@@ -9,7 +9,7 @@ public static class TrayIconSetup
     public static void Configure(TaskbarIcon taskbarIcon, TrayViewModel vm)
     {
         taskbarIcon.ToolTipText = "GlDrive";
-        taskbarIcon.IconSource = CyberpunkIconGenerator.Generate(Services.MountState.Unmounted);
+        taskbarIcon.Icon = CyberpunkIconGenerator.Generate(Services.MountState.Unmounted);
 
         var menu = new ContextMenu();
 
@@ -76,7 +76,7 @@ public static class TrayIconSetup
             if (args.PropertyName == nameof(TrayViewModel.CurrentState))
             {
                 taskbarIcon.ToolTipText = $"GlDrive — {vm.StatusText}";
-                taskbarIcon.IconSource = CyberpunkIconGenerator.Generate(vm.CurrentState);
+                taskbarIcon.Icon = CyberpunkIconGenerator.Generate(vm.CurrentState);
             }
         };
     }
