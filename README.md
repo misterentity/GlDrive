@@ -12,6 +12,7 @@ Built with WinFsp, FluentFTP, and GnuTLS.
 - **Connection pooling** — bounded pool of FTPS connections with automatic reconnection
 - **Directory caching** — TTL-based cache with LRU eviction for responsive browsing
 - **Setup wizard** — first-run wizard walks through server configuration
+- **New release notifications** — polls `/recent/` categories and shows a Windows toast notification when new releases appear
 - **System tray** — lives in the tray with mount/unmount/settings controls
 - **Auto-mount** — optionally connect on Windows startup
 
@@ -90,6 +91,7 @@ App.xaml.cs (startup)
   │     ├── DirectoryCache (TTL + LRU)
   │     └── GlDriveFileSystem (WinFsp)
   ├── ConnectionMonitor (NOOP keepalive)
+  ├── NewReleaseMonitor (polls /recent/)
   └── TrayIcon (H.NotifyIcon)
 ```
 
