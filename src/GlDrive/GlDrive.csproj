@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- <ApplicationIcon>Assets\gldrive.ico</ApplicationIcon> -->
+    <AssemblyName>GlDrive</AssemblyName>
+    <RootNamespace>GlDrive</RootNamespace>
+    <Version>1.0.0</Version>
+    <Description>Mount a glftpd FTPS server as a Windows drive letter</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="winfsp.net" Version="2.*" />
+    <PackageReference Include="FluentFTP" Version="53.*" />
+    <PackageReference Include="FluentFTP.GnuTLS" Version="1.0.*" />
+    <PackageReference Include="H.NotifyIcon.Wpf" Version="2.*" />
+    <PackageReference Include="Serilog" Version="4.*" />
+    <PackageReference Include="Serilog.Sinks.File" Version="6.*" />
+    <PackageReference Include="Meziantou.Framework.Win32.CredentialManager" Version="1.*" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.*" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Assets\*.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

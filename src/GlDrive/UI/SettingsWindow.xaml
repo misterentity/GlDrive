@@ -1,0 +1,98 @@
+<Window x:Class="GlDrive.UI.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="GlDrive Settings" Width="500" Height="450"
+        WindowStartupLocation="CenterScreen" ResizeMode="NoResize">
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TabControl Grid.Row="0">
+            <!-- Connection Tab -->
+            <TabItem Header="Connection">
+                <StackPanel Margin="12">
+                    <TextBlock Text="Host:" Margin="0,0,0,4"/>
+                    <TextBox Text="{Binding Host, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
+
+                    <TextBlock Text="Port:" Margin="0,0,0,4"/>
+                    <TextBox Text="{Binding Port, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
+
+                    <TextBlock Text="Username:" Margin="0,0,0,4"/>
+                    <TextBox Text="{Binding Username, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
+
+                    <TextBlock Text="Password:" Margin="0,0,0,4"/>
+                    <PasswordBox x:Name="PasswordBox" Margin="0,0,0,8"/>
+
+                    <TextBlock Text="Root Path:" Margin="0,0,0,4"/>
+                    <TextBox Text="{Binding RootPath, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
+
+                    <Button Content="Test Connection" Click="TestConnection_Click"
+                            HorizontalAlignment="Left" Padding="16,6" Margin="0,4,0,0"/>
+                    <TextBlock x:Name="TestResultText" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+            </TabItem>
+
+            <!-- Mount Tab -->
+            <TabItem Header="Mount">
+                <StackPanel Margin="12">
+                    <TextBlock Text="Drive Letter:" Margin="0,0,0,4"/>
+                    <ComboBox ItemsSource="{Binding AvailableDriveLetters}"
+                              SelectedItem="{Binding DriveLetter}" Margin="0,0,0,8" Width="80" HorizontalAlignment="Left"/>
+
+                    <TextBlock Text="Volume Label:" Margin="0,0,0,4"/>
+                    <TextBox Text="{Binding VolumeLabel, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
+
+                    <CheckBox Content="Auto-mount on start" IsChecked="{Binding AutoMountOnStart}" Margin="0,8,0,0"/>
+                </StackPanel>
+            </TabItem>
+
+            <!-- Security Tab -->
+            <TabItem Header="Security">
+                <StackPanel Margin="12">
+                    <CheckBox Content="Prefer TLS 1.2 (recommended for glftpd)"
+                              IsChecked="{Binding PreferTls12}" Margin="0,0,0,12"/>
+
+                    <TextBlock Text="Trusted Certificates:" Margin="0,0,0,4" FontWeight="SemiBold"/>
+                    <TextBlock Text="{Binding TrustedCertsInfo}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                    <Button Content="Clear Trusted Certificates" Click="ClearCerts_Click"
+                            HorizontalAlignment="Left" Padding="16,6"/>
+                </StackPanel>
+            </TabItem>
+
+            <!-- Performance Tab -->
+            <TabItem Header="Performance">
+                <StackPanel Margin="12">
+                    <TextBlock Text="Directory Cache TTL (seconds):" Margin="0,0,0,4"/>
+                    <TextBox Text="{Binding CacheTtl, UpdateSourceTrigger=PropertyChanged}"
+                             Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+
+                    <TextBlock Text="Connection Pool Size:" Margin="0,0,0,4"/>
+                    <TextBox Text="{Binding PoolSize, UpdateSourceTrigger=PropertyChanged}"
+                             Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+                </StackPanel>
+            </TabItem>
+
+            <!-- Diagnostics Tab -->
+            <TabItem Header="Diagnostics">
+                <StackPanel Margin="12">
+                    <TextBlock Text="Log Level:" Margin="0,0,0,4"/>
+                    <ComboBox ItemsSource="{Binding LogLevels}"
+                              SelectedItem="{Binding LogLevel}" Width="150" HorizontalAlignment="Left" Margin="0,0,0,12"/>
+
+                    <Button Content="Open Log Folder" Click="OpenLogs_Click"
+                            HorizontalAlignment="Left" Padding="16,6"/>
+                </StackPanel>
+            </TabItem>
+        </TabControl>
+
+        <!-- Buttons -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+            <Button Content="Save" Click="Save_Click" Padding="20,6" Margin="0,0,8,0"
+                    Style="{StaticResource PrimaryButton}"/>
+            <Button Content="Cancel" Click="Cancel_Click" Padding="20,6"
+                    Style="{StaticResource SecondaryButton}"/>
+        </StackPanel>
+    </Grid>
+</Window>
