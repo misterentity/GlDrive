@@ -19,9 +19,11 @@ public class MountService : IDisposable
     private GlDriveFileSystem? _fileSystem;
     private FileSystemHost? _host;
     private ConnectionMonitor? _monitor;
+    private NewReleaseMonitor? _releaseMonitor;
     private bool _mounted;
 
     public event Action<MountState>? StateChanged;
+    public event Action<string, string>? NewReleaseDetected;
 
     public MountState CurrentState { get; private set; } = MountState.Unmounted;
     public FtpConnectionPool? Pool => _pool;
@@ -79,6 +81,11 @@ public class MountService : IDisposable
             _monitor.ConnectionRestored += () => SetState(MountState.Connected);
             _monitor.Start();
 
+            // Start release monitor
+            _releaseMonitor = new NewReleaseMonitor(_pool, _config.Notifications, () => CurrentState);
+            _releaseMonitor.NewReleaseDetected += (category, release) => NewReleaseDetected?.Invoke(category, release);
+            _releaseMonitor.Start();
+
             SetState(MountState.Connected);
             Log.Information("Drive {MountPoint} mounted successfully", mountPoint);
         }
@@ -96,6 +103,7 @@ public class MountService : IDisposable
         if (!_mounted) return;
 
         Log.Information("Unmounting drive...");
+        _releaseMonitor?.Stop();
         _monitor?.Stop();
 
         try
@@ -120,6 +128,8 @@ public class MountService : IDisposable
 
     private void Cleanup()
     {
+        _releaseMonitor?.Stop();
+        _releaseMonitor = null;
         _monitor?.Stop();
         _host?.Dispose();
         _host = null;

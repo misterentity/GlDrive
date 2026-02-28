@@ -8,6 +8,7 @@ public class AppConfig
     public CacheConfig Cache { get; set; } = new();
     public PoolConfig Pool { get; set; } = new();
     public LoggingConfig Logging { get; set; } = new();
+    public NotificationConfig Notifications { get; set; } = new();
 }
 
 public class ConnectionConfig
@@ -50,4 +51,11 @@ public class LoggingConfig
     public string Level { get; set; } = "Information";
     public int MaxFileSizeMb { get; set; } = 10;
     public int RetainedFiles { get; set; } = 3;
+}
+
+public class NotificationConfig
+{
+    public bool Enabled { get; set; } = true;
+    public int PollIntervalSeconds { get; set; } = 60;
+    public string WatchPath { get; set; } = "/recent";
 }

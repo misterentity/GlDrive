@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using H.NotifyIcon;
+using H.NotifyIcon.Core;
 
 namespace GlDrive.UI;
 
@@ -78,6 +79,12 @@ public static class TrayIconSetup
                 taskbarIcon.ToolTipText = $"GlDrive — {vm.StatusText}";
                 taskbarIcon.Icon = CyberpunkIconGenerator.Generate(vm.CurrentState);
             }
+        };
+
+        // Wire balloon tip notifications
+        vm.ShowNotificationRequested = (title, message) =>
+        {
+            taskbarIcon.ShowNotification(title, message, NotificationIcon.Info);
         };
     }
 

@@ -21,6 +21,14 @@ public class TrayViewModel : INotifyPropertyChanged
         _mountService = mountService;
         _config = config;
 
+        _mountService.NewReleaseDetected += (category, release) =>
+        {
+            Application.Current?.Dispatcher.Invoke(() =>
+            {
+                ShowNotification(category, release);
+            });
+        };
+
         _mountService.StateChanged += state =>
         {
             CurrentState = state;
@@ -117,10 +125,12 @@ public class TrayViewModel : INotifyPropertyChanged
     public ICommand ViewLogsCommand { get; }
     public ICommand ExitCommand { get; }
 
+    public Action<string, string>? ShowNotificationRequested { get; set; }
+
     public void ShowNotification(string title, string message)
     {
-        // Use balloon tip via Log for now — H.NotifyIcon notifications
         Log.Information("{Title}: {Message}", title, message);
+        ShowNotificationRequested?.Invoke(title, message);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
