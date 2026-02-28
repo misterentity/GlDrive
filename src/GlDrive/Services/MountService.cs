@@ -1,3 +1,4 @@
+using System.IO;
 using Fsp;
 using GlDrive.Config;
 using GlDrive.Filesystem;
@@ -35,6 +36,9 @@ public class MountService : IDisposable
     public async Task Mount(CancellationToken ct = default)
     {
         if (_mounted) return;
+
+        // Clean up stale mount from a previous crash
+        CleanStaleMounts();
 
         SetState(MountState.Connecting);
 
@@ -125,6 +129,41 @@ public class MountService : IDisposable
         _pool?.DisposeAsync().AsTask().GetAwaiter().GetResult();
         _pool = null;
         _factory = null;
+    }
+
+    private void CleanStaleMounts()
+    {
+        var mountPoint = _config.Mount.DriveLetter + ":\\";
+        try
+        {
+            if (Directory.Exists(mountPoint))
+            {
+                Log.Warning("Stale mount detected at {MountPoint}, attempting cleanup...", mountPoint);
+                // Try to unmount via a temporary host — WinFsp will clean up the stale mount
+                var tempHost = new FileSystemHost(null!);
+                try { tempHost.Unmount(); } catch { }
+                tempHost.Dispose();
+
+                // If directory still exists, force-remove the drive mapping
+                if (Directory.Exists(mountPoint))
+                {
+                    Log.Warning("Stale mount still present, removing via net use...");
+                    var psi = new System.Diagnostics.ProcessStartInfo("net", $"use {_config.Mount.DriveLetter}: /delete /y")
+                    {
+                        CreateNoWindow = true,
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
+                    };
+                    using var proc = System.Diagnostics.Process.Start(psi);
+                    proc?.WaitForExit(5000);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Stale mount cleanup failed — continuing anyway");
+        }
     }
 
     private void SetState(MountState state)
