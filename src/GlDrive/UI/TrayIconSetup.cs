@@ -1,6 +1,5 @@
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Media;
 using H.NotifyIcon;
 
 namespace GlDrive.UI;
@@ -10,12 +9,7 @@ public static class TrayIconSetup
     public static void Configure(TaskbarIcon taskbarIcon, TrayViewModel vm)
     {
         taskbarIcon.ToolTipText = "GlDrive";
-        taskbarIcon.IconSource = new GeneratedIconSource
-        {
-            Text = "G",
-            Foreground = Brushes.White,
-            FontSize = 18
-        };
+        taskbarIcon.IconSource = CyberpunkIconGenerator.Generate(Services.MountState.Unmounted);
 
         var menu = new ContextMenu();
 
@@ -76,12 +70,13 @@ public static class TrayIconSetup
         // Double-click opens drive
         taskbarIcon.TrayLeftMouseDown += (_, _) => vm.OpenDriveCommand.Execute(null);
 
-        // Update icon on state changes
+        // Update icon and tooltip on state changes
         vm.PropertyChanged += (_, args) =>
         {
             if (args.PropertyName == nameof(TrayViewModel.CurrentState))
             {
                 taskbarIcon.ToolTipText = $"GlDrive — {vm.StatusText}";
+                taskbarIcon.IconSource = CyberpunkIconGenerator.Generate(vm.CurrentState);
             }
         };
     }

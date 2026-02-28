@@ -3,3 +3,10 @@ obj/
 *.user
 *.suo
 .vs/
+
+# Installer build artifacts
+installer/publish/
+installer/output/
+
+# Personal scripts
+transfer-movies.ps1
