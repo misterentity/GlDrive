@@ -1,7 +1,10 @@
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
+using GlDrive.Services;
 using H.NotifyIcon;
 using H.NotifyIcon.Core;
+using Serilog;
 
 namespace GlDrive.UI;
 
@@ -10,50 +13,143 @@ public static class TrayIconSetup
     public static void Configure(TaskbarIcon taskbarIcon, TrayViewModel vm)
     {
         taskbarIcon.ToolTipText = "GlDrive";
-        taskbarIcon.Icon = CyberpunkIconGenerator.Generate(Services.MountState.Unmounted);
+        taskbarIcon.Icon = CyberpunkIconGenerator.Generate(MountState.Unmounted);
 
         var menu = new ContextMenu();
+        BuildMenu(menu, vm);
+        taskbarIcon.ContextMenu = menu;
+
+        // Double-click opens first connected drive
+        taskbarIcon.TrayLeftMouseDown += (_, _) => vm.OpenDriveCommand.Execute(null);
+
+        // Rebuild menu and update icon when server states change
+        vm.ServerManager.ServerStateChanged += (_, _, _) =>
+        {
+            Application.Current?.Dispatcher.Invoke(() =>
+            {
+                BuildMenu(menu, vm);
+
+                // Update icon based on best state across all servers
+                var mounted = vm.ServerManager.GetMountedServers();
+                var bestState = MountState.Unmounted;
+                foreach (var s in mounted)
+                {
+                    if (s.CurrentState == MountState.Connected) { bestState = MountState.Connected; break; }
+                    if (s.CurrentState == MountState.Reconnecting) bestState = MountState.Reconnecting;
+                    else if (s.CurrentState == MountState.Connecting && bestState != MountState.Reconnecting)
+                        bestState = MountState.Connecting;
+                    else if (s.CurrentState == MountState.Error && bestState == MountState.Unmounted)
+                        bestState = MountState.Error;
+                }
+
+                taskbarIcon.ToolTipText = $"GlDrive — {vm.StatusText}";
+                taskbarIcon.Icon = CyberpunkIconGenerator.Generate(bestState);
+            });
+        };
+
+        // Wire balloon tip notifications
+        vm.ShowNotificationRequested = (title, message) =>
+        {
+            taskbarIcon.ShowNotification(title, message, NotificationIcon.Info);
+        };
+    }
+
+    private static void BuildMenu(ContextMenu menu, TrayViewModel vm)
+    {
+        menu.Items.Clear();
 
         // Header
         var header = new MenuItem { Header = "GlDrive", IsEnabled = false, FontWeight = FontWeights.Bold };
         menu.Items.Add(header);
 
-        var statusItem = new MenuItem { IsEnabled = false };
-        statusItem.SetBinding(MenuItem.HeaderProperty, new System.Windows.Data.Binding("StatusText") { Source = vm });
+        var statusItem = new MenuItem { Header = vm.StatusText, IsEnabled = false };
         menu.Items.Add(statusItem);
 
         menu.Items.Add(new Separator());
 
-        // Open Drive
-        var openDrive = new MenuItem { Header = "Open Drive" };
-        openDrive.Click += (_, _) => vm.OpenDriveCommand.Execute(null);
-        openDrive.SetBinding(UIElement.IsEnabledProperty,
-            new System.Windows.Data.Binding("IsConnected") { Source = vm });
-        menu.Items.Add(openDrive);
+        // Per-server items
+        var config = vm.Config;
+        if (config.Servers.Count > 0)
+        {
+            foreach (var serverConfig in config.Servers)
+            {
+                var mounted = vm.ServerManager.GetServer(serverConfig.Id);
+                var isConnected = mounted?.CurrentState == MountState.Connected;
+                var isActive = mounted != null && mounted.CurrentState != MountState.Unmounted;
 
-        // Refresh Cache
-        var refresh = new MenuItem { Header = "Refresh (Clear Cache)" };
-        refresh.Click += (_, _) => vm.RefreshCacheCommand.Execute(null);
-        refresh.SetBinding(UIElement.IsEnabledProperty,
-            new System.Windows.Data.Binding("IsConnected") { Source = vm });
-        menu.Items.Add(refresh);
+                var stateLabel = mounted?.CurrentState switch
+                {
+                    MountState.Connected => $"{serverConfig.Mount.DriveLetter}:",
+                    MountState.Connecting => "connecting...",
+                    MountState.Reconnecting => "reconnecting...",
+                    MountState.Error => "error",
+                    _ => "unmounted"
+                };
 
-        menu.Items.Add(new Separator());
+                var serverMenu = new MenuItem
+                {
+                    Header = $"{serverConfig.Name} ({stateLabel})"
+                };
 
-        // Mount/Unmount
-        var mount = new MenuItem();
-        mount.SetBinding(MenuItem.HeaderProperty,
-            new System.Windows.Data.Binding("MountButtonText") { Source = vm });
-        mount.Click += (_, _) => vm.ToggleMountCommand.Execute(null);
-        menu.Items.Add(mount);
+                // Mount/Unmount
+                var serverId = serverConfig.Id;
+                var serverName = serverConfig.Name;
 
-        menu.Items.Add(new Separator());
+                if (isActive)
+                {
+                    var unmountItem = new MenuItem { Header = "Unmount" };
+                    unmountItem.Click += (_, _) =>
+                    {
+                        vm.ServerManager.UnmountServer(serverId);
+                        vm.UpdateStatusText();
+                    };
+                    serverMenu.Items.Add(unmountItem);
+                }
+                else
+                {
+                    var mountItem = new MenuItem { Header = "Mount" };
+                    mountItem.Click += async (_, _) =>
+                    {
+                        try
+                        {
+                            await vm.ServerManager.MountServer(serverId);
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Error(ex, "Mount failed for {Server}", serverName);
+                            vm.ShowNotification("GlDrive", $"Mount failed for {serverName}: {ex.Message}");
+                        }
+                    };
+                    serverMenu.Items.Add(mountItem);
+                }
+
+                // Open Drive
+                if (isConnected)
+                {
+                    var driveLetter = serverConfig.Mount.DriveLetter;
+                    var openItem = new MenuItem { Header = "Open Drive" };
+                    openItem.Click += (_, _) => Process.Start("explorer.exe", $"{driveLetter}:\\");
+                    serverMenu.Items.Add(openItem);
+
+                    var refreshItem = new MenuItem { Header = "Refresh Cache" };
+                    refreshItem.Click += (_, _) =>
+                    {
+                        mounted?.RefreshCache();
+                        vm.ShowNotification("GlDrive", $"Cache cleared for {serverName}");
+                    };
+                    serverMenu.Items.Add(refreshItem);
+                }
+
+                menu.Items.Add(serverMenu);
+            }
+
+            menu.Items.Add(new Separator());
+        }
 
         // Dashboard
         var dashboard = new MenuItem { Header = "Dashboard..." };
         dashboard.Click += (_, _) => vm.DashboardCommand.Execute(null);
-        dashboard.SetBinding(UIElement.IsEnabledProperty,
-            new System.Windows.Data.Binding("IsConnected") { Source = vm });
+        dashboard.IsEnabled = vm.ServerManager.GetMountedServers().Any(s => s.CurrentState == MountState.Connected);
         menu.Items.Add(dashboard);
 
         menu.Items.Add(new Separator());
@@ -74,27 +170,5 @@ public static class TrayIconSetup
         var exit = new MenuItem { Header = "Exit" };
         exit.Click += (_, _) => vm.ExitCommand.Execute(null);
         menu.Items.Add(exit);
-
-        taskbarIcon.ContextMenu = menu;
-
-        // Double-click opens drive
-        taskbarIcon.TrayLeftMouseDown += (_, _) => vm.OpenDriveCommand.Execute(null);
-
-        // Update icon and tooltip on state changes
-        vm.PropertyChanged += (_, args) =>
-        {
-            if (args.PropertyName == nameof(TrayViewModel.CurrentState))
-            {
-                taskbarIcon.ToolTipText = $"GlDrive — {vm.StatusText}";
-                taskbarIcon.Icon = CyberpunkIconGenerator.Generate(vm.CurrentState);
-            }
-        };
-
-        // Wire balloon tip notifications
-        vm.ShowNotificationRequested = (title, message) =>
-        {
-            taskbarIcon.ShowNotification(title, message, NotificationIcon.Info);
-        };
     }
-
 }

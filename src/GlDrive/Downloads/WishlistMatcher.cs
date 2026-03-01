@@ -11,15 +11,20 @@ public class WishlistMatcher
     private readonly DownloadManager _downloadManager;
     private readonly FtpOperations _ftp;
     private readonly DownloadConfig _config;
+    private readonly string _serverId;
+    private readonly string _serverName;
 
     public event Action<WishlistItem, string, string>? MatchFound; // item, category, release
 
-    public WishlistMatcher(WishlistStore wishlist, DownloadManager downloadManager, FtpOperations ftp, DownloadConfig config)
+    public WishlistMatcher(WishlistStore wishlist, DownloadManager downloadManager, FtpOperations ftp,
+        DownloadConfig config, string serverId, string serverName)
     {
         _wishlist = wishlist;
         _downloadManager = downloadManager;
         _ftp = ftp;
         _config = config;
+        _serverId = serverId;
+        _serverName = serverName;
     }
 
     public async void OnNewRelease(string category, string releaseName)
@@ -43,7 +48,8 @@ public class WishlistMatcher
 
                 if (!matches) continue;
 
-                Log.Information("Wishlist match: [{Category}] {Release} -> {Title}", category, releaseName, item.Title);
+                Log.Information("Wishlist match: [{Category}] {Release} -> {Title} (server: {Server})",
+                    category, releaseName, item.Title, _serverName);
 
                 var remotePath = $"/recent/{category}/{releaseName}";
                 var localPath = BuildLocalPath(item, releaseName);
@@ -54,7 +60,9 @@ public class WishlistMatcher
                     ReleaseName = releaseName,
                     LocalPath = localPath,
                     WishlistItemId = item.Id,
-                    Category = category
+                    Category = category,
+                    ServerId = _serverId,
+                    ServerName = _serverName
                 };
 
                 _downloadManager.Enqueue(downloadItem);

@@ -14,7 +14,7 @@ namespace GlDrive.UI;
 
 public class DashboardViewModel : INotifyPropertyChanged
 {
-    private readonly MountService _mountService;
+    private readonly ServerManager _serverManager;
     private readonly AppConfig _config;
     private readonly WishlistStore _wishlistStore;
     private string _searchQuery = "";
@@ -113,9 +113,9 @@ public class DashboardViewModel : INotifyPropertyChanged
     public ICommand DownloadSearchResultCommand { get; }
     public ICommand RefreshMetadataCommand { get; }
 
-    public DashboardViewModel(MountService mountService, AppConfig config)
+    public DashboardViewModel(ServerManager serverManager, AppConfig config)
     {
-        _mountService = mountService;
+        _serverManager = serverManager;
         _config = config;
 
         _wishlistStore = new WishlistStore();
@@ -135,12 +135,30 @@ public class DashboardViewModel : INotifyPropertyChanged
         RefreshWishlist();
         RefreshDownloads();
 
-        // Subscribe to download progress events
-        if (_mountService.Downloads != null)
+        // Subscribe to download progress events from all mounted servers
+        foreach (var server in _serverManager.GetMountedServers())
+            SubscribeToServer(server);
+
+        // Also subscribe when new servers come online
+        _serverManager.ServerStateChanged += (serverId, _, state) =>
         {
-            _mountService.Downloads.DownloadProgressChanged += OnDownloadProgress;
-            _mountService.Downloads.DownloadStatusChanged += OnDownloadStatusChanged;
-        }
+            if (state == MountState.Connected)
+            {
+                var server = _serverManager.GetServer(serverId);
+                if (server != null)
+                {
+                    SubscribeToServer(server);
+                    Application.Current?.Dispatcher.Invoke(RefreshDownloads);
+                }
+            }
+        };
+    }
+
+    private void SubscribeToServer(MountService server)
+    {
+        if (server.Downloads == null) return;
+        server.Downloads.DownloadProgressChanged += OnDownloadProgress;
+        server.Downloads.DownloadStatusChanged += OnDownloadStatusChanged;
     }
 
     private void AddMedia(MediaType type)
@@ -178,43 +196,72 @@ public class DashboardViewModel : INotifyPropertyChanged
     private void CancelDownload()
     {
         if (SelectedDownloadItem == null) return;
-        _mountService.Downloads?.Cancel(SelectedDownloadItem.Id);
+        var server = _serverManager.GetServer(SelectedDownloadItem.ServerId);
+        server?.Downloads?.Cancel(SelectedDownloadItem.Id);
     }
 
     private void RetryDownload()
     {
         if (SelectedDownloadItem == null) return;
-        _mountService.Downloads?.Retry(SelectedDownloadItem.Id);
+        var server = _serverManager.GetServer(SelectedDownloadItem.ServerId);
+        server?.Downloads?.Retry(SelectedDownloadItem.Id);
     }
 
     private void ClearCompleted()
     {
-        _mountService.Downloads?.RemoveCompleted();
+        foreach (var server in _serverManager.GetMountedServers())
+            server.Downloads?.RemoveCompleted();
         RefreshDownloads();
     }
 
     private async Task PerformSearch()
     {
-        if (string.IsNullOrWhiteSpace(SearchQuery) || _mountService.Search == null) return;
+        if (string.IsNullOrWhiteSpace(SearchQuery)) return;
+
+        var mounted = _serverManager.GetMountedServers()
+            .Where(s => s.Search != null && s.CurrentState == MountState.Connected)
+            .ToList();
+
+        if (mounted.Count == 0)
+        {
+            SearchStatus = "No connected servers";
+            return;
+        }
 
         SearchStatus = "Searching...";
         SearchResults.Clear();
 
         try
         {
-            var results = await _mountService.Search.Search(SearchQuery);
-            foreach (var r in results)
+            // Search all servers in parallel
+            var tasks = mounted.Select(async server =>
             {
-                SearchResults.Add(new SearchResultVm
+                var results = await server.Search!.Search(SearchQuery);
+                return results.Select(r => new SearchResultVm
                 {
                     ReleaseName = r.ReleaseName,
                     Category = r.Category,
                     RemotePath = r.RemotePath,
                     Size = r.Size,
-                    SizeText = FormatSize(r.Size)
+                    SizeText = FormatSize(r.Size),
+                    ServerId = server.ServerId,
+                    ServerName = server.ServerName
                 });
+            });
+
+            var allResults = await Task.WhenAll(tasks);
+            var totalCount = 0;
+
+            foreach (var serverResults in allResults)
+            {
+                foreach (var r in serverResults)
+                {
+                    SearchResults.Add(r);
+                    totalCount++;
+                }
             }
-            SearchStatus = $"{results.Count} result(s) found";
+
+            SearchStatus = $"{totalCount} result(s) found across {mounted.Count} server(s)";
         }
         catch (Exception ex)
         {
@@ -225,9 +272,12 @@ public class DashboardViewModel : INotifyPropertyChanged
 
     private void DownloadSearchResult()
     {
-        if (SelectedSearchResult == null || _mountService.Downloads == null) return;
+        if (SelectedSearchResult == null) return;
 
         var result = SelectedSearchResult;
+        var server = _serverManager.GetServer(result.ServerId);
+        if (server?.Downloads == null) return;
+
         var parsed = SceneNameParser.Parse(result.ReleaseName);
         var localBase = _config.Downloads.LocalPath;
 
@@ -251,10 +301,12 @@ public class DashboardViewModel : INotifyPropertyChanged
             RemotePath = result.RemotePath,
             ReleaseName = result.ReleaseName,
             LocalPath = localPath,
-            Category = result.Category
+            Category = result.Category,
+            ServerId = result.ServerId,
+            ServerName = result.ServerName
         };
 
-        _mountService.Downloads.Enqueue(item);
+        server.Downloads.Enqueue(item);
         RefreshDownloads();
     }
 
@@ -365,27 +417,32 @@ public class DashboardViewModel : INotifyPropertyChanged
     private void RefreshDownloads()
     {
         DownloadItems.Clear();
-        var store = _mountService.Downloads?.Store;
-        if (store == null) return;
-
-        foreach (var item in store.Items)
+        foreach (var server in _serverManager.GetMountedServers())
         {
-            DownloadItems.Add(new DownloadItemVm
+            var store = server.Downloads?.Store;
+            if (store == null) continue;
+
+            foreach (var item in store.Items)
             {
-                Id = item.Id,
-                ReleaseName = item.ReleaseName,
-                Category = item.Category,
-                Status = item.Status.ToString(),
-                ProgressText = item.Status == DownloadStatus.Downloading && item.TotalBytes > 0
-                    ? $"{item.DownloadedBytes * 100 / item.TotalBytes}%"
-                    : item.Status == DownloadStatus.Completed ? "Done" : ""
-            });
+                DownloadItems.Add(new DownloadItemVm
+                {
+                    Id = item.Id,
+                    ReleaseName = item.ReleaseName,
+                    Category = item.Category,
+                    Status = item.Status.ToString(),
+                    ProgressText = item.Status == DownloadStatus.Downloading && item.TotalBytes > 0
+                        ? $"{item.DownloadedBytes * 100 / item.TotalBytes}%"
+                        : item.Status == DownloadStatus.Completed ? "Done" : "",
+                    ServerId = server.ServerId,
+                    ServerName = server.ServerName
+                });
+            }
         }
     }
 
     private static string FormatSize(long bytes)
     {
-        if (bytes <= 0) return "—";
+        if (bytes <= 0) return "\u2014";
         string[] units = ["B", "KB", "MB", "GB", "TB"];
         int i = 0;
         double size = bytes;
@@ -430,6 +487,8 @@ public class DownloadItemVm
     public string Category { get; set; } = "";
     public string Status { get; set; } = "";
     public string ProgressText { get; set; } = "";
+    public string ServerId { get; set; } = "";
+    public string ServerName { get; set; } = "";
 }
 
 public class SearchResultVm
@@ -439,4 +498,6 @@ public class SearchResultVm
     public string RemotePath { get; set; } = "";
     public long Size { get; set; }
     public string SizeText { get; set; } = "";
+    public string ServerId { get; set; } = "";
+    public string ServerName { get; set; } = "";
 }

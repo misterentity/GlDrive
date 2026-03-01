@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ui="clr-namespace:GlDrive.UI"
-        Title="GlDrive Dashboard" Width="920" Height="660"
+        Title="GlDrive Dashboard" Width="960" Height="660"
         WindowStartupLocation="CenterScreen"
         Background="{StaticResource BackgroundBrush}"
         Foreground="{StaticResource ForegroundBrush}">
@@ -123,9 +123,10 @@
                               HeadersVisibility="Column" CanUserAddRows="False">
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="Release" Binding="{Binding ReleaseName}" Width="*"/>
+                            <DataGridTextColumn Header="Server" Binding="{Binding ServerName}" Width="90"/>
                             <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="80"/>
                             <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="90"/>
-                            <DataGridTextColumn Header="Progress" Binding="{Binding ProgressText}" Width="100"/>
+                            <DataGridTextColumn Header="Progress" Binding="{Binding ProgressText}" Width="80"/>
                         </DataGrid.Columns>
                     </DataGrid>
                 </DockPanel>
@@ -157,6 +158,7 @@
                               HeadersVisibility="Column" CanUserAddRows="False">
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="Release" Binding="{Binding ReleaseName}" Width="*"/>
+                            <DataGridTextColumn Header="Server" Binding="{Binding ServerName}" Width="90"/>
                             <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="100"/>
                             <DataGridTextColumn Header="Size" Binding="{Binding SizeText}" Width="80"/>
                         </DataGrid.Columns>

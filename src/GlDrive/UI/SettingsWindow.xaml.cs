@@ -1,9 +1,7 @@
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Windows;
-using FluentFTP;
-using FluentFTP.GnuTLS;
-using FluentFTP.GnuTLS.Enums;
 using GlDrive.Config;
 using GlDrive.Services;
 using GlDrive.Tls;
@@ -14,51 +12,82 @@ namespace GlDrive.UI;
 public partial class SettingsWindow : Window
 {
     private readonly AppConfig _config;
-    private readonly MountService _mountService;
+    private readonly ServerManager _serverManager;
     private readonly SettingsViewModel _vm;
+    private readonly ObservableCollection<ServerListItem> _serverItems = new();
 
-    public SettingsWindow(AppConfig config, MountService mountService)
+    public SettingsWindow(AppConfig config, ServerManager serverManager)
     {
         InitializeComponent();
         _config = config;
-        _mountService = mountService;
+        _serverManager = serverManager;
         _vm = new SettingsViewModel(config);
         DataContext = _vm;
+
+        RefreshServerList();
+        ServerGrid.ItemsSource = _serverItems;
     }
 
-    private async void TestConnection_Click(object sender, RoutedEventArgs e)
+    private void RefreshServerList()
     {
-        TestResultText.Text = "Testing connection...";
-        try
+        _serverItems.Clear();
+        foreach (var server in _config.Servers)
         {
-            var password = PasswordBox.Password;
-            if (string.IsNullOrEmpty(password))
-                password = CredentialStore.GetPassword(_vm.Host, int.Parse(_vm.Port), _vm.Username) ?? "";
-
-            var client = new AsyncFtpClient(_vm.Host, _vm.Username, password, int.Parse(_vm.Port));
-            client.Config.EncryptionMode = FtpEncryptionMode.Explicit;
-            client.Config.DataConnectionEncryption = true;
-            client.Config.CustomStream = typeof(GnuTlsStream);
-            client.Config.CustomStreamConfig = new GnuConfig { SecuritySuite = GnuSuite.Secure128 };
-            client.ValidateCertificate += (_, e) => e.Accept = true;
-
-            await client.Connect();
-            var listing = await client.GetListing("/");
-            await client.Disconnect();
-            client.Dispose();
-
-            TestResultText.Text = $"Success! Connected and listed {listing.Length} items in root.";
+            _serverItems.Add(new ServerListItem
+            {
+                Id = server.Id,
+                Enabled = server.Enabled,
+                Name = server.Name,
+                Host = $"{server.Connection.Host}:{server.Connection.Port}",
+                DriveLetter = $"{server.Mount.DriveLetter}:"
+            });
         }
-        catch (Exception ex)
+    }
+
+    private void AddServer_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new ServerEditDialog { Owner = this };
+        if (dialog.ShowDialog() == true)
         {
-            TestResultText.Text = $"Failed: {ex.Message}";
-            Log.Warning(ex, "Test connection failed");
+            _config.Servers.Add(dialog.Result);
+            RefreshServerList();
         }
+    }
+
+    private void EditServer_Click(object sender, RoutedEventArgs e)
+    {
+        if (ServerGrid.SelectedItem is not ServerListItem selected) return;
+
+        var serverConfig = _config.Servers.FirstOrDefault(s => s.Id == selected.Id);
+        if (serverConfig == null) return;
+
+        var dialog = new ServerEditDialog(serverConfig) { Owner = this };
+        if (dialog.ShowDialog() == true)
+        {
+            RefreshServerList();
+        }
+    }
+
+    private void RemoveServer_Click(object sender, RoutedEventArgs e)
+    {
+        if (ServerGrid.SelectedItem is not ServerListItem selected) return;
+
+        var result = MessageBox.Show(
+            $"Remove server \"{selected.Name}\"? This will unmount the drive.",
+            "Remove Server", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+
+        if (result != MessageBoxResult.Yes) return;
+
+        // Unmount if mounted
+        _serverManager.UnmountServer(selected.Id);
+
+        _config.Servers.RemoveAll(s => s.Id == selected.Id);
+        RefreshServerList();
     }
 
     private void ClearCerts_Click(object sender, RoutedEventArgs e)
     {
-        var certMgr = new CertificateManager(_config.Tls.CertificateFingerprintFile);
+        var certMgr = new CertificateManager();
         certMgr.ClearTrustedCertificates();
         _vm.RefreshCertsInfo();
         MessageBox.Show("Trusted certificates cleared.", "GlDrive", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -86,17 +115,6 @@ public partial class SettingsWindow : Window
     private void Save_Click(object sender, RoutedEventArgs e)
     {
         _vm.ApplyTo(_config);
-
-        // Save password if entered
-        if (!string.IsNullOrEmpty(PasswordBox.Password))
-        {
-            CredentialStore.SavePassword(
-                _config.Connection.Host,
-                _config.Connection.Port,
-                _config.Connection.Username,
-                PasswordBox.Password);
-        }
-
         ConfigManager.Save(_config);
         Log.Information("Settings saved");
         DialogResult = true;
@@ -108,4 +126,13 @@ public partial class SettingsWindow : Window
         DialogResult = false;
         Close();
     }
+}
+
+public class ServerListItem
+{
+    public string Id { get; set; } = "";
+    public bool Enabled { get; set; }
+    public string Name { get; set; } = "";
+    public string Host { get; set; } = "";
+    public string DriveLetter { get; set; } = "";
 }

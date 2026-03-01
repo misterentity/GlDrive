@@ -38,6 +38,8 @@ public class DownloadItem
     public string? ErrorMessage { get; set; }
     public string? WishlistItemId { get; set; }
     public string Category { get; set; } = "";
+    public string ServerId { get; set; } = "";
+    public string ServerName { get; set; } = "";
 }
 
 public class SearchResult
@@ -48,6 +50,8 @@ public class SearchResult
     public long Size { get; set; }
     public DateTime Modified { get; set; }
     public List<string> Files { get; set; } = [];
+    public string ServerId { get; set; } = "";
+    public string ServerName { get; set; } = "";
 }
 
 public record ParsedRelease(

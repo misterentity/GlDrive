@@ -1,7 +1,7 @@
 <Window x:Class="GlDrive.UI.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="GlDrive Settings" Width="500" Height="450"
+        Title="GlDrive Settings" Width="600" Height="500"
         WindowStartupLocation="CenterScreen" ResizeMode="NoResize"
         Background="{StaticResource BackgroundBrush}"
         Foreground="{StaticResource ForegroundBrush}">
@@ -12,55 +12,29 @@
         </Grid.RowDefinitions>
 
         <TabControl Grid.Row="0">
-            <!-- Connection Tab -->
-            <TabItem Header="Connection">
-                <StackPanel Margin="12">
-                    <TextBlock Text="Host:" Margin="0,0,0,4"/>
-                    <TextBox Text="{Binding Host, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
-
-                    <TextBlock Text="Port:" Margin="0,0,0,4"/>
-                    <TextBox Text="{Binding Port, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
-
-                    <TextBlock Text="Username:" Margin="0,0,0,4"/>
-                    <TextBox Text="{Binding Username, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
-
-                    <TextBlock Text="Password:" Margin="0,0,0,4"/>
-                    <PasswordBox x:Name="PasswordBox" Margin="0,0,0,8"/>
-
-                    <TextBlock Text="Root Path:" Margin="0,0,0,4"/>
-                    <TextBox Text="{Binding RootPath, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
-
-                    <Button Content="Test Connection" Click="TestConnection_Click"
-                            HorizontalAlignment="Left" Padding="16,6" Margin="0,4,0,0"/>
-                    <TextBlock x:Name="TestResultText" Margin="0,8,0,0" TextWrapping="Wrap"/>
-                </StackPanel>
-            </TabItem>
-
-            <!-- Mount Tab -->
-            <TabItem Header="Mount">
-                <StackPanel Margin="12">
-                    <TextBlock Text="Drive Letter:" Margin="0,0,0,4"/>
-                    <ComboBox ItemsSource="{Binding AvailableDriveLetters}"
-                              SelectedItem="{Binding DriveLetter}" Margin="0,0,0,8" Width="80" HorizontalAlignment="Left"/>
-
-                    <TextBlock Text="Volume Label:" Margin="0,0,0,4"/>
-                    <TextBox Text="{Binding VolumeLabel, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
-
-                    <CheckBox Content="Auto-mount on start" IsChecked="{Binding AutoMountOnStart}" Margin="0,8,0,0"/>
-                </StackPanel>
-            </TabItem>
-
-            <!-- Security Tab -->
-            <TabItem Header="Security">
-                <StackPanel Margin="12">
-                    <CheckBox Content="Prefer TLS 1.2 (recommended for glftpd)"
-                              IsChecked="{Binding PreferTls12}" Margin="0,0,0,12"/>
-
-                    <TextBlock Text="Trusted Certificates:" Margin="0,0,0,4" FontWeight="SemiBold"/>
-                    <TextBlock Text="{Binding TrustedCertsInfo}" TextWrapping="Wrap" Margin="0,0,0,8"/>
-                    <Button Content="Clear Trusted Certificates" Click="ClearCerts_Click"
-                            HorizontalAlignment="Left" Padding="16,6"/>
-                </StackPanel>
+            <!-- Servers Tab -->
+            <TabItem Header="Servers">
+                <DockPanel Margin="12">
+                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,10,0,0">
+                        <Button Content="Add Server" Click="AddServer_Click"
+                                Padding="12,6" Margin="0,0,6,0" Style="{StaticResource PrimaryButton}"/>
+                        <Button Content="Edit" Click="EditServer_Click"
+                                Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"/>
+                        <Button Content="Remove" Click="RemoveServer_Click"
+                                Padding="12,6" Style="{StaticResource SecondaryButton}"/>
+                    </StackPanel>
+                    <DataGrid x:Name="ServerGrid"
+                              AutoGenerateColumns="False" IsReadOnly="True"
+                              SelectionMode="Single" GridLinesVisibility="Horizontal"
+                              HeadersVisibility="Column" CanUserAddRows="False">
+                        <DataGrid.Columns>
+                            <DataGridCheckBoxColumn Header="Enabled" Binding="{Binding Enabled}" Width="60"/>
+                            <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*"/>
+                            <DataGridTextColumn Header="Host" Binding="{Binding Host}" Width="150"/>
+                            <DataGridTextColumn Header="Drive" Binding="{Binding DriveLetter}" Width="55"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
             </TabItem>
 
             <!-- Performance Tab -->
@@ -78,30 +52,6 @@
                         <TextBlock Text="Max Concurrent Downloads:" Margin="0,0,0,4"/>
                         <TextBox Text="{Binding MaxConcurrentDownloads, UpdateSourceTrigger=PropertyChanged}"
                                  Width="80" HorizontalAlignment="Left" Margin="0,0,0,12"/>
-
-                        <!-- Network Section -->
-                        <TextBlock Text="Network" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                        <TextBlock Text="Connection Pool Size:" Margin="0,0,0,4"/>
-                        <TextBox Text="{Binding PoolSize, UpdateSourceTrigger=PropertyChanged}"
-                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
-                        <TextBlock Text="Keepalive Interval (seconds):" Margin="0,0,0,4"/>
-                        <TextBox Text="{Binding KeepaliveInterval, UpdateSourceTrigger=PropertyChanged}"
-                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,12"/>
-
-                        <!-- Filesystem Section -->
-                        <TextBlock Text="Filesystem" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                        <TextBlock Text="Directory Cache TTL (seconds):" Margin="0,0,0,4"/>
-                        <TextBox Text="{Binding CacheTtl, UpdateSourceTrigger=PropertyChanged}"
-                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
-                        <TextBlock Text="Max Cached Directories:" Margin="0,0,0,4"/>
-                        <TextBox Text="{Binding MaxCachedDirs, UpdateSourceTrigger=PropertyChanged}"
-                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
-                        <TextBlock Text="Directory List Timeout (seconds):" Margin="0,0,0,4"/>
-                        <TextBox Text="{Binding DirListTimeout, UpdateSourceTrigger=PropertyChanged}"
-                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
-                        <TextBlock Text="File Info Cache (ms):" Margin="0,0,0,4"/>
-                        <TextBox Text="{Binding FileInfoTimeout, UpdateSourceTrigger=PropertyChanged}"
-                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
@@ -135,6 +85,11 @@
                     <TextBlock Text="Log Level:" Margin="0,0,0,4"/>
                     <ComboBox ItemsSource="{Binding LogLevels}"
                               SelectedItem="{Binding LogLevel}" Width="150" HorizontalAlignment="Left" Margin="0,0,0,12"/>
+
+                    <TextBlock Text="Trusted Certificates:" Margin="0,0,0,4" FontWeight="SemiBold"/>
+                    <TextBlock Text="{Binding TrustedCertsInfo}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                    <Button Content="Clear Trusted Certificates" Click="ClearCerts_Click"
+                            HorizontalAlignment="Left" Padding="16,6" Margin="0,0,0,12"/>
 
                     <Button Content="Open Log Folder" Click="OpenLogs_Click"
                             HorizontalAlignment="Left" Padding="16,6"/>

@@ -2,14 +2,22 @@ namespace GlDrive.Config;
 
 public class AppConfig
 {
+    public List<ServerConfig> Servers { get; set; } = [];
+    public LoggingConfig Logging { get; set; } = new();
+    public DownloadConfig Downloads { get; set; } = new();
+}
+
+public class ServerConfig
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N")[..8];
+    public string Name { get; set; } = "";
+    public bool Enabled { get; set; } = true;
     public ConnectionConfig Connection { get; set; } = new();
     public MountConfig Mount { get; set; } = new();
     public TlsConfig Tls { get; set; } = new();
     public CacheConfig Cache { get; set; } = new();
     public PoolConfig Pool { get; set; } = new();
-    public LoggingConfig Logging { get; set; } = new();
     public NotificationConfig Notifications { get; set; } = new();
-    public DownloadConfig Downloads { get; set; } = new();
 }
 
 public class ConnectionConfig

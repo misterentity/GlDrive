@@ -6,9 +6,9 @@ namespace GlDrive.UI;
 
 public partial class DashboardWindow : Window
 {
-    public DashboardWindow(MountService mountService, AppConfig config)
+    public DashboardWindow(ServerManager serverManager, AppConfig config)
     {
         InitializeComponent();
-        DataContext = new DashboardViewModel(mountService, config);
+        DataContext = new DashboardViewModel(serverManager, config);
     }
 }

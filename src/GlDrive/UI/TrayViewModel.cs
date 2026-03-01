@@ -12,19 +12,19 @@ namespace GlDrive.UI;
 
 public class TrayViewModel : INotifyPropertyChanged
 {
-    private readonly MountService _mountService;
+    private readonly ServerManager _serverManager;
     private readonly AppConfig _config;
-    private MountState _currentState;
+    private string _statusText = "No servers";
     private readonly List<(string Category, string Release)> _releaseBatch = new();
     private System.Windows.Threading.DispatcherTimer? _batchTimer;
     private DashboardWindow? _dashboardWindow;
 
-    public TrayViewModel(MountService mountService, AppConfig config)
+    public TrayViewModel(ServerManager serverManager, AppConfig config)
     {
-        _mountService = mountService;
+        _serverManager = serverManager;
         _config = config;
 
-        _mountService.NewReleaseDetected += (category, release) =>
+        _serverManager.NewReleaseDetected += (serverId, serverName, category, release) =>
         {
             Application.Current?.Dispatcher.Invoke(() =>
             {
@@ -43,31 +43,35 @@ public class TrayViewModel : INotifyPropertyChanged
             });
         };
 
-        _mountService.StateChanged += state =>
+        _serverManager.ServerStateChanged += (serverId, serverName, state) =>
         {
-            if (state == MountState.Connected && _mountService.Matcher != null)
-            {
-                _mountService.Matcher.MatchFound += (item, cat, rel) =>
-                    Application.Current?.Dispatcher.Invoke(() =>
-                        ShowNotification("Grabbed", $"{item.Title} [{cat}]"));
-            }
-        };
-
-        _mountService.StateChanged += state =>
-        {
-            CurrentState = state;
             Application.Current?.Dispatcher.Invoke(() =>
             {
+                UpdateStatusText();
+                OnPropertyChanged(nameof(StatusText));
+
+                // Wire up wishlist matcher notifications for newly connected servers
+                if (state == MountState.Connected)
+                {
+                    var server = _serverManager.GetServer(serverId);
+                    if (server?.Matcher != null)
+                    {
+                        server.Matcher.MatchFound += (item, cat, rel) =>
+                            Application.Current?.Dispatcher.Invoke(() =>
+                                ShowNotification("Grabbed", $"{item.Title} [{cat}] ({serverName})"));
+                    }
+                }
+
                 switch (state)
                 {
                     case MountState.Connected:
-                        ShowNotification("GlDrive", $"Connected — {_config.Mount.DriveLetter}: is ready");
+                        ShowNotification("GlDrive", $"{serverName} connected");
                         break;
                     case MountState.Reconnecting:
-                        ShowNotification("GlDrive", "Disconnected — reconnecting...");
+                        ShowNotification("GlDrive", $"{serverName} disconnected — reconnecting...");
                         break;
                     case MountState.Error:
-                        ShowNotification("GlDrive", "Connection error");
+                        ShowNotification("GlDrive", $"{serverName} connection error");
                         break;
                 }
             });
@@ -75,36 +79,17 @@ public class TrayViewModel : INotifyPropertyChanged
 
         OpenDriveCommand = new RelayCommand(() =>
         {
-            var path = _config.Mount.DriveLetter + ":\\";
-            Process.Start("explorer.exe", path);
-        });
-
-        RefreshCacheCommand = new RelayCommand(() =>
-        {
-            _mountService.RefreshCache();
-            ShowNotification("GlDrive", "Cache cleared");
-        });
-
-        ToggleMountCommand = new RelayCommand(async () =>
-        {
-            if (_currentState == MountState.Connected || _currentState == MountState.Reconnecting)
+            var mounted = _serverManager.GetMountedServers();
+            if (mounted.Count > 0)
             {
-                _mountService.Unmount();
-            }
-            else
-            {
-                try { await _mountService.Mount(); }
-                catch (Exception ex)
-                {
-                    Log.Error(ex, "Mount failed");
-                    ShowNotification("GlDrive", $"Mount failed: {ex.Message}");
-                }
+                var path = mounted[0].DriveLetter + ":\\";
+                Process.Start("explorer.exe", path);
             }
         });
 
         SettingsCommand = new RelayCommand(() =>
         {
-            var window = new SettingsWindow(_config, _mountService);
+            var window = new SettingsWindow(_config, _serverManager);
             window.ShowDialog();
         });
 
@@ -112,7 +97,7 @@ public class TrayViewModel : INotifyPropertyChanged
         {
             if (_dashboardWindow == null || !_dashboardWindow.IsLoaded)
             {
-                _dashboardWindow = new DashboardWindow(_mountService, _config);
+                _dashboardWindow = new DashboardWindow(_serverManager, _config);
                 _dashboardWindow.Show();
             }
             else
@@ -130,40 +115,71 @@ public class TrayViewModel : INotifyPropertyChanged
 
         ExitCommand = new RelayCommand(() =>
         {
-            _mountService.Unmount();
+            _serverManager.UnmountAll();
             Application.Current?.Shutdown();
         });
+
+        UpdateStatusText();
     }
 
-    public MountState CurrentState
+    public ServerManager ServerManager => _serverManager;
+    public AppConfig Config => _config;
+
+    public string StatusText
     {
-        get => _currentState;
-        set { _currentState = value; OnPropertyChanged(); OnPropertyChanged(nameof(StatusText)); OnPropertyChanged(nameof(MountButtonText)); OnPropertyChanged(nameof(IsConnected)); }
+        get => _statusText;
+        private set { _statusText = value; OnPropertyChanged(); }
     }
-
-    public string StatusText => CurrentState switch
-    {
-        MountState.Connected => $"Connected ({_config.Mount.DriveLetter}:)",
-        MountState.Connecting => "Connecting...",
-        MountState.Reconnecting => "Reconnecting...",
-        MountState.Error => "Error",
-        _ => "Unmounted"
-    };
-
-    public string MountButtonText => CurrentState == MountState.Connected || CurrentState == MountState.Reconnecting
-        ? "Unmount Drive" : "Mount Drive";
-
-    public bool IsConnected => CurrentState == MountState.Connected;
 
     public ICommand OpenDriveCommand { get; }
-    public ICommand RefreshCacheCommand { get; }
-    public ICommand ToggleMountCommand { get; }
     public ICommand DashboardCommand { get; }
     public ICommand SettingsCommand { get; }
     public ICommand ViewLogsCommand { get; }
     public ICommand ExitCommand { get; }
 
     public Action<string, string>? ShowNotificationRequested { get; set; }
+
+    public void UpdateStatusText()
+    {
+        var mounted = _serverManager.GetMountedServers();
+        var total = _config.Servers.Count;
+
+        if (total == 0)
+        {
+            StatusText = "No servers configured";
+            return;
+        }
+
+        var connectedCount = mounted.Count(s => s.CurrentState == MountState.Connected);
+
+        if (connectedCount == 0 && mounted.Count == 0)
+        {
+            StatusText = "Unmounted";
+            return;
+        }
+
+        if (total == 1 && mounted.Count > 0)
+        {
+            var server = mounted[0];
+            StatusText = server.CurrentState switch
+            {
+                MountState.Connected => $"Connected ({server.DriveLetter}:)",
+                MountState.Connecting => "Connecting...",
+                MountState.Reconnecting => "Reconnecting...",
+                MountState.Error => "Error",
+                _ => "Unmounted"
+            };
+            return;
+        }
+
+        // Multi-server: summarize
+        var drives = mounted
+            .Where(s => s.CurrentState == MountState.Connected)
+            .Select(s => $"{s.ServerName} ({s.DriveLetter}:)");
+        StatusText = connectedCount > 0
+            ? $"{connectedCount}/{total} connected"
+            : "No servers connected";
+    }
 
     private void FlushReleaseBatch()
     {

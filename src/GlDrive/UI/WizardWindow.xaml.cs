@@ -14,6 +14,7 @@ public partial class WizardWindow : Window
 {
     private int _step;
     private readonly AppConfig _config = new();
+    private readonly ServerConfig _serverConfig = new() { Name = "Server 1" };
     private readonly CertificateManager _certManager = new();
     private string _password = "";
     private string _certFingerprint = "";
@@ -219,27 +220,30 @@ public partial class WizardWindow : Window
 
         if (_step == 4)
         {
-            // Save config
-            _config.Connection.Host = _hostBox.Text;
-            _config.Connection.Port = int.TryParse(_portBox.Text, out var p) ? p : 21;
-            _config.Connection.Username = _usernameBox.Text;
-            _config.Connection.RootPath = _rootPathBox.Text;
-            _config.Mount.DriveLetter = _driveLetterBox.SelectedItem?.ToString() ?? "G";
-            _config.Mount.VolumeLabel = _volumeLabelBox.Text;
-            _config.Mount.AutoMountOnStart = _autoMountBox.IsChecked == true;
+            // Build ServerConfig
+            _serverConfig.Connection.Host = _hostBox.Text;
+            _serverConfig.Connection.Port = int.TryParse(_portBox.Text, out var p) ? p : 21;
+            _serverConfig.Connection.Username = _usernameBox.Text;
+            _serverConfig.Connection.RootPath = _rootPathBox.Text;
+            _serverConfig.Mount.DriveLetter = _driveLetterBox.SelectedItem?.ToString() ?? "G";
+            _serverConfig.Mount.VolumeLabel = _volumeLabelBox.Text;
+            _serverConfig.Mount.AutoMountOnStart = _autoMountBox.IsChecked == true;
+            _serverConfig.Name = _hostBox.Text;
 
+            // Add to config and save
+            _config.Servers.Add(_serverConfig);
             ConfigManager.Save(_config);
 
             if (!string.IsNullOrEmpty(_password))
             {
                 CredentialStore.SavePassword(
-                    _config.Connection.Host,
-                    _config.Connection.Port,
-                    _config.Connection.Username,
+                    _serverConfig.Connection.Host,
+                    _serverConfig.Connection.Port,
+                    _serverConfig.Connection.Username,
                     _password);
             }
 
-            Log.Information("Wizard completed, config saved");
+            Log.Information("Wizard completed, config saved with server {ServerName}", _serverConfig.Name);
             DialogResult = true;
             Close();
             return;

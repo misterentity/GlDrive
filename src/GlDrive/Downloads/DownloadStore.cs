@@ -7,8 +7,7 @@ namespace GlDrive.Downloads;
 
 public class DownloadStore
 {
-    private static readonly string FilePath =
-        Path.Combine(ConfigManager.AppDataPath, "downloads.json");
+    private readonly string _filePath;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -20,9 +19,14 @@ public class DownloadStore
 
     public IReadOnlyList<DownloadItem> Items => _items;
 
+    public DownloadStore(string serverId)
+    {
+        _filePath = Path.Combine(ConfigManager.AppDataPath, $"downloads-{serverId}.json");
+    }
+
     public void Load()
     {
-        if (!File.Exists(FilePath))
+        if (!File.Exists(_filePath))
         {
             _items = [];
             return;
@@ -30,7 +34,7 @@ public class DownloadStore
 
         try
         {
-            var json = File.ReadAllText(FilePath);
+            var json = File.ReadAllText(_filePath);
             _items = JsonSerializer.Deserialize<List<DownloadItem>>(json, JsonOptions) ?? [];
 
             // Reset any items that were downloading when app closed
@@ -48,9 +52,9 @@ public class DownloadStore
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
             var json = JsonSerializer.Serialize(_items, JsonOptions);
-            File.WriteAllText(FilePath, json);
+            File.WriteAllText(_filePath, json);
         }
         catch (Exception ex)
         {

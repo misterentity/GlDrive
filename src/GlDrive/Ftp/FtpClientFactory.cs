@@ -9,20 +9,20 @@ namespace GlDrive.Ftp;
 
 public class FtpClientFactory
 {
-    private readonly AppConfig _config;
+    private readonly ServerConfig _serverConfig;
     private readonly CertificateManager _certManager;
 
-    public string Host => _config.Connection.Host;
+    public string Host => _serverConfig.Connection.Host;
 
-    public FtpClientFactory(AppConfig config, CertificateManager certManager)
+    public FtpClientFactory(ServerConfig serverConfig, CertificateManager certManager)
     {
-        _config = config;
+        _serverConfig = serverConfig;
         _certManager = certManager;
     }
 
     public AsyncFtpClient Create()
     {
-        var conn = _config.Connection;
+        var conn = _serverConfig.Connection;
         var password = CredentialStore.GetPassword(conn.Host, conn.Port, conn.Username) ?? "";
 
         var client = new AsyncFtpClient(conn.Host, conn.Username, password, conn.Port);
@@ -41,7 +41,7 @@ public class FtpClientFactory
         };
 
         // TLS 1.2 preferred (glftpd TLS 1.3 session ticket bug)
-        if (_config.Tls.PreferTls12)
+        if (_serverConfig.Tls.PreferTls12)
         {
             gnuConfig.AdvancedOptions = [GnuAdvanced.NoTickets];
         }
@@ -95,7 +95,7 @@ public class FtpClientFactory
         {
             await client.Connect(ct);
             Log.Information("Connected to {Host}:{Port} as {User}",
-                _config.Connection.Host, _config.Connection.Port, _config.Connection.Username);
+                _serverConfig.Connection.Host, _serverConfig.Connection.Port, _serverConfig.Connection.Username);
             return client;
         }
         catch
