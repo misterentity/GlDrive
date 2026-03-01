@@ -13,6 +13,10 @@ Built with WinFsp, FluentFTP, and GnuTLS.
 - **Directory caching** — TTL-based cache with LRU eviction for responsive browsing
 - **Setup wizard** — first-run wizard walks through server configuration
 - **New release notifications** — polls `/recent/` categories and shows a Windows toast notification when new releases appear
+- **Wishlist & auto-download** — track TV shows (TVMaze) and movies (OMDB), auto-download matching releases
+- **Rich media dashboard** — posters, ratings, genres, and plot summaries for wishlist items
+- **Download manager** — streaming FTP-to-disk downloads with progress, queue management, and auto-organization
+- **Dark theme** — black/red/white UI throughout
 - **System tray** — lives in the tray with mount/unmount/settings controls
 - **Auto-mount** — optionally connect on Windows startup
 
@@ -92,6 +96,8 @@ App.xaml.cs (startup)
   │     └── GlDriveFileSystem (WinFsp)
   ├── ConnectionMonitor (NOOP keepalive)
   ├── NewReleaseMonitor (polls /recent/)
+  ├── WishlistStore + DownloadManager
+  ├── DashboardWindow (Wishlist / Downloads / Search)
   └── TrayIcon (H.NotifyIcon)
 ```
 
