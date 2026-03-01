@@ -1,24 +1,27 @@
 # GlDrive
 
-A Windows 11 system tray application that mounts a glftpd FTPS server as a local drive letter. Browse your FTP site in Windows Explorer like any other drive.
+A Windows 11 system tray application that mounts glftpd FTPS servers as local drive letters. Browse your FTP sites in Windows Explorer like any other drive. Supports multiple servers, each on its own drive letter.
 
 Built with WinFsp, FluentFTP, and GnuTLS.
 
 ## Features
 
-- **Native drive letter** — mount your glftpd server as G: (or any letter) and use it in Explorer, cmd, or any app
+- **Multi-server support** — mount multiple glftpd servers simultaneously, each on its own drive letter (G:, H:, etc.)
+- **Native drive letter** — use mounted servers in Explorer, cmd, or any app
+- **Cross-server search** — search all connected servers in parallel from the Dashboard
+- **Per-server tray menu** — mount/unmount, open drive, and refresh cache per server from the tray icon
 - **CPSV support** — works with glftpd behind a BNC (CPSV data connections with reverse TLS)
 - **TOFU certificate pinning** — trust-on-first-use with SHA-256 fingerprint storage
-- **Connection pooling** — bounded pool of FTPS connections with automatic reconnection
+- **Connection pooling** — bounded pool of FTPS connections per server with automatic reconnection
 - **Directory caching** — TTL-based cache with LRU eviction for responsive browsing
 - **Setup wizard** — first-run wizard walks through server configuration
 - **New release notifications** — polls `/recent/` categories and shows a Windows toast notification when new releases appear
-- **Wishlist & auto-download** — track TV shows (TVMaze) and movies (OMDB), auto-download matching releases
+- **Wishlist & auto-download** — track TV shows (TVMaze) and movies (OMDB), auto-download matching releases from any server
 - **Rich media dashboard** — posters, ratings, genres, and plot summaries for wishlist items
 - **Download manager** — streaming FTP-to-disk downloads with progress, queue management, and auto-organization
 - **Dark theme** — black/red/white UI throughout
-- **System tray** — lives in the tray with mount/unmount/settings controls
-- **Auto-mount** — optionally connect on Windows startup
+- **System tray** — lives in the tray with per-server status and controls
+- **Auto-mount** — optionally connect each server on Windows startup
 
 ## Installation
 
@@ -65,8 +68,10 @@ This publishes a self-contained release build and compiles the Inno Setup instal
 ## Usage
 
 1. **First run** — the setup wizard appears. Enter your glftpd server address, port, username, and password. Choose a drive letter.
-2. **Tray icon** — GlDrive runs in the system tray. Right-click for mount/unmount/settings/exit.
-3. **Browse** — open Explorer and navigate to your mounted drive letter.
+2. **Add more servers** — open Settings > Servers tab to add, edit, or remove servers. Each gets its own drive letter.
+3. **Tray icon** — GlDrive runs in the system tray. Right-click for per-server mount/unmount, open drive, refresh cache, settings, and exit.
+4. **Browse** — open Explorer and navigate to any mounted drive letter.
+5. **Search** — Dashboard > Search queries all connected servers in parallel and shows results with server labels.
 
 ### Configuration
 
@@ -75,6 +80,8 @@ All settings are stored locally on your machine:
 | Data | Location |
 |------|----------|
 | App config | `%AppData%\GlDrive\appsettings.json` |
+| Downloads (per server) | `%AppData%\GlDrive\downloads-{serverId}.json` |
+| Wishlist | `%AppData%\GlDrive\wishlist.json` |
 | Trusted certs | `%AppData%\GlDrive\trusted_certs.json` |
 | Logs | `%AppData%\GlDrive\logs\gldrive-{date}.log` |
 | Passwords | Windows Credential Manager |
@@ -84,21 +91,25 @@ All settings are stored locally on your machine:
 ```
 App.xaml.cs (startup)
   ├── SingleInstanceGuard
-  ├── ConfigManager → AppConfig (from %AppData%)
+  ├── ConfigManager → AppConfig { Servers[], Downloads, Logging }
   ├── SerilogSetup
   ├── WizardWindow (first-run only)
-  ├── CertificateManager (TOFU)
-  ├── MountService
-  │     ├── FtpClientFactory (FluentFTP + GnuTLS)
-  │     ├── FtpConnectionPool (bounded Channel<T>)
-  │     ├── FtpOperations → CpsvDataHelper (for BNC)
-  │     ├── DirectoryCache (TTL + LRU)
-  │     └── GlDriveFileSystem (WinFsp)
-  ├── ConnectionMonitor (NOOP keepalive)
-  ├── NewReleaseMonitor (polls /recent/)
-  ├── WishlistStore + DownloadManager
-  ├── DashboardWindow (Wishlist / Downloads / Search)
-  └── TrayIcon (H.NotifyIcon)
+  ├── CertificateManager (TOFU, shared across servers)
+  ├── ServerManager (orchestrates all servers)
+  │     └── per server: MountService
+  │           ├── FtpClientFactory (FluentFTP + GnuTLS)
+  │           ├── FtpConnectionPool (bounded Channel<T>)
+  │           ├── FtpOperations → CpsvDataHelper (for BNC)
+  │           ├── DirectoryCache (TTL + LRU)
+  │           ├── GlDriveFileSystem (WinFsp, unique prefix per server)
+  │           ├── ConnectionMonitor (NOOP keepalive)
+  │           ├── NewReleaseMonitor (polls /recent/)
+  │           ├── FtpSearchService (parallel category search)
+  │           ├── DownloadManager + DownloadStore (per-server)
+  │           └── WishlistMatcher (global wishlist, per-server matching)
+  ├── WishlistStore (global)
+  ├── DashboardWindow (cross-server search / downloads / wishlist)
+  └── TrayIcon (H.NotifyIcon, dynamic per-server menu)
 ```
 
 ### CPSV data connections
@@ -132,7 +143,7 @@ glftpd behind a BNC requires CPSV instead of PASV for data connections. FluentFT
 | Data | Storage | Protection |
 |------|---------|------------|
 | Password | Windows Credential Manager | OS-level DPAPI encryption |
-| Server host/port/username | `%AppData%\GlDrive\appsettings.json` | User-profile ACLs |
+| Server configs (host/port/username) | `%AppData%\GlDrive\appsettings.json` | User-profile ACLs |
 | Certificate fingerprints | `%AppData%\GlDrive\trusted_certs.json` | User-profile ACLs |
 | Logs | `%AppData%\GlDrive\logs\` | Passwords redacted, auto-rotated |
 
