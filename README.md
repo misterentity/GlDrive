@@ -112,6 +112,50 @@ App.xaml.cs (startup)
   └── TrayIcon (H.NotifyIcon, dynamic per-server menu)
 ```
 
+### Mounting
+
+When a server is mounted, GlDrive establishes a pool of FTPS connections (default 3) and registers a WinFsp virtual filesystem on the chosen drive letter. Each server gets a unique WinFsp prefix (`\GlDrive\{serverId}`) so multiple servers can be mounted simultaneously without conflict.
+
+The `ServerManager` holds a dictionary of `MountService` instances. On startup, it calls `MountAll()` which iterates all enabled servers with auto-mount and connects them in sequence. Each `MountService` creates its own `FtpClientFactory` → `FtpConnectionPool` → `FtpOperations` → `DirectoryCache` → `GlDriveFileSystem` → `FileSystemHost` chain. A `ConnectionMonitor` sends NOOP keepalives every 30 seconds and reconnects with exponential backoff if the connection drops.
+
+Stale mounts from a previous crash are cleaned up automatically via `net use /delete` before mounting.
+
+### Searching
+
+Search operates at two levels of parallelism:
+
+1. **Cross-server** — the Dashboard dispatches search queries to all connected servers simultaneously using `Task.WhenAll`. Each server's search runs independently with its own FTP connection pool.
+
+2. **Within a server** — `FtpSearchService` first lists the category directories under the watch path (e.g. `/recent/`), then searches all categories in parallel using `Task.WhenAll`. The pool's bounded size (default 3 connections) naturally throttles concurrency so the server isn't overwhelmed.
+
+Search bypasses the `DirectoryCache` entirely — it borrows connections directly from the `FtpConnectionPool` and issues fresh `LIST` commands to get up-to-date results. Results are tagged with `ServerId` and `ServerName` so the Dashboard can display which server each result came from and route downloads to the correct server.
+
+### Watching & notifications
+
+Each server runs a `NewReleaseMonitor` that polls the configured watch path (default `/recent/`) on a configurable interval (default 60s). On the first poll it seeds a snapshot of all category/release pairs. On subsequent polls it diffs against the snapshot and fires `NewReleaseDetected` events for any new entries.
+
+The `TrayViewModel` batches release notifications with a 3-second debounce timer — if multiple releases appear in quick succession, they're combined into a single "X new releases" toast notification instead of spamming one per release.
+
+### Wishlist & auto-download
+
+The wishlist is a global store (`wishlist.json`) shared across all servers. You add movies (searched via OMDB) or TV shows (searched via TVMaze) with a quality profile (Any/SD/720p/1080p/2160p).
+
+Each server runs its own `WishlistMatcher` that listens to that server's `NewReleaseDetected` events. When a new release appears, the matcher:
+
+1. Parses the release name using `SceneNameParser` (extracts title, year, season/episode, quality, group)
+2. Compares against all non-paused wishlist items
+3. On match, builds a local path (`Movies/Title (Year)/release` or `TV/Show/Season XX/release`)
+4. Enqueues a `DownloadItem` tagged with the server's ID and name
+5. Records the grab so the same release isn't downloaded twice
+
+### Downloads
+
+Each server has its own `DownloadManager` with a `DownloadStore` persisted to `downloads-{serverId}.json`. The manager runs a processing loop that reads from an unbounded channel, bounded by a concurrency semaphore (default 1 concurrent download).
+
+For each download, the `StreamingDownloader` borrows a connection from the pool and streams data directly to disk in configurable buffer sizes (default 256KB). For directory releases, it downloads each file sequentially, reporting aggregate progress. Progress events are forwarded to the Dashboard UI which shows a real-time progress bar with speed.
+
+Downloads that were in-progress when the app closed are automatically reset to queued on next launch.
+
 ### CPSV data connections
 
 glftpd behind a BNC requires CPSV instead of PASV for data connections. FluentFTP doesn't support this natively, so `CpsvDataHelper` implements it manually:
