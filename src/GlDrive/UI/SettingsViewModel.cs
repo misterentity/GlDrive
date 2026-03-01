@@ -22,6 +22,12 @@ public class SettingsViewModel : INotifyPropertyChanged
     private string _trustedCertsInfo;
     private string _downloadLocalPath;
     private string _maxConcurrentDownloads;
+    private string _streamingBufferSize;
+    private string _writeBufferLimit;
+    private string _keepaliveInterval;
+    private string _maxCachedDirs;
+    private string _dirListTimeout;
+    private string _fileInfoTimeout;
     private string _qualityDefault;
     private string _omdbApiKey;
     private bool _autoDownloadWishlist;
@@ -42,6 +48,12 @@ public class SettingsViewModel : INotifyPropertyChanged
         _trustedCertsInfo = GetCertsInfo(config);
         _downloadLocalPath = config.Downloads.LocalPath;
         _maxConcurrentDownloads = config.Downloads.MaxConcurrentDownloads.ToString();
+        _streamingBufferSize = config.Downloads.StreamingBufferSizeKb.ToString();
+        _writeBufferLimit = config.Downloads.WriteBufferLimitMb.ToString();
+        _keepaliveInterval = config.Pool.KeepaliveIntervalSeconds.ToString();
+        _maxCachedDirs = config.Cache.MaxCachedDirectories.ToString();
+        _dirListTimeout = config.Cache.DirectoryListTimeoutSeconds.ToString();
+        _fileInfoTimeout = config.Cache.FileInfoTimeoutMs.ToString();
         _qualityDefault = config.Downloads.QualityDefault;
         _omdbApiKey = config.Downloads.OmdbApiKey;
         _autoDownloadWishlist = config.Downloads.AutoDownloadWishlist;
@@ -61,6 +73,12 @@ public class SettingsViewModel : INotifyPropertyChanged
     public string TrustedCertsInfo { get => _trustedCertsInfo; set { _trustedCertsInfo = value; OnPropertyChanged(); } }
     public string DownloadLocalPath { get => _downloadLocalPath; set { _downloadLocalPath = value; OnPropertyChanged(); } }
     public string MaxConcurrentDownloads { get => _maxConcurrentDownloads; set { _maxConcurrentDownloads = value; OnPropertyChanged(); } }
+    public string StreamingBufferSize { get => _streamingBufferSize; set { _streamingBufferSize = value; OnPropertyChanged(); } }
+    public string WriteBufferLimit { get => _writeBufferLimit; set { _writeBufferLimit = value; OnPropertyChanged(); } }
+    public string KeepaliveInterval { get => _keepaliveInterval; set { _keepaliveInterval = value; OnPropertyChanged(); } }
+    public string MaxCachedDirs { get => _maxCachedDirs; set { _maxCachedDirs = value; OnPropertyChanged(); } }
+    public string DirListTimeout { get => _dirListTimeout; set { _dirListTimeout = value; OnPropertyChanged(); } }
+    public string FileInfoTimeout { get => _fileInfoTimeout; set { _fileInfoTimeout = value; OnPropertyChanged(); } }
     public string QualityDefault { get => _qualityDefault; set { _qualityDefault = value; OnPropertyChanged(); } }
     public string OmdbApiKey { get => _omdbApiKey; set { _omdbApiKey = value; OnPropertyChanged(); } }
     public bool AutoDownloadWishlist { get => _autoDownloadWishlist; set { _autoDownloadWishlist = value; OnPropertyChanged(); } }
@@ -80,10 +98,16 @@ public class SettingsViewModel : INotifyPropertyChanged
         config.Mount.AutoMountOnStart = AutoMountOnStart;
         config.Tls.PreferTls12 = PreferTls12;
         config.Cache.DirectoryListingTtlSeconds = int.TryParse(CacheTtl, out var ttl) ? Math.Clamp(ttl, 5, 300) : 30;
+        config.Cache.MaxCachedDirectories = int.TryParse(MaxCachedDirs, out var mcd2) ? Math.Clamp(mcd2, 50, 5000) : 500;
+        config.Cache.DirectoryListTimeoutSeconds = int.TryParse(DirListTimeout, out var dlt) ? Math.Clamp(dlt, 10, 120) : 30;
+        config.Cache.FileInfoTimeoutMs = int.TryParse(FileInfoTimeout, out var fit) ? Math.Clamp(fit, 200, 30000) : 1000;
         config.Pool.PoolSize = int.TryParse(PoolSize, out var ps) ? Math.Clamp(ps, 1, 10) : 3;
+        config.Pool.KeepaliveIntervalSeconds = int.TryParse(KeepaliveInterval, out var kai) ? Math.Clamp(kai, 10, 300) : 30;
         config.Logging.Level = LogLevel;
         config.Downloads.LocalPath = DownloadLocalPath;
         config.Downloads.MaxConcurrentDownloads = int.TryParse(MaxConcurrentDownloads, out var mcd) ? Math.Clamp(mcd, 1, 5) : 1;
+        config.Downloads.StreamingBufferSizeKb = int.TryParse(StreamingBufferSize, out var sbs) ? Math.Clamp(sbs, 64, 4096) : 256;
+        config.Downloads.WriteBufferLimitMb = int.TryParse(WriteBufferLimit, out var wbl) ? Math.Clamp(wbl, 0, 512) : 0;
         config.Downloads.QualityDefault = QualityDefault;
         config.Downloads.OmdbApiKey = OmdbApiKey;
         config.Downloads.AutoDownloadWishlist = AutoDownloadWishlist;

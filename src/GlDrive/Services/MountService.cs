@@ -67,7 +67,9 @@ public class MountService : IDisposable
             _fileSystem = new GlDriveFileSystem(
                 _ftp, _cache,
                 _config.Connection.RootPath,
-                _config.Mount.VolumeLabel);
+                _config.Mount.VolumeLabel,
+                _config.Cache.FileInfoTimeoutMs,
+                _config.Cache.DirectoryListTimeoutSeconds);
 
             _host = new FileSystemHost(_fileSystem);
             _host.Prefix = @"\GlDrive\ftps";
@@ -101,7 +103,8 @@ public class MountService : IDisposable
             var wishlistStore = new WishlistStore();
             wishlistStore.Load();
 
-            _streamingDownloader = new StreamingDownloader(_pool);
+            _streamingDownloader = new StreamingDownloader(
+                _pool, _config.Downloads.StreamingBufferSizeKb, _config.Downloads.WriteBufferLimitMb);
             _downloadManager = new DownloadManager(downloadStore, _ftp, _streamingDownloader, _config.Downloads);
             _searchService = new FtpSearchService(_ftp, _config.Notifications);
             _wishlistMatcher = new WishlistMatcher(wishlistStore, _downloadManager, _ftp, _config.Downloads);

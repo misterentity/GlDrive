@@ -38,11 +38,14 @@ public class CacheConfig
 {
     public int DirectoryListingTtlSeconds { get; set; } = 30;
     public int MaxCachedDirectories { get; set; } = 500;
+    public int DirectoryListTimeoutSeconds { get; set; } = 30;
+    public int FileInfoTimeoutMs { get; set; } = 1000;
 }
 
 public class PoolConfig
 {
     public int PoolSize { get; set; } = 3;
+    public int KeepaliveIntervalSeconds { get; set; } = 30;
     public int ReconnectInitialDelaySeconds { get; set; } = 5;
     public int ReconnectMaxDelaySeconds { get; set; } = 120;
 }
@@ -66,6 +69,8 @@ public class DownloadConfig
     public string LocalPath { get; set; } = System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "GlDrive");
     public int MaxConcurrentDownloads { get; set; } = 1;
+    public int StreamingBufferSizeKb { get; set; } = 256;
+    public int WriteBufferLimitMb { get; set; } = 0;
     public string QualityDefault { get; set; } = "1080p";
     public string OmdbApiKey { get; set; } = "";
     public bool AutoDownloadWishlist { get; set; } = true;

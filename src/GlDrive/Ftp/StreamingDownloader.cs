@@ -8,10 +8,16 @@ namespace GlDrive.Ftp;
 
 public class StreamingDownloader
 {
-    private const int BufferSize = 256 * 1024; // 256KB
+    private readonly int _bufferSize;
+    private readonly int _writeBufferLimitBytes;
     private readonly FtpConnectionPool _pool;
 
-    public StreamingDownloader(FtpConnectionPool pool) => _pool = pool;
+    public StreamingDownloader(FtpConnectionPool pool, int bufferSizeKb = 256, int writeBufferLimitMb = 0)
+    {
+        _pool = pool;
+        _bufferSize = Math.Clamp(bufferSizeKb, 64, 4096) * 1024;
+        _writeBufferLimitBytes = writeBufferLimitMb > 0 ? writeBufferLimitMb * 1024 * 1024 : 0;
+    }
 
     public async Task DownloadToFile(
         string remotePath, string localPath, IProgress<DownloadProgress>? progress, CancellationToken ct)
@@ -37,7 +43,7 @@ public class StreamingDownloader
     {
         var size = await client.GetFileSize(remotePath, -1, ct);
         await using var remoteStream = await client.OpenRead(remotePath, token: ct);
-        await using var fileStream = new FileStream(localPath, FileMode.Create, FileAccess.Write, FileShare.None, BufferSize, true);
+        await using var fileStream = new FileStream(localPath, FileMode.Create, FileAccess.Write, FileShare.None, _bufferSize, true);
 
         await CopyWithProgress(remoteStream, fileStream, size, progress, ct);
 
@@ -67,7 +73,7 @@ public class StreamingDownloader
             var ssl = await CpsvDataHelper.NegotiateDataTls(tcp.GetStream(), ct);
             try
             {
-                await using var fileStream = new FileStream(localPath, FileMode.Create, FileAccess.Write, FileShare.None, BufferSize, true);
+                await using var fileStream = new FileStream(localPath, FileMode.Create, FileAccess.Write, FileShare.None, _bufferSize, true);
                 await CopyWithProgress(ssl, fileStream, size, progress, ct);
 
                 ssl.Close();
@@ -80,17 +86,20 @@ public class StreamingDownloader
         finally { tcp.Dispose(); }
     }
 
-    private static async Task CopyWithProgress(
+    private async Task CopyWithProgress(
         Stream source, Stream destination, long totalSize,
         IProgress<DownloadProgress>? progress, CancellationToken ct)
     {
-        var buffer = new byte[BufferSize];
+        var buffer = new byte[_bufferSize];
         long totalRead = 0;
         var sw = Stopwatch.StartNew();
         int bytesRead;
 
-        while ((bytesRead = await source.ReadAsync(buffer.AsMemory(0, BufferSize), ct)) > 0)
+        while ((bytesRead = await source.ReadAsync(buffer.AsMemory(0, _bufferSize), ct)) > 0)
         {
+            if (_writeBufferLimitBytes > 0 && totalRead + bytesRead > _writeBufferLimitBytes)
+                throw new IOException($"Write buffer limit exceeded ({_writeBufferLimitBytes / (1024 * 1024)} MB)");
+
             await destination.WriteAsync(buffer.AsMemory(0, bytesRead), ct);
             totalRead += bytesRead;
 

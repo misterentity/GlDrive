@@ -18,14 +18,19 @@ public class GlDriveFileSystem : FileSystemBase
     private readonly DirectoryCache _cache;
     private readonly string _rootPath;
     private readonly string _volumeLabel;
+    private readonly int _fileInfoTimeoutMs;
+    private readonly int _dirListTimeoutSeconds;
     private readonly byte[] _defaultSecurityDescriptor;
 
-    public GlDriveFileSystem(FtpOperations ftp, DirectoryCache cache, string rootPath, string volumeLabel)
+    public GlDriveFileSystem(FtpOperations ftp, DirectoryCache cache, string rootPath, string volumeLabel,
+        int fileInfoTimeoutMs = 1000, int dirListTimeoutSeconds = 30)
     {
         _ftp = ftp;
         _cache = cache;
         _rootPath = rootPath.TrimEnd('/');
         _volumeLabel = volumeLabel;
+        _fileInfoTimeoutMs = fileInfoTimeoutMs;
+        _dirListTimeoutSeconds = dirListTimeoutSeconds;
 
         // Build a security descriptor granting the current user full access
         var sid = WindowsIdentity.GetCurrent().User!;
@@ -57,7 +62,7 @@ public class GlDriveFileSystem : FileSystemBase
         host.SectorSize = 4096;
         host.SectorsPerAllocationUnit = 1;
         host.MaxComponentLength = 255;
-        host.FileInfoTimeout = 1000;
+        host.FileInfoTimeout = (uint)_fileInfoTimeoutMs;
         host.CaseSensitiveSearch = false;
         host.CasePreservedNames = true;
         host.UnicodeOnDisk = true;
@@ -628,11 +633,11 @@ public override int CanDelete(
 
         Log.Debug("Listing {Path} (cache miss, fetching from server)...", remotePath);
 
-        // Use Task.Run to avoid potential deadlocks, with a 30s timeout
+        // Use Task.Run to avoid potential deadlocks, with a configurable timeout
         var task = Task.Run(() => _ftp.ListDirectory(remotePath));
-        if (!task.Wait(TimeSpan.FromSeconds(30)))
+        if (!task.Wait(TimeSpan.FromSeconds(_dirListTimeoutSeconds)))
         {
-            Log.Warning("ListDirectory timed out after 30s: {Path}", remotePath);
+            Log.Warning("ListDirectory timed out after {Seconds}s: {Path}", _dirListTimeoutSeconds, remotePath);
             throw new TimeoutException($"ListDirectory timed out: {remotePath}");
         }
 

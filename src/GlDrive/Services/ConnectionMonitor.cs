@@ -43,7 +43,7 @@ public class ConnectionMonitor
         {
             try
             {
-                await Task.Delay(TimeSpan.FromSeconds(30), ct);
+                await Task.Delay(TimeSpan.FromSeconds(_config.KeepaliveIntervalSeconds), ct);
 
                 // Health check via NOOP
                 bool healthy;

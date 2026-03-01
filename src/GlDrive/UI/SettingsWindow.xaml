@@ -65,15 +65,45 @@
 
             <!-- Performance Tab -->
             <TabItem Header="Performance">
-                <StackPanel Margin="12">
-                    <TextBlock Text="Directory Cache TTL (seconds):" Margin="0,0,0,4"/>
-                    <TextBox Text="{Binding CacheTtl, UpdateSourceTrigger=PropertyChanged}"
-                             Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="12">
+                        <!-- Downloads Section -->
+                        <TextBlock Text="Downloads" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                        <TextBlock Text="Streaming Buffer Size (KB):" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding StreamingBufferSize, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+                        <TextBlock Text="Write Buffer Limit (MB, 0=unlimited):" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding WriteBufferLimit, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+                        <TextBlock Text="Max Concurrent Downloads:" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding MaxConcurrentDownloads, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,12"/>
 
-                    <TextBlock Text="Connection Pool Size:" Margin="0,0,0,4"/>
-                    <TextBox Text="{Binding PoolSize, UpdateSourceTrigger=PropertyChanged}"
-                             Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
-                </StackPanel>
+                        <!-- Network Section -->
+                        <TextBlock Text="Network" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                        <TextBlock Text="Connection Pool Size:" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding PoolSize, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+                        <TextBlock Text="Keepalive Interval (seconds):" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding KeepaliveInterval, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,12"/>
+
+                        <!-- Filesystem Section -->
+                        <TextBlock Text="Filesystem" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                        <TextBlock Text="Directory Cache TTL (seconds):" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding CacheTtl, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+                        <TextBlock Text="Max Cached Directories:" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding MaxCachedDirs, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+                        <TextBlock Text="Directory List Timeout (seconds):" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding DirListTimeout, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+                        <TextBlock Text="File Info Cache (ms):" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding FileInfoTimeout, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+                    </StackPanel>
+                </ScrollViewer>
             </TabItem>
 
             <!-- Downloads Tab -->
@@ -85,10 +115,6 @@
                                 Padding="8,4" Margin="8,0,0,0"/>
                         <TextBox Text="{Binding DownloadLocalPath, UpdateSourceTrigger=PropertyChanged}"/>
                     </DockPanel>
-
-                    <TextBlock Text="Max Concurrent Downloads:" Margin="0,0,0,4"/>
-                    <TextBox Text="{Binding MaxConcurrentDownloads, UpdateSourceTrigger=PropertyChanged}"
-                             Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
 
                     <TextBlock Text="Default Quality:" Margin="0,0,0,4"/>
                     <ComboBox ItemsSource="{Binding QualityOptions}"
