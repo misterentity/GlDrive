@@ -22,15 +22,19 @@ public class FtpSearchService
         _searchConfig = searchConfig;
     }
 
+    private static string Normalize(string s) => s.Replace('.', ' ').Replace('_', ' ').Replace('-', ' ');
+
     public async Task<List<SearchResult>> Search(string keyword, CancellationToken ct = default)
     {
         var results = new List<SearchResult>();
+        // Normalize keyword once — split into words so "kill bill" matches "Kill.Bill.xxx"
+        var normalizedKeyword = Normalize(keyword);
 
         try
         {
             // Search each configured path (bounded by pool size naturally)
             var tasks = _searchConfig.SearchPaths.Select(path =>
-                SearchPath(path.TrimEnd('/'), keyword, ct));
+                SearchPath(path.TrimEnd('/'), normalizedKeyword, ct));
             var pathResults = await Task.WhenAll(tasks);
 
             foreach (var batch in pathResults)
@@ -84,7 +88,7 @@ public class FtpSearchService
             if (item.Type != FtpObjectType.Directory) continue;
             if (SkipDirs.Contains(item.Name)) continue;
 
-            if (item.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase))
+            if (Normalize(item.Name).Contains(keyword, StringComparison.OrdinalIgnoreCase))
             {
                 // Derive category from the first directory component after the search root
                 var category = ExtractCategory(path, item.FullName);
