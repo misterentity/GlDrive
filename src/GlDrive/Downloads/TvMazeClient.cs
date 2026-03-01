@@ -64,8 +64,16 @@ public class TvMazeShow
     public string? Premiered { get; set; }
     public string? Status { get; set; }
     public TvMazeImage? Image { get; set; }
+    public string? Summary { get; set; }
+    public string[]? Genres { get; set; }
+    public TvMazeRating? Rating { get; set; }
 
     public int? PremieredYear => Premiered != null && DateTime.TryParse(Premiered, out var dt) ? dt.Year : null;
+}
+
+public class TvMazeRating
+{
+    public double? Average { get; set; }
 }
 
 public class TvMazeImage

@@ -1,6 +1,8 @@
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media.Imaging;
 using GlDrive.Downloads;
 using Serilog;
 
@@ -40,6 +42,7 @@ public partial class MetadataSearchDialog : Window
 
         _results.Clear();
         ResultsList.Items.Clear();
+        DetailPanel.Visibility = Visibility.Collapsed;
 
         try
         {
@@ -48,13 +51,22 @@ public partial class MetadataSearchDialog : Window
                 var shows = await _tvMaze.Search(query);
                 foreach (var show in shows)
                 {
+                    var summary = StripHtml(show.Summary);
+                    var rating = show.Rating?.Average?.ToString("F1");
+                    var genres = show.Genres != null ? string.Join(", ", show.Genres) : null;
+
                     _results.Add(new MetadataResult
                     {
-                        DisplayText = $"{show.Name} ({show.PremieredYear?.ToString() ?? "?"}) — {show.Status ?? "Unknown"}",
                         Title = show.Name,
                         Year = show.PremieredYear,
                         TvMazeId = show.Id,
-                        Type = MediaType.TvShow
+                        Type = MediaType.TvShow,
+                        PosterUrl = show.Image?.Medium,
+                        Plot = summary,
+                        Rating = rating,
+                        Genres = genres,
+                        YearDisplay = $"{show.PremieredYear?.ToString() ?? "?"} \u2022 {show.Status ?? "Unknown"}",
+                        RatingDisplay = rating != null ? $"\u2605 {rating}" : ""
                     });
                 }
             }
@@ -70,13 +82,20 @@ public partial class MetadataSearchDialog : Window
                 var movies = await _omdb.Search(query);
                 foreach (var movie in movies)
                 {
+                    var posterUrl = movie.Poster is "N/A" or null ? null : movie.Poster;
+
                     _results.Add(new MetadataResult
                     {
-                        DisplayText = $"{movie.Title} ({movie.Year}) — {movie.ImdbID}",
                         Title = movie.Title,
                         Year = movie.YearParsed,
                         ImdbId = movie.ImdbID,
-                        Type = MediaType.Movie
+                        Type = MediaType.Movie,
+                        PosterUrl = posterUrl,
+                        Plot = movie.Plot is "N/A" or null ? null : movie.Plot,
+                        Rating = movie.imdbRating is "N/A" or null ? null : movie.imdbRating,
+                        Genres = movie.Genre is "N/A" or null ? null : movie.Genre,
+                        YearDisplay = movie.Year,
+                        RatingDisplay = movie.imdbRating is not "N/A" and not null ? $"\u2605 {movie.imdbRating}" : ""
                     });
                 }
             }
@@ -91,9 +110,72 @@ public partial class MetadataSearchDialog : Window
         }
     }
 
-    private void ResultsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private async void ResultsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         OkButton.IsEnabled = ResultsList.SelectedItem != null;
+
+        if (ResultsList.SelectedItem is not MetadataResult selected)
+        {
+            DetailPanel.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        // For movies: fetch full details if we don't have plot yet
+        if (selected.Type == MediaType.Movie && _omdb != null
+            && string.IsNullOrEmpty(selected.Plot) && !string.IsNullOrEmpty(selected.ImdbId))
+        {
+            try
+            {
+                var full = await _omdb.GetById(selected.ImdbId);
+                if (full != null)
+                {
+                    selected.Plot = full.Plot is "N/A" or null ? null : full.Plot;
+                    selected.Rating = full.imdbRating is "N/A" or null ? selected.Rating : full.imdbRating;
+                    selected.Genres = full.Genre is "N/A" or null ? selected.Genres : full.Genre;
+                    selected.RatingDisplay = selected.Rating != null ? $"\u2605 {selected.Rating}" : "";
+                    if (selected.PosterUrl == null && full.Poster is not "N/A" and not null)
+                        selected.PosterUrl = full.Poster;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Debug(ex, "Failed to fetch movie details for {ImdbId}", selected.ImdbId);
+            }
+        }
+
+        UpdateDetailPanel(selected);
+    }
+
+    private void UpdateDetailPanel(MetadataResult result)
+    {
+        DetailPanel.Visibility = Visibility.Visible;
+        DetailTitle.Text = $"{result.Title} ({result.Year?.ToString() ?? "?"})";
+        DetailRating.Text = result.Rating != null ? $"\u2605 {result.Rating}/10" : "";
+        DetailGenres.Text = result.Genres ?? "";
+        DetailPlot.Text = result.Plot ?? "";
+
+        if (!string.IsNullOrEmpty(result.PosterUrl))
+        {
+            try
+            {
+                var bitmap = new BitmapImage();
+                bitmap.BeginInit();
+                bitmap.UriSource = new Uri(result.PosterUrl, UriKind.Absolute);
+                bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                bitmap.DecodePixelWidth = 150;
+                bitmap.EndInit();
+                PosterImage.Source = bitmap;
+                PosterImage.Visibility = Visibility.Visible;
+            }
+            catch
+            {
+                PosterImage.Visibility = Visibility.Collapsed;
+            }
+        }
+        else
+        {
+            PosterImage.Visibility = Visibility.Collapsed;
+        }
     }
 
     private void Ok_Click(object sender, RoutedEventArgs e)
@@ -117,7 +199,11 @@ public partial class MetadataSearchDialog : Window
             Year = selected.Year,
             ImdbId = selected.ImdbId,
             TvMazeId = selected.TvMazeId,
-            Quality = quality
+            Quality = quality,
+            PosterUrl = selected.PosterUrl,
+            Plot = selected.Plot,
+            Rating = selected.Rating,
+            Genres = selected.Genres
         };
 
         DialogResult = true;
@@ -136,16 +222,30 @@ public partial class MetadataSearchDialog : Window
         _tvMaze?.Dispose();
         _omdb?.Dispose();
     }
+
+    private static string? StripHtml(string? html)
+    {
+        if (string.IsNullOrWhiteSpace(html)) return null;
+        var text = Regex.Replace(html, "<[^>]+>", "").Trim();
+        return string.IsNullOrEmpty(text) ? null : text;
+    }
 }
 
 internal class MetadataResult
 {
-    public string DisplayText { get; set; } = "";
     public string Title { get; set; } = "";
     public int? Year { get; set; }
     public string? ImdbId { get; set; }
     public int? TvMazeId { get; set; }
     public MediaType Type { get; set; }
+    public string? PosterUrl { get; set; }
+    public string? Plot { get; set; }
+    public string? Rating { get; set; }
+    public string? Genres { get; set; }
 
-    public override string ToString() => DisplayText;
+    // Display helpers for the list
+    public string YearDisplay { get; set; } = "";
+    public string RatingDisplay { get; set; } = "";
+
+    public override string ToString() => Title;
 }

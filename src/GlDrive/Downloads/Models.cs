@@ -17,6 +17,10 @@ public class WishlistItem
     public WishlistStatus Status { get; set; } = WishlistStatus.Watching;
     public DateTime AddedAt { get; set; } = DateTime.UtcNow;
     public List<string> GrabbedReleases { get; set; } = [];
+    public string? PosterUrl { get; set; }
+    public string? Plot { get; set; }
+    public string? Rating { get; set; }
+    public string? Genres { get; set; }
 }
 
 public class DownloadItem

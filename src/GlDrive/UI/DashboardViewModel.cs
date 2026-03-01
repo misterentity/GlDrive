@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Input;
 using GlDrive.Config;
@@ -33,8 +34,25 @@ public class DashboardViewModel : INotifyPropertyChanged
     public WishlistItemVm? SelectedWishlistItem
     {
         get => _selectedWishlistItem;
-        set { _selectedWishlistItem = value; OnPropertyChanged(); }
+        set
+        {
+            _selectedWishlistItem = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasWishlistSelection));
+            OnPropertyChanged(nameof(HasSelectedPoster));
+            OnPropertyChanged(nameof(SelectedPosterUrl));
+            OnPropertyChanged(nameof(SelectedPlot));
+            OnPropertyChanged(nameof(SelectedRating));
+            OnPropertyChanged(nameof(SelectedGenres));
+        }
     }
+
+    public bool HasWishlistSelection => _selectedWishlistItem != null;
+    public bool HasSelectedPoster => !string.IsNullOrEmpty(_selectedWishlistItem?.PosterUrl);
+    public string? SelectedPosterUrl => _selectedWishlistItem?.PosterUrl;
+    public string SelectedPlot => _selectedWishlistItem?.Plot ?? "";
+    public string SelectedRating => _selectedWishlistItem?.Rating is { Length: > 0 } r ? $"\u2605 {r}/10" : "";
+    public string SelectedGenres => _selectedWishlistItem?.Genres ?? "";
 
     public DownloadItemVm? SelectedDownloadItem
     {
@@ -93,6 +111,7 @@ public class DashboardViewModel : INotifyPropertyChanged
     public ICommand ClearCompletedCommand { get; }
     public ICommand SearchCommand { get; }
     public ICommand DownloadSearchResultCommand { get; }
+    public ICommand RefreshMetadataCommand { get; }
 
     public DashboardViewModel(MountService mountService, AppConfig config)
     {
@@ -111,6 +130,7 @@ public class DashboardViewModel : INotifyPropertyChanged
         ClearCompletedCommand = new RelayCommand(ClearCompleted);
         SearchCommand = new RelayCommand(async () => await PerformSearch());
         DownloadSearchResultCommand = new RelayCommand(DownloadSearchResult);
+        RefreshMetadataCommand = new RelayCommand(async () => await RefreshAllMetadata());
 
         RefreshWishlist();
         RefreshDownloads();
@@ -264,6 +284,62 @@ public class DashboardViewModel : INotifyPropertyChanged
         });
     }
 
+    private async Task RefreshAllMetadata()
+    {
+        using var tvMaze = new TvMazeClient();
+        using var omdb = new OmdbClient(_config.Downloads.OmdbApiKey);
+        var updated = 0;
+
+        foreach (var item in _wishlistStore.Items.ToList())
+        {
+            // Skip items that already have metadata
+            if (!string.IsNullOrEmpty(item.PosterUrl) && !string.IsNullOrEmpty(item.Plot))
+                continue;
+
+            try
+            {
+                if (item.Type == MediaType.TvShow && item.TvMazeId.HasValue)
+                {
+                    var show = await tvMaze.GetShow(item.TvMazeId.Value);
+                    if (show == null) continue;
+
+                    item.PosterUrl ??= show.Image?.Medium;
+                    item.Plot ??= StripHtml(show.Summary);
+                    item.Rating ??= show.Rating?.Average?.ToString("F1");
+                    item.Genres ??= show.Genres != null ? string.Join(", ", show.Genres) : null;
+                    _wishlistStore.Update(item);
+                    updated++;
+                }
+                else if (item.Type == MediaType.Movie && !string.IsNullOrEmpty(item.ImdbId))
+                {
+                    var movie = await omdb.GetById(item.ImdbId);
+                    if (movie == null) continue;
+
+                    item.PosterUrl ??= movie.Poster is "N/A" or null ? null : movie.Poster;
+                    item.Plot ??= movie.Plot is "N/A" or null ? null : movie.Plot;
+                    item.Rating ??= movie.imdbRating is "N/A" or null ? null : movie.imdbRating;
+                    item.Genres ??= movie.Genre is "N/A" or null ? null : movie.Genre;
+                    _wishlistStore.Update(item);
+                    updated++;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to refresh metadata for {Title}", item.Title);
+            }
+        }
+
+        RefreshWishlist();
+        Log.Information("Refreshed metadata for {Count} item(s)", updated);
+    }
+
+    private static string? StripHtml(string? html)
+    {
+        if (string.IsNullOrWhiteSpace(html)) return null;
+        var text = Regex.Replace(html, "<[^>]+>", "").Trim();
+        return string.IsNullOrEmpty(text) ? null : text;
+    }
+
     private void RefreshWishlist()
     {
         WishlistItems.Clear();
@@ -277,7 +353,11 @@ public class DashboardViewModel : INotifyPropertyChanged
                 Year = item.Year?.ToString() ?? "",
                 Quality = item.Quality.ToString(),
                 Status = item.Status.ToString(),
-                GrabbedCount = item.GrabbedReleases.Count.ToString()
+                GrabbedCount = item.GrabbedReleases.Count.ToString(),
+                PosterUrl = item.PosterUrl,
+                Plot = item.Plot,
+                Rating = item.Rating,
+                Genres = item.Genres
             });
         }
     }
@@ -337,6 +417,10 @@ public class WishlistItemVm
     public string Quality { get; set; } = "";
     public string Status { get; set; } = "";
     public string GrabbedCount { get; set; } = "0";
+    public string? PosterUrl { get; set; }
+    public string? Plot { get; set; }
+    public string? Rating { get; set; }
+    public string? Genres { get; set; }
 }
 
 public class DownloadItemVm

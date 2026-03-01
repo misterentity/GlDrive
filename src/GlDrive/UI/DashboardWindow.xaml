@@ -1,23 +1,79 @@
 <Window x:Class="GlDrive.UI.DashboardWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="GlDrive Dashboard" Width="850" Height="600"
-        WindowStartupLocation="CenterScreen">
+        xmlns:ui="clr-namespace:GlDrive.UI"
+        Title="GlDrive Dashboard" Width="920" Height="660"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource BackgroundBrush}"
+        Foreground="{StaticResource ForegroundBrush}">
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
+        <ui:ImageUrlConverter x:Key="ImageUrlConverter"/>
     </Window.Resources>
-    <Grid Margin="8">
-        <TabControl>
+    <Grid Margin="0">
+        <TabControl Padding="0">
             <!-- Wishlist Tab -->
             <TabItem Header="Wishlist">
-                <DockPanel Margin="8">
-                    <ToolBar DockPanel.Dock="Top" Margin="0,0,0,8">
-                        <Button Content="+ Movie" Command="{Binding AddMovieCommand}" Padding="8,4"/>
-                        <Button Content="+ TV Show" Command="{Binding AddTvShowCommand}" Padding="8,4"/>
-                        <Separator/>
-                        <Button Content="Remove" Command="{Binding RemoveWishlistCommand}" Padding="8,4"/>
-                        <Button Content="Pause" Command="{Binding TogglePauseCommand}" Padding="8,4"/>
-                    </ToolBar>
+                <DockPanel Margin="12">
+                    <!-- Action bar -->
+                    <Border DockPanel.Dock="Top" Background="{StaticResource SurfaceBrush}"
+                            CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="+ Movie" Command="{Binding AddMovieCommand}"
+                                    Padding="12,6" Margin="0,0,6,0" Style="{StaticResource PrimaryButton}"/>
+                            <Button Content="+ TV Show" Command="{Binding AddTvShowCommand}"
+                                    Padding="12,6" Margin="0,0,12,0" Style="{StaticResource PrimaryButton}"/>
+                            <Button Content="Remove" Command="{Binding RemoveWishlistCommand}"
+                                    Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"/>
+                            <Button Content="Pause" Command="{Binding TogglePauseCommand}"
+                                    Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"/>
+                            <Button Content="Refresh Info" Command="{Binding RefreshMetadataCommand}"
+                                    Padding="12,6" Style="{StaticResource SecondaryButton}"
+                                    ToolTip="Fetch posters, ratings, and plots for all items"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Detail panel — bottom -->
+                    <Border DockPanel.Dock="Bottom" Height="155"
+                            Background="{StaticResource SurfaceBrush}"
+                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                            CornerRadius="6" Margin="0,10,0,0" Padding="14"
+                            Visibility="{Binding HasWishlistSelection, Converter={StaticResource BoolToVisibility}}">
+                        <DockPanel>
+                            <Border DockPanel.Dock="Left" Width="95" Margin="0,0,16,0"
+                                    CornerRadius="4" ClipToBounds="True"
+                                    Background="{StaticResource SurfaceLightBrush}"
+                                    Visibility="{Binding HasSelectedPoster, Converter={StaticResource BoolToVisibility}}">
+                                <Image Stretch="UniformToFill" VerticalAlignment="Top"
+                                       RenderOptions.BitmapScalingMode="HighQuality"
+                                       Source="{Binding SelectedPosterUrl, Converter={StaticResource ImageUrlConverter}, ConverterParameter=120}"/>
+                            </Border>
+                            <StackPanel VerticalAlignment="Top">
+                                <TextBlock FontWeight="Bold" FontSize="16"
+                                           Foreground="White">
+                                    <Run Text="{Binding SelectedWishlistItem.Title, Mode=OneWay}"/>
+                                    <Run Text=" ("/>
+                                    <Run Text="{Binding SelectedWishlistItem.Year, Mode=OneWay}"/>
+                                    <Run Text=")"/>
+                                </TextBlock>
+                                <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
+                                    <TextBlock Text="{Binding SelectedRating}" FontSize="13"
+                                               FontWeight="SemiBold"
+                                               Foreground="{StaticResource AccentBrush}"/>
+                                    <TextBlock Text="{Binding SelectedGenres}" FontSize="12.5"
+                                               Foreground="{StaticResource ForegroundDimBrush}"
+                                               Margin="14,0,0,0"/>
+                                </StackPanel>
+                                <TextBlock Text="{Binding SelectedPlot}" TextWrapping="Wrap"
+                                           MaxHeight="65" FontSize="12.5" Margin="0,8,0,0"
+                                           LineHeight="18"
+                                           Foreground="{StaticResource ForegroundDimBrush}"
+                                           TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+
+                    <!-- DataGrid -->
                     <DataGrid ItemsSource="{Binding WishlistItems}"
                               SelectedItem="{Binding SelectedWishlistItem}"
                               AutoGenerateColumns="False" IsReadOnly="True"
@@ -27,17 +83,7 @@
                             <DataGridTextColumn Header="Title" Binding="{Binding Title}" Width="*"/>
                             <DataGridTextColumn Header="Type" Binding="{Binding Type}" Width="70"/>
                             <DataGridTextColumn Header="Year" Binding="{Binding Year}" Width="60"/>
-                            <DataGridComboBoxColumn Header="Quality" SelectedItemBinding="{Binding Quality}" Width="80">
-                                <DataGridComboBoxColumn.ItemsSource>
-                                    <x:Array Type="{x:Type sys:String}" xmlns:sys="clr-namespace:System;assembly=mscorlib">
-                                        <sys:String>Any</sys:String>
-                                        <sys:String>SD</sys:String>
-                                        <sys:String>Q720p</sys:String>
-                                        <sys:String>Q1080p</sys:String>
-                                        <sys:String>Q2160p</sys:String>
-                                    </x:Array>
-                                </DataGridComboBoxColumn.ItemsSource>
-                            </DataGridComboBoxColumn>
+                            <DataGridTextColumn Header="Quality" Binding="{Binding Quality}" Width="80"/>
                             <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="80"/>
                             <DataGridTextColumn Header="Grabbed" Binding="{Binding GrabbedCount}" Width="65"/>
                         </DataGrid.Columns>
@@ -47,24 +93,29 @@
 
             <!-- Downloads Tab -->
             <TabItem Header="Downloads">
-                <DockPanel Margin="8">
+                <DockPanel Margin="12">
                     <!-- Active download progress -->
-                    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,8"
+                    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,10"
                                 Visibility="{Binding HasActiveDownload, Converter={StaticResource BoolToVisibility}}">
-                        <TextBlock>
-                            <Run Text="{Binding ActiveDownloadName, Mode=OneWay}"/>
-                            <Run Text=" — "/>
-                            <Run Text="{Binding ActiveDownloadSpeed, Mode=OneWay}"/>
+                        <TextBlock Foreground="{StaticResource ForegroundBrush}" Margin="0,0,0,6">
+                            <Run Text="{Binding ActiveDownloadName, Mode=OneWay}" FontWeight="SemiBold"/>
+                            <Run Text=" — " Foreground="{StaticResource ForegroundDimBrush}"/>
+                            <Run Text="{Binding ActiveDownloadSpeed, Mode=OneWay}" Foreground="{StaticResource AccentBrush}"/>
                         </TextBlock>
-                        <ProgressBar Value="{Binding ActiveDownloadPercent}" Maximum="100" Height="20" Margin="0,4,0,0"/>
+                        <ProgressBar Value="{Binding ActiveDownloadPercent}" Maximum="100" Height="6" Margin="0,0,0,0"/>
                     </StackPanel>
 
-                    <ToolBar DockPanel.Dock="Top" Margin="0,0,0,8">
-                        <Button Content="Cancel" Command="{Binding CancelDownloadCommand}" Padding="8,4"/>
-                        <Button Content="Retry" Command="{Binding RetryDownloadCommand}" Padding="8,4"/>
-                        <Separator/>
-                        <Button Content="Clear Completed" Command="{Binding ClearCompletedCommand}" Padding="8,4"/>
-                    </ToolBar>
+                    <Border DockPanel.Dock="Top" Background="{StaticResource SurfaceBrush}"
+                            CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="Cancel" Command="{Binding CancelDownloadCommand}"
+                                    Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"/>
+                            <Button Content="Retry" Command="{Binding RetryDownloadCommand}"
+                                    Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"/>
+                            <Button Content="Clear Completed" Command="{Binding ClearCompletedCommand}"
+                                    Padding="12,6" Style="{StaticResource SecondaryButton}"/>
+                        </StackPanel>
+                    </Border>
                     <DataGrid ItemsSource="{Binding DownloadItems}"
                               SelectedItem="{Binding SelectedDownloadItem}"
                               AutoGenerateColumns="False" IsReadOnly="True"
@@ -82,22 +133,22 @@
 
             <!-- Search Tab -->
             <TabItem Header="Search">
-                <DockPanel Margin="8">
-                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+                <DockPanel Margin="12">
+                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
                         <Button DockPanel.Dock="Right" Content="Search" Command="{Binding SearchCommand}"
-                                Padding="16,4" Margin="8,0,0,0" Style="{StaticResource PrimaryButton}"/>
+                                Padding="18,6" Margin="10,0,0,0" Style="{StaticResource PrimaryButton}"/>
                         <TextBox Text="{Binding SearchQuery, UpdateSourceTrigger=PropertyChanged}"
-                                 VerticalContentAlignment="Center" Padding="4">
+                                 VerticalContentAlignment="Center">
                             <TextBox.InputBindings>
                                 <KeyBinding Key="Return" Command="{Binding SearchCommand}"/>
                             </TextBox.InputBindings>
                         </TextBox>
                     </DockPanel>
-                    <TextBlock DockPanel.Dock="Top" Text="{Binding SearchStatus}" Margin="0,0,0,4"
-                               Foreground="Gray"/>
-                    <DockPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+                    <TextBlock DockPanel.Dock="Top" Text="{Binding SearchStatus}" Margin="0,0,0,6"
+                               Foreground="{StaticResource ForegroundDimBrush}" FontSize="12"/>
+                    <DockPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
                         <Button Content="Download Selected" Command="{Binding DownloadSearchResultCommand}"
-                                Padding="12,4" Style="{StaticResource PrimaryButton}"/>
+                                Padding="16,6" Style="{StaticResource PrimaryButton}"/>
                     </DockPanel>
                     <DataGrid ItemsSource="{Binding SearchResults}"
                               SelectedItem="{Binding SelectedSearchResult}"
