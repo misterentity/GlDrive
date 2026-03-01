@@ -144,6 +144,30 @@
 
                 <Separator Margin="0,4,0,12"/>
 
+                <!-- Search Settings -->
+                <TextBlock Text="Search" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                <TextBlock Text="Search Paths (one per line):" Margin="0,0,0,2"/>
+                <TextBox x:Name="SearchPathsBox" AcceptsReturn="True" TextWrapping="Wrap"
+                         Height="80" VerticalScrollBarVisibility="Auto" Margin="0,0,0,8"
+                         Text="/" ToolTip="Directories to search for releases, e.g. /site&#x0a;/archive"/>
+                <Grid Margin="0,0,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Margin="0,0,16,0">
+                        <TextBlock Text="Max Depth:" Margin="0,0,0,2"/>
+                        <TextBox x:Name="SearchMaxDepthBox" Text="2" Width="60" HorizontalAlignment="Left"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Bottom">
+                        <Button Content="Discover Paths" Click="DiscoverPaths_Click"
+                                HorizontalAlignment="Left" Padding="16,6"/>
+                    </StackPanel>
+                </Grid>
+                <TextBlock x:Name="DiscoverResultText" Margin="0,0,0,8" TextWrapping="Wrap"/>
+
+                <Separator Margin="0,4,0,12"/>
+
                 <Button Content="Test Connection" Click="TestConnection_Click"
                         HorizontalAlignment="Left" Padding="16,6"/>
                 <TextBlock x:Name="TestResultText" Margin="0,8,0,0" TextWrapping="Wrap"/>

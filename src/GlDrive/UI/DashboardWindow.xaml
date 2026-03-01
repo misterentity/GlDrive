@@ -165,6 +165,115 @@
                     </DataGrid>
                 </DockPanel>
             </TabItem>
+            <!-- Upcoming Tab -->
+            <TabItem Header="Upcoming">
+                <DockPanel Margin="12">
+                    <!-- Action bar -->
+                    <Border DockPanel.Dock="Top" Background="{StaticResource SurfaceBrush}"
+                            CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="Refresh" Command="{Binding LoadUpcomingCommand}"
+                                    Padding="12,6" Margin="0,0,6,0" Style="{StaticResource PrimaryButton}"/>
+                            <Button Content="Add to Wishlist" Command="{Binding AddUpcomingToWishlistCommand}"
+                                    Padding="12,6" Margin="0,0,12,0" Style="{StaticResource PrimaryButton}"/>
+                            <TextBlock Text="Quality:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <ComboBox ItemsSource="{Binding QualityOptions}"
+                                      SelectedItem="{Binding UpcomingQualityText}" Width="90"/>
+                            <TextBlock Text="{Binding UpcomingStatus}" VerticalAlignment="Center"
+                                       Margin="16,0,0,0" Foreground="{StaticResource ForegroundDimBrush}" FontSize="12"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Detail panel — bottom -->
+                    <Border DockPanel.Dock="Bottom" Height="155"
+                            Background="{StaticResource SurfaceBrush}"
+                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                            CornerRadius="6" Margin="0,10,0,0" Padding="14"
+                            Visibility="{Binding HasUpcomingSelection, Converter={StaticResource BoolToVisibility}}">
+                        <DockPanel>
+                            <Border DockPanel.Dock="Left" Width="95" Margin="0,0,16,0"
+                                    CornerRadius="4" ClipToBounds="True"
+                                    Background="{StaticResource SurfaceLightBrush}"
+                                    Visibility="{Binding HasUpcomingPoster, Converter={StaticResource BoolToVisibility}}">
+                                <Image Stretch="UniformToFill" VerticalAlignment="Top"
+                                       RenderOptions.BitmapScalingMode="HighQuality"
+                                       Source="{Binding UpcomingPosterUrl, Converter={StaticResource ImageUrlConverter}, ConverterParameter=120}"/>
+                            </Border>
+                            <StackPanel VerticalAlignment="Top">
+                                <TextBlock Text="{Binding UpcomingDetailTitle}" FontWeight="Bold" FontSize="16"
+                                           Foreground="White"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
+                                    <TextBlock Text="{Binding UpcomingRating}" FontSize="13"
+                                               FontWeight="SemiBold"
+                                               Foreground="{StaticResource AccentBrush}"/>
+                                    <TextBlock Text="{Binding UpcomingGenres}" FontSize="12.5"
+                                               Foreground="{StaticResource ForegroundDimBrush}"
+                                               Margin="14,0,0,0"/>
+                                </StackPanel>
+                                <TextBlock Text="{Binding UpcomingPlot}" TextWrapping="Wrap"
+                                           MaxHeight="65" FontSize="12.5" Margin="0,8,0,0"
+                                           LineHeight="18"
+                                           Foreground="{StaticResource ForegroundDimBrush}"
+                                           TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+
+                    <!-- Two side-by-side grids -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="5"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <!-- TV Schedule -->
+                        <DockPanel Grid.Column="0">
+                            <TextBlock DockPanel.Dock="Top" Text="TV Schedule (Next 7 Days)"
+                                       FontWeight="SemiBold" Margin="0,0,0,6"/>
+                            <DataGrid ItemsSource="{Binding UpcomingTvEpisodes}"
+                                      SelectedItem="{Binding SelectedTvEpisode}"
+                                      AutoGenerateColumns="False" IsReadOnly="True"
+                                      SelectionMode="Single" GridLinesVisibility="Horizontal"
+                                      HeadersVisibility="Column" CanUserAddRows="False">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Date" Binding="{Binding DateDisplay}" Width="75"/>
+                                    <DataGridTextColumn Header="Show" Binding="{Binding ShowName}" Width="*"/>
+                                    <DataGridTextColumn Header="Episode" Binding="{Binding EpisodeInfo}" Width="140"/>
+                                    <DataGridTextColumn Header="Time" Binding="{Binding TimeDisplay}" Width="55"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </DockPanel>
+
+                        <GridSplitter Grid.Column="1" Width="5" HorizontalAlignment="Stretch"
+                                      Background="Transparent"/>
+
+                        <!-- Movie Releases -->
+                        <DockPanel Grid.Column="2">
+                            <TextBlock DockPanel.Dock="Top" FontWeight="SemiBold" Margin="0,0,0,6">
+                                <Run Text="Movie Releases"/>
+                            </TextBlock>
+                            <TextBlock DockPanel.Dock="Top" Margin="0,0,0,6" FontSize="11"
+                                       Foreground="{StaticResource ForegroundDimBrush}"
+                                       Visibility="{Binding HasNoTmdbKey, Converter={StaticResource BoolToVisibility}}">
+                                <Run Text="Configure TMDb API key in Settings → Downloads to see movie releases."/>
+                            </TextBlock>
+                            <DataGrid ItemsSource="{Binding UpcomingMovies}"
+                                      SelectedItem="{Binding SelectedUpcomingMovie}"
+                                      AutoGenerateColumns="False" IsReadOnly="True"
+                                      SelectionMode="Single" GridLinesVisibility="Horizontal"
+                                      HeadersVisibility="Column" CanUserAddRows="False">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Title" Binding="{Binding Title}" Width="*"/>
+                                    <DataGridTextColumn Header="Year" Binding="{Binding Year}" Width="50"/>
+                                    <DataGridTextColumn Header="Date" Binding="{Binding ReleaseDateDisplay}" Width="85"/>
+                                    <DataGridTextColumn Header="Genres" Binding="{Binding Genres}" Width="110"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </DockPanel>
+                    </Grid>
+                </DockPanel>
+            </TabItem>
         </TabControl>
     </Grid>
 </Window>

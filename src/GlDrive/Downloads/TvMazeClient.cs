@@ -34,6 +34,20 @@ public class TvMazeClient : IDisposable
         }
     }
 
+    public async Task<TvMazeScheduleEpisode[]> GetSchedule(DateOnly date, CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await _http.GetStringAsync($"schedule?country=US&date={date:yyyy-MM-dd}", ct);
+            return JsonSerializer.Deserialize<TvMazeScheduleEpisode[]>(response, JsonOptions) ?? [];
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "TVMaze schedule failed for date: {Date}", date);
+            return [];
+        }
+    }
+
     public async Task<TvMazeShow?> GetShow(int id, CancellationToken ct = default)
     {
         try
@@ -67,6 +81,7 @@ public class TvMazeShow
     public string? Summary { get; set; }
     public string[]? Genres { get; set; }
     public TvMazeRating? Rating { get; set; }
+    public TvMazeNetwork? Network { get; set; }
 
     public int? PremieredYear => Premiered != null && DateTime.TryParse(Premiered, out var dt) ? dt.Year : null;
 }
@@ -80,4 +95,22 @@ public class TvMazeImage
 {
     public string? Medium { get; set; }
     public string? Original { get; set; }
+}
+
+public class TvMazeScheduleEpisode
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = "";
+    public int Season { get; set; }
+    public int Number { get; set; }
+    public string? Airdate { get; set; }
+    public string? Airtime { get; set; }
+    public int? Runtime { get; set; }
+    public TvMazeShow? Show { get; set; }
+}
+
+public class TvMazeNetwork
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = "";
 }

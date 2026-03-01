@@ -47,6 +47,16 @@ public class ServerManager : IDisposable
         await service.Mount(ct);
     }
 
+    public async Task UnmountServerAsync(string serverId)
+    {
+        if (!_servers.TryGetValue(serverId, out var service))
+            return;
+
+        await service.UnmountAsync();
+        service.Dispose();
+        _servers.Remove(serverId);
+    }
+
     public void UnmountServer(string serverId)
     {
         if (!_servers.TryGetValue(serverId, out var service))
@@ -70,6 +80,12 @@ public class ServerManager : IDisposable
                 Log.Error(ex, "Failed to mount server {ServerName}", server.Name);
             }
         }
+    }
+
+    public async Task UnmountAllAsync()
+    {
+        foreach (var serverId in _servers.Keys.ToList())
+            await UnmountServerAsync(serverId);
     }
 
     public void UnmountAll()

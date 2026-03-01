@@ -99,9 +99,16 @@ public static class TrayIconSetup
                 if (isActive)
                 {
                     var disconnectItem = new MenuItem { Header = "Disconnect" };
-                    disconnectItem.Click += (_, _) =>
+                    disconnectItem.Click += async (_, _) =>
                     {
-                        vm.ServerManager.UnmountServer(serverId);
+                        try
+                        {
+                            await vm.ServerManager.UnmountServerAsync(serverId);
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Error(ex, "Disconnect failed for {Server}", serverName);
+                        }
                         vm.UpdateStatusText();
                     };
                     serverMenu.Items.Add(disconnectItem);

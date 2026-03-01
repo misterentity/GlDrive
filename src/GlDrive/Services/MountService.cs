@@ -119,7 +119,7 @@ public class MountService : IDisposable
             _streamingDownloader = new StreamingDownloader(
                 _pool, _downloadConfig.StreamingBufferSizeKb, _downloadConfig.WriteBufferLimitMb);
             _downloadManager = new DownloadManager(downloadStore, _ftp, _streamingDownloader, _downloadConfig);
-            _searchService = new FtpSearchService(_pool, _serverConfig.Notifications);
+            _searchService = new FtpSearchService(_pool, _serverConfig.Search);
             _wishlistMatcher = new WishlistMatcher(wishlistStore, _downloadManager, _ftp, _downloadConfig,
                 _serverConfig.Id, _serverConfig.Name);
 
@@ -141,14 +141,36 @@ public class MountService : IDisposable
         }
     }
 
-    public void Unmount()
+    public async Task UnmountAsync()
     {
         if (!_mounted) return;
 
         Log.Information("Unmounting drive for server {ServerName}...", _serverConfig.Name);
+
+        var timeout = TimeSpan.FromSeconds(5);
+
+        // 1. Signal all background tasks to cancel (non-blocking)
         _releaseMonitor?.Stop();
         _monitor?.Stop();
+        _downloadManager?.Stop();
 
+        // 2. Wait for background tasks to finish (with timeout)
+        var stopTasks = new List<Task>();
+        if (_releaseMonitor != null) stopTasks.Add(_releaseMonitor.StopAsync(timeout));
+        if (_monitor != null) stopTasks.Add(_monitor.StopAsync(timeout));
+        if (_downloadManager != null) stopTasks.Add(_downloadManager.StopAsync(timeout));
+
+        try
+        {
+            await Task.WhenAll(stopTasks).WaitAsync(TimeSpan.FromSeconds(8));
+        }
+        catch (TimeoutException)
+        {
+            Log.Warning("Background tasks did not stop in time for {ServerName} — proceeding with cleanup", _serverConfig.Name);
+        }
+        catch { }
+
+        // 3. Unmount WinFsp host
         try
         {
             _host?.Unmount();
@@ -158,15 +180,64 @@ public class MountService : IDisposable
             Log.Warning(ex, "Unmount error");
         }
 
-        Cleanup();
+        // 4. Dispose resources with timeout
+        await CleanupAsync();
         _mounted = false;
         SetState(MountState.Unmounted);
         Log.Information("Drive unmounted for server {ServerName}", _serverConfig.Name);
     }
 
+    public void Unmount()
+    {
+        if (!_mounted) return;
+        // Sync fallback for Dispose() — just signal cancellation and tear down fast
+        Log.Information("Unmounting drive (sync) for server {ServerName}...", _serverConfig.Name);
+        _releaseMonitor?.Stop();
+        _monitor?.Stop();
+        _downloadManager?.Stop();
+
+        try { _host?.Unmount(); } catch { }
+
+        Cleanup();
+        _mounted = false;
+        SetState(MountState.Unmounted);
+    }
+
     public void RefreshCache()
     {
         _cache?.Clear();
+    }
+
+    private async Task CleanupAsync()
+    {
+        _downloadManager?.Dispose();
+        _downloadManager = null;
+        _wishlistMatcher = null;
+        _searchService = null;
+        _streamingDownloader = null;
+        _releaseMonitor = null;
+        _monitor = null;
+        _host?.Dispose();
+        _host = null;
+        _fileSystem = null;
+        _cache = null;
+        _ftp = null;
+
+        if (_pool != null)
+        {
+            try
+            {
+                await _pool.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            catch (TimeoutException)
+            {
+                Log.Warning("Pool dispose timed out — abandoning connections");
+            }
+            catch { }
+            _pool = null;
+        }
+
+        _factory = null;
     }
 
     private void Cleanup()
@@ -176,16 +247,24 @@ public class MountService : IDisposable
         _wishlistMatcher = null;
         _searchService = null;
         _streamingDownloader = null;
-        _releaseMonitor?.Stop();
         _releaseMonitor = null;
-        _monitor?.Stop();
+        _monitor = null;
         _host?.Dispose();
         _host = null;
         _fileSystem = null;
         _cache = null;
         _ftp = null;
-        _pool?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+
+        // Fire-and-forget pool dispose — don't block on dead TCP connections
+        var pool = _pool;
         _pool = null;
+        if (pool != null)
+            _ = Task.Run(async () =>
+            {
+                try { await pool.DisposeAsync(); }
+                catch (Exception ex) { Log.Debug(ex, "Pool dispose error"); }
+            });
+
         _factory = null;
     }
 

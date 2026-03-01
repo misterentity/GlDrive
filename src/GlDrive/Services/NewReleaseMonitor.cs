@@ -33,10 +33,28 @@ public class NewReleaseMonitor
             _config.WatchPath, _config.PollIntervalSeconds);
     }
 
+    public async Task StopAsync(TimeSpan? timeout = null)
+    {
+        _cts?.Cancel();
+        if (_pollTask != null)
+        {
+            try
+            {
+                await _pollTask.WaitAsync(timeout ?? TimeSpan.FromSeconds(5));
+            }
+            catch (TimeoutException)
+            {
+                Log.Warning("NewReleaseMonitor stop timed out — abandoning background task");
+            }
+            catch { }
+        }
+        _cts?.Dispose();
+        _cts = null;
+    }
+
     public void Stop()
     {
         _cts?.Cancel();
-        try { _pollTask?.GetAwaiter().GetResult(); } catch { }
         _cts?.Dispose();
         _cts = null;
     }

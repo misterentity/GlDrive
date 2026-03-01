@@ -29,10 +29,29 @@ public class ConnectionMonitor
         _monitorTask = MonitorLoop(_cts.Token);
     }
 
+    public async Task StopAsync(TimeSpan? timeout = null)
+    {
+        _cts?.Cancel();
+        if (_monitorTask != null)
+        {
+            try
+            {
+                await _monitorTask.WaitAsync(timeout ?? TimeSpan.FromSeconds(5));
+            }
+            catch (TimeoutException)
+            {
+                Log.Warning("ConnectionMonitor stop timed out — abandoning background task");
+            }
+            catch { }
+        }
+        _cts?.Dispose();
+        _cts = null;
+    }
+
     public void Stop()
     {
         _cts?.Cancel();
-        try { _monitorTask?.GetAwaiter().GetResult(); } catch { }
+        // Fire-and-forget — don't block the calling thread
         _cts?.Dispose();
         _cts = null;
     }

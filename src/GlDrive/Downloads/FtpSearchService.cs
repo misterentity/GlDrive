@@ -8,36 +8,37 @@ namespace GlDrive.Downloads;
 public class FtpSearchService
 {
     private readonly FtpConnectionPool _pool;
-    private readonly NotificationConfig _notifConfig;
+    private readonly SearchConfig _searchConfig;
+    private const int MaxResults = 200;
 
-    public FtpSearchService(FtpConnectionPool pool, NotificationConfig notifConfig)
+    private static readonly HashSet<string> SkipDirs = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".", "..", ".banner", ".message"
+    };
+
+    public FtpSearchService(FtpConnectionPool pool, SearchConfig searchConfig)
     {
         _pool = pool;
-        _notifConfig = notifConfig;
+        _searchConfig = searchConfig;
     }
 
     public async Task<List<SearchResult>> Search(string keyword, CancellationToken ct = default)
     {
         var results = new List<SearchResult>();
-        var watchPath = _notifConfig.WatchPath.TrimEnd('/');
 
         try
         {
-            // List categories (single LIST call)
-            var categories = await ListDirect(watchPath, ct);
-            var categoryDirs = categories
-                .Where(i => i.Type == FtpObjectType.Directory)
-                .Select(i => i.Name)
-                .ToList();
+            // Search each configured path (bounded by pool size naturally)
+            var tasks = _searchConfig.SearchPaths.Select(path =>
+                SearchPath(path.TrimEnd('/'), keyword, ct));
+            var pathResults = await Task.WhenAll(tasks);
 
-            if (categoryDirs.Count == 0) return results;
-
-            // Search all categories in parallel (bounded by pool size)
-            var tasks = categoryDirs.Select(cat => SearchCategory(watchPath, cat, keyword, ct));
-            var categoryResults = await Task.WhenAll(tasks);
-
-            foreach (var batch in categoryResults)
+            foreach (var batch in pathResults)
                 results.AddRange(batch);
+
+            // Cap total results
+            if (results.Count > MaxResults)
+                results.RemoveRange(MaxResults, results.Count - MaxResults);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -48,57 +49,87 @@ public class FtpSearchService
         return results;
     }
 
-    private async Task<List<SearchResult>> SearchCategory(string watchPath, string category, string keyword, CancellationToken ct)
+    private async Task<List<SearchResult>> SearchPath(string rootPath, string keyword, CancellationToken ct)
     {
         var results = new List<SearchResult>();
-        var catPath = $"{watchPath}/{category}";
 
         try
         {
-            var releases = await ListDirect(catPath, ct);
+            // Borrow one connection for the entire search path to minimize pool contention
+            await using var conn = await _pool.Borrow(ct);
 
-            foreach (var release in releases)
-            {
-                if (release.Type != FtpObjectType.Directory) continue;
-                if (release.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase))
-                {
-                    results.Add(new SearchResult
-                    {
-                        ReleaseName = release.Name,
-                        Category = category,
-                        RemotePath = release.FullName,
-                        Size = release.Size,
-                        Modified = release.Modified
-                    });
-                }
-            }
+            await SearchRecursive(conn.Client, rootPath, keyword, 0, _searchConfig.MaxDepth, results, ct);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
-            Log.Debug(ex, "Failed to search {Category}, skipping", catPath);
+            Log.Debug(ex, "Failed to search path {Path}, skipping", rootPath);
         }
 
         return results;
     }
 
-    /// <summary>
-    /// Borrows a connection directly from the pool for a fresh LIST (no filesystem cache).
-    /// The pool's bounded size naturally throttles concurrency.
-    /// </summary>
-    private async Task<FtpListItem[]> ListDirect(string remotePath, CancellationToken ct)
+    private async Task SearchRecursive(
+        AsyncFtpClient client, string path, string keyword,
+        int depth, int maxDepth, List<SearchResult> results, CancellationToken ct)
     {
-        await using var conn = await _pool.Borrow(ct);
+        if (results.Count >= MaxResults) return;
 
+        var items = await ListDirect(client, path, ct);
+
+        foreach (var item in items)
+        {
+            if (ct.IsCancellationRequested) return;
+            if (results.Count >= MaxResults) return;
+            if (item.Type != FtpObjectType.Directory) continue;
+            if (SkipDirs.Contains(item.Name)) continue;
+
+            if (item.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase))
+            {
+                // Derive category from the first directory component after the search root
+                var category = ExtractCategory(path, item.FullName);
+
+                results.Add(new SearchResult
+                {
+                    ReleaseName = item.Name,
+                    Category = category,
+                    RemotePath = item.FullName,
+                    Size = item.Size,
+                    Modified = item.Modified
+                });
+            }
+
+            if (depth < maxDepth)
+            {
+                await SearchRecursive(client, item.FullName, keyword, depth + 1, maxDepth, results, ct);
+            }
+        }
+    }
+
+    private static string ExtractCategory(string searchRoot, string fullPath)
+    {
+        // Given searchRoot="/site" and fullPath="/site/TV/Some.Show", extract "TV"
+        var relative = fullPath;
+        if (relative.StartsWith(searchRoot, StringComparison.OrdinalIgnoreCase))
+            relative = relative[searchRoot.Length..];
+        relative = relative.TrimStart('/');
+
+        var slash = relative.IndexOf('/');
+        return slash > 0 ? relative[..slash] : "";
+    }
+
+    private async Task<FtpListItem[]> ListDirect(AsyncFtpClient client, string remotePath, CancellationToken ct)
+    {
         if (_pool.UseCpsv)
-            return await CpsvDataHelper.ListDirectory(conn.Client, remotePath, _pool.ControlHost, ct);
+            return await CpsvDataHelper.ListDirectory(client, remotePath, _pool.ControlHost, ct);
 
-        return await conn.Client.GetListing(remotePath, FtpListOption.AllFiles, ct);
+        return await client.GetListing(remotePath, FtpListOption.AllFiles, ct);
     }
 
     public async Task<List<FtpListItem>> GetReleaseFiles(string remotePath, CancellationToken ct = default)
     {
-        var items = await ListDirect(remotePath, ct);
+        await using var conn = await _pool.Borrow(ct);
+        var items = await ListDirect(conn.Client, remotePath, ct);
         return items.Where(i => i.Type == FtpObjectType.File).ToList();
     }
 }

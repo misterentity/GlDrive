@@ -45,6 +45,31 @@ public class DownloadManager : IDisposable
         Log.Information("DownloadManager started (max concurrent: {Max})", _config.MaxConcurrentDownloads);
     }
 
+    public async Task StopAsync(TimeSpan? timeout = null)
+    {
+        _cts?.Cancel();
+        lock (_activeCts)
+        {
+            foreach (var cts in _activeCts.Values)
+                cts.Cancel();
+            _activeCts.Clear();
+        }
+        if (_processorTask != null)
+        {
+            try
+            {
+                await _processorTask.WaitAsync(timeout ?? TimeSpan.FromSeconds(5));
+            }
+            catch (TimeoutException)
+            {
+                Log.Warning("DownloadManager stop timed out — abandoning background task");
+            }
+            catch { }
+        }
+        _cts?.Dispose();
+        _cts = null;
+    }
+
     public void Stop()
     {
         _cts?.Cancel();
@@ -54,7 +79,6 @@ public class DownloadManager : IDisposable
                 cts.Cancel();
             _activeCts.Clear();
         }
-        try { _processorTask?.GetAwaiter().GetResult(); } catch { }
         _cts?.Dispose();
         _cts = null;
     }

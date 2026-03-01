@@ -75,6 +75,10 @@ public partial class ServerEditDialog : Window
             WatchPathBox.Text = existing.Notifications.WatchPath;
             ExcludedCategoriesBox.Text = string.Join(", ", existing.Notifications.ExcludedCategories);
 
+            // Search
+            SearchPathsBox.Text = string.Join("\n", existing.Search.SearchPaths);
+            SearchMaxDepthBox.Text = existing.Search.MaxDepth.ToString();
+
             // Load stored password hint
             var storedPw = CredentialStore.GetPassword(existing.Connection.Host, existing.Connection.Port, existing.Connection.Username);
             if (!string.IsNullOrEmpty(storedPw))
@@ -211,6 +215,14 @@ public partial class ServerEditDialog : Window
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(s => s.Length > 0).ToList();
 
+        // Search
+        _serverConfig.Search.SearchPaths = (SearchPathsBox.Text ?? "/")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(s => s.Length > 0).ToList();
+        if (_serverConfig.Search.SearchPaths.Count == 0)
+            _serverConfig.Search.SearchPaths = ["/"];
+        _serverConfig.Search.MaxDepth = int.TryParse(SearchMaxDepthBox.Text, out var md) ? Math.Clamp(md, 1, 10) : 2;
+
         // Save password
         _password = PasswordBox.Password;
         if (!string.IsNullOrEmpty(_password))
@@ -224,6 +236,105 @@ public partial class ServerEditDialog : Window
 
         DialogResult = true;
         Close();
+    }
+
+    private static readonly HashSet<string> NonContentDirs = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".", "..", ".banner", ".message", "etc", "bin", "dev", "usr", "tmp", "proc", "lib"
+    };
+
+    private async void DiscoverPaths_Click(object sender, RoutedEventArgs e)
+    {
+        DiscoverResultText.Text = "Discovering paths...";
+        try
+        {
+            var host = HostBox.Text;
+            var port = int.TryParse(PortBox.Text, out var p) ? p : 21;
+            var username = UsernameBox.Text;
+            var password = PasswordBox.Password;
+            if (string.IsNullOrEmpty(password))
+                password = CredentialStore.GetPassword(host, port, username) ?? "";
+
+            AsyncFtpClient client;
+
+            if (ProxyEnabledBox.IsChecked == true && !string.IsNullOrWhiteSpace(ProxyHostBox.Text))
+            {
+                var proxyPort = int.TryParse(ProxyPortBox.Text, out var pp) ? pp : 1080;
+                var proxyUser = ProxyUsernameBox.Text ?? "";
+                var proxyPw = !string.IsNullOrEmpty(proxyUser) ? ProxyPasswordBox.Password : "";
+
+                var profile = new FtpProxyProfile
+                {
+                    ProxyHost = ProxyHostBox.Text,
+                    ProxyPort = proxyPort,
+                    ProxyCredentials = !string.IsNullOrEmpty(proxyUser)
+                        ? new NetworkCredential(proxyUser, proxyPw)
+                        : null,
+                    FtpHost = host,
+                    FtpPort = port,
+                    FtpCredentials = new NetworkCredential(username, password),
+                };
+                client = new AsyncFtpClientSocks5Proxy(profile);
+            }
+            else
+            {
+                client = new AsyncFtpClient(host, username, password, port);
+            }
+
+            client.Config.EncryptionMode = FtpEncryptionMode.Explicit;
+            client.Config.DataConnectionEncryption = true;
+            client.Config.CustomStream = typeof(GnuTlsStream);
+            var gnuConfig = new GnuConfig { SecuritySuite = GnuSuite.Secure128 };
+            if (PreferTls12Box.IsChecked == true)
+                gnuConfig.AdvancedOptions = [GnuAdvanced.NoTickets];
+            client.Config.CustomStreamConfig = gnuConfig;
+            client.ValidateCertificate += (_, ev) => ev.Accept = true;
+
+            await client.Connect();
+
+            // List root to find top-level dirs
+            var rootPath = string.IsNullOrWhiteSpace(RootPathBox.Text) ? "/" : RootPathBox.Text.TrimEnd('/');
+            if (string.IsNullOrEmpty(rootPath)) rootPath = "/";
+            var rootItems = await client.GetListing(rootPath, FtpListOption.AllFiles);
+
+            var topDirs = rootItems
+                .Where(i => i.Type == FtpObjectType.Directory && !NonContentDirs.Contains(i.Name))
+                .ToList();
+
+            var contentPaths = new List<string>();
+
+            foreach (var dir in topDirs)
+            {
+                try
+                {
+                    var subItems = await client.GetListing(dir.FullName, FtpListOption.AllFiles);
+                    var subDirCount = subItems.Count(i => i.Type == FtpObjectType.Directory
+                        && !NonContentDirs.Contains(i.Name));
+                    if (subDirCount >= 2)
+                        contentPaths.Add(dir.FullName);
+                }
+                catch { }
+            }
+
+            await client.Disconnect();
+            client.Dispose();
+
+            if (contentPaths.Count > 0)
+            {
+                SearchPathsBox.Text = string.Join("\n", contentPaths);
+                DiscoverResultText.Text = $"Found {contentPaths.Count} content path(s).";
+            }
+            else
+            {
+                SearchPathsBox.Text = rootPath;
+                DiscoverResultText.Text = "No content sections found, using root path.";
+            }
+        }
+        catch (Exception ex)
+        {
+            DiscoverResultText.Text = $"Discovery failed: {ex.Message}";
+            Log.Warning(ex, "Path discovery failed");
+        }
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e)

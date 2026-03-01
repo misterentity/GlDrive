@@ -15,6 +15,7 @@ public class SettingsViewModel : INotifyPropertyChanged
     private string _writeBufferLimit;
     private string _qualityDefault;
     private string _omdbApiKey;
+    private string _tmdbApiKey;
     private bool _autoDownloadWishlist;
 
     public SettingsViewModel(AppConfig config)
@@ -27,6 +28,7 @@ public class SettingsViewModel : INotifyPropertyChanged
         _writeBufferLimit = config.Downloads.WriteBufferLimitMb.ToString();
         _qualityDefault = config.Downloads.QualityDefault;
         _omdbApiKey = config.Downloads.OmdbApiKey;
+        _tmdbApiKey = config.Downloads.TmdbApiKey;
         _autoDownloadWishlist = config.Downloads.AutoDownloadWishlist;
     }
 
@@ -38,6 +40,7 @@ public class SettingsViewModel : INotifyPropertyChanged
     public string WriteBufferLimit { get => _writeBufferLimit; set { _writeBufferLimit = value; OnPropertyChanged(); } }
     public string QualityDefault { get => _qualityDefault; set { _qualityDefault = value; OnPropertyChanged(); } }
     public string OmdbApiKey { get => _omdbApiKey; set { _omdbApiKey = value; OnPropertyChanged(); } }
+    public string TmdbApiKey { get => _tmdbApiKey; set { _tmdbApiKey = value; OnPropertyChanged(); } }
     public bool AutoDownloadWishlist { get => _autoDownloadWishlist; set { _autoDownloadWishlist = value; OnPropertyChanged(); } }
 
     public string[] LogLevels { get; } = ["Verbose", "Debug", "Information", "Warning", "Error"];
@@ -52,6 +55,7 @@ public class SettingsViewModel : INotifyPropertyChanged
         config.Downloads.WriteBufferLimitMb = int.TryParse(WriteBufferLimit, out var wbl) ? Math.Clamp(wbl, 0, 512) : 0;
         config.Downloads.QualityDefault = QualityDefault;
         config.Downloads.OmdbApiKey = OmdbApiKey;
+        config.Downloads.TmdbApiKey = TmdbApiKey;
         config.Downloads.AutoDownloadWishlist = AutoDownloadWishlist;
     }
 

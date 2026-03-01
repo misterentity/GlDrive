@@ -75,7 +75,7 @@ public partial class SettingsWindow : Window
         }
     }
 
-    private void RemoveServer_Click(object sender, RoutedEventArgs e)
+    private async void RemoveServer_Click(object sender, RoutedEventArgs e)
     {
         if (ServerGrid.SelectedItem is not ServerListItem selected) return;
 
@@ -86,7 +86,7 @@ public partial class SettingsWindow : Window
         if (result != MessageBoxResult.Yes) return;
 
         // Unmount if mounted
-        _serverManager.UnmountServer(selected.Id);
+        await _serverManager.UnmountServerAsync(selected.Id);
 
         _config.Servers.RemoveAll(s => s.Id == selected.Id);
         RefreshServerList();

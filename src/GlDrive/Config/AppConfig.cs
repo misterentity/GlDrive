@@ -18,6 +18,7 @@ public class ServerConfig
     public CacheConfig Cache { get; set; } = new();
     public PoolConfig Pool { get; set; } = new();
     public NotificationConfig Notifications { get; set; } = new();
+    public SearchConfig Search { get; set; } = new();
 }
 
 public class ConnectionConfig
@@ -83,6 +84,12 @@ public class NotificationConfig
     public List<string> ExcludedCategories { get; set; } = [];
 }
 
+public class SearchConfig
+{
+    public List<string> SearchPaths { get; set; } = ["/"];
+    public int MaxDepth { get; set; } = 2;
+}
+
 public class DownloadConfig
 {
     public string LocalPath { get; set; } = System.IO.Path.Combine(
@@ -105,5 +112,6 @@ public class DownloadConfig
     public int WriteBufferLimitMb { get; set; } = 0;
     public string QualityDefault { get; set; } = "1080p";
     public string OmdbApiKey { get; set; } = "";
+    public string TmdbApiKey { get; set; } = "";
     public bool AutoDownloadWishlist { get; set; } = true;
 }

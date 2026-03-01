@@ -75,6 +75,9 @@
                         <TextBlock Text="OMDB API Key (for movie search):" Margin="0,0,0,4"/>
                         <TextBox Text="{Binding OmdbApiKey, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
 
+                        <TextBlock Text="TMDb API Key (for upcoming releases):" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding TmdbApiKey, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
+
                         <CheckBox Content="Auto-download wishlist matches"
                                   IsChecked="{Binding AutoDownloadWishlist}" Margin="0,8,0,12"/>
 

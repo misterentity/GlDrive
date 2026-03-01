@@ -26,10 +26,18 @@ public class DashboardViewModel : INotifyPropertyChanged
     private string _activeDownloadSpeed = "";
     private double _activeDownloadPercent;
     private bool _hasActiveDownload;
+    private UpcomingTvEpisodeVm? _selectedTvEpisode;
+    private UpcomingMovieVm? _selectedUpcomingMovie;
+    private string _upcomingQualityText = "1080p";
+    private string _upcomingStatus = "";
+    private DateTime _tvCacheTime;
+    private DateTime _movieCacheTime;
 
     public ObservableCollection<WishlistItemVm> WishlistItems { get; } = new();
     public ObservableCollection<DownloadItemVm> DownloadItems { get; } = new();
     public ObservableCollection<SearchResultVm> SearchResults { get; } = new();
+    public ObservableCollection<UpcomingTvEpisodeVm> UpcomingTvEpisodes { get; } = new();
+    public ObservableCollection<UpcomingMovieVm> UpcomingMovies { get; } = new();
 
     public WishlistItemVm? SelectedWishlistItem
     {
@@ -64,6 +72,71 @@ public class DashboardViewModel : INotifyPropertyChanged
     {
         get => _selectedSearchResult;
         set { _selectedSearchResult = value; OnPropertyChanged(); }
+    }
+
+    public UpcomingTvEpisodeVm? SelectedTvEpisode
+    {
+        get => _selectedTvEpisode;
+        set
+        {
+            _selectedTvEpisode = value;
+            if (value != null) _selectedUpcomingMovie = null;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SelectedUpcomingMovie));
+            NotifyUpcomingDetailChanged();
+        }
+    }
+
+    public UpcomingMovieVm? SelectedUpcomingMovie
+    {
+        get => _selectedUpcomingMovie;
+        set
+        {
+            _selectedUpcomingMovie = value;
+            if (value != null) _selectedTvEpisode = null;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SelectedTvEpisode));
+            NotifyUpcomingDetailChanged();
+        }
+    }
+
+    public bool HasUpcomingSelection => _selectedTvEpisode != null || _selectedUpcomingMovie != null;
+    public bool HasUpcomingPoster => !string.IsNullOrEmpty(UpcomingPosterUrl);
+    public string? UpcomingPosterUrl => _selectedTvEpisode?.PosterUrl ?? _selectedUpcomingMovie?.PosterUrl;
+    public string UpcomingDetailTitle =>
+        _selectedTvEpisode != null ? $"{_selectedTvEpisode.ShowName} — {_selectedTvEpisode.EpisodeInfo}" :
+        _selectedUpcomingMovie != null ? $"{_selectedUpcomingMovie.Title} ({_selectedUpcomingMovie.Year})" : "";
+    public string UpcomingRating =>
+        _selectedTvEpisode?.Rating is { Length: > 0 } tr ? $"\u2605 {tr}/10" :
+        _selectedUpcomingMovie?.Rating is { Length: > 0 } mr ? $"\u2605 {mr}/10" : "";
+    public string UpcomingGenres => _selectedTvEpisode?.Genres ?? _selectedUpcomingMovie?.Genres ?? "";
+    public string UpcomingPlot => _selectedTvEpisode?.Plot ?? _selectedUpcomingMovie?.Plot ?? "";
+
+    public string UpcomingQualityText
+    {
+        get => _upcomingQualityText;
+        set { _upcomingQualityText = value; OnPropertyChanged(); }
+    }
+
+    public string UpcomingStatus
+    {
+        get => _upcomingStatus;
+        set { _upcomingStatus = value; OnPropertyChanged(); }
+    }
+
+    public string[] QualityOptions { get; } = ["Any", "SD", "720p", "1080p", "2160p"];
+    public bool HasTmdbKey => !string.IsNullOrEmpty(_config.Downloads.TmdbApiKey);
+    public bool HasNoTmdbKey => string.IsNullOrEmpty(_config.Downloads.TmdbApiKey);
+
+    private void NotifyUpcomingDetailChanged()
+    {
+        OnPropertyChanged(nameof(HasUpcomingSelection));
+        OnPropertyChanged(nameof(HasUpcomingPoster));
+        OnPropertyChanged(nameof(UpcomingPosterUrl));
+        OnPropertyChanged(nameof(UpcomingDetailTitle));
+        OnPropertyChanged(nameof(UpcomingRating));
+        OnPropertyChanged(nameof(UpcomingGenres));
+        OnPropertyChanged(nameof(UpcomingPlot));
     }
 
     public string SearchQuery
@@ -112,6 +185,8 @@ public class DashboardViewModel : INotifyPropertyChanged
     public ICommand SearchCommand { get; }
     public ICommand DownloadSearchResultCommand { get; }
     public ICommand RefreshMetadataCommand { get; }
+    public ICommand LoadUpcomingCommand { get; }
+    public ICommand AddUpcomingToWishlistCommand { get; }
 
     public DashboardViewModel(ServerManager serverManager, AppConfig config)
     {
@@ -131,6 +206,8 @@ public class DashboardViewModel : INotifyPropertyChanged
         SearchCommand = new RelayCommand(async () => await PerformSearch());
         DownloadSearchResultCommand = new RelayCommand(DownloadSearchResult);
         RefreshMetadataCommand = new RelayCommand(async () => await RefreshAllMetadata());
+        LoadUpcomingCommand = new RelayCommand(async () => await LoadUpcoming(force: true));
+        AddUpcomingToWishlistCommand = new RelayCommand(async () => await AddUpcomingToWishlist());
 
         RefreshWishlist();
         RefreshDownloads();
@@ -336,6 +413,176 @@ public class DashboardViewModel : INotifyPropertyChanged
         });
     }
 
+    public async Task LoadUpcoming(bool force = false)
+    {
+        var now = DateTime.UtcNow;
+        var loadTv = force || (now - _tvCacheTime).TotalMinutes >= 30;
+        var loadMovies = force || (now - _movieCacheTime).TotalHours >= 1;
+
+        if (!loadTv && !loadMovies) return;
+
+        UpcomingStatus = "Loading...";
+
+        try
+        {
+            if (loadTv)
+            {
+                using var tvMaze = new TvMazeClient();
+                var today = DateOnly.FromDateTime(DateTime.Today);
+                var episodes = new List<UpcomingTvEpisodeVm>();
+
+                for (int d = 0; d < 7; d++)
+                {
+                    var date = today.AddDays(d);
+                    var schedule = await tvMaze.GetSchedule(date);
+
+                    foreach (var ep in schedule.Where(e => e.Show != null))
+                    {
+                        episodes.Add(new UpcomingTvEpisodeVm
+                        {
+                            ShowId = ep.Show!.Id,
+                            ShowName = ep.Show.Name,
+                            EpisodeInfo = $"S{ep.Season:D2}E{ep.Number:D2} — {ep.Name}",
+                            TimeDisplay = ep.Airtime ?? "",
+                            NetworkDisplay = ep.Show.Network?.Name ?? "",
+                            DateDisplay = date.ToString("ddd M/d"),
+                            AirDate = date,
+                            PosterUrl = ep.Show.Image?.Medium,
+                            Plot = StripHtml(ep.Show.Summary),
+                            Rating = ep.Show.Rating?.Average?.ToString("F1"),
+                            Genres = ep.Show.Genres != null ? string.Join(", ", ep.Show.Genres) : "",
+                            TvMazeId = ep.Show.Id
+                        });
+                    }
+
+                    if (d < 6) await Task.Delay(600); // Rate limit: 20 req/10s
+                }
+
+                UpcomingTvEpisodes.Clear();
+                foreach (var ep in episodes)
+                    UpcomingTvEpisodes.Add(ep);
+
+                _tvCacheTime = now;
+            }
+
+            if (loadMovies && HasTmdbKey)
+            {
+                using var tmdb = new TmdbClient(_config.Downloads.TmdbApiKey);
+                var from = DateOnly.FromDateTime(DateTime.Today.AddDays(-7));
+                var to = DateOnly.FromDateTime(DateTime.Today.AddDays(14));
+                var movies = await tmdb.GetUpcomingReleases(from, to);
+
+                UpcomingMovies.Clear();
+                foreach (var m in movies)
+                {
+                    UpcomingMovies.Add(new UpcomingMovieVm
+                    {
+                        TmdbId = m.Id,
+                        Title = m.Title,
+                        Year = m.YearParsed?.ToString() ?? "",
+                        ReleaseDateDisplay = m.ReleaseDate ?? "",
+                        ReleaseType = "", // discover doesn't distinguish 4 vs 5
+                        PosterUrl = m.PosterUrl,
+                        Plot = m.Overview,
+                        Rating = m.VoteAverage > 0 ? m.VoteAverage.ToString("F1") : "",
+                        Genres = m.GenreText
+                    });
+                }
+
+                _movieCacheTime = now;
+            }
+
+            var tvCount = UpcomingTvEpisodes.Count;
+            var movieCount = UpcomingMovies.Count;
+            UpcomingStatus = $"{tvCount} episode(s), {movieCount} movie(s)";
+        }
+        catch (Exception ex)
+        {
+            UpcomingStatus = $"Error: {ex.Message}";
+            Log.Error(ex, "Failed to load upcoming data");
+        }
+    }
+
+    private async Task AddUpcomingToWishlist()
+    {
+        if (_selectedTvEpisode != null)
+        {
+            var ep = _selectedTvEpisode;
+            // Check duplicate
+            if (_wishlistStore.Items.Any(w => w.TvMazeId == ep.TvMazeId))
+            {
+                UpcomingStatus = $"{ep.ShowName} is already in wishlist";
+                return;
+            }
+
+            var quality = ParseQuality(UpcomingQualityText);
+            _wishlistStore.Add(new WishlistItem
+            {
+                Type = MediaType.TvShow,
+                Title = ep.ShowName,
+                TvMazeId = ep.TvMazeId,
+                Quality = quality,
+                PosterUrl = ep.PosterUrl,
+                Plot = ep.Plot,
+                Rating = ep.Rating,
+                Genres = ep.Genres
+            });
+            RefreshWishlist();
+            UpcomingStatus = $"Added {ep.ShowName} to wishlist";
+        }
+        else if (_selectedUpcomingMovie != null)
+        {
+            var movie = _selectedUpcomingMovie;
+
+            // Fetch detail for ImdbId if we don't have it
+            if (string.IsNullOrEmpty(movie.ImdbId) && HasTmdbKey)
+            {
+                using var tmdb = new TmdbClient(_config.Downloads.TmdbApiKey);
+                var detail = await tmdb.GetMovieDetail(movie.TmdbId);
+                if (detail != null)
+                {
+                    movie.ImdbId = detail.ImdbId;
+                    if (string.IsNullOrEmpty(movie.Plot)) movie.Plot = detail.Overview;
+                    if (string.IsNullOrEmpty(movie.Genres)) movie.Genres = detail.GenreText;
+                    if (string.IsNullOrEmpty(movie.Rating) && detail.VoteAverage > 0)
+                        movie.Rating = detail.VoteAverage.ToString("F1");
+                }
+            }
+
+            if (!string.IsNullOrEmpty(movie.ImdbId) &&
+                _wishlistStore.Items.Any(w => w.ImdbId == movie.ImdbId))
+            {
+                UpcomingStatus = $"{movie.Title} is already in wishlist";
+                return;
+            }
+
+            var quality = ParseQuality(UpcomingQualityText);
+            _wishlistStore.Add(new WishlistItem
+            {
+                Type = MediaType.Movie,
+                Title = movie.Title,
+                Year = int.TryParse(movie.Year, out var y) ? y : null,
+                ImdbId = movie.ImdbId,
+                Quality = quality,
+                PosterUrl = movie.PosterUrl,
+                Plot = movie.Plot,
+                Rating = movie.Rating,
+                Genres = movie.Genres
+            });
+            RefreshWishlist();
+            UpcomingStatus = $"Added {movie.Title} to wishlist";
+        }
+    }
+
+    private static QualityProfile ParseQuality(string text) => text switch
+    {
+        "SD" => QualityProfile.SD,
+        "720p" => QualityProfile.Q720p,
+        "1080p" => QualityProfile.Q1080p,
+        "2160p" => QualityProfile.Q2160p,
+        _ => QualityProfile.Any
+    };
+
     private async Task RefreshAllMetadata()
     {
         using var tvMaze = new TvMazeClient();
@@ -500,4 +747,34 @@ public class SearchResultVm
     public string SizeText { get; set; } = "";
     public string ServerId { get; set; } = "";
     public string ServerName { get; set; } = "";
+}
+
+public class UpcomingTvEpisodeVm
+{
+    public int ShowId { get; set; }
+    public string ShowName { get; set; } = "";
+    public string EpisodeInfo { get; set; } = "";
+    public string TimeDisplay { get; set; } = "";
+    public string NetworkDisplay { get; set; } = "";
+    public string DateDisplay { get; set; } = "";
+    public DateOnly AirDate { get; set; }
+    public string? PosterUrl { get; set; }
+    public string? Plot { get; set; }
+    public string? Rating { get; set; }
+    public string? Genres { get; set; }
+    public int TvMazeId { get; set; }
+}
+
+public class UpcomingMovieVm
+{
+    public int TmdbId { get; set; }
+    public string Title { get; set; } = "";
+    public string Year { get; set; } = "";
+    public string ReleaseDateDisplay { get; set; } = "";
+    public string ReleaseType { get; set; } = "";
+    public string? PosterUrl { get; set; }
+    public string? Plot { get; set; }
+    public string? Rating { get; set; }
+    public string? Genres { get; set; }
+    public string? ImdbId { get; set; }
 }
