@@ -76,9 +76,11 @@ public class NewReleaseMonitor
         else
             categories = await conn.Client.GetListing(_config.WatchPath, FtpListOption.AllFiles, ct);
 
+        var excluded = _config.ExcludedCategories;
         var categoryDirs = categories
             .Where(i => i.Type == FtpObjectType.Directory)
             .Select(i => i.Name)
+            .Where(name => !excluded.Any(ex => string.Equals(ex, name, StringComparison.OrdinalIgnoreCase)))
             .ToList();
 
         foreach (var category in categoryDirs)

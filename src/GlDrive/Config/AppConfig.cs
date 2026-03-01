@@ -70,6 +70,7 @@ public class NotificationConfig
     public bool Enabled { get; set; } = true;
     public int PollIntervalSeconds { get; set; } = 60;
     public string WatchPath { get; set; } = "/recent";
+    public List<string> ExcludedCategories { get; set; } = [];
 }
 
 public class DownloadConfig

@@ -53,6 +53,7 @@ public partial class ServerEditDialog : Window
             NotificationsEnabledBox.IsChecked = existing.Notifications.Enabled;
             PollIntervalBox.Text = existing.Notifications.PollIntervalSeconds.ToString();
             WatchPathBox.Text = existing.Notifications.WatchPath;
+            ExcludedCategoriesBox.Text = string.Join(", ", existing.Notifications.ExcludedCategories);
 
             // Load stored password hint
             var storedPw = CredentialStore.GetPassword(existing.Connection.Host, existing.Connection.Port, existing.Connection.Username);
@@ -128,6 +129,9 @@ public partial class ServerEditDialog : Window
         _serverConfig.Notifications.Enabled = NotificationsEnabledBox.IsChecked == true;
         _serverConfig.Notifications.PollIntervalSeconds = int.TryParse(PollIntervalBox.Text, out var pi) ? Math.Clamp(pi, 10, 600) : 60;
         _serverConfig.Notifications.WatchPath = string.IsNullOrWhiteSpace(WatchPathBox.Text) ? "/recent" : WatchPathBox.Text;
+        _serverConfig.Notifications.ExcludedCategories = (ExcludedCategoriesBox.Text ?? "")
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(s => s.Length > 0).ToList();
 
         // Save password
         _password = PasswordBox.Password;
