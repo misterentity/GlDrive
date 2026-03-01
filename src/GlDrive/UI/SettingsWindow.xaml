@@ -96,6 +96,8 @@
                         <StackPanel Orientation="Horizontal">
                             <Button Content="Add" Click="AddCategoryPath_Click" Padding="12,4" Margin="0,0,6,0"
                                     Style="{StaticResource SecondaryButton}"/>
+                            <Button Content="Browse..." Click="BrowseCategoryPath_Click" Padding="12,4" Margin="0,0,6,0"
+                                    Style="{StaticResource SecondaryButton}"/>
                             <Button Content="Remove" Click="RemoveCategoryPath_Click" Padding="12,4"
                                     Style="{StaticResource SecondaryButton}"/>
                         </StackPanel>

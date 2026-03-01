@@ -123,6 +123,23 @@ public partial class SettingsWindow : Window
         _categoryPaths.Add(new CategoryPathItem { Category = "", Path = "" });
     }
 
+    private void BrowseCategoryPath_Click(object sender, RoutedEventArgs e)
+    {
+        if (CategoryPathGrid.SelectedItem is not CategoryPathItem selected) return;
+
+        var dialog = new Microsoft.Win32.OpenFolderDialog
+        {
+            Title = $"Select folder for \"{selected.Category}\"",
+            InitialDirectory = string.IsNullOrWhiteSpace(selected.Path) ? _vm.DownloadLocalPath : selected.Path
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            selected.Path = dialog.FolderName;
+            CategoryPathGrid.Items.Refresh();
+        }
+    }
+
     private void RemoveCategoryPath_Click(object sender, RoutedEventArgs e)
     {
         if (CategoryPathGrid.SelectedItem is CategoryPathItem selected)
