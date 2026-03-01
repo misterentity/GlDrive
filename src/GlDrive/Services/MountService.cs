@@ -112,7 +112,7 @@ public class MountService : IDisposable
             _streamingDownloader = new StreamingDownloader(
                 _pool, _downloadConfig.StreamingBufferSizeKb, _downloadConfig.WriteBufferLimitMb);
             _downloadManager = new DownloadManager(downloadStore, _ftp, _streamingDownloader, _downloadConfig);
-            _searchService = new FtpSearchService(_ftp, _serverConfig.Notifications);
+            _searchService = new FtpSearchService(_pool, _serverConfig.Notifications);
             _wishlistMatcher = new WishlistMatcher(wishlistStore, _downloadManager, _ftp, _downloadConfig,
                 _serverConfig.Id, _serverConfig.Name);
 
