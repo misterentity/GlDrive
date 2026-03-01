@@ -9,6 +9,7 @@ public class AppConfig
     public PoolConfig Pool { get; set; } = new();
     public LoggingConfig Logging { get; set; } = new();
     public NotificationConfig Notifications { get; set; } = new();
+    public DownloadConfig Downloads { get; set; } = new();
 }
 
 public class ConnectionConfig
@@ -58,4 +59,14 @@ public class NotificationConfig
     public bool Enabled { get; set; } = true;
     public int PollIntervalSeconds { get; set; } = 60;
     public string WatchPath { get; set; } = "/recent";
+}
+
+public class DownloadConfig
+{
+    public string LocalPath { get; set; } = System.IO.Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "GlDrive");
+    public int MaxConcurrentDownloads { get; set; } = 1;
+    public string QualityDefault { get; set; } = "1080p";
+    public string OmdbApiKey { get; set; } = "";
+    public bool AutoDownloadWishlist { get; set; } = true;
 }

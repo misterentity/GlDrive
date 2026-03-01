@@ -64,6 +64,18 @@ public partial class SettingsWindow : Window
         MessageBox.Show("Trusted certificates cleared.", "GlDrive", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
+    private void BrowseDownloadPath_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFolderDialog
+        {
+            Title = "Select Download Folder",
+            InitialDirectory = _vm.DownloadLocalPath
+        };
+
+        if (dialog.ShowDialog() == true)
+            _vm.DownloadLocalPath = dialog.FolderName;
+    }
+
     private void OpenLogs_Click(object sender, RoutedEventArgs e)
     {
         var logPath = Path.Combine(ConfigManager.AppDataPath, "logs");

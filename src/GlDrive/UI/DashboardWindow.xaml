@@ -1,0 +1,118 @@
+<Window x:Class="GlDrive.UI.DashboardWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="GlDrive Dashboard" Width="850" Height="600"
+        WindowStartupLocation="CenterScreen">
+    <Grid Margin="8">
+        <TabControl>
+            <!-- Wishlist Tab -->
+            <TabItem Header="Wishlist">
+                <DockPanel Margin="8">
+                    <ToolBar DockPanel.Dock="Top" Margin="0,0,0,8">
+                        <Button Content="+ Movie" Command="{Binding AddMovieCommand}" Padding="8,4"/>
+                        <Button Content="+ TV Show" Command="{Binding AddTvShowCommand}" Padding="8,4"/>
+                        <Separator/>
+                        <Button Content="Remove" Command="{Binding RemoveWishlistCommand}" Padding="8,4"/>
+                        <Button Content="Pause" Command="{Binding TogglePauseCommand}" Padding="8,4"/>
+                    </ToolBar>
+                    <DataGrid ItemsSource="{Binding WishlistItems}"
+                              SelectedItem="{Binding SelectedWishlistItem}"
+                              AutoGenerateColumns="False" IsReadOnly="True"
+                              SelectionMode="Single" GridLinesVisibility="Horizontal"
+                              HeadersVisibility="Column" CanUserAddRows="False">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Title" Binding="{Binding Title}" Width="*"/>
+                            <DataGridTextColumn Header="Type" Binding="{Binding Type}" Width="70"/>
+                            <DataGridTextColumn Header="Year" Binding="{Binding Year}" Width="60"/>
+                            <DataGridComboBoxColumn Header="Quality" SelectedItemBinding="{Binding Quality}" Width="80">
+                                <DataGridComboBoxColumn.ItemsSource>
+                                    <x:Array Type="{x:Type sys:String}" xmlns:sys="clr-namespace:System;assembly=mscorlib">
+                                        <sys:String>Any</sys:String>
+                                        <sys:String>SD</sys:String>
+                                        <sys:String>Q720p</sys:String>
+                                        <sys:String>Q1080p</sys:String>
+                                        <sys:String>Q2160p</sys:String>
+                                    </x:Array>
+                                </DataGridComboBoxColumn.ItemsSource>
+                            </DataGridComboBoxColumn>
+                            <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="80"/>
+                            <DataGridTextColumn Header="Grabbed" Binding="{Binding GrabbedCount}" Width="65"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </TabItem>
+
+            <!-- Downloads Tab -->
+            <TabItem Header="Downloads">
+                <DockPanel Margin="8">
+                    <!-- Active download progress -->
+                    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,8"
+                                Visibility="{Binding HasActiveDownload, Converter={StaticResource BoolToVisibility}}">
+                        <TextBlock>
+                            <Run Text="{Binding ActiveDownloadName, Mode=OneWay}"/>
+                            <Run Text=" — "/>
+                            <Run Text="{Binding ActiveDownloadSpeed, Mode=OneWay}"/>
+                        </TextBlock>
+                        <ProgressBar Value="{Binding ActiveDownloadPercent}" Maximum="100" Height="20" Margin="0,4,0,0"/>
+                    </StackPanel>
+
+                    <ToolBar DockPanel.Dock="Top" Margin="0,0,0,8">
+                        <Button Content="Cancel" Command="{Binding CancelDownloadCommand}" Padding="8,4"/>
+                        <Button Content="Retry" Command="{Binding RetryDownloadCommand}" Padding="8,4"/>
+                        <Separator/>
+                        <Button Content="Clear Completed" Command="{Binding ClearCompletedCommand}" Padding="8,4"/>
+                    </ToolBar>
+                    <DataGrid ItemsSource="{Binding DownloadItems}"
+                              SelectedItem="{Binding SelectedDownloadItem}"
+                              AutoGenerateColumns="False" IsReadOnly="True"
+                              SelectionMode="Single" GridLinesVisibility="Horizontal"
+                              HeadersVisibility="Column" CanUserAddRows="False">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Release" Binding="{Binding ReleaseName}" Width="*"/>
+                            <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="80"/>
+                            <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="90"/>
+                            <DataGridTextColumn Header="Progress" Binding="{Binding ProgressText}" Width="100"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </TabItem>
+
+            <!-- Search Tab -->
+            <TabItem Header="Search">
+                <DockPanel Margin="8">
+                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+                        <Button DockPanel.Dock="Right" Content="Search" Command="{Binding SearchCommand}"
+                                Padding="16,4" Margin="8,0,0,0" Style="{StaticResource PrimaryButton}"/>
+                        <TextBox Text="{Binding SearchQuery, UpdateSourceTrigger=PropertyChanged}"
+                                 VerticalContentAlignment="Center" Padding="4">
+                            <TextBox.InputBindings>
+                                <KeyBinding Key="Return" Command="{Binding SearchCommand}"/>
+                            </TextBox.InputBindings>
+                        </TextBox>
+                    </DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="{Binding SearchStatus}" Margin="0,0,0,4"
+                               Foreground="Gray"/>
+                    <DockPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+                        <Button Content="Download Selected" Command="{Binding DownloadSearchResultCommand}"
+                                Padding="12,4" Style="{StaticResource PrimaryButton}"/>
+                    </DockPanel>
+                    <DataGrid ItemsSource="{Binding SearchResults}"
+                              SelectedItem="{Binding SelectedSearchResult}"
+                              AutoGenerateColumns="False" IsReadOnly="True"
+                              SelectionMode="Single" GridLinesVisibility="Horizontal"
+                              HeadersVisibility="Column" CanUserAddRows="False">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Release" Binding="{Binding ReleaseName}" Width="*"/>
+                            <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="100"/>
+                            <DataGridTextColumn Header="Size" Binding="{Binding SizeText}" Width="80"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </TabItem>
+        </TabControl>
+    </Grid>
+
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
+    </Window.Resources>
+</Window>

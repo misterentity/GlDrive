@@ -20,6 +20,11 @@ public class SettingsViewModel : INotifyPropertyChanged
     private string _poolSize;
     private string _logLevel;
     private string _trustedCertsInfo;
+    private string _downloadLocalPath;
+    private string _maxConcurrentDownloads;
+    private string _qualityDefault;
+    private string _omdbApiKey;
+    private bool _autoDownloadWishlist;
 
     public SettingsViewModel(AppConfig config)
     {
@@ -35,6 +40,11 @@ public class SettingsViewModel : INotifyPropertyChanged
         _poolSize = config.Pool.PoolSize.ToString();
         _logLevel = config.Logging.Level;
         _trustedCertsInfo = GetCertsInfo(config);
+        _downloadLocalPath = config.Downloads.LocalPath;
+        _maxConcurrentDownloads = config.Downloads.MaxConcurrentDownloads.ToString();
+        _qualityDefault = config.Downloads.QualityDefault;
+        _omdbApiKey = config.Downloads.OmdbApiKey;
+        _autoDownloadWishlist = config.Downloads.AutoDownloadWishlist;
     }
 
     public string Host { get => _host; set { _host = value; OnPropertyChanged(); } }
@@ -49,9 +59,15 @@ public class SettingsViewModel : INotifyPropertyChanged
     public string PoolSize { get => _poolSize; set { _poolSize = value; OnPropertyChanged(); } }
     public string LogLevel { get => _logLevel; set { _logLevel = value; OnPropertyChanged(); } }
     public string TrustedCertsInfo { get => _trustedCertsInfo; set { _trustedCertsInfo = value; OnPropertyChanged(); } }
+    public string DownloadLocalPath { get => _downloadLocalPath; set { _downloadLocalPath = value; OnPropertyChanged(); } }
+    public string MaxConcurrentDownloads { get => _maxConcurrentDownloads; set { _maxConcurrentDownloads = value; OnPropertyChanged(); } }
+    public string QualityDefault { get => _qualityDefault; set { _qualityDefault = value; OnPropertyChanged(); } }
+    public string OmdbApiKey { get => _omdbApiKey; set { _omdbApiKey = value; OnPropertyChanged(); } }
+    public bool AutoDownloadWishlist { get => _autoDownloadWishlist; set { _autoDownloadWishlist = value; OnPropertyChanged(); } }
 
     public string[] AvailableDriveLetters { get; } = GetAvailableDriveLetters();
     public string[] LogLevels { get; } = ["Verbose", "Debug", "Information", "Warning", "Error"];
+    public string[] QualityOptions { get; } = ["Any", "SD", "720p", "1080p", "2160p"];
 
     public void ApplyTo(AppConfig config)
     {
@@ -66,6 +82,11 @@ public class SettingsViewModel : INotifyPropertyChanged
         config.Cache.DirectoryListingTtlSeconds = int.TryParse(CacheTtl, out var ttl) ? Math.Clamp(ttl, 5, 300) : 30;
         config.Pool.PoolSize = int.TryParse(PoolSize, out var ps) ? Math.Clamp(ps, 1, 10) : 3;
         config.Logging.Level = LogLevel;
+        config.Downloads.LocalPath = DownloadLocalPath;
+        config.Downloads.MaxConcurrentDownloads = int.TryParse(MaxConcurrentDownloads, out var mcd) ? Math.Clamp(mcd, 1, 5) : 1;
+        config.Downloads.QualityDefault = QualityDefault;
+        config.Downloads.OmdbApiKey = OmdbApiKey;
+        config.Downloads.AutoDownloadWishlist = AutoDownloadWishlist;
     }
 
     public void RefreshCertsInfo()

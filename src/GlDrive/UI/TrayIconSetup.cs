@@ -49,6 +49,15 @@ public static class TrayIconSetup
 
         menu.Items.Add(new Separator());
 
+        // Dashboard
+        var dashboard = new MenuItem { Header = "Dashboard..." };
+        dashboard.Click += (_, _) => vm.DashboardCommand.Execute(null);
+        dashboard.SetBinding(UIElement.IsEnabledProperty,
+            new System.Windows.Data.Binding("IsConnected") { Source = vm });
+        menu.Items.Add(dashboard);
+
+        menu.Items.Add(new Separator());
+
         // Settings
         var settings = new MenuItem { Header = "Settings..." };
         settings.Click += (_, _) => vm.SettingsCommand.Execute(null);

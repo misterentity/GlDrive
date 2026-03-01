@@ -15,6 +15,9 @@ public class TrayViewModel : INotifyPropertyChanged
     private readonly MountService _mountService;
     private readonly AppConfig _config;
     private MountState _currentState;
+    private readonly List<(string Category, string Release)> _releaseBatch = new();
+    private System.Windows.Threading.DispatcherTimer? _batchTimer;
+    private DashboardWindow? _dashboardWindow;
 
     public TrayViewModel(MountService mountService, AppConfig config)
     {
@@ -25,8 +28,29 @@ public class TrayViewModel : INotifyPropertyChanged
         {
             Application.Current?.Dispatcher.Invoke(() =>
             {
-                ShowNotification(category, release);
+                _releaseBatch.Add((category, release));
+                _batchTimer ??= new System.Windows.Threading.DispatcherTimer
+                {
+                    Interval = TimeSpan.FromSeconds(3)
+                };
+                _batchTimer.Tick += (_, _) =>
+                {
+                    _batchTimer.Stop();
+                    FlushReleaseBatch();
+                };
+                _batchTimer.Stop();
+                _batchTimer.Start();
             });
+        };
+
+        _mountService.StateChanged += state =>
+        {
+            if (state == MountState.Connected && _mountService.Matcher != null)
+            {
+                _mountService.Matcher.MatchFound += (item, cat, rel) =>
+                    Application.Current?.Dispatcher.Invoke(() =>
+                        ShowNotification("Grabbed", $"{item.Title} [{cat}]"));
+            }
         };
 
         _mountService.StateChanged += state =>
@@ -84,6 +108,19 @@ public class TrayViewModel : INotifyPropertyChanged
             window.ShowDialog();
         });
 
+        DashboardCommand = new RelayCommand(() =>
+        {
+            if (_dashboardWindow == null || !_dashboardWindow.IsLoaded)
+            {
+                _dashboardWindow = new DashboardWindow(_mountService, _config);
+                _dashboardWindow.Show();
+            }
+            else
+            {
+                _dashboardWindow.Activate();
+            }
+        });
+
         ViewLogsCommand = new RelayCommand(() =>
         {
             var logPath = Path.Combine(ConfigManager.AppDataPath, "logs");
@@ -121,11 +158,30 @@ public class TrayViewModel : INotifyPropertyChanged
     public ICommand OpenDriveCommand { get; }
     public ICommand RefreshCacheCommand { get; }
     public ICommand ToggleMountCommand { get; }
+    public ICommand DashboardCommand { get; }
     public ICommand SettingsCommand { get; }
     public ICommand ViewLogsCommand { get; }
     public ICommand ExitCommand { get; }
 
     public Action<string, string>? ShowNotificationRequested { get; set; }
+
+    private void FlushReleaseBatch()
+    {
+        if (_releaseBatch.Count == 0) return;
+
+        if (_releaseBatch.Count == 1)
+        {
+            var (cat, rel) = _releaseBatch[0];
+            ShowNotification(cat, rel);
+        }
+        else
+        {
+            var lines = _releaseBatch.Select(r => $"[{r.Category}] {r.Release}");
+            ShowNotification($"{_releaseBatch.Count} new releases", string.Join("\n", lines));
+        }
+
+        _releaseBatch.Clear();
+    }
 
     public void ShowNotification(string title, string message)
     {

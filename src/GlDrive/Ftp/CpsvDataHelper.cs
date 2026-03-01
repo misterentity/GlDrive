@@ -36,7 +36,7 @@ public static class CpsvDataHelper
     /// Sends CPSV and establishes a TCP connection to the data port.
     /// Does NOT negotiate TLS — that happens after the data command is sent.
     /// </summary>
-    private static async Task<TcpClient> OpenDataTcp(
+    internal static async Task<TcpClient> OpenDataTcp(
         AsyncFtpClient client, CancellationToken ct)
     {
         var cpsvReply = await client.Execute("CPSV", ct);
@@ -69,7 +69,7 @@ public static class CpsvDataHelper
     /// The glftpd server/BNC does SSL_connect (TLS client) on data channels after the
     /// data command is sent, so we must SSL_accept (TLS server).
     /// </summary>
-    private static async Task<SslStream> NegotiateDataTls(NetworkStream networkStream, CancellationToken ct)
+    internal static async Task<SslStream> NegotiateDataTls(NetworkStream networkStream, CancellationToken ct)
     {
         var ssl = new SslStream(networkStream, true, (_, _, _, _) => true);
         using var tlsCts = CancellationTokenSource.CreateLinkedTokenSource(ct);

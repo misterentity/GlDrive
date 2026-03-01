@@ -1,6 +1,7 @@
 using System.IO;
 using Fsp;
 using GlDrive.Config;
+using GlDrive.Downloads;
 using GlDrive.Filesystem;
 using GlDrive.Ftp;
 using GlDrive.Tls;
@@ -20,6 +21,10 @@ public class MountService : IDisposable
     private FileSystemHost? _host;
     private ConnectionMonitor? _monitor;
     private NewReleaseMonitor? _releaseMonitor;
+    private StreamingDownloader? _streamingDownloader;
+    private DownloadManager? _downloadManager;
+    private FtpSearchService? _searchService;
+    private WishlistMatcher? _wishlistMatcher;
     private bool _mounted;
 
     public event Action<MountState>? StateChanged;
@@ -27,7 +32,11 @@ public class MountService : IDisposable
 
     public MountState CurrentState { get; private set; } = MountState.Unmounted;
     public FtpConnectionPool? Pool => _pool;
+    public FtpOperations? Ftp => _ftp;
     public DirectoryCache? Cache => _cache;
+    public DownloadManager? Downloads => _downloadManager;
+    public FtpSearchService? Search => _searchService;
+    public WishlistMatcher? Matcher => _wishlistMatcher;
 
     public MountService(AppConfig config, CertificateManager certManager)
     {
@@ -86,6 +95,22 @@ public class MountService : IDisposable
             _releaseMonitor.NewReleaseDetected += (category, release) => NewReleaseDetected?.Invoke(category, release);
             _releaseMonitor.Start();
 
+            // Initialize download subsystem
+            var downloadStore = new DownloadStore();
+            downloadStore.Load();
+            var wishlistStore = new WishlistStore();
+            wishlistStore.Load();
+
+            _streamingDownloader = new StreamingDownloader(_pool);
+            _downloadManager = new DownloadManager(downloadStore, _ftp, _streamingDownloader, _config.Downloads);
+            _searchService = new FtpSearchService(_ftp, _config.Notifications);
+            _wishlistMatcher = new WishlistMatcher(wishlistStore, _downloadManager, _ftp, _config.Downloads);
+
+            if (_config.Downloads.AutoDownloadWishlist)
+                _releaseMonitor.NewReleaseDetected += _wishlistMatcher.OnNewRelease;
+
+            _downloadManager.Start();
+
             SetState(MountState.Connected);
             Log.Information("Drive {MountPoint} mounted successfully", mountPoint);
         }
@@ -128,6 +153,11 @@ public class MountService : IDisposable
 
     private void Cleanup()
     {
+        _downloadManager?.Dispose();
+        _downloadManager = null;
+        _wishlistMatcher = null;
+        _searchService = null;
+        _streamingDownloader = null;
         _releaseMonitor?.Stop();
         _releaseMonitor = null;
         _monitor?.Stop();

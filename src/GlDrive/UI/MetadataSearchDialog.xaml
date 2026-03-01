@@ -1,0 +1,46 @@
+<Window x:Class="GlDrive.UI.MetadataSearchDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Search" Width="500" Height="400"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize">
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Search bar -->
+        <DockPanel Grid.Row="0" Margin="0,0,0,8">
+            <Button DockPanel.Dock="Right" Content="Search" Click="Search_Click"
+                    Padding="12,4" Margin="8,0,0,0" Style="{StaticResource PrimaryButton}"/>
+            <TextBox x:Name="SearchBox" VerticalContentAlignment="Center" Padding="4"
+                     KeyDown="SearchBox_KeyDown"/>
+        </DockPanel>
+
+        <!-- Results -->
+        <ListBox Grid.Row="1" x:Name="ResultsList" DisplayMemberPath="DisplayText"
+                 SelectionChanged="ResultsList_SelectionChanged"/>
+
+        <!-- Quality -->
+        <DockPanel Grid.Row="2" Margin="0,8,0,8">
+            <TextBlock Text="Quality:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+            <ComboBox x:Name="QualityCombo" Width="120" HorizontalAlignment="Left">
+                <ComboBoxItem Content="Any" IsSelected="True"/>
+                <ComboBoxItem Content="SD"/>
+                <ComboBoxItem Content="720p"/>
+                <ComboBoxItem Content="1080p"/>
+                <ComboBoxItem Content="2160p"/>
+            </ComboBox>
+        </DockPanel>
+
+        <!-- Buttons -->
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="Add" Click="Ok_Click" Padding="20,6" Margin="0,0,8,0"
+                    Style="{StaticResource PrimaryButton}" x:Name="OkButton" IsEnabled="False"/>
+            <Button Content="Cancel" Click="Cancel_Click" Padding="20,6"
+                    Style="{StaticResource SecondaryButton}"/>
+        </StackPanel>
+    </Grid>
+</Window>
