@@ -21,7 +21,7 @@ public static class CredentialStore
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "Failed to read proxy credential for {Target}", target);
+            Log.Warning(ex, "Failed to read proxy credential");
             return null;
         }
     }
@@ -35,7 +35,7 @@ public static class CredentialStore
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Failed to save proxy credential for {Target}", target);
+            Log.Error(ex, "Failed to save proxy credential");
             throw;
         }
     }
@@ -50,7 +50,7 @@ public static class CredentialStore
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "Failed to read credential for {Target}", target);
+            Log.Warning(ex, "Failed to read credential");
             return null;
         }
     }
@@ -68,7 +68,7 @@ public static class CredentialStore
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Failed to save credential for {Target}", target);
+            Log.Error(ex, "Failed to save credential");
             throw;
         }
     }
@@ -82,7 +82,7 @@ public static class CredentialStore
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "Failed to delete credential for {Target}", target);
+            Log.Warning(ex, "Failed to delete credential");
         }
     }
 }

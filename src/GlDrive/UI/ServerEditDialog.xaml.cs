@@ -1,8 +1,10 @@
 using System.IO;
+using System.Net;
 using System.Windows;
 using FluentFTP;
 using FluentFTP.GnuTLS;
 using FluentFTP.GnuTLS.Enums;
+using FluentFTP.Proxy.AsyncProxy;
 using GlDrive.Config;
 using Serilog;
 
@@ -90,15 +92,46 @@ public partial class ServerEditDialog : Window
         TestResultText.Text = "Testing connection...";
         try
         {
+            var host = HostBox.Text;
+            var port = int.TryParse(PortBox.Text, out var p) ? p : 21;
+            var username = UsernameBox.Text;
             var password = PasswordBox.Password;
             if (string.IsNullOrEmpty(password))
-                password = CredentialStore.GetPassword(HostBox.Text, int.Parse(PortBox.Text), UsernameBox.Text) ?? "";
+                password = CredentialStore.GetPassword(host, port, username) ?? "";
 
-            var client = new AsyncFtpClient(HostBox.Text, UsernameBox.Text, password, int.Parse(PortBox.Text));
+            AsyncFtpClient client;
+
+            if (ProxyEnabledBox.IsChecked == true && !string.IsNullOrWhiteSpace(ProxyHostBox.Text))
+            {
+                var proxyPort = int.TryParse(ProxyPortBox.Text, out var pp) ? pp : 1080;
+                var proxyUser = ProxyUsernameBox.Text ?? "";
+                var proxyPw = !string.IsNullOrEmpty(proxyUser) ? ProxyPasswordBox.Password : "";
+
+                var profile = new FtpProxyProfile
+                {
+                    ProxyHost = ProxyHostBox.Text,
+                    ProxyPort = proxyPort,
+                    ProxyCredentials = !string.IsNullOrEmpty(proxyUser)
+                        ? new NetworkCredential(proxyUser, proxyPw)
+                        : null,
+                    FtpHost = host,
+                    FtpPort = port,
+                    FtpCredentials = new NetworkCredential(username, password),
+                };
+                client = new AsyncFtpClientSocks5Proxy(profile);
+            }
+            else
+            {
+                client = new AsyncFtpClient(host, username, password, port);
+            }
+
             client.Config.EncryptionMode = FtpEncryptionMode.Explicit;
             client.Config.DataConnectionEncryption = true;
             client.Config.CustomStream = typeof(GnuTlsStream);
-            client.Config.CustomStreamConfig = new GnuConfig { SecuritySuite = GnuSuite.Secure128 };
+            var gnuConfig = new GnuConfig { SecuritySuite = GnuSuite.Secure128 };
+            if (PreferTls12Box.IsChecked == true)
+                gnuConfig.AdvancedOptions = [GnuAdvanced.NoTickets];
+            client.Config.CustomStreamConfig = gnuConfig;
             client.ValidateCertificate += (_, e) => e.Accept = true;
 
             await client.Connect();
@@ -106,7 +139,8 @@ public partial class ServerEditDialog : Window
             await client.Disconnect();
             client.Dispose();
 
-            TestResultText.Text = $"Success! Connected and listed {listing.Length} items in root.";
+            var via = ProxyEnabledBox.IsChecked == true ? " (via SOCKS5 proxy)" : "";
+            TestResultText.Text = $"Success! Connected{via} and listed {listing.Length} items in root.";
         }
         catch (Exception ex)
         {

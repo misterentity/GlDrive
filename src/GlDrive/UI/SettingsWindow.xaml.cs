@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using GlDrive.Config;
+using GlDrive.Logging;
 using GlDrive.Services;
 using GlDrive.Tls;
 using Serilog;
@@ -159,6 +160,10 @@ public partial class SettingsWindow : Window
         }
 
         ConfigManager.Save(_config);
+
+        // Apply log level change at runtime
+        SerilogSetup.SetLevel(_config.Logging.Level);
+
         Log.Information("Settings saved");
         DialogResult = true;
         Close();

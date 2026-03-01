@@ -1,31 +1,25 @@
 using System.IO;
-using System.Text.RegularExpressions;
 using GlDrive.Config;
 using Serilog;
+using Serilog.Core;
 using Serilog.Events;
 
 namespace GlDrive.Logging;
 
-public static partial class SerilogSetup
+public static class SerilogSetup
 {
+    private static LoggingLevelSwitch? _levelSwitch;
+
     public static void Configure(LoggingConfig? config = null)
     {
         config ??= new LoggingConfig();
         var logFolder = Path.Combine(ConfigManager.AppDataPath, "logs");
         Directory.CreateDirectory(logFolder);
 
-        var level = config.Level?.ToLowerInvariant() switch
-        {
-            "debug" => LogEventLevel.Debug,
-            "verbose" => LogEventLevel.Verbose,
-            "warning" => LogEventLevel.Warning,
-            "error" => LogEventLevel.Error,
-            _ => LogEventLevel.Information
-        };
+        _levelSwitch = new LoggingLevelSwitch(ParseLevel(config.Level));
 
         Log.Logger = new LoggerConfiguration()
-            .MinimumLevel.Is(level)
-            .Enrich.With(new PasswordRedactingEnricher())
+            .MinimumLevel.ControlledBy(_levelSwitch)
             .WriteTo.File(
                 Path.Combine(logFolder, "gldrive-.log"),
                 rollingInterval: RollingInterval.Day,
@@ -34,19 +28,25 @@ public static partial class SerilogSetup
                 outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
             .CreateLogger();
 
-        Log.Information("GlDrive logging initialized at {Level} level", level);
+        Log.Information("GlDrive logging initialized at {Level} level", _levelSwitch.MinimumLevel);
     }
 
-    [GeneratedRegex(@"(?i)(pass(?:word)?|pwd)\s*[:=]\s*\S+")]
-    private static partial Regex PasswordPattern();
-
-    private class PasswordRedactingEnricher : Serilog.Core.ILogEventEnricher
+    /// <summary>
+    /// Change log level at runtime without restarting the app.
+    /// </summary>
+    public static void SetLevel(string level)
     {
-        public void Enrich(LogEvent logEvent, Serilog.Core.ILogEventPropertyFactory propertyFactory)
-        {
-            // Serilog doesn't have a built-in message rewrite mechanism,
-            // but we avoid logging passwords by never passing them as parameters.
-            // This enricher exists as a safety net placeholder.
-        }
+        if (_levelSwitch == null) return;
+        _levelSwitch.MinimumLevel = ParseLevel(level);
+        Log.Information("Log level changed to {Level}", _levelSwitch.MinimumLevel);
     }
+
+    private static LogEventLevel ParseLevel(string? level) => level?.ToLowerInvariant() switch
+    {
+        "debug" => LogEventLevel.Debug,
+        "verbose" => LogEventLevel.Verbose,
+        "warning" => LogEventLevel.Warning,
+        "error" => LogEventLevel.Error,
+        _ => LogEventLevel.Information
+    };
 }

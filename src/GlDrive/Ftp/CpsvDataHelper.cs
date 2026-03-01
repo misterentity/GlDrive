@@ -44,7 +44,7 @@ public static class CpsvDataHelper
             throw new IOException($"CPSV failed: {cpsvReply.Code} {cpsvReply.Message}");
 
         var (cpsvIp, port) = ParsePasvResponse(cpsvReply.Message);
-        Log.Debug("CPSV -> {Ip}:{Port}", cpsvIp, port);
+        Log.Debug("CPSV -> data endpoint parsed");
 
         // Connect to the CPSV-returned IP:port directly.
         // With BNCs, the CPSV IP is the backend data address.
@@ -54,7 +54,7 @@ public static class CpsvDataHelper
             using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             connectCts.CancelAfter(TimeSpan.FromSeconds(10));
             await tcp.ConnectAsync(cpsvIp, port, connectCts.Token);
-            Log.Debug("Data connection: connected to {Ip}:{Port}", cpsvIp, port);
+            Log.Debug("Data connection established");
             return tcp;
         }
         catch

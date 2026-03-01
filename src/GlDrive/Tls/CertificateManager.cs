@@ -44,17 +44,17 @@ public class CertificateManager
         {
             if (trusted.Fingerprint == fingerprint)
             {
-                Log.Debug("Certificate fingerprint matches for {Key}", key);
+                Log.Debug("Certificate fingerprint matches");
                 return true;
             }
 
-            Log.Warning("Certificate fingerprint MISMATCH for {Key}. Expected {Expected}, got {Actual}",
-                key, trusted.Fingerprint, fingerprint);
+            Log.Warning("Certificate fingerprint MISMATCH — expected {Expected}, got {Actual}",
+                trusted.Fingerprint, fingerprint);
             return false;
         }
 
         // TOFU: first time seeing this cert
-        Log.Information("New certificate for {Key}: {Fingerprint}", key, fingerprint);
+        Log.Information("New certificate encountered: {Fingerprint}", fingerprint);
 
         if (CertificatePrompt != null)
         {

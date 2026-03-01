@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.RegularExpressions;
 using FluentFTP;
 using FluentFTP.GnuTLS;
 using FluentFTP.GnuTLS.Enums;
@@ -47,8 +48,7 @@ public class FtpClientFactory
                 FtpCredentials = new NetworkCredential(conn.Username, password),
             };
             client = new AsyncFtpClientSocks5Proxy(profile);
-            Log.Information("Using SOCKS5 proxy {ProxyHost}:{ProxyPort} for {FtpHost}",
-                proxy.Host, proxy.Port, conn.Host);
+            Log.Information("Using SOCKS5 proxy for FTP connection");
         }
         else
         {
@@ -106,12 +106,14 @@ public class FtpClientFactory
 
     private class FtpLogAdapter : IFtpLogger
     {
+        private static readonly Regex IpRegex = new(@"\d+\.\d+\.\d+\.\d+", RegexOptions.Compiled);
+
         public void Log(FtpLogEntry entry)
         {
-            // Redact passwords
             var msg = entry.Message;
             if (msg.Contains("PASS", StringComparison.OrdinalIgnoreCase))
                 msg = "PASS [REDACTED]";
+            msg = IpRegex.Replace(msg, "*.*.*.*");
             Serilog.Log.Debug("[FTP] {Message}", msg);
         }
     }
@@ -122,8 +124,7 @@ public class FtpClientFactory
         try
         {
             await client.Connect(ct);
-            Log.Information("Connected to {Host}:{Port} as {User}",
-                _serverConfig.Connection.Host, _serverConfig.Connection.Port, _serverConfig.Connection.Username);
+            Log.Information("FTP connection established");
             return client;
         }
         catch
