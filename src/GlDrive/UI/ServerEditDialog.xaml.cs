@@ -35,8 +35,26 @@ public partial class ServerEditDialog : Window
             PortBox.Text = existing.Connection.Port.ToString();
             UsernameBox.Text = existing.Connection.Username;
             RootPathBox.Text = existing.Connection.RootPath;
+
+            // Proxy
+            if (existing.Connection.Proxy != null)
+            {
+                ProxyEnabledBox.IsChecked = existing.Connection.Proxy.Enabled;
+                ProxyHostBox.Text = existing.Connection.Proxy.Host;
+                ProxyPortBox.Text = existing.Connection.Proxy.Port.ToString();
+                ProxyUsernameBox.Text = existing.Connection.Proxy.Username;
+                if (!string.IsNullOrEmpty(existing.Connection.Proxy.Username))
+                {
+                    var proxyPw = CredentialStore.GetProxyPassword(
+                        existing.Connection.Proxy.Host, existing.Connection.Proxy.Port, existing.Connection.Proxy.Username);
+                    if (!string.IsNullOrEmpty(proxyPw))
+                        ProxyPasswordBox.Password = proxyPw;
+                }
+            }
+
             DriveLetterBox.SelectedItem = existing.Mount.DriveLetter;
             VolumeLabelBox.Text = existing.Mount.VolumeLabel;
+            MountDriveBox.IsChecked = existing.Mount.MountDrive;
             AutoMountBox.IsChecked = existing.Mount.AutoMountOnStart;
             PreferTls12Box.IsChecked = existing.Tls.PreferTls12;
 
@@ -111,8 +129,34 @@ public partial class ServerEditDialog : Window
         _serverConfig.Connection.Port = int.TryParse(PortBox.Text, out var p) ? p : 21;
         _serverConfig.Connection.Username = UsernameBox.Text;
         _serverConfig.Connection.RootPath = RootPathBox.Text;
+
+        // Proxy
+        if (ProxyEnabledBox.IsChecked == true && !string.IsNullOrWhiteSpace(ProxyHostBox.Text))
+        {
+            _serverConfig.Connection.Proxy ??= new ProxyConfig();
+            _serverConfig.Connection.Proxy.Enabled = true;
+            _serverConfig.Connection.Proxy.Host = ProxyHostBox.Text;
+            _serverConfig.Connection.Proxy.Port = int.TryParse(ProxyPortBox.Text, out var pp) ? pp : 1080;
+            _serverConfig.Connection.Proxy.Username = ProxyUsernameBox.Text ?? "";
+
+            if (!string.IsNullOrEmpty(ProxyUsernameBox.Text) && !string.IsNullOrEmpty(ProxyPasswordBox.Password))
+            {
+                CredentialStore.SaveProxyPassword(
+                    _serverConfig.Connection.Proxy.Host,
+                    _serverConfig.Connection.Proxy.Port,
+                    _serverConfig.Connection.Proxy.Username,
+                    ProxyPasswordBox.Password);
+            }
+        }
+        else
+        {
+            if (_serverConfig.Connection.Proxy != null)
+                _serverConfig.Connection.Proxy.Enabled = false;
+        }
+
         _serverConfig.Mount.DriveLetter = DriveLetterBox.SelectedItem?.ToString() ?? "G";
         _serverConfig.Mount.VolumeLabel = VolumeLabelBox.Text;
+        _serverConfig.Mount.MountDrive = MountDriveBox.IsChecked == true;
         _serverConfig.Mount.AutoMountOnStart = AutoMountBox.IsChecked == true;
         _serverConfig.Tls.PreferTls12 = PreferTls12Box.IsChecked == true;
 

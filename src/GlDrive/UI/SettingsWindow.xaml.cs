@@ -15,6 +15,7 @@ public partial class SettingsWindow : Window
     private readonly ServerManager _serverManager;
     private readonly SettingsViewModel _vm;
     private readonly ObservableCollection<ServerListItem> _serverItems = new();
+    private readonly ObservableCollection<CategoryPathItem> _categoryPaths = new();
 
     public SettingsWindow(AppConfig config, ServerManager serverManager)
     {
@@ -26,6 +27,11 @@ public partial class SettingsWindow : Window
 
         RefreshServerList();
         ServerGrid.ItemsSource = _serverItems;
+
+        // Load category paths
+        foreach (var kvp in config.Downloads.CategoryPaths)
+            _categoryPaths.Add(new CategoryPathItem { Category = kvp.Key, Path = kvp.Value });
+        CategoryPathGrid.ItemsSource = _categoryPaths;
     }
 
     private void RefreshServerList()
@@ -112,9 +118,29 @@ public partial class SettingsWindow : Window
         Process.Start("explorer.exe", logPath);
     }
 
+    private void AddCategoryPath_Click(object sender, RoutedEventArgs e)
+    {
+        _categoryPaths.Add(new CategoryPathItem { Category = "", Path = "" });
+    }
+
+    private void RemoveCategoryPath_Click(object sender, RoutedEventArgs e)
+    {
+        if (CategoryPathGrid.SelectedItem is CategoryPathItem selected)
+            _categoryPaths.Remove(selected);
+    }
+
     private void Save_Click(object sender, RoutedEventArgs e)
     {
         _vm.ApplyTo(_config);
+
+        // Save category paths
+        _config.Downloads.CategoryPaths.Clear();
+        foreach (var item in _categoryPaths)
+        {
+            if (!string.IsNullOrWhiteSpace(item.Category) && !string.IsNullOrWhiteSpace(item.Path))
+                _config.Downloads.CategoryPaths[item.Category.Trim()] = item.Path.Trim();
+        }
+
         ConfigManager.Save(_config);
         Log.Information("Settings saved");
         DialogResult = true;
@@ -135,4 +161,10 @@ public class ServerListItem
     public string Name { get; set; } = "";
     public string Host { get; set; } = "";
     public string DriveLetter { get; set; } = "";
+}
+
+public class CategoryPathItem
+{
+    public string Category { get; set; } = "";
+    public string Path { get; set; } = "";
 }

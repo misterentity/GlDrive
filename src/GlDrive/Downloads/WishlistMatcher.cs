@@ -52,7 +52,7 @@ public class WishlistMatcher
                     category, releaseName, item.Title, _serverName);
 
                 var remotePath = $"/recent/{category}/{releaseName}";
-                var localPath = BuildLocalPath(item, releaseName);
+                var localPath = BuildLocalPath(item, category, releaseName);
 
                 var downloadItem = new DownloadItem
                 {
@@ -79,9 +79,9 @@ public class WishlistMatcher
         }
     }
 
-    private string BuildLocalPath(WishlistItem item, string releaseName)
+    private string BuildLocalPath(WishlistItem item, string category, string releaseName)
     {
-        var basePath = _config.LocalPath;
+        var basePath = _config.GetPathForCategory(category);
 
         if (item.Type == MediaType.Movie)
         {

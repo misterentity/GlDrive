@@ -58,25 +58,49 @@
 
             <!-- Downloads Tab -->
             <TabItem Header="Downloads">
-                <StackPanel Margin="12">
-                    <TextBlock Text="Download Folder:" Margin="0,0,0,4"/>
-                    <DockPanel Margin="0,0,0,8">
-                        <Button DockPanel.Dock="Right" Content="Browse..." Click="BrowseDownloadPath_Click"
-                                Padding="8,4" Margin="8,0,0,0"/>
-                        <TextBox Text="{Binding DownloadLocalPath, UpdateSourceTrigger=PropertyChanged}"/>
-                    </DockPanel>
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="12">
+                        <TextBlock Text="Default Download Folder:" Margin="0,0,0,4"/>
+                        <DockPanel Margin="0,0,0,8">
+                            <Button DockPanel.Dock="Right" Content="Browse..." Click="BrowseDownloadPath_Click"
+                                    Padding="8,4" Margin="8,0,0,0"/>
+                            <TextBox Text="{Binding DownloadLocalPath, UpdateSourceTrigger=PropertyChanged}"/>
+                        </DockPanel>
 
-                    <TextBlock Text="Default Quality:" Margin="0,0,0,4"/>
-                    <ComboBox ItemsSource="{Binding QualityOptions}"
-                              SelectedItem="{Binding QualityDefault}" Width="120"
-                              HorizontalAlignment="Left" Margin="0,0,0,8"/>
+                        <TextBlock Text="Default Quality:" Margin="0,0,0,4"/>
+                        <ComboBox ItemsSource="{Binding QualityOptions}"
+                                  SelectedItem="{Binding QualityDefault}" Width="120"
+                                  HorizontalAlignment="Left" Margin="0,0,0,8"/>
 
-                    <TextBlock Text="OMDB API Key (for movie search):" Margin="0,0,0,4"/>
-                    <TextBox Text="{Binding OmdbApiKey, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
+                        <TextBlock Text="OMDB API Key (for movie search):" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding OmdbApiKey, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
 
-                    <CheckBox Content="Auto-download wishlist matches"
-                              IsChecked="{Binding AutoDownloadWishlist}" Margin="0,8,0,0"/>
-                </StackPanel>
+                        <CheckBox Content="Auto-download wishlist matches"
+                                  IsChecked="{Binding AutoDownloadWishlist}" Margin="0,8,0,12"/>
+
+                        <Separator Margin="0,0,0,12"/>
+
+                        <!-- Category Path Routing -->
+                        <TextBlock Text="Category Download Paths" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                        <TextBlock Text="Route specific categories to custom folders. Unmatched categories use the default path above."
+                                   TextWrapping="Wrap" Foreground="#999" Margin="0,0,0,8" FontSize="11"/>
+                        <DataGrid x:Name="CategoryPathGrid"
+                                  AutoGenerateColumns="False" CanUserAddRows="False"
+                                  SelectionMode="Single" GridLinesVisibility="Horizontal"
+                                  HeadersVisibility="Column" Height="150" Margin="0,0,0,8">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="150"/>
+                                <DataGridTextColumn Header="Download Path" Binding="{Binding Path}" Width="*"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="Add" Click="AddCategoryPath_Click" Padding="12,4" Margin="0,0,6,0"
+                                    Style="{StaticResource SecondaryButton}"/>
+                            <Button Content="Remove" Click="RemoveCategoryPath_Click" Padding="12,4"
+                                    Style="{StaticResource SecondaryButton}"/>
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
             </TabItem>
 
             <!-- Diagnostics Tab -->

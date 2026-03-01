@@ -77,13 +77,14 @@ public static class TrayIconSetup
                 var isConnected = mounted?.CurrentState == MountState.Connected;
                 var isActive = mounted != null && mounted.CurrentState != MountState.Unmounted;
 
+                var hasDrive = serverConfig.Mount.MountDrive;
                 var stateLabel = mounted?.CurrentState switch
                 {
-                    MountState.Connected => $"{serverConfig.Mount.DriveLetter}:",
+                    MountState.Connected => hasDrive ? $"{serverConfig.Mount.DriveLetter}:" : "connected",
                     MountState.Connecting => "connecting...",
                     MountState.Reconnecting => "reconnecting...",
                     MountState.Error => "error",
-                    _ => "unmounted"
+                    _ => "disconnected"
                 };
 
                 var serverMenu = new MenuItem
@@ -97,18 +98,18 @@ public static class TrayIconSetup
 
                 if (isActive)
                 {
-                    var unmountItem = new MenuItem { Header = "Unmount" };
-                    unmountItem.Click += (_, _) =>
+                    var disconnectItem = new MenuItem { Header = "Disconnect" };
+                    disconnectItem.Click += (_, _) =>
                     {
                         vm.ServerManager.UnmountServer(serverId);
                         vm.UpdateStatusText();
                     };
-                    serverMenu.Items.Add(unmountItem);
+                    serverMenu.Items.Add(disconnectItem);
                 }
                 else
                 {
-                    var mountItem = new MenuItem { Header = "Mount" };
-                    mountItem.Click += async (_, _) =>
+                    var connectItem = new MenuItem { Header = "Connect" };
+                    connectItem.Click += async (_, _) =>
                     {
                         try
                         {
@@ -116,20 +117,23 @@ public static class TrayIconSetup
                         }
                         catch (Exception ex)
                         {
-                            Log.Error(ex, "Mount failed for {Server}", serverName);
-                            vm.ShowNotification("GlDrive", $"Mount failed for {serverName}: {ex.Message}");
+                            Log.Error(ex, "Connect failed for {Server}", serverName);
+                            vm.ShowNotification("GlDrive", $"Connect failed for {serverName}: {ex.Message}");
                         }
                     };
-                    serverMenu.Items.Add(mountItem);
+                    serverMenu.Items.Add(connectItem);
                 }
 
-                // Open Drive
                 if (isConnected)
                 {
-                    var driveLetter = serverConfig.Mount.DriveLetter;
-                    var openItem = new MenuItem { Header = "Open Drive" };
-                    openItem.Click += (_, _) => Process.Start("explorer.exe", $"{driveLetter}:\\");
-                    serverMenu.Items.Add(openItem);
+                    // Open Drive (only if drive mount is enabled)
+                    if (hasDrive)
+                    {
+                        var driveLetter = serverConfig.Mount.DriveLetter;
+                        var openItem = new MenuItem { Header = "Open Drive" };
+                        openItem.Click += (_, _) => Process.Start("explorer.exe", $"{driveLetter}:\\");
+                        serverMenu.Items.Add(openItem);
+                    }
 
                     var refreshItem = new MenuItem { Header = "Refresh Cache" };
                     refreshItem.Click += (_, _) =>

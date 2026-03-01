@@ -1,6 +1,8 @@
+using System.Net;
 using FluentFTP;
 using FluentFTP.GnuTLS;
 using FluentFTP.GnuTLS.Enums;
+using FluentFTP.Proxy.AsyncProxy;
 using GlDrive.Config;
 using GlDrive.Tls;
 using Serilog;
@@ -25,7 +27,33 @@ public class FtpClientFactory
         var conn = _serverConfig.Connection;
         var password = CredentialStore.GetPassword(conn.Host, conn.Port, conn.Username) ?? "";
 
-        var client = new AsyncFtpClient(conn.Host, conn.Username, password, conn.Port);
+        AsyncFtpClient client;
+        var proxy = conn.Proxy;
+        if (proxy is { Enabled: true } && !string.IsNullOrWhiteSpace(proxy.Host))
+        {
+            var proxyPassword = !string.IsNullOrEmpty(proxy.Username)
+                ? CredentialStore.GetProxyPassword(proxy.Host, proxy.Port, proxy.Username) ?? ""
+                : "";
+
+            var profile = new FtpProxyProfile
+            {
+                ProxyHost = proxy.Host,
+                ProxyPort = proxy.Port,
+                ProxyCredentials = !string.IsNullOrEmpty(proxy.Username)
+                    ? new NetworkCredential(proxy.Username, proxyPassword)
+                    : null,
+                FtpHost = conn.Host,
+                FtpPort = conn.Port,
+                FtpCredentials = new NetworkCredential(conn.Username, password),
+            };
+            client = new AsyncFtpClientSocks5Proxy(profile);
+            Log.Information("Using SOCKS5 proxy {ProxyHost}:{ProxyPort} for {FtpHost}",
+                proxy.Host, proxy.Port, conn.Host);
+        }
+        else
+        {
+            client = new AsyncFtpClient(conn.Host, conn.Username, password, conn.Port);
+        }
 
         // FTPS Explicit (AUTH TLS)
         client.Config.EncryptionMode = FtpEncryptionMode.Explicit;

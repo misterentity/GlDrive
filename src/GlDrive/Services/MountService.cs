@@ -53,9 +53,6 @@ public class MountService : IDisposable
     {
         if (_mounted) return;
 
-        // Clean up stale mount from a previous crash
-        CleanStaleMounts();
-
         SetState(MountState.Connecting);
 
         try
@@ -69,25 +66,35 @@ public class MountService : IDisposable
                 _serverConfig.Cache.DirectoryListingTtlSeconds,
                 _serverConfig.Cache.MaxCachedDirectories);
 
-            _fileSystem = new GlDriveFileSystem(
-                _ftp, _cache,
-                _serverConfig.Connection.RootPath,
-                _serverConfig.Mount.VolumeLabel,
-                _serverConfig.Cache.FileInfoTimeoutMs,
-                _serverConfig.Cache.DirectoryListTimeoutSeconds);
-
-            _host = new FileSystemHost(_fileSystem);
-            _host.Prefix = @$"\GlDrive\{_serverConfig.Id}";
-
-            var mountPoint = _serverConfig.Mount.DriveLetter + ":";
-            Log.Information("Mounting {MountPoint} for server {ServerName} (prefix: {Prefix})...",
-                mountPoint, _serverConfig.Name, _host.Prefix);
-
-            var status = _host.Mount(mountPoint, null, false, 0);
-            if (status < 0)
+            // Mount WinFsp drive if enabled
+            if (_serverConfig.Mount.MountDrive)
             {
-                throw new InvalidOperationException(
-                    $"WinFsp Mount failed with NTSTATUS 0x{status:X8}");
+                CleanStaleMounts();
+
+                _fileSystem = new GlDriveFileSystem(
+                    _ftp, _cache,
+                    _serverConfig.Connection.RootPath,
+                    _serverConfig.Mount.VolumeLabel,
+                    _serverConfig.Cache.FileInfoTimeoutMs,
+                    _serverConfig.Cache.DirectoryListTimeoutSeconds);
+
+                _host = new FileSystemHost(_fileSystem);
+                _host.Prefix = @$"\GlDrive\{_serverConfig.Id}";
+
+                var mountPoint = _serverConfig.Mount.DriveLetter + ":";
+                Log.Information("Mounting {MountPoint} for server {ServerName} (prefix: {Prefix})...",
+                    mountPoint, _serverConfig.Name, _host.Prefix);
+
+                var status = _host.Mount(mountPoint, null, false, 0);
+                if (status < 0)
+                {
+                    throw new InvalidOperationException(
+                        $"WinFsp Mount failed with NTSTATUS 0x{status:X8}");
+                }
+            }
+            else
+            {
+                Log.Information("Drive mount disabled for server {ServerName}, connecting without drive letter", _serverConfig.Name);
             }
 
             _mounted = true;
@@ -122,7 +129,8 @@ public class MountService : IDisposable
             _downloadManager.Start();
 
             SetState(MountState.Connected);
-            Log.Information("Drive {MountPoint} mounted successfully for server {ServerName}", mountPoint, _serverConfig.Name);
+            var driveInfo = _serverConfig.Mount.MountDrive ? $"Drive {_serverConfig.Mount.DriveLetter}:" : "No drive";
+            Log.Information("{DriveInfo} connected for server {ServerName}", driveInfo, _serverConfig.Name);
         }
         catch (Exception ex)
         {
@@ -183,22 +191,19 @@ public class MountService : IDisposable
 
     private void CleanStaleMounts()
     {
-        var mountPoint = _serverConfig.Mount.DriveLetter + ":\\";
+        var driveLetter = _serverConfig.Mount.DriveLetter;
+        var mountPoint = driveLetter + ":\\";
         try
         {
             if (Directory.Exists(mountPoint))
             {
                 Log.Warning("Stale mount detected at {MountPoint}, attempting cleanup...", mountPoint);
-                // Try to unmount via a temporary host — WinFsp will clean up the stale mount
-                var tempHost = new FileSystemHost(null!);
-                try { tempHost.Unmount(); } catch { }
-                tempHost.Dispose();
 
-                // If directory still exists, force-remove the drive mapping
-                if (Directory.Exists(mountPoint))
+                // Try WinFsp launchctl stop first (most reliable for WinFsp mounts)
+                try
                 {
-                    Log.Warning("Stale mount still present, removing via net use...");
-                    var psi = new System.Diagnostics.ProcessStartInfo("net", $"use {_serverConfig.Mount.DriveLetter}: /delete /y")
+                    var psi = new System.Diagnostics.ProcessStartInfo(
+                        "launchctl-x64.exe", $"stop GlDrive\\{_serverConfig.Id}")
                     {
                         CreateNoWindow = true,
                         UseShellExecute = false,
@@ -206,8 +211,43 @@ public class MountService : IDisposable
                         RedirectStandardError = true
                     };
                     using var proc = System.Diagnostics.Process.Start(psi);
-                    proc?.WaitForExit(5000);
+                    proc?.WaitForExit(3000);
                 }
+                catch { }
+
+                // Try net use delete
+                if (Directory.Exists(mountPoint))
+                {
+                    var psi = new System.Diagnostics.ProcessStartInfo("net", $"use {driveLetter}: /delete /y")
+                    {
+                        CreateNoWindow = true,
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
+                    };
+                    using var proc = System.Diagnostics.Process.Start(psi);
+                    proc?.WaitForExit(3000);
+                }
+
+                // Last resort: use mountvol to remove the mount point
+                if (Directory.Exists(mountPoint))
+                {
+                    Log.Warning("Stale mount still present after net use, trying mountvol...");
+                    var psi = new System.Diagnostics.ProcessStartInfo("mountvol", $"{driveLetter}: /P")
+                    {
+                        CreateNoWindow = true,
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
+                    };
+                    using var proc = System.Diagnostics.Process.Start(psi);
+                    proc?.WaitForExit(3000);
+                }
+
+                if (!Directory.Exists(mountPoint))
+                    Log.Information("Stale mount at {MountPoint} cleaned up successfully", mountPoint);
+                else
+                    Log.Warning("Stale mount at {MountPoint} could not be fully cleaned — mounting may fail", mountPoint);
             }
         }
         catch (Exception ex)

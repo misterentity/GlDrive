@@ -279,7 +279,7 @@ public class DashboardViewModel : INotifyPropertyChanged
         if (server?.Downloads == null) return;
 
         var parsed = SceneNameParser.Parse(result.ReleaseName);
-        var localBase = _config.Downloads.LocalPath;
+        var localBase = _config.Downloads.GetPathForCategory(result.Category);
 
         string localPath;
         if (parsed.Season != null)

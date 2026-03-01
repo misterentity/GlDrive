@@ -27,6 +27,15 @@ public class ConnectionConfig
     public string Username { get; set; } = "";
     public string RootPath { get; set; } = "/";
     public int[] PassivePorts { get; set; } = [];
+    public ProxyConfig? Proxy { get; set; }
+}
+
+public class ProxyConfig
+{
+    public bool Enabled { get; set; }
+    public string Host { get; set; } = "";
+    public int Port { get; set; } = 1080;
+    public string Username { get; set; } = "";
 }
 
 public class MountConfig
@@ -34,6 +43,7 @@ public class MountConfig
     public string DriveLetter { get; set; } = "G";
     public string VolumeLabel { get; set; } = "glFTPd";
     public bool AutoMountOnStart { get; set; } = true;
+    public bool MountDrive { get; set; } = true;
 }
 
 public class TlsConfig
@@ -77,6 +87,19 @@ public class DownloadConfig
 {
     public string LocalPath { get; set; } = System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "GlDrive");
+    public Dictionary<string, string> CategoryPaths { get; set; } = new();
+
+    /// <summary>
+    /// Resolves the base download path for a given category.
+    /// If the category has a custom path mapped, use that; otherwise use default LocalPath.
+    /// </summary>
+    public string GetPathForCategory(string category)
+    {
+        if (!string.IsNullOrEmpty(category) && CategoryPaths.TryGetValue(category, out var customPath)
+            && !string.IsNullOrWhiteSpace(customPath))
+            return customPath;
+        return LocalPath;
+    }
     public int MaxConcurrentDownloads { get; set; } = 1;
     public int StreamingBufferSizeKb { get; set; } = 256;
     public int WriteBufferLimitMb { get; set; } = 0;
