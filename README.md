@@ -7,21 +7,24 @@ Built with WinFsp, FluentFTP, and GnuTLS.
 ## Features
 
 - **Multi-server support** — mount multiple glftpd servers simultaneously, each on its own drive letter (G:, H:, etc.)
+- **Optional drive mounting** — servers can connect without a drive letter while retaining full functionality (search, downloads, notifications)
+- **SOCKS5 proxy** — connect to FTP servers through a SOCKS5 proxy with optional authentication
 - **Native drive letter** — use mounted servers in Explorer, cmd, or any app
 - **Cross-server search** — search all connected servers in parallel from the Dashboard
-- **Per-server tray menu** — mount/unmount, open drive, and refresh cache per server from the tray icon
+- **Per-server tray menu** — connect/disconnect, open drive, and refresh cache per server from the tray icon
 - **CPSV support** — works with glftpd behind a BNC (CPSV data connections with reverse TLS)
 - **TOFU certificate pinning** — trust-on-first-use with SHA-256 fingerprint storage
 - **Connection pooling** — bounded pool of FTPS connections per server with automatic reconnection
 - **Directory caching** — TTL-based cache with LRU eviction for responsive browsing
 - **Setup wizard** — first-run wizard walks through server configuration
-- **New release notifications** — polls `/recent/` categories and shows a Windows toast notification when new releases appear
+- **New release notifications** — polls `/recent/` categories with configurable excluded categories, shows Windows toast notifications
 - **Wishlist & auto-download** — track TV shows (TVMaze) and movies (OMDB), auto-download matching releases from any server
+- **Category download paths** — route downloads from specific categories to custom local folders
 - **Rich media dashboard** — posters, ratings, genres, and plot summaries for wishlist items
 - **Download manager** — streaming FTP-to-disk downloads with progress, queue management, and auto-organization
 - **Dark theme** — black/red/white UI throughout
 - **System tray** — lives in the tray with per-server status and controls
-- **Auto-mount** — optionally connect each server on Windows startup
+- **Auto-connect** — optionally connect each server on Windows startup
 
 ## Installation
 
@@ -114,11 +117,15 @@ App.xaml.cs (startup)
 
 ### Mounting
 
-When a server is mounted, GlDrive establishes a pool of FTPS connections (default 3) and registers a WinFsp virtual filesystem on the chosen drive letter. Each server gets a unique WinFsp prefix (`\GlDrive\{serverId}`) so multiple servers can be mounted simultaneously without conflict.
+When a server is connected, GlDrive establishes a pool of FTPS connections (default 3). If drive mounting is enabled, it registers a WinFsp virtual filesystem on the chosen drive letter with a unique prefix (`\GlDrive\{serverId}`) so multiple servers can coexist. If drive mounting is disabled, the server still connects with full functionality — search, downloads, notifications, and wishlist all work without a drive letter.
 
-The `ServerManager` holds a dictionary of `MountService` instances. On startup, it calls `MountAll()` which iterates all enabled servers with auto-mount and connects them in sequence. Each `MountService` creates its own `FtpClientFactory` → `FtpConnectionPool` → `FtpOperations` → `DirectoryCache` → `GlDriveFileSystem` → `FileSystemHost` chain. A `ConnectionMonitor` sends NOOP keepalives every 30 seconds and reconnects with exponential backoff if the connection drops.
+The `ServerManager` holds a dictionary of `MountService` instances. On startup, it calls `MountAll()` which iterates all enabled servers with auto-connect and connects them in sequence. Each `MountService` creates its own `FtpClientFactory` → `FtpConnectionPool` → `FtpOperations` → `DirectoryCache` → (optionally) `GlDriveFileSystem` → `FileSystemHost` chain. A `ConnectionMonitor` sends NOOP keepalives every 30 seconds and reconnects with exponential backoff if the connection drops.
 
-Stale mounts from a previous crash are cleaned up automatically via `net use /delete` before mounting.
+Stale mounts from a previous crash are cleaned up automatically using a cascade of `launchctl`, `net use /delete`, and `mountvol /P` before re-mounting.
+
+### SOCKS5 proxy
+
+Each server can optionally route all FTP traffic through a SOCKS5 proxy. When enabled, the `FtpClientFactory` creates an `AsyncFtpClientSocks5Proxy` (from FluentFTP) instead of a direct `AsyncFtpClient`. Proxy credentials are stored separately in Windows Credential Manager with a `GlDrive:proxy:` prefix. All features (CPSV, TLS, search, downloads) work transparently through the proxy.
 
 ### Searching
 
@@ -132,7 +139,7 @@ Search bypasses the `DirectoryCache` entirely — it borrows connections directl
 
 ### Watching & notifications
 
-Each server runs a `NewReleaseMonitor` that polls the configured watch path (default `/recent/`) on a configurable interval (default 60s). On the first poll it seeds a snapshot of all category/release pairs. On subsequent polls it diffs against the snapshot and fires `NewReleaseDetected` events for any new entries.
+Each server runs a `NewReleaseMonitor` that polls the configured watch path (default `/recent/`) on a configurable interval (default 60s). Categories listed in the per-server "Excluded Categories" setting (e.g. `xxx-paysite, 0day`) are skipped entirely. On the first poll it seeds a snapshot of all category/release pairs. On subsequent polls it diffs against the snapshot and fires `NewReleaseDetected` events for any new entries.
 
 The `TrayViewModel` batches release notifications with a 3-second debounce timer — if multiple releases appear in quick succession, they're combined into a single "X new releases" toast notification instead of spamming one per release.
 
@@ -155,6 +162,10 @@ Each server has its own `DownloadManager` with a `DownloadStore` persisted to `d
 For each download, the `StreamingDownloader` borrows a connection from the pool and streams data directly to disk in configurable buffer sizes (default 256KB). For directory releases, it downloads each file sequentially, reporting aggregate progress. Progress events are forwarded to the Dashboard UI which shows a real-time progress bar with speed.
 
 Downloads that were in-progress when the app closed are automatically reset to queued on next launch.
+
+#### Category download paths
+
+In Settings > Downloads, you can map specific categories to custom local folders. For example, map `x265` to `D:\Movies\x265` and `tv-hd` to `T:\TV`. When a download is initiated (manually or via wishlist), GlDrive checks the category against the mapping table and uses the custom path if one is set. Unmatched categories fall back to the default download folder.
 
 ### CPSV data connections
 
@@ -186,7 +197,8 @@ glftpd behind a BNC requires CPSV instead of PASV for data connections. FluentFT
 
 | Data | Storage | Protection |
 |------|---------|------------|
-| Password | Windows Credential Manager | OS-level DPAPI encryption |
+| Passwords | Windows Credential Manager | OS-level DPAPI encryption |
+| Proxy passwords | Windows Credential Manager | OS-level DPAPI encryption |
 | Server configs (host/port/username) | `%AppData%\GlDrive\appsettings.json` | User-profile ACLs |
 | Certificate fingerprints | `%AppData%\GlDrive\trusted_certs.json` | User-profile ACLs |
 | Logs | `%AppData%\GlDrive\logs\` | Passwords redacted, auto-rotated |
