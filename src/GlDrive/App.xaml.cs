@@ -19,6 +19,27 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // Global exception handlers to prevent silent crashes
+        DispatcherUnhandledException += (_, args) =>
+        {
+            Log.Fatal(args.Exception, "Unhandled UI exception");
+            Log.CloseAndFlush();
+            args.Handled = true; // Prevent crash for non-fatal UI exceptions
+        };
+
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            if (args.ExceptionObject is Exception ex)
+                Log.Fatal(ex, "Unhandled domain exception (terminating={Terminating})", args.IsTerminating);
+            Log.CloseAndFlush();
+        };
+
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            Log.Error(args.Exception, "Unobserved task exception");
+            args.SetObserved(); // Prevent process termination
+        };
+
         // Single instance check
         _guard = new SingleInstanceGuard();
         if (!_guard.TryAcquire())

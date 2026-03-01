@@ -40,6 +40,20 @@ public partial class ServerEditDialog : Window
             AutoMountBox.IsChecked = existing.Mount.AutoMountOnStart;
             PreferTls12Box.IsChecked = existing.Tls.PreferTls12;
 
+            // Cache
+            CacheTtlBox.Text = existing.Cache.DirectoryListingTtlSeconds.ToString();
+            MaxCachedDirsBox.Text = existing.Cache.MaxCachedDirectories.ToString();
+            FileInfoTimeoutBox.Text = existing.Cache.FileInfoTimeoutMs.ToString();
+
+            // Pool
+            PoolSizeBox.Text = existing.Pool.PoolSize.ToString();
+            KeepaliveBox.Text = existing.Pool.KeepaliveIntervalSeconds.ToString();
+
+            // Notifications
+            NotificationsEnabledBox.IsChecked = existing.Notifications.Enabled;
+            PollIntervalBox.Text = existing.Notifications.PollIntervalSeconds.ToString();
+            WatchPathBox.Text = existing.Notifications.WatchPath;
+
             // Load stored password hint
             var storedPw = CredentialStore.GetPassword(existing.Connection.Host, existing.Connection.Port, existing.Connection.Username);
             if (!string.IsNullOrEmpty(storedPw))
@@ -100,6 +114,20 @@ public partial class ServerEditDialog : Window
         _serverConfig.Mount.VolumeLabel = VolumeLabelBox.Text;
         _serverConfig.Mount.AutoMountOnStart = AutoMountBox.IsChecked == true;
         _serverConfig.Tls.PreferTls12 = PreferTls12Box.IsChecked == true;
+
+        // Cache
+        _serverConfig.Cache.DirectoryListingTtlSeconds = int.TryParse(CacheTtlBox.Text, out var ttl) ? Math.Clamp(ttl, 5, 300) : 30;
+        _serverConfig.Cache.MaxCachedDirectories = int.TryParse(MaxCachedDirsBox.Text, out var mcd) ? Math.Clamp(mcd, 50, 5000) : 500;
+        _serverConfig.Cache.FileInfoTimeoutMs = int.TryParse(FileInfoTimeoutBox.Text, out var fit) ? Math.Clamp(fit, 100, 10000) : 1000;
+
+        // Pool
+        _serverConfig.Pool.PoolSize = int.TryParse(PoolSizeBox.Text, out var ps) ? Math.Clamp(ps, 1, 10) : 3;
+        _serverConfig.Pool.KeepaliveIntervalSeconds = int.TryParse(KeepaliveBox.Text, out var ka) ? Math.Clamp(ka, 10, 120) : 30;
+
+        // Notifications
+        _serverConfig.Notifications.Enabled = NotificationsEnabledBox.IsChecked == true;
+        _serverConfig.Notifications.PollIntervalSeconds = int.TryParse(PollIntervalBox.Text, out var pi) ? Math.Clamp(pi, 10, 600) : 60;
+        _serverConfig.Notifications.WatchPath = string.IsNullOrWhiteSpace(WatchPathBox.Text) ? "/recent" : WatchPathBox.Text;
 
         // Save password
         _password = PasswordBox.Password;
