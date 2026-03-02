@@ -438,7 +438,7 @@ public class DashboardViewModel : INotifyPropertyChanged
         Application.Current?.Dispatcher.Invoke(() =>
         {
             RefreshDownloads();
-            if (item.Status != DownloadStatus.Downloading)
+            if (item.Status != DownloadStatus.Downloading && item.Status != DownloadStatus.Extracting)
             {
                 HasActiveDownload = false;
                 ActiveDownloadPercent = 0;
@@ -710,9 +710,14 @@ public class DashboardViewModel : INotifyPropertyChanged
                     ReleaseName = item.ReleaseName,
                     Category = item.Category,
                     Status = item.Status.ToString(),
-                    ProgressText = item.Status == DownloadStatus.Downloading && item.TotalBytes > 0
-                        ? $"{item.DownloadedBytes * 100 / item.TotalBytes}%"
-                        : item.Status == DownloadStatus.Completed ? "Done" : "",
+                    ProgressText = item.Status switch
+                    {
+                        DownloadStatus.Downloading when item.TotalBytes > 0
+                            => $"{item.DownloadedBytes * 100 / item.TotalBytes}%",
+                        DownloadStatus.Extracting => "Extracting...",
+                        DownloadStatus.Completed => "Done",
+                        _ => ""
+                    },
                     ServerId = server.ServerId,
                     ServerName = server.ServerName
                 });
