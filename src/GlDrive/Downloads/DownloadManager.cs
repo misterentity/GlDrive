@@ -169,11 +169,12 @@ public class DownloadManager : IDisposable
             if (dataFiles.Count == 0)
             {
                 // Single file download
+                var fileName = Path.GetFileName(item.RemotePath);
                 var progress = new Progress<DownloadProgress>(p =>
                 {
                     item.DownloadedBytes = p.DownloadedBytes;
                     item.TotalBytes = p.TotalBytes;
-                    DownloadProgressChanged?.Invoke(item, p);
+                    DownloadProgressChanged?.Invoke(item, p with { CurrentFileName = fileName });
                 });
 
                 await _downloader.DownloadToFile(item.RemotePath, item.LocalPath, progress, itemCts.Token);
@@ -196,7 +197,7 @@ public class DownloadManager : IDisposable
                         fileCompleted = p.DownloadedBytes;
                         item.DownloadedBytes = completedBytes + fileCompleted;
                         DownloadProgressChanged?.Invoke(item, new DownloadProgress(
-                            item.DownloadedBytes, item.TotalBytes, p.BytesPerSecond));
+                            item.DownloadedBytes, item.TotalBytes, p.BytesPerSecond, file.Name));
                     });
 
                     await _downloader.DownloadToFile(file.FullName, localFilePath, progress, itemCts.Token);

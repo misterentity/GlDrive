@@ -476,6 +476,19 @@ public class DashboardViewModel : INotifyPropertyChanged
             ActiveDownloadPercent = progress.TotalBytes > 0
                 ? (double)progress.DownloadedBytes / progress.TotalBytes * 100
                 : 0;
+
+            // Update the grid row's Progress column
+            var vm = DownloadItems.FirstOrDefault(d => d.Id == item.Id);
+            if (vm != null)
+            {
+                var pct = progress.TotalBytes > 0
+                    ? (int)(progress.DownloadedBytes * 100 / progress.TotalBytes)
+                    : 0;
+                var fileName = progress.CurrentFileName ?? "";
+                vm.ProgressText = string.IsNullOrEmpty(fileName)
+                    ? $"{pct}%"
+                    : $"{pct}% — {fileName}";
+            }
         });
     }
 
@@ -946,15 +959,28 @@ public class WishlistItemVm
     public string? Genres { get; set; }
 }
 
-public class DownloadItemVm
+public class DownloadItemVm : INotifyPropertyChanged
 {
+    private string _progressText = "";
+
     public string Id { get; set; } = "";
     public string ReleaseName { get; set; } = "";
     public string Category { get; set; } = "";
     public string Status { get; set; } = "";
-    public string ProgressText { get; set; } = "";
+    public string ProgressText
+    {
+        get => _progressText;
+        set
+        {
+            if (_progressText == value) return;
+            _progressText = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ProgressText)));
+        }
+    }
     public string ServerId { get; set; } = "";
     public string ServerName { get; set; } = "";
+
+    public event PropertyChangedEventHandler? PropertyChanged;
 }
 
 public class SearchResultVm

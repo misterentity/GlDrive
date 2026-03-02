@@ -63,4 +63,4 @@ public record ParsedRelease(
     string? Group,
     bool IsSeasonPack);
 
-public record DownloadProgress(long DownloadedBytes, long TotalBytes, double BytesPerSecond);
+public record DownloadProgress(long DownloadedBytes, long TotalBytes, double BytesPerSecond, string? CurrentFileName = null);
