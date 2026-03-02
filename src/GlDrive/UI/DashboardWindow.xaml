@@ -189,7 +189,7 @@
                             <DataGridTextColumn Header="Server" Binding="{Binding ServerName}" Width="90"/>
                             <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="80"/>
                             <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="90"/>
-                            <DataGridTextColumn Header="Progress" Binding="{Binding ProgressText}" Width="80"/>
+                            <DataGridTextColumn Header="Progress" Binding="{Binding ProgressText}" Width="*"/>
                         </DataGrid.Columns>
                     </DataGrid>
                 </DockPanel>
