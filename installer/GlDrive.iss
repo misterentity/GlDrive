@@ -1,5 +1,5 @@
 #define MyAppName "GlDrive"
-#define MyAppVersion "1.7.0"
+#define MyAppVersion "1.8.0"
 #define MyAppPublisher "GlDrive"
 #define MyAppExeName "GlDrive.exe"
 #define MyAppDescription "Mount a glftpd FTPS server as a Windows drive letter"
