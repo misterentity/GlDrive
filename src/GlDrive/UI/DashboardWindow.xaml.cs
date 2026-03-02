@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using GlDrive.Config;
+using GlDrive.Downloads;
 using GlDrive.Services;
 
 namespace GlDrive.UI;
@@ -9,10 +10,10 @@ public partial class DashboardWindow : Window
 {
     private bool _upcomingLoaded;
 
-    public DashboardWindow(ServerManager serverManager, AppConfig config)
+    public DashboardWindow(ServerManager serverManager, AppConfig config, NotificationStore notificationStore)
     {
         InitializeComponent();
-        DataContext = new DashboardViewModel(serverManager, config);
+        DataContext = new DashboardViewModel(serverManager, config, notificationStore);
     }
 
     protected override void OnContentRendered(EventArgs e)

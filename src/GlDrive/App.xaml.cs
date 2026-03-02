@@ -1,5 +1,6 @@
 using System.Windows;
 using GlDrive.Config;
+using GlDrive.Downloads;
 using GlDrive.Logging;
 using GlDrive.Services;
 using GlDrive.Tls;
@@ -82,10 +83,12 @@ public partial class App : Application
 
         // Init services
         var certManager = new CertificateManager();
-        _serverManager = new ServerManager(config, certManager);
+        var notificationStore = new NotificationStore();
+        notificationStore.Load();
+        _serverManager = new ServerManager(config, certManager, notificationStore);
 
         // Init tray
-        _trayViewModel = new TrayViewModel(_serverManager, config);
+        _trayViewModel = new TrayViewModel(_serverManager, config, notificationStore);
         _taskbarIcon = new H.NotifyIcon.TaskbarIcon();
         _taskbarIcon.DataContext = _trayViewModel;
         TrayIconSetup.Configure(_taskbarIcon, _trayViewModel);

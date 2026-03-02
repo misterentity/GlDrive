@@ -12,6 +12,30 @@
     </Window.Resources>
     <Grid Margin="0">
         <TabControl Padding="0">
+            <!-- Notifications Tab -->
+            <TabItem Header="Notifications">
+                <DockPanel Margin="12">
+                    <Border DockPanel.Dock="Top" Background="{StaticResource SurfaceBrush}"
+                            CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="Clear All" Command="{Binding ClearNotificationsCommand}"
+                                    Padding="12,6" Style="{StaticResource SecondaryButton}"/>
+                        </StackPanel>
+                    </Border>
+                    <DataGrid ItemsSource="{Binding NotificationItems}"
+                              AutoGenerateColumns="False" IsReadOnly="True"
+                              SelectionMode="Single" GridLinesVisibility="Horizontal"
+                              HeadersVisibility="Column" CanUserAddRows="False">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Time" Binding="{Binding TimeDisplay}" Width="130"/>
+                            <DataGridTextColumn Header="Server" Binding="{Binding ServerName}" Width="90"/>
+                            <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="100"/>
+                            <DataGridTextColumn Header="Release" Binding="{Binding ReleaseName}" Width="*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </TabItem>
+
             <!-- Wishlist Tab -->
             <TabItem Header="Wishlist">
                 <DockPanel Margin="12">
