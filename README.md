@@ -26,6 +26,38 @@ Built with WinFsp, FluentFTP, and GnuTLS.
 - **System tray** — lives in the tray with per-server status and controls
 - **Auto-connect** — optionally connect each server on Windows startup
 
+## Screenshots
+
+### Dashboard
+
+| Wishlist | Downloads |
+|----------|-----------|
+| ![Wishlist](docs/screenshots/dashboard-wishlist.png) | ![Downloads](docs/screenshots/dashboard-downloads.png) |
+
+| Search | Upcoming |
+|--------|----------|
+| ![Search](docs/screenshots/dashboard-search.png) | ![Upcoming](docs/screenshots/dashboard-upcoming.png) |
+
+### Settings
+
+| Servers | Performance |
+|---------|-------------|
+| ![Servers](docs/screenshots/settings-servers.png) | ![Performance](docs/screenshots/settings-performance.png) |
+
+| Downloads | Diagnostics |
+|-----------|-------------|
+| ![Downloads](docs/screenshots/settings-downloads.png) | ![Diagnostics](docs/screenshots/settings-diagnostics.png) |
+
+### Setup Wizard
+
+| Welcome | Connection | TLS Certificate |
+|---------|------------|-----------------|
+| ![Welcome](docs/screenshots/wizard-1-welcome.png) | ![Connection](docs/screenshots/wizard-2-connection.png) | ![TLS](docs/screenshots/wizard-3-tls.png) |
+
+| Mount Options | Confirm |
+|---------------|---------|
+| ![Mount](docs/screenshots/wizard-4-mount.png) | ![Confirm](docs/screenshots/wizard-5-confirm.png) |
+
 ## Installation
 
 ### Option 1: Installer (recommended)

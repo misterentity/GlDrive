@@ -18,6 +18,7 @@ public partial class WizardWindow : Window
     private readonly CertificateManager _certManager = new();
     private string _password = "";
     private string _certFingerprint = "";
+    internal bool DemoMode;
 
     // Step panels
     private readonly StackPanel _welcomePanel;
@@ -121,7 +122,7 @@ public partial class WizardWindow : Window
         ShowStep(0);
     }
 
-    private void ShowStep(int step)
+    internal void ShowStep(int step)
     {
         _step = step;
         var titles = new[] { "Step 1 of 5 — Welcome", "Step 2 of 5 — Connection", "Step 3 of 5 — TLS Certificate",
@@ -140,7 +141,7 @@ public partial class WizardWindow : Window
             _ => null
         };
 
-        if (step == 2) AttemptTlsConnect();
+        if (step == 2 && !DemoMode) AttemptTlsConnect();
         if (step == 4) BuildSummary();
     }
 
@@ -250,6 +251,19 @@ public partial class WizardWindow : Window
         }
 
         ShowStep(_step + 1);
+    }
+
+    internal void PreFillDemo()
+    {
+        _hostBox.Text = "ftp.example.com";
+        _portBox.Text = "21";
+        _usernameBox.Text = "myuser";
+        _rootPathBox.Text = "/";
+        _certInfo.Text = "Server certificate SHA-256 fingerprint:\n\n" +
+            "A1:B2:C3:D4:E5:F6:78:90:AB:CD:EF:01:23:45:67:89\n" +
+            "A1:B2:C3:D4:E5:F6:78:90:AB:CD:EF:01:23:45:67:89\n\n" +
+            "Do you trust this certificate?";
+        _trustCertBox.IsChecked = true;
     }
 
     private static TextBlock Label(string text) =>

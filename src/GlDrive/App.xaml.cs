@@ -19,6 +19,14 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // Screenshot mode — capture all UI windows to PNGs and exit
+        if (e.Args.Contains("--screenshots", StringComparer.OrdinalIgnoreCase))
+        {
+            ScreenshotCapture.CaptureAll(ConfigManager.Load());
+            Shutdown();
+            return;
+        }
+
         // Global exception handlers to prevent silent crashes
         DispatcherUnhandledException += (_, args) =>
         {
