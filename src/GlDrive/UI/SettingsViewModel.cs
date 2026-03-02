@@ -19,6 +19,8 @@ public class SettingsViewModel : INotifyPropertyChanged
     private bool _autoDownloadWishlist;
     private bool _autoExtract;
     private bool _deleteArchivesAfterExtract;
+    private string _speedLimitKbps;
+    private bool _skipIncompleteReleases;
 
     public SettingsViewModel(AppConfig config)
     {
@@ -34,6 +36,8 @@ public class SettingsViewModel : INotifyPropertyChanged
         _autoDownloadWishlist = config.Downloads.AutoDownloadWishlist;
         _autoExtract = config.Downloads.AutoExtract;
         _deleteArchivesAfterExtract = config.Downloads.DeleteArchivesAfterExtract;
+        _speedLimitKbps = config.Downloads.SpeedLimitKbps.ToString();
+        _skipIncompleteReleases = config.Downloads.SkipIncompleteReleases;
     }
 
     public string LogLevel { get => _logLevel; set { _logLevel = value; OnPropertyChanged(); } }
@@ -48,6 +52,8 @@ public class SettingsViewModel : INotifyPropertyChanged
     public bool AutoDownloadWishlist { get => _autoDownloadWishlist; set { _autoDownloadWishlist = value; OnPropertyChanged(); } }
     public bool AutoExtract { get => _autoExtract; set { _autoExtract = value; OnPropertyChanged(); } }
     public bool DeleteArchivesAfterExtract { get => _deleteArchivesAfterExtract; set { _deleteArchivesAfterExtract = value; OnPropertyChanged(); } }
+    public string SpeedLimitKbps { get => _speedLimitKbps; set { _speedLimitKbps = value; OnPropertyChanged(); } }
+    public bool SkipIncompleteReleases { get => _skipIncompleteReleases; set { _skipIncompleteReleases = value; OnPropertyChanged(); } }
 
     public string[] LogLevels { get; } = ["Verbose", "Debug", "Information", "Warning", "Error"];
     public string[] QualityOptions { get; } = ["Any", "SD", "720p", "1080p", "2160p"];
@@ -65,6 +71,8 @@ public class SettingsViewModel : INotifyPropertyChanged
         config.Downloads.AutoDownloadWishlist = AutoDownloadWishlist;
         config.Downloads.AutoExtract = AutoExtract;
         config.Downloads.DeleteArchivesAfterExtract = DeleteArchivesAfterExtract;
+        config.Downloads.SpeedLimitKbps = int.TryParse(SpeedLimitKbps, out var slk) ? Math.Max(slk, 0) : 0;
+        config.Downloads.SkipIncompleteReleases = SkipIncompleteReleases;
     }
 
     public void RefreshCertsInfo()

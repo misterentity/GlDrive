@@ -18,6 +18,7 @@ public class DashboardViewModel : INotifyPropertyChanged
     private readonly AppConfig _config;
     private readonly WishlistStore _wishlistStore;
     private readonly NotificationStore _notificationStore;
+    private readonly DownloadHistoryStore _historyStore;
     private string _searchQuery = "";
     private string _searchStatus = "";
     private bool _isSearching;
@@ -37,12 +38,24 @@ public class DashboardViewModel : INotifyPropertyChanged
     private DateTime _tvCacheTime;
     private DateTime _movieCacheTime;
 
+    // Notification filter state
+    private List<NotificationItemVm> _allNotifications = new();
+    private string _notificationFilterText = "";
+    private string _notificationFilterCategory = "All";
+    private string _notificationFilterServer = "All";
+
+    // History
+    private DownloadHistoryItemVm? _selectedHistoryItem;
+
     public ObservableCollection<NotificationItemVm> NotificationItems { get; } = new();
     public ObservableCollection<WishlistItemVm> WishlistItems { get; } = new();
     public ObservableCollection<DownloadItemVm> DownloadItems { get; } = new();
     public ObservableCollection<SearchResultVm> SearchResults { get; } = new();
     public ObservableCollection<UpcomingTvEpisodeVm> UpcomingTvEpisodes { get; } = new();
     public ObservableCollection<UpcomingMovieVm> UpcomingMovies { get; } = new();
+    public ObservableCollection<DownloadHistoryItemVm> HistoryItems { get; } = new();
+    public ObservableCollection<string> NotificationCategories { get; } = new() { "All" };
+    public ObservableCollection<string> NotificationServers { get; } = new() { "All" };
 
     public WishlistItemVm? SelectedWishlistItem
     {
@@ -153,6 +166,32 @@ public class DashboardViewModel : INotifyPropertyChanged
     public bool HasTmdbKey => !string.IsNullOrEmpty(_config.Downloads.TmdbApiKey);
     public bool HasNoTmdbKey => string.IsNullOrEmpty(_config.Downloads.TmdbApiKey);
 
+    // Notification filter properties
+    public string NotificationFilterText
+    {
+        get => _notificationFilterText;
+        set { _notificationFilterText = value; OnPropertyChanged(); ApplyNotificationFilter(); }
+    }
+
+    public string NotificationFilterCategory
+    {
+        get => _notificationFilterCategory;
+        set { _notificationFilterCategory = value; OnPropertyChanged(); ApplyNotificationFilter(); }
+    }
+
+    public string NotificationFilterServer
+    {
+        get => _notificationFilterServer;
+        set { _notificationFilterServer = value; OnPropertyChanged(); ApplyNotificationFilter(); }
+    }
+
+    // History
+    public DownloadHistoryItemVm? SelectedHistoryItem
+    {
+        get => _selectedHistoryItem;
+        set { _selectedHistoryItem = value; OnPropertyChanged(); }
+    }
+
     private void NotifyUpcomingDetailChanged()
     {
         OnPropertyChanged(nameof(HasUpcomingSelection));
@@ -221,12 +260,16 @@ public class DashboardViewModel : INotifyPropertyChanged
     public ICommand DownloadNotificationCommand { get; }
     public ICommand LoadUpcomingCommand { get; }
     public ICommand AddUpcomingToWishlistCommand { get; }
+    public ICommand MoveUpCommand { get; }
+    public ICommand MoveDownCommand { get; }
+    public ICommand ClearHistoryCommand { get; }
 
     public DashboardViewModel(ServerManager serverManager, AppConfig config, NotificationStore notificationStore)
     {
         _serverManager = serverManager;
         _config = config;
         _notificationStore = notificationStore;
+        _historyStore = serverManager.HistoryStore;
 
         _wishlistStore = new WishlistStore();
         _wishlistStore.Load();
@@ -246,10 +289,14 @@ public class DashboardViewModel : INotifyPropertyChanged
         RefreshMetadataCommand = new RelayCommand(async () => await RefreshAllMetadata());
         LoadUpcomingCommand = new RelayCommand(async () => await LoadUpcoming(force: true));
         AddUpcomingToWishlistCommand = new RelayCommand(async () => await AddUpcomingToWishlist());
+        MoveUpCommand = new RelayCommand(MoveUpDownload);
+        MoveDownCommand = new RelayCommand(MoveDownDownload);
+        ClearHistoryCommand = new RelayCommand(ClearHistory);
 
         RefreshNotifications();
         RefreshWishlist();
         RefreshDownloads();
+        RefreshHistory();
 
         // Subscribe to download progress events from all mounted servers
         foreach (var server in _serverManager.GetMountedServers())
@@ -274,7 +321,7 @@ public class DashboardViewModel : INotifyPropertyChanged
         {
             Application.Current?.Dispatcher.Invoke(() =>
             {
-                NotificationItems.Insert(0, new NotificationItemVm
+                var vm = new NotificationItemVm
                 {
                     ServerId = serverId,
                     ServerName = serverName,
@@ -282,7 +329,10 @@ public class DashboardViewModel : INotifyPropertyChanged
                     ReleaseName = release,
                     RemotePath = remotePath,
                     TimeDisplay = DateTime.Now.ToString("g")
-                });
+                };
+                _allNotifications.Insert(0, vm);
+                UpdateNotificationFilterOptions();
+                ApplyNotificationFilter();
             });
         };
     }
@@ -345,6 +395,20 @@ public class DashboardViewModel : INotifyPropertyChanged
         foreach (var server in _serverManager.GetMountedServers())
             server.Downloads?.RemoveCompleted();
         RefreshDownloads();
+    }
+
+    private void MoveUpDownload()
+    {
+        if (SelectedDownloadItem == null) return;
+        var server = _serverManager.GetServer(SelectedDownloadItem.ServerId);
+        server?.Downloads?.MoveUp(SelectedDownloadItem.Id);
+    }
+
+    private void MoveDownDownload()
+    {
+        if (SelectedDownloadItem == null) return;
+        var server = _serverManager.GetServer(SelectedDownloadItem.ServerId);
+        server?.Downloads?.MoveDown(SelectedDownloadItem.Id);
     }
 
     private void CancelSearch()
@@ -462,7 +526,11 @@ public class DashboardViewModel : INotifyPropertyChanged
             ServerName = result.ServerName
         };
 
-        server.Downloads.Enqueue(item);
+        if (!server.Downloads.Enqueue(item))
+        {
+            SearchStatus = $"Skipped: {result.ReleaseName} (duplicate or already exists)";
+            return;
+        }
         RefreshDownloads();
     }
 
@@ -497,6 +565,8 @@ public class DashboardViewModel : INotifyPropertyChanged
         Application.Current?.Dispatcher.Invoke(() =>
         {
             RefreshDownloads();
+            if (item.Status == DownloadStatus.Completed || item.Status == DownloadStatus.Failed)
+                RefreshHistory();
             if (item.Status != DownloadStatus.Downloading && item.Status != DownloadStatus.Extracting)
             {
                 HasActiveDownload = false;
@@ -733,10 +803,10 @@ public class DashboardViewModel : INotifyPropertyChanged
 
     private void RefreshNotifications()
     {
-        NotificationItems.Clear();
+        _allNotifications.Clear();
         foreach (var item in _notificationStore.Items)
         {
-            NotificationItems.Add(new NotificationItemVm
+            _allNotifications.Add(new NotificationItemVm
             {
                 ServerId = item.ServerId,
                 ServerName = item.ServerName,
@@ -745,6 +815,41 @@ public class DashboardViewModel : INotifyPropertyChanged
                 RemotePath = item.RemotePath,
                 TimeDisplay = item.Timestamp.ToLocalTime().ToString("g")
             });
+        }
+        UpdateNotificationFilterOptions();
+        ApplyNotificationFilter();
+    }
+
+    private void UpdateNotificationFilterOptions()
+    {
+        var categories = _allNotifications.Select(n => n.Category).Where(c => !string.IsNullOrEmpty(c)).Distinct().OrderBy(c => c).ToList();
+        var servers = _allNotifications.Select(n => n.ServerName).Where(s => !string.IsNullOrEmpty(s)).Distinct().OrderBy(s => s).ToList();
+
+        NotificationCategories.Clear();
+        NotificationCategories.Add("All");
+        foreach (var c in categories) NotificationCategories.Add(c);
+
+        NotificationServers.Clear();
+        NotificationServers.Add("All");
+        foreach (var s in servers) NotificationServers.Add(s);
+    }
+
+    private void ApplyNotificationFilter()
+    {
+        NotificationItems.Clear();
+        foreach (var item in _allNotifications)
+        {
+            if (!string.IsNullOrEmpty(_notificationFilterText) &&
+                !item.ReleaseName.Contains(_notificationFilterText, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (_notificationFilterCategory != "All" && item.Category != _notificationFilterCategory)
+                continue;
+
+            if (_notificationFilterServer != "All" && item.ServerName != _notificationFilterServer)
+                continue;
+
+            NotificationItems.Add(item);
         }
     }
 
@@ -856,14 +961,23 @@ public class DashboardViewModel : INotifyPropertyChanged
             ServerName = n.ServerName
         };
 
-        server.Downloads.Enqueue(item);
+        if (!server.Downloads.Enqueue(item))
+        {
+            SearchStatus = $"Skipped: {n.ReleaseName} (duplicate or already exists)";
+            return;
+        }
         RefreshDownloads();
     }
 
     private void ClearNotifications()
     {
         _notificationStore.Clear();
+        _allNotifications.Clear();
         NotificationItems.Clear();
+        NotificationCategories.Clear();
+        NotificationCategories.Add("All");
+        NotificationServers.Clear();
+        NotificationServers.Add("All");
     }
 
     private void RefreshWishlist()
@@ -917,6 +1031,31 @@ public class DashboardViewModel : INotifyPropertyChanged
                 });
             }
         }
+    }
+
+    private void RefreshHistory()
+    {
+        HistoryItems.Clear();
+        foreach (var item in _historyStore.Items)
+        {
+            HistoryItems.Add(new DownloadHistoryItemVm
+            {
+                Id = item.Id,
+                ReleaseName = item.ReleaseName,
+                ServerName = item.ServerName,
+                Category = item.Category,
+                SizeText = FormatSize(item.TotalBytes),
+                FinalStatus = item.FinalStatus,
+                ErrorMessage = item.ErrorMessage,
+                CompletedAt = item.CompletedAt.ToLocalTime().ToString("g")
+            });
+        }
+    }
+
+    private void ClearHistory()
+    {
+        _historyStore.Clear();
+        HistoryItems.Clear();
     }
 
     private static string FormatSize(long bytes)
@@ -1037,4 +1176,16 @@ public class NotificationItemVm
     public string? Rating { get; set; }
     public string? Genres { get; set; }
     public bool MetadataLoaded { get; set; }
+}
+
+public class DownloadHistoryItemVm
+{
+    public string Id { get; set; } = "";
+    public string ReleaseName { get; set; } = "";
+    public string ServerName { get; set; } = "";
+    public string Category { get; set; } = "";
+    public string SizeText { get; set; } = "";
+    public string FinalStatus { get; set; } = "";
+    public string? ErrorMessage { get; set; }
+    public string CompletedAt { get; set; } = "";
 }

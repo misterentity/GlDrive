@@ -120,4 +120,6 @@ public class DownloadConfig
     public bool AutoDownloadWishlist { get; set; } = true;
     public bool AutoExtract { get; set; } = true;
     public bool DeleteArchivesAfterExtract { get; set; } = true;
+    public int SpeedLimitKbps { get; set; }
+    public bool SkipIncompleteReleases { get; set; }
 }

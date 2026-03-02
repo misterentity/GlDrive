@@ -10,16 +10,21 @@ public class ServerManager : IDisposable
     private readonly AppConfig _config;
     private readonly CertificateManager _certManager;
     private readonly NotificationStore _notificationStore;
+    private readonly DownloadHistoryStore _historyStore;
     private readonly Dictionary<string, MountService> _servers = new();
 
     public event Action<string, string, MountState>? ServerStateChanged; // serverId, serverName, state
     public event Action<string, string, string, string, string>? NewReleaseDetected; // serverId, serverName, category, release, remotePath
+
+    public DownloadHistoryStore HistoryStore => _historyStore;
 
     public ServerManager(AppConfig config, CertificateManager certManager, NotificationStore notificationStore)
     {
         _config = config;
         _certManager = certManager;
         _notificationStore = notificationStore;
+        _historyStore = new DownloadHistoryStore();
+        _historyStore.Load();
     }
 
     public async Task MountServer(string serverId, CancellationToken ct = default)
@@ -37,7 +42,7 @@ public class ServerManager : IDisposable
             return;
         }
 
-        var service = new MountService(serverConfig, _config.Downloads, _certManager);
+        var service = new MountService(serverConfig, _config.Downloads, _certManager, _historyStore);
 
         service.StateChanged += state =>
             ServerStateChanged?.Invoke(serverId, serverConfig.Name, state);
