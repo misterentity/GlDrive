@@ -119,9 +119,12 @@ public class MountService : IDisposable
             var wishlistStore = new WishlistStore();
             wishlistStore.Load();
 
+            var effectiveSpeedLimit = _serverConfig.SpeedLimitKbps > 0
+                ? _serverConfig.SpeedLimitKbps
+                : _downloadConfig.SpeedLimitKbps;
             _streamingDownloader = new StreamingDownloader(
                 _pool, _downloadConfig.StreamingBufferSizeKb, _downloadConfig.WriteBufferLimitMb,
-                _downloadConfig.SpeedLimitKbps);
+                effectiveSpeedLimit);
             _downloadManager = new DownloadManager(downloadStore, _ftp, _streamingDownloader, _downloadConfig, _historyStore);
             _searchService = new FtpSearchService(_pool, _serverConfig.Search);
             _searchService.StartIndexer();

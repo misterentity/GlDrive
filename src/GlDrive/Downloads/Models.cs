@@ -40,6 +40,7 @@ public class DownloadItem
     public string Category { get; set; } = "";
     public string ServerId { get; set; } = "";
     public string ServerName { get; set; } = "";
+    public int RetryCount { get; set; }
 }
 
 public class SearchResult

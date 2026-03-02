@@ -189,6 +189,22 @@ public class DownloadManager : IDisposable
             {
                 await _queueSignal.WaitAsync(ct);
 
+                // Schedule check: if scheduling enabled and outside window, delay
+                if (_config.ScheduleEnabled)
+                {
+                    var hour = DateTime.Now.Hour;
+                    bool inWindow = _config.ScheduleStartHour <= _config.ScheduleEndHour
+                        ? hour >= _config.ScheduleStartHour && hour < _config.ScheduleEndHour
+                        : hour >= _config.ScheduleStartHour || hour < _config.ScheduleEndHour;
+                    if (!inWindow)
+                    {
+                        // Re-signal so we check again later
+                        _queueSignal.Release();
+                        await Task.Delay(TimeSpan.FromSeconds(60), ct);
+                        continue;
+                    }
+                }
+
                 DownloadItem? item;
                 lock (_queueLock)
                 {
@@ -328,6 +344,29 @@ public class DownloadManager : IDisposable
                 }
             }
 
+            // SFV verification if enabled
+            if (_config.VerifySfv && Directory.Exists(item.LocalPath))
+            {
+                try
+                {
+                    var failures = await SfvVerifier.VerifyAsync(item.LocalPath, itemCts.Token);
+                    if (failures.Count > 0)
+                    {
+                        foreach (var f in failures)
+                            Log.Warning("SFV verification failed: {File}", f);
+                    }
+                    else
+                    {
+                        Log.Information("SFV verification passed for {Release}", item.ReleaseName);
+                    }
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "SFV verification error for {Release}", item.ReleaseName);
+                }
+            }
+
             // Auto-extract RAR archives if enabled
             if (_config.AutoExtract && Directory.Exists(item.LocalPath))
             {
@@ -366,12 +405,37 @@ public class DownloadManager : IDisposable
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Download failed: {Release}", item.ReleaseName);
-            item.Status = DownloadStatus.Failed;
-            item.ErrorMessage = ex.Message;
-            _store.Update(item);
-            DownloadStatusChanged?.Invoke(item);
-            AddHistoryEntry(item);
+            // Auto-retry with backoff
+            if (item.RetryCount < _config.MaxRetries)
+            {
+                item.RetryCount++;
+                var delay = _config.RetryDelaySeconds * item.RetryCount;
+                Log.Warning(ex, "Download failed: {Release} — retry {Attempt}/{Max} in {Delay}s",
+                    item.ReleaseName, item.RetryCount, _config.MaxRetries, delay);
+                item.Status = DownloadStatus.Queued;
+                item.ErrorMessage = $"Retry {item.RetryCount}/{_config.MaxRetries}: {ex.Message}";
+                _store.Update(item);
+                DownloadStatusChanged?.Invoke(item);
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(delay), _cts?.Token ?? CancellationToken.None);
+                        lock (_queueLock) _pendingQueue.Add(item);
+                        _queueSignal.Release();
+                    }
+                    catch (OperationCanceledException) { }
+                });
+            }
+            else
+            {
+                Log.Error(ex, "Download failed: {Release} (no retries left)", item.ReleaseName);
+                item.Status = DownloadStatus.Failed;
+                item.ErrorMessage = ex.Message;
+                _store.Update(item);
+                DownloadStatusChanged?.Invoke(item);
+                AddHistoryEntry(item);
+            }
         }
         finally
         {

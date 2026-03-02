@@ -164,6 +164,9 @@ public partial class SettingsWindow : Window
         // Apply log level change at runtime
         SerilogSetup.SetLevel(_config.Logging.Level);
 
+        // Apply theme change at runtime
+        ThemeManager.ApplyTheme(_config.Downloads.Theme);
+
         Log.Information("Settings saved");
         DialogResult = true;
         Close();

@@ -1,13 +1,18 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Threading;
 using GlDrive.Config;
 using GlDrive.Downloads;
 using GlDrive.Services;
+using Microsoft.Win32;
 using Serilog;
 
 namespace GlDrive.UI;
@@ -46,6 +51,17 @@ public class DashboardViewModel : INotifyPropertyChanged
 
     // History
     private DownloadHistoryItemVm? _selectedHistoryItem;
+
+    // Status bar
+    private string _statusBarSpeed = "";
+    private string _statusBarQueueCount = "";
+    private string _statusBarDiskSpace = "";
+    private DispatcherTimer? _statusTimer;
+
+    // Bandwidth graph
+    private readonly List<double> _speedHistory = new();
+    private PointCollection _speedGraphPoints = new();
+    private double _latestSpeed;
 
     public ObservableCollection<NotificationItemVm> NotificationItems { get; } = new();
     public ObservableCollection<WishlistItemVm> WishlistItems { get; } = new();
@@ -192,6 +208,32 @@ public class DashboardViewModel : INotifyPropertyChanged
         set { _selectedHistoryItem = value; OnPropertyChanged(); }
     }
 
+    // Status bar properties
+    public string StatusBarSpeed
+    {
+        get => _statusBarSpeed;
+        set { _statusBarSpeed = value; OnPropertyChanged(); }
+    }
+
+    public string StatusBarQueueCount
+    {
+        get => _statusBarQueueCount;
+        set { _statusBarQueueCount = value; OnPropertyChanged(); }
+    }
+
+    public string StatusBarDiskSpace
+    {
+        get => _statusBarDiskSpace;
+        set { _statusBarDiskSpace = value; OnPropertyChanged(); }
+    }
+
+    // Bandwidth graph
+    public PointCollection SpeedGraphPoints
+    {
+        get => _speedGraphPoints;
+        set { _speedGraphPoints = value; OnPropertyChanged(); }
+    }
+
     private void NotifyUpcomingDetailChanged()
     {
         OnPropertyChanged(nameof(HasUpcomingSelection));
@@ -263,6 +305,9 @@ public class DashboardViewModel : INotifyPropertyChanged
     public ICommand MoveUpCommand { get; }
     public ICommand MoveDownCommand { get; }
     public ICommand ClearHistoryCommand { get; }
+    public ICommand OpenFolderCommand { get; }
+    public ICommand ExportWishlistCommand { get; }
+    public ICommand ImportWishlistCommand { get; }
 
     public DashboardViewModel(ServerManager serverManager, AppConfig config, NotificationStore notificationStore)
     {
@@ -292,6 +337,14 @@ public class DashboardViewModel : INotifyPropertyChanged
         MoveUpCommand = new RelayCommand(MoveUpDownload);
         MoveDownCommand = new RelayCommand(MoveDownDownload);
         ClearHistoryCommand = new RelayCommand(ClearHistory);
+        OpenFolderCommand = new RelayCommand(OpenFolder);
+        ExportWishlistCommand = new RelayCommand(ExportWishlist);
+        ImportWishlistCommand = new RelayCommand(ImportWishlist);
+
+        // Status bar timer
+        _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        _statusTimer.Tick += (_, _) => UpdateStatusBar();
+        _statusTimer.Start();
 
         RefreshNotifications();
         RefreshWishlist();
@@ -536,6 +589,7 @@ public class DashboardViewModel : INotifyPropertyChanged
 
     private void OnDownloadProgress(DownloadItem item, DownloadProgress progress)
     {
+        _latestSpeed = progress.BytesPerSecond;
         Application.Current?.Dispatcher.Invoke(() =>
         {
             HasActiveDownload = true;
@@ -571,6 +625,7 @@ public class DashboardViewModel : INotifyPropertyChanged
             {
                 HasActiveDownload = false;
                 ActiveDownloadPercent = 0;
+                _latestSpeed = 0;
             }
         });
     }
@@ -1026,6 +1081,7 @@ public class DashboardViewModel : INotifyPropertyChanged
                         DownloadStatus.Completed => "Done",
                         _ => ""
                     },
+                    LocalPath = item.LocalPath,
                     ServerId = server.ServerId,
                     ServerName = server.ServerName
                 });
@@ -1056,6 +1112,140 @@ public class DashboardViewModel : INotifyPropertyChanged
     {
         _historyStore.Clear();
         HistoryItems.Clear();
+    }
+
+    private void OpenFolder()
+    {
+        if (SelectedDownloadItem == null) return;
+        var server = _serverManager.GetServer(SelectedDownloadItem.ServerId);
+        var item = server?.Downloads?.Store.GetById(SelectedDownloadItem.Id);
+        if (item == null || string.IsNullOrEmpty(item.LocalPath)) return;
+
+        var path = Directory.Exists(item.LocalPath) ? item.LocalPath : Path.GetDirectoryName(item.LocalPath);
+        if (!string.IsNullOrEmpty(path) && Directory.Exists(path))
+            Process.Start("explorer.exe", path);
+    }
+
+    private void ExportWishlist()
+    {
+        var dlg = new SaveFileDialog
+        {
+            Filter = "JSON files (*.json)|*.json",
+            FileName = "wishlist-export.json"
+        };
+        if (dlg.ShowDialog() != true) return;
+
+        try
+        {
+            var json = JsonSerializer.Serialize(_wishlistStore.Items, new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            });
+            File.WriteAllText(dlg.FileName, json);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Failed to export wishlist");
+        }
+    }
+
+    private void ImportWishlist()
+    {
+        var dlg = new OpenFileDialog
+        {
+            Filter = "JSON files (*.json)|*.json"
+        };
+        if (dlg.ShowDialog() != true) return;
+
+        try
+        {
+            var json = File.ReadAllText(dlg.FileName);
+            var items = JsonSerializer.Deserialize<List<WishlistItem>>(json, new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            });
+            if (items == null) return;
+
+            var added = 0;
+            foreach (var item in items)
+            {
+                // Deduplicate by ImdbId, TvMazeId, or Title
+                var isDupe = _wishlistStore.Items.Any(w =>
+                    (!string.IsNullOrEmpty(w.ImdbId) && w.ImdbId == item.ImdbId) ||
+                    (w.TvMazeId.HasValue && w.TvMazeId == item.TvMazeId) ||
+                    (w.Title == item.Title && w.Type == item.Type));
+                if (isDupe) continue;
+
+                item.Id = Guid.NewGuid().ToString("N");
+                _wishlistStore.Add(item);
+                added++;
+            }
+
+            RefreshWishlist();
+            Log.Information("Imported {Count} wishlist item(s)", added);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Failed to import wishlist");
+        }
+    }
+
+    private void UpdateStatusBar()
+    {
+        // Total speed from active downloads
+        _speedHistory.Add(_latestSpeed);
+        if (_speedHistory.Count > 60) _speedHistory.RemoveAt(0);
+
+        StatusBarSpeed = _latestSpeed > 0 ? FormatSpeed(_latestSpeed) : "Idle";
+
+        // Queue count
+        var queued = 0;
+        foreach (var server in _serverManager.GetMountedServers())
+        {
+            var store = server.Downloads?.Store;
+            if (store == null) continue;
+            queued += store.Items.Count(i => i.Status == DownloadStatus.Queued || i.Status == DownloadStatus.Downloading);
+        }
+        StatusBarQueueCount = $"{queued} active";
+
+        // Disk space
+        try
+        {
+            var dlPath = _config.Downloads.LocalPath;
+            var root = Path.GetPathRoot(dlPath);
+            if (!string.IsNullOrEmpty(root))
+            {
+                var drive = new DriveInfo(root);
+                if (drive.IsReady)
+                    StatusBarDiskSpace = $"{FormatSize(drive.AvailableFreeSpace)} free";
+            }
+        }
+        catch { StatusBarDiskSpace = ""; }
+
+        // Update bandwidth graph points
+        UpdateSpeedGraph();
+    }
+
+    private void UpdateSpeedGraph()
+    {
+        if (_speedHistory.Count < 2) return;
+
+        var maxSpeed = _speedHistory.Max();
+        if (maxSpeed <= 0) maxSpeed = 1;
+
+        const double width = 200;
+        const double height = 40;
+        var points = new PointCollection();
+
+        for (int i = 0; i < _speedHistory.Count; i++)
+        {
+            var x = (double)i / (_speedHistory.Count - 1) * width;
+            var y = height - (_speedHistory[i] / maxSpeed * height);
+            points.Add(new Point(x, y));
+        }
+
+        SpeedGraphPoints = points;
     }
 
     private static string FormatSize(long bytes)
@@ -1116,6 +1306,7 @@ public class DownloadItemVm : INotifyPropertyChanged
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ProgressText)));
         }
     }
+    public string LocalPath { get; set; } = "";
     public string ServerId { get; set; } = "";
     public string ServerName { get; set; } = "";
 

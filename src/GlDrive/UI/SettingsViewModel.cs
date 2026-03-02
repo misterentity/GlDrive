@@ -21,6 +21,14 @@ public class SettingsViewModel : INotifyPropertyChanged
     private bool _deleteArchivesAfterExtract;
     private string _speedLimitKbps;
     private bool _skipIncompleteReleases;
+    private string _maxRetries;
+    private string _retryDelaySeconds;
+    private bool _scheduleEnabled;
+    private string _scheduleStartHour;
+    private string _scheduleEndHour;
+    private bool _verifySfv;
+    private bool _playSoundOnComplete;
+    private string _theme;
 
     public SettingsViewModel(AppConfig config)
     {
@@ -38,6 +46,14 @@ public class SettingsViewModel : INotifyPropertyChanged
         _deleteArchivesAfterExtract = config.Downloads.DeleteArchivesAfterExtract;
         _speedLimitKbps = config.Downloads.SpeedLimitKbps.ToString();
         _skipIncompleteReleases = config.Downloads.SkipIncompleteReleases;
+        _maxRetries = config.Downloads.MaxRetries.ToString();
+        _retryDelaySeconds = config.Downloads.RetryDelaySeconds.ToString();
+        _scheduleEnabled = config.Downloads.ScheduleEnabled;
+        _scheduleStartHour = config.Downloads.ScheduleStartHour.ToString();
+        _scheduleEndHour = config.Downloads.ScheduleEndHour.ToString();
+        _verifySfv = config.Downloads.VerifySfv;
+        _playSoundOnComplete = config.Downloads.PlaySoundOnComplete;
+        _theme = config.Downloads.Theme;
     }
 
     public string LogLevel { get => _logLevel; set { _logLevel = value; OnPropertyChanged(); } }
@@ -54,9 +70,18 @@ public class SettingsViewModel : INotifyPropertyChanged
     public bool DeleteArchivesAfterExtract { get => _deleteArchivesAfterExtract; set { _deleteArchivesAfterExtract = value; OnPropertyChanged(); } }
     public string SpeedLimitKbps { get => _speedLimitKbps; set { _speedLimitKbps = value; OnPropertyChanged(); } }
     public bool SkipIncompleteReleases { get => _skipIncompleteReleases; set { _skipIncompleteReleases = value; OnPropertyChanged(); } }
+    public string MaxRetries { get => _maxRetries; set { _maxRetries = value; OnPropertyChanged(); } }
+    public string RetryDelaySeconds { get => _retryDelaySeconds; set { _retryDelaySeconds = value; OnPropertyChanged(); } }
+    public bool ScheduleEnabled { get => _scheduleEnabled; set { _scheduleEnabled = value; OnPropertyChanged(); } }
+    public string ScheduleStartHour { get => _scheduleStartHour; set { _scheduleStartHour = value; OnPropertyChanged(); } }
+    public string ScheduleEndHour { get => _scheduleEndHour; set { _scheduleEndHour = value; OnPropertyChanged(); } }
+    public bool VerifySfv { get => _verifySfv; set { _verifySfv = value; OnPropertyChanged(); } }
+    public bool PlaySoundOnComplete { get => _playSoundOnComplete; set { _playSoundOnComplete = value; OnPropertyChanged(); } }
+    public string Theme { get => _theme; set { _theme = value; OnPropertyChanged(); } }
 
     public string[] LogLevels { get; } = ["Verbose", "Debug", "Information", "Warning", "Error"];
     public string[] QualityOptions { get; } = ["Any", "SD", "720p", "1080p", "2160p"];
+    public string[] ThemeOptions { get; } = ["Dark", "Light"];
 
     public void ApplyTo(AppConfig config)
     {
@@ -73,6 +98,14 @@ public class SettingsViewModel : INotifyPropertyChanged
         config.Downloads.DeleteArchivesAfterExtract = DeleteArchivesAfterExtract;
         config.Downloads.SpeedLimitKbps = int.TryParse(SpeedLimitKbps, out var slk) ? Math.Max(slk, 0) : 0;
         config.Downloads.SkipIncompleteReleases = SkipIncompleteReleases;
+        config.Downloads.MaxRetries = int.TryParse(MaxRetries, out var mr) ? Math.Clamp(mr, 0, 10) : 3;
+        config.Downloads.RetryDelaySeconds = int.TryParse(RetryDelaySeconds, out var rds) ? Math.Clamp(rds, 5, 300) : 30;
+        config.Downloads.ScheduleEnabled = ScheduleEnabled;
+        config.Downloads.ScheduleStartHour = int.TryParse(ScheduleStartHour, out var ssh) ? Math.Clamp(ssh, 0, 23) : 0;
+        config.Downloads.ScheduleEndHour = int.TryParse(ScheduleEndHour, out var seh) ? Math.Clamp(seh, 0, 23) : 6;
+        config.Downloads.VerifySfv = VerifySfv;
+        config.Downloads.PlaySoundOnComplete = PlaySoundOnComplete;
+        config.Downloads.Theme = Theme;
     }
 
     public void RefreshCertsInfo()
