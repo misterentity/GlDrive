@@ -15,7 +15,7 @@ public class NewReleaseMonitor
     private Task? _pollTask;
     private bool _seeded;
 
-    public event Action<string, string>? NewReleaseDetected;
+    public event Action<string, string, string>? NewReleaseDetected; // category, release, remotePath
 
     public NewReleaseMonitor(FtpConnectionPool pool, NotificationConfig config, Func<MountState> getState)
     {
@@ -133,8 +133,9 @@ public class NewReleaseMonitor
                     {
                         if (!previous.Contains(name))
                         {
+                            var remotePath = categoryPath + "/" + name;
                             Log.Information("New release: [{Category}] {Release}", category, name);
-                            NewReleaseDetected?.Invoke(category, name);
+                            NewReleaseDetected?.Invoke(category, name, remotePath);
                         }
                     }
                 }

@@ -25,6 +25,7 @@ public class DashboardViewModel : INotifyPropertyChanged
     private WishlistItemVm? _selectedWishlistItem;
     private DownloadItemVm? _selectedDownloadItem;
     private SearchResultVm? _selectedSearchResult;
+    private NotificationItemVm? _selectedNotificationItem;
     private string _activeDownloadName = "";
     private string _activeDownloadSpeed = "";
     private double _activeDownloadPercent;
@@ -65,6 +66,26 @@ public class DashboardViewModel : INotifyPropertyChanged
     public string SelectedPlot => _selectedWishlistItem?.Plot ?? "";
     public string SelectedRating => _selectedWishlistItem?.Rating is { Length: > 0 } r ? $"\u2605 {r}/10" : "";
     public string SelectedGenres => _selectedWishlistItem?.Genres ?? "";
+
+    public NotificationItemVm? SelectedNotificationItem
+    {
+        get => _selectedNotificationItem;
+        set
+        {
+            _selectedNotificationItem = value;
+            OnPropertyChanged();
+            NotifyNotificationDetailChanged();
+            if (value != null && !value.MetadataLoaded)
+                _ = LoadNotificationMetadata(value);
+        }
+    }
+
+    public bool HasNotificationSelection => _selectedNotificationItem != null;
+    public bool HasNotificationPoster => !string.IsNullOrEmpty(_selectedNotificationItem?.PosterUrl);
+    public string? NotificationPosterUrl => _selectedNotificationItem?.PosterUrl;
+    public string NotificationPlot => _selectedNotificationItem?.Plot ?? "";
+    public string NotificationRating => _selectedNotificationItem?.Rating is { Length: > 0 } r ? $"\u2605 {r}/10" : "";
+    public string NotificationGenres => _selectedNotificationItem?.Genres ?? "";
 
     public DownloadItemVm? SelectedDownloadItem
     {
@@ -197,6 +218,7 @@ public class DashboardViewModel : INotifyPropertyChanged
     public ICommand DownloadSearchResultCommand { get; }
     public ICommand RefreshMetadataCommand { get; }
     public ICommand ClearNotificationsCommand { get; }
+    public ICommand DownloadNotificationCommand { get; }
     public ICommand LoadUpcomingCommand { get; }
     public ICommand AddUpcomingToWishlistCommand { get; }
 
@@ -217,6 +239,7 @@ public class DashboardViewModel : INotifyPropertyChanged
         RetryDownloadCommand = new RelayCommand(RetryDownload);
         ClearCompletedCommand = new RelayCommand(ClearCompleted);
         ClearNotificationsCommand = new RelayCommand(ClearNotifications);
+        DownloadNotificationCommand = new RelayCommand(DownloadNotification);
         SearchCommand = new RelayCommand(async () => await PerformSearch());
         CancelSearchCommand = new RelayCommand(CancelSearch);
         DownloadSearchResultCommand = new RelayCommand(DownloadSearchResult);
@@ -247,7 +270,7 @@ public class DashboardViewModel : INotifyPropertyChanged
         };
 
         // Live notifications — add to collection when new releases arrive
-        _serverManager.NewReleaseDetected += (serverId, serverName, category, release) =>
+        _serverManager.NewReleaseDetected += (serverId, serverName, category, release, remotePath) =>
         {
             Application.Current?.Dispatcher.Invoke(() =>
             {
@@ -257,6 +280,7 @@ public class DashboardViewModel : INotifyPropertyChanged
                     ServerName = serverName,
                     Category = category,
                     ReleaseName = release,
+                    RemotePath = remotePath,
                     TimeDisplay = DateTime.Now.ToString("g")
                 });
             });
@@ -705,9 +729,122 @@ public class DashboardViewModel : INotifyPropertyChanged
                 ServerName = item.ServerName,
                 Category = item.Category,
                 ReleaseName = item.ReleaseName,
+                RemotePath = item.RemotePath,
                 TimeDisplay = item.Timestamp.ToLocalTime().ToString("g")
             });
         }
+    }
+
+    private void NotifyNotificationDetailChanged()
+    {
+        OnPropertyChanged(nameof(HasNotificationSelection));
+        OnPropertyChanged(nameof(HasNotificationPoster));
+        OnPropertyChanged(nameof(NotificationPosterUrl));
+        OnPropertyChanged(nameof(NotificationPlot));
+        OnPropertyChanged(nameof(NotificationRating));
+        OnPropertyChanged(nameof(NotificationGenres));
+    }
+
+    private async Task LoadNotificationMetadata(NotificationItemVm item)
+    {
+        try
+        {
+            var parsed = SceneNameParser.Parse(item.ReleaseName);
+
+            if (parsed.Season != null)
+            {
+                using var tvMaze = new TvMazeClient();
+                var results = await tvMaze.Search(parsed.Title);
+                var show = results.FirstOrDefault();
+                if (show != null)
+                {
+                    item.PosterUrl = show.Image?.Medium;
+                    item.Plot = StripHtml(show.Summary);
+                    item.Rating = show.Rating?.Average?.ToString("F1");
+                    item.Genres = show.Genres != null ? string.Join(", ", show.Genres) : null;
+                }
+            }
+            else
+            {
+                var omdbKey = _config.Downloads.OmdbApiKey;
+                if (!string.IsNullOrEmpty(omdbKey))
+                {
+                    using var omdb = new OmdbClient(omdbKey);
+                    var results = await omdb.Search(parsed.Title);
+                    var movie = results.FirstOrDefault();
+                    if (movie != null)
+                    {
+                        if (!string.IsNullOrEmpty(movie.ImdbID))
+                        {
+                            var detail = await omdb.GetById(movie.ImdbID);
+                            if (detail != null)
+                            {
+                                item.PosterUrl = detail.Poster is "N/A" ? null : detail.Poster;
+                                item.Plot = detail.Plot is "N/A" ? null : detail.Plot;
+                                item.Rating = detail.imdbRating is "N/A" ? null : detail.imdbRating;
+                                item.Genres = detail.Genre is "N/A" ? null : detail.Genre;
+                            }
+                        }
+                        else
+                        {
+                            item.PosterUrl = movie.Poster is "N/A" ? null : movie.Poster;
+                        }
+                    }
+                }
+            }
+
+            item.MetadataLoaded = true;
+
+            if (_selectedNotificationItem == item)
+                Application.Current?.Dispatcher.Invoke(NotifyNotificationDetailChanged);
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Failed to load metadata for notification {Release}", item.ReleaseName);
+            item.MetadataLoaded = true;
+        }
+    }
+
+    private void DownloadNotification()
+    {
+        if (SelectedNotificationItem == null) return;
+
+        var n = SelectedNotificationItem;
+        if (string.IsNullOrEmpty(n.RemotePath)) return;
+
+        var server = _serverManager.GetServer(n.ServerId);
+        if (server?.Downloads == null) return;
+
+        var parsed = SceneNameParser.Parse(n.ReleaseName);
+        var localBase = _config.Downloads.GetPathForCategory(n.Category);
+
+        string localPath;
+        if (parsed.Season != null)
+        {
+            var seasonFolder = $"Season {parsed.Season:D2}";
+            localPath = Path.Combine(localBase, "TV", parsed.Title, seasonFolder, n.ReleaseName);
+        }
+        else if (parsed.Year != null)
+        {
+            localPath = Path.Combine(localBase, "Movies", $"{parsed.Title} ({parsed.Year})", n.ReleaseName);
+        }
+        else
+        {
+            localPath = Path.Combine(localBase, n.Category, n.ReleaseName);
+        }
+
+        var item = new DownloadItem
+        {
+            RemotePath = n.RemotePath,
+            ReleaseName = n.ReleaseName,
+            LocalPath = localPath,
+            Category = n.Category,
+            ServerId = n.ServerId,
+            ServerName = n.ServerName
+        };
+
+        server.Downloads.Enqueue(item);
+        RefreshDownloads();
     }
 
     private void ClearNotifications()
@@ -867,5 +1004,11 @@ public class NotificationItemVm
     public string ServerName { get; set; } = "";
     public string Category { get; set; } = "";
     public string ReleaseName { get; set; } = "";
+    public string RemotePath { get; set; } = "";
     public string TimeDisplay { get; set; } = "";
+    public string? PosterUrl { get; set; }
+    public string? Plot { get; set; }
+    public string? Rating { get; set; }
+    public string? Genres { get; set; }
+    public bool MetadataLoaded { get; set; }
 }

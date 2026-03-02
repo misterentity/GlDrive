@@ -27,7 +27,7 @@ public class WishlistMatcher
         _serverName = serverName;
     }
 
-    public async void OnNewRelease(string category, string releaseName)
+    public async void OnNewRelease(string category, string releaseName, string remotePath)
     {
         try
         {
@@ -51,7 +51,6 @@ public class WishlistMatcher
                 Log.Information("Wishlist match: [{Category}] {Release} -> {Title} (server: {Server})",
                     category, releaseName, item.Title, _serverName);
 
-                var remotePath = $"/recent/{category}/{releaseName}";
                 var localPath = BuildLocalPath(item, category, releaseName);
 
                 var downloadItem = new DownloadItem

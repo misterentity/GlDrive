@@ -13,7 +13,7 @@ public class ServerManager : IDisposable
     private readonly Dictionary<string, MountService> _servers = new();
 
     public event Action<string, string, MountState>? ServerStateChanged; // serverId, serverName, state
-    public event Action<string, string, string, string>? NewReleaseDetected; // serverId, serverName, category, release
+    public event Action<string, string, string, string, string>? NewReleaseDetected; // serverId, serverName, category, release, remotePath
 
     public ServerManager(AppConfig config, CertificateManager certManager, NotificationStore notificationStore)
     {
@@ -42,16 +42,17 @@ public class ServerManager : IDisposable
         service.StateChanged += state =>
             ServerStateChanged?.Invoke(serverId, serverConfig.Name, state);
 
-        service.NewReleaseDetected += (category, release) =>
+        service.NewReleaseDetected += (category, release, remotePath) =>
         {
             _notificationStore.Add(new NotificationItem
             {
                 ServerId = serverId,
                 ServerName = serverConfig.Name,
                 Category = category,
-                ReleaseName = release
+                ReleaseName = release,
+                RemotePath = remotePath
             });
-            NewReleaseDetected?.Invoke(serverId, serverConfig.Name, category, release);
+            NewReleaseDetected?.Invoke(serverId, serverConfig.Name, category, release, remotePath);
         };
 
         _servers[serverId] = service;
