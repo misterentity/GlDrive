@@ -36,8 +36,42 @@ public class FtpSearchService : IDisposable
 
     /// <summary>
     /// Main search entry point. Uses the configured method (or Auto to try all in order).
+    /// Retries once on transient failures.
     /// </summary>
     public async Task<List<SearchResult>> Search(string keyword, IProgress<string>? progress = null, CancellationToken ct = default)
+    {
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            try
+            {
+                if (attempt > 0)
+                {
+                    progress?.Report("Retrying search...");
+                    await Task.Delay(1000, ct);
+                }
+
+                var results = await SearchOnce(keyword, progress, ct);
+                if (results.Count > 0 || attempt > 0)
+                    return results;
+
+                // Got 0 results on first attempt — retry in case of transient issue
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                if (attempt > 0)
+                {
+                    Log.Error(ex, "Search failed after retry for: {Keyword}", keyword);
+                    throw;
+                }
+                Log.Debug(ex, "Search failed on first attempt, retrying");
+            }
+        }
+
+        return [];
+    }
+
+    private async Task<List<SearchResult>> SearchOnce(string keyword, IProgress<string>? progress, CancellationToken ct)
     {
         var method = _searchConfig.Method;
 
@@ -101,6 +135,7 @@ public class FtpSearchService : IDisposable
 
     /// <summary>
     /// Tries SITE SEARCH. Returns null if the server doesn't support it.
+    /// Only marks unsupported on explicit server rejection (5xx), not on transient errors.
     /// </summary>
     private async Task<List<SearchResult>?> TrySiteSearch(string keyword, IProgress<string>? progress, CancellationToken ct)
     {
@@ -113,7 +148,9 @@ public class FtpSearchService : IDisposable
             if (!reply.Success)
             {
                 Log.Debug("SITE SEARCH returned {Code}: {Message}", reply.Code, reply.Message);
-                _siteSearchSupported = false;
+                // Only permanently disable on 5xx (command not recognized) — not transient errors
+                if (reply.Code.StartsWith('5'))
+                    _siteSearchSupported = false;
                 return null;
             }
 
@@ -125,8 +162,8 @@ public class FtpSearchService : IDisposable
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
-            Log.Debug(ex, "SITE SEARCH probe failed, marking unsupported");
-            _siteSearchSupported = false;
+            // Connection errors are transient — don't permanently disable SITE SEARCH
+            Log.Debug(ex, "SITE SEARCH failed (transient), will retry next search");
             return null;
         }
     }
