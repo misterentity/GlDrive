@@ -14,15 +14,18 @@ public class TrayViewModel : INotifyPropertyChanged
 {
     private readonly ServerManager _serverManager;
     private readonly AppConfig _config;
+    private readonly UpdateChecker _updateChecker;
     private string _statusText = "No servers";
     private readonly List<(string Category, string Release)> _releaseBatch = new();
     private System.Windows.Threading.DispatcherTimer? _batchTimer;
     private DashboardWindow? _dashboardWindow;
+    private GitHubRelease? _availableUpdate;
 
     public TrayViewModel(ServerManager serverManager, AppConfig config)
     {
         _serverManager = serverManager;
         _config = config;
+        _updateChecker = new UpdateChecker();
 
         _serverManager.NewReleaseDetected += (serverId, serverName, category, release) =>
         {
@@ -115,9 +118,47 @@ public class TrayViewModel : INotifyPropertyChanged
 
         ExitCommand = new RelayCommand(() =>
         {
+            _updateChecker.StopPeriodicCheck();
             _serverManager.UnmountAll();
             Application.Current?.Shutdown();
         });
+
+        CheckForUpdateCommand = new RelayCommand(async () =>
+        {
+            var release = await _updateChecker.CheckForUpdateAsync();
+            if (release != null)
+            {
+                AvailableUpdate = release;
+                ShowNotification("Update Available", $"GlDrive {release.TagName} is available");
+            }
+            else
+            {
+                ShowNotification("GlDrive", "You're up to date");
+            }
+        });
+
+        InstallUpdateCommand = new RelayCommand(async () =>
+        {
+            if (_availableUpdate == null) return;
+            ShowNotification("GlDrive", $"Downloading {_availableUpdate.TagName}...");
+            await _updateChecker.DownloadAndInstallAsync(_availableUpdate);
+        });
+
+        _updateChecker.UpdateAvailable += release =>
+        {
+            Application.Current?.Dispatcher.Invoke(() =>
+            {
+                AvailableUpdate = release;
+                ShowNotification("Update Available", $"GlDrive {release.TagName} is available");
+            });
+        };
+
+        _updateChecker.RestartRequested += () =>
+        {
+            Application.Current?.Dispatcher.Invoke(() => ExitCommand.Execute(null));
+        };
+
+        _updateChecker.StartPeriodicCheck();
 
         UpdateStatusText();
     }
@@ -136,6 +177,14 @@ public class TrayViewModel : INotifyPropertyChanged
     public ICommand SettingsCommand { get; }
     public ICommand ViewLogsCommand { get; }
     public ICommand ExitCommand { get; }
+    public ICommand CheckForUpdateCommand { get; }
+    public ICommand InstallUpdateCommand { get; }
+
+    public GitHubRelease? AvailableUpdate
+    {
+        get => _availableUpdate;
+        private set { _availableUpdate = value; OnPropertyChanged(); }
+    }
 
     public Action<string, string>? ShowNotificationRequested { get; set; }
 

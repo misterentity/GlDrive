@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
@@ -12,7 +13,9 @@ public static class TrayIconSetup
 {
     public static void Configure(TaskbarIcon taskbarIcon, TrayViewModel vm)
     {
-        taskbarIcon.ToolTipText = "GlDrive";
+        var version = UpdateChecker.CurrentVersion;
+        var versionStr = $"{version.Major}.{version.Minor}.{version.Build}";
+        taskbarIcon.ToolTipText = $"GlDrive v{versionStr}";
         taskbarIcon.Icon = CyberpunkIconGenerator.Generate(MountState.Unmounted);
 
         var menu = new ContextMenu();
@@ -42,9 +45,16 @@ public static class TrayIconSetup
                         bestState = MountState.Error;
                 }
 
-                taskbarIcon.ToolTipText = $"GlDrive — {vm.StatusText}";
+                taskbarIcon.ToolTipText = $"GlDrive v{versionStr} — {vm.StatusText}";
                 taskbarIcon.Icon = CyberpunkIconGenerator.Generate(bestState);
             });
+        };
+
+        // Rebuild menu when an update becomes available
+        vm.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(vm.AvailableUpdate))
+                Application.Current?.Dispatcher.Invoke(() => BuildMenu(menu, vm));
         };
 
         // Wire balloon tip notifications
@@ -58,8 +68,9 @@ public static class TrayIconSetup
     {
         menu.Items.Clear();
 
-        // Header
-        var header = new MenuItem { Header = "GlDrive", IsEnabled = false, FontWeight = FontWeights.Bold };
+        // Header with version
+        var ver = UpdateChecker.CurrentVersion;
+        var header = new MenuItem { Header = $"GlDrive v{ver.Major}.{ver.Minor}.{ver.Build}", IsEnabled = false, FontWeight = FontWeights.Bold };
         menu.Items.Add(header);
 
         var statusItem = new MenuItem { Header = vm.StatusText, IsEnabled = false };
@@ -174,6 +185,20 @@ public static class TrayIconSetup
         var logs = new MenuItem { Header = "View Logs..." };
         logs.Click += (_, _) => vm.ViewLogsCommand.Execute(null);
         menu.Items.Add(logs);
+
+        // Update check
+        if (vm.AvailableUpdate != null)
+        {
+            var update = new MenuItem { Header = $"Update to {vm.AvailableUpdate.TagName}..." };
+            update.Click += (_, _) => vm.InstallUpdateCommand.Execute(null);
+            menu.Items.Add(update);
+        }
+        else
+        {
+            var checkUpdate = new MenuItem { Header = "Check for Updates" };
+            checkUpdate.Click += (_, _) => vm.CheckForUpdateCommand.Execute(null);
+            menu.Items.Add(checkUpdate);
+        }
 
         menu.Items.Add(new Separator());
 
