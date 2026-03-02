@@ -37,9 +37,11 @@ public class DownloadStore
             var json = File.ReadAllText(_filePath);
             _items = JsonSerializer.Deserialize<List<DownloadItem>>(json, JsonOptions) ?? [];
 
-            // Reset any items that were downloading when app closed
+            // Reset any items that were in-flight when app closed
             foreach (var item in _items.Where(i => i.Status == DownloadStatus.Downloading))
                 item.Status = DownloadStatus.Queued;
+            foreach (var item in _items.Where(i => i.Status == DownloadStatus.Extracting))
+                item.Status = DownloadStatus.Completed;
         }
         catch (Exception ex)
         {
