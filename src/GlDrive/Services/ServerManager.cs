@@ -1,4 +1,5 @@
 using GlDrive.Config;
+using GlDrive.Downloads;
 using GlDrive.Tls;
 using Serilog;
 
@@ -8,15 +9,17 @@ public class ServerManager : IDisposable
 {
     private readonly AppConfig _config;
     private readonly CertificateManager _certManager;
+    private readonly NotificationStore _notificationStore;
     private readonly Dictionary<string, MountService> _servers = new();
 
     public event Action<string, string, MountState>? ServerStateChanged; // serverId, serverName, state
     public event Action<string, string, string, string>? NewReleaseDetected; // serverId, serverName, category, release
 
-    public ServerManager(AppConfig config, CertificateManager certManager)
+    public ServerManager(AppConfig config, CertificateManager certManager, NotificationStore notificationStore)
     {
         _config = config;
         _certManager = certManager;
+        _notificationStore = notificationStore;
     }
 
     public async Task MountServer(string serverId, CancellationToken ct = default)
@@ -40,7 +43,16 @@ public class ServerManager : IDisposable
             ServerStateChanged?.Invoke(serverId, serverConfig.Name, state);
 
         service.NewReleaseDetected += (category, release) =>
+        {
+            _notificationStore.Add(new NotificationItem
+            {
+                ServerId = serverId,
+                ServerName = serverConfig.Name,
+                Category = category,
+                ReleaseName = release
+            });
             NewReleaseDetected?.Invoke(serverId, serverConfig.Name, category, release);
+        };
 
         _servers[serverId] = service;
 

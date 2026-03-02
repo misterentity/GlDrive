@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using GlDrive.Config;
+using GlDrive.Downloads;
 using GlDrive.Services;
 using GlDrive.Tls;
 
@@ -58,12 +59,13 @@ internal static class ScreenshotCapture
     private static void CaptureDashboard(AppConfig config)
     {
         var certManager = new CertificateManager();
-        var serverManager = new ServerManager(config, certManager);
-        var dashboard = new DashboardWindow(serverManager, config);
+        var notificationStore = new NotificationStore();
+        var serverManager = new ServerManager(config, certManager, notificationStore);
+        var dashboard = new DashboardWindow(serverManager, config, notificationStore);
         dashboard.Show();
         DoEvents();
 
-        var tabNames = new[] { "wishlist", "downloads", "search", "upcoming" };
+        var tabNames = new[] { "notifications", "wishlist", "downloads", "search", "upcoming" };
         var tabControl = FindTabControl(dashboard);
 
         if (tabControl != null)
@@ -84,7 +86,8 @@ internal static class ScreenshotCapture
     private static void CaptureSettings(AppConfig config)
     {
         var certManager = new CertificateManager();
-        var serverManager = new ServerManager(config, certManager);
+        var notificationStore = new NotificationStore();
+        var serverManager = new ServerManager(config, certManager, notificationStore);
         var settings = new SettingsWindow(config, serverManager);
         settings.Show();
         DoEvents();

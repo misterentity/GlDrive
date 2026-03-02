@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Input;
 using GlDrive.Config;
+using GlDrive.Downloads;
 using GlDrive.Services;
 using Serilog;
 
@@ -14,37 +15,18 @@ public class TrayViewModel : INotifyPropertyChanged
 {
     private readonly ServerManager _serverManager;
     private readonly AppConfig _config;
+    private readonly NotificationStore _notificationStore;
     private readonly UpdateChecker _updateChecker;
     private string _statusText = "No servers";
-    private readonly List<(string Category, string Release)> _releaseBatch = new();
-    private System.Windows.Threading.DispatcherTimer? _batchTimer;
     private DashboardWindow? _dashboardWindow;
     private GitHubRelease? _availableUpdate;
 
-    public TrayViewModel(ServerManager serverManager, AppConfig config)
+    public TrayViewModel(ServerManager serverManager, AppConfig config, NotificationStore notificationStore)
     {
         _serverManager = serverManager;
         _config = config;
+        _notificationStore = notificationStore;
         _updateChecker = new UpdateChecker();
-
-        _serverManager.NewReleaseDetected += (serverId, serverName, category, release) =>
-        {
-            Application.Current?.Dispatcher.Invoke(() =>
-            {
-                _releaseBatch.Add((category, release));
-                _batchTimer ??= new System.Windows.Threading.DispatcherTimer
-                {
-                    Interval = TimeSpan.FromSeconds(3)
-                };
-                _batchTimer.Tick += (_, _) =>
-                {
-                    _batchTimer.Stop();
-                    FlushReleaseBatch();
-                };
-                _batchTimer.Stop();
-                _batchTimer.Start();
-            });
-        };
 
         _serverManager.ServerStateChanged += (serverId, serverName, state) =>
         {
@@ -100,7 +82,7 @@ public class TrayViewModel : INotifyPropertyChanged
         {
             if (_dashboardWindow == null || !_dashboardWindow.IsLoaded)
             {
-                _dashboardWindow = new DashboardWindow(_serverManager, _config);
+                _dashboardWindow = new DashboardWindow(_serverManager, _config, _notificationStore);
                 _dashboardWindow.Show();
             }
             else
@@ -228,24 +210,6 @@ public class TrayViewModel : INotifyPropertyChanged
         StatusText = connectedCount > 0
             ? $"{connectedCount}/{total} connected"
             : "No servers connected";
-    }
-
-    private void FlushReleaseBatch()
-    {
-        if (_releaseBatch.Count == 0) return;
-
-        if (_releaseBatch.Count == 1)
-        {
-            var (cat, rel) = _releaseBatch[0];
-            ShowNotification(cat, rel);
-        }
-        else
-        {
-            var lines = _releaseBatch.Select(r => $"[{r.Category}] {r.Release}");
-            ShowNotification($"{_releaseBatch.Count} new releases", string.Join("\n", lines));
-        }
-
-        _releaseBatch.Clear();
     }
 
     public void ShowNotification(string title, string message)

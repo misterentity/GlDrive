@@ -17,6 +17,7 @@ public class DashboardViewModel : INotifyPropertyChanged
     private readonly ServerManager _serverManager;
     private readonly AppConfig _config;
     private readonly WishlistStore _wishlistStore;
+    private readonly NotificationStore _notificationStore;
     private string _searchQuery = "";
     private string _searchStatus = "";
     private bool _isSearching;
@@ -35,6 +36,7 @@ public class DashboardViewModel : INotifyPropertyChanged
     private DateTime _tvCacheTime;
     private DateTime _movieCacheTime;
 
+    public ObservableCollection<NotificationItemVm> NotificationItems { get; } = new();
     public ObservableCollection<WishlistItemVm> WishlistItems { get; } = new();
     public ObservableCollection<DownloadItemVm> DownloadItems { get; } = new();
     public ObservableCollection<SearchResultVm> SearchResults { get; } = new();
@@ -194,13 +196,15 @@ public class DashboardViewModel : INotifyPropertyChanged
     public ICommand CancelSearchCommand { get; }
     public ICommand DownloadSearchResultCommand { get; }
     public ICommand RefreshMetadataCommand { get; }
+    public ICommand ClearNotificationsCommand { get; }
     public ICommand LoadUpcomingCommand { get; }
     public ICommand AddUpcomingToWishlistCommand { get; }
 
-    public DashboardViewModel(ServerManager serverManager, AppConfig config)
+    public DashboardViewModel(ServerManager serverManager, AppConfig config, NotificationStore notificationStore)
     {
         _serverManager = serverManager;
         _config = config;
+        _notificationStore = notificationStore;
 
         _wishlistStore = new WishlistStore();
         _wishlistStore.Load();
@@ -212,6 +216,7 @@ public class DashboardViewModel : INotifyPropertyChanged
         CancelDownloadCommand = new RelayCommand(CancelDownload);
         RetryDownloadCommand = new RelayCommand(RetryDownload);
         ClearCompletedCommand = new RelayCommand(ClearCompleted);
+        ClearNotificationsCommand = new RelayCommand(ClearNotifications);
         SearchCommand = new RelayCommand(async () => await PerformSearch());
         CancelSearchCommand = new RelayCommand(CancelSearch);
         DownloadSearchResultCommand = new RelayCommand(DownloadSearchResult);
@@ -219,6 +224,7 @@ public class DashboardViewModel : INotifyPropertyChanged
         LoadUpcomingCommand = new RelayCommand(async () => await LoadUpcoming(force: true));
         AddUpcomingToWishlistCommand = new RelayCommand(async () => await AddUpcomingToWishlist());
 
+        RefreshNotifications();
         RefreshWishlist();
         RefreshDownloads();
 
@@ -238,6 +244,22 @@ public class DashboardViewModel : INotifyPropertyChanged
                     Application.Current?.Dispatcher.Invoke(RefreshDownloads);
                 }
             }
+        };
+
+        // Live notifications — add to collection when new releases arrive
+        _serverManager.NewReleaseDetected += (serverId, serverName, category, release) =>
+        {
+            Application.Current?.Dispatcher.Invoke(() =>
+            {
+                NotificationItems.Insert(0, new NotificationItemVm
+                {
+                    ServerId = serverId,
+                    ServerName = serverName,
+                    Category = category,
+                    ReleaseName = release,
+                    TimeDisplay = DateTime.Now.ToString("g")
+                });
+            });
         };
     }
 
@@ -672,6 +694,28 @@ public class DashboardViewModel : INotifyPropertyChanged
         return string.IsNullOrEmpty(text) ? null : text;
     }
 
+    private void RefreshNotifications()
+    {
+        NotificationItems.Clear();
+        foreach (var item in _notificationStore.Items)
+        {
+            NotificationItems.Add(new NotificationItemVm
+            {
+                ServerId = item.ServerId,
+                ServerName = item.ServerName,
+                Category = item.Category,
+                ReleaseName = item.ReleaseName,
+                TimeDisplay = item.Timestamp.ToLocalTime().ToString("g")
+            });
+        }
+    }
+
+    private void ClearNotifications()
+    {
+        _notificationStore.Clear();
+        NotificationItems.Clear();
+    }
+
     private void RefreshWishlist()
     {
         WishlistItems.Clear();
@@ -815,4 +859,13 @@ public class UpcomingMovieVm
     public string? Rating { get; set; }
     public string? Genres { get; set; }
     public string? ImdbId { get; set; }
+}
+
+public class NotificationItemVm
+{
+    public string ServerId { get; set; } = "";
+    public string ServerName { get; set; } = "";
+    public string Category { get; set; } = "";
+    public string ReleaseName { get; set; } = "";
+    public string TimeDisplay { get; set; } = "";
 }
