@@ -7,6 +7,7 @@ using FluentFTP.GnuTLS.Enums;
 using FluentFTP.Proxy.AsyncProxy;
 using GlDrive.Config;
 using Serilog;
+using static GlDrive.Config.SearchMethod;
 
 namespace GlDrive.UI;
 
@@ -29,6 +30,13 @@ public partial class ServerEditDialog : Window
         foreach (var c in Enumerable.Range('D', 23).Select(c => ((char)c).ToString())
                      .Where(c => !used.Contains(c[0]) || c == _serverConfig.Mount.DriveLetter))
             DriveLetterBox.Items.Add(c);
+
+        // Populate search method combo
+        SearchMethodBox.Items.Add("Auto");
+        SearchMethodBox.Items.Add("SITE SEARCH");
+        SearchMethodBox.Items.Add("Cached Index");
+        SearchMethodBox.Items.Add("Live Crawl");
+        SearchMethodBox.SelectedIndex = 0;
 
         if (existing != null)
         {
@@ -78,6 +86,8 @@ public partial class ServerEditDialog : Window
             // Search
             SearchPathsBox.Text = string.Join("\n", existing.Search.SearchPaths);
             SearchMaxDepthBox.Text = existing.Search.MaxDepth.ToString();
+            SearchMethodBox.SelectedIndex = (int)existing.Search.Method;
+            IndexCacheMinutesBox.Text = existing.Search.IndexCacheMinutes.ToString();
 
             // Load stored password hint
             var storedPw = CredentialStore.GetPassword(existing.Connection.Host, existing.Connection.Port, existing.Connection.Username);
@@ -222,6 +232,8 @@ public partial class ServerEditDialog : Window
         if (_serverConfig.Search.SearchPaths.Count == 0)
             _serverConfig.Search.SearchPaths = ["/"];
         _serverConfig.Search.MaxDepth = int.TryParse(SearchMaxDepthBox.Text, out var md) ? Math.Clamp(md, 1, 10) : 2;
+        _serverConfig.Search.Method = (SearchMethod)(SearchMethodBox.SelectedIndex >= 0 ? SearchMethodBox.SelectedIndex : 0);
+        _serverConfig.Search.IndexCacheMinutes = int.TryParse(IndexCacheMinutesBox.Text, out var icm) ? Math.Clamp(icm, 1, 1440) : 60;
 
         // Save password
         _password = PasswordBox.Password;

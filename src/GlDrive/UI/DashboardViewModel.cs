@@ -19,6 +19,8 @@ public class DashboardViewModel : INotifyPropertyChanged
     private readonly WishlistStore _wishlistStore;
     private string _searchQuery = "";
     private string _searchStatus = "";
+    private bool _isSearching;
+    private CancellationTokenSource? _searchCts;
     private WishlistItemVm? _selectedWishlistItem;
     private DownloadItemVm? _selectedDownloadItem;
     private SearchResultVm? _selectedSearchResult;
@@ -151,6 +153,12 @@ public class DashboardViewModel : INotifyPropertyChanged
         set { _searchStatus = value; OnPropertyChanged(); }
     }
 
+    public bool IsSearching
+    {
+        get => _isSearching;
+        set { _isSearching = value; OnPropertyChanged(); }
+    }
+
     public string ActiveDownloadName
     {
         get => _activeDownloadName;
@@ -183,6 +191,7 @@ public class DashboardViewModel : INotifyPropertyChanged
     public ICommand RetryDownloadCommand { get; }
     public ICommand ClearCompletedCommand { get; }
     public ICommand SearchCommand { get; }
+    public ICommand CancelSearchCommand { get; }
     public ICommand DownloadSearchResultCommand { get; }
     public ICommand RefreshMetadataCommand { get; }
     public ICommand LoadUpcomingCommand { get; }
@@ -204,6 +213,7 @@ public class DashboardViewModel : INotifyPropertyChanged
         RetryDownloadCommand = new RelayCommand(RetryDownload);
         ClearCompletedCommand = new RelayCommand(ClearCompleted);
         SearchCommand = new RelayCommand(async () => await PerformSearch());
+        CancelSearchCommand = new RelayCommand(CancelSearch);
         DownloadSearchResultCommand = new RelayCommand(DownloadSearchResult);
         RefreshMetadataCommand = new RelayCommand(async () => await RefreshAllMetadata());
         LoadUpcomingCommand = new RelayCommand(async () => await LoadUpcoming(force: true));
@@ -291,9 +301,20 @@ public class DashboardViewModel : INotifyPropertyChanged
         RefreshDownloads();
     }
 
+    private void CancelSearch()
+    {
+        _searchCts?.Cancel();
+    }
+
     private async Task PerformSearch()
     {
         if (string.IsNullOrWhiteSpace(SearchQuery)) return;
+
+        // Cancel any in-progress search
+        _searchCts?.Cancel();
+        _searchCts?.Dispose();
+        _searchCts = new CancellationTokenSource();
+        var ct = _searchCts.Token;
 
         var mounted = _serverManager.GetMountedServers()
             .Where(s => s.Search != null && s.CurrentState == MountState.Connected)
@@ -305,15 +326,19 @@ public class DashboardViewModel : INotifyPropertyChanged
             return;
         }
 
+        IsSearching = true;
         SearchStatus = "Searching...";
         SearchResults.Clear();
+
+        var progress = new Progress<string>(msg =>
+            Application.Current?.Dispatcher.Invoke(() => SearchStatus = msg));
 
         try
         {
             // Search all servers in parallel
             var tasks = mounted.Select(async server =>
             {
-                var results = await server.Search!.Search(SearchQuery);
+                var results = await server.Search!.Search(SearchQuery, progress, ct);
                 return results.Select(r => new SearchResultVm
                 {
                     ReleaseName = r.ReleaseName,
@@ -340,10 +365,18 @@ public class DashboardViewModel : INotifyPropertyChanged
 
             SearchStatus = $"{totalCount} result(s) found across {mounted.Count} server(s)";
         }
+        catch (OperationCanceledException)
+        {
+            SearchStatus = "Search cancelled";
+        }
         catch (Exception ex)
         {
             SearchStatus = $"Search failed: {ex.Message}";
             Log.Error(ex, "Dashboard search failed");
+        }
+        finally
+        {
+            IsSearching = false;
         }
     }
 

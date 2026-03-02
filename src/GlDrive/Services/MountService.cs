@@ -120,6 +120,7 @@ public class MountService : IDisposable
                 _pool, _downloadConfig.StreamingBufferSizeKb, _downloadConfig.WriteBufferLimitMb);
             _downloadManager = new DownloadManager(downloadStore, _ftp, _streamingDownloader, _downloadConfig);
             _searchService = new FtpSearchService(_pool, _serverConfig.Search);
+            _searchService.StartIndexer();
             _wishlistMatcher = new WishlistMatcher(wishlistStore, _downloadManager, _ftp, _downloadConfig,
                 _serverConfig.Id, _serverConfig.Name);
 
@@ -153,12 +154,14 @@ public class MountService : IDisposable
         _releaseMonitor?.Stop();
         _monitor?.Stop();
         _downloadManager?.Stop();
+        _searchService?.StopIndexer();
 
         // 2. Wait for background tasks to finish (with timeout)
         var stopTasks = new List<Task>();
         if (_releaseMonitor != null) stopTasks.Add(_releaseMonitor.StopAsync(timeout));
         if (_monitor != null) stopTasks.Add(_monitor.StopAsync(timeout));
         if (_downloadManager != null) stopTasks.Add(_downloadManager.StopAsync(timeout));
+        if (_searchService != null) stopTasks.Add(_searchService.StopIndexerAsync(timeout));
 
         try
         {
@@ -195,6 +198,7 @@ public class MountService : IDisposable
         _releaseMonitor?.Stop();
         _monitor?.Stop();
         _downloadManager?.Stop();
+        _searchService?.StopIndexer();
 
         try { _host?.Unmount(); } catch { }
 
@@ -213,6 +217,7 @@ public class MountService : IDisposable
         _downloadManager?.Dispose();
         _downloadManager = null;
         _wishlistMatcher = null;
+        _searchService?.Dispose();
         _searchService = null;
         _streamingDownloader = null;
         _releaseMonitor = null;
@@ -245,6 +250,7 @@ public class MountService : IDisposable
         _downloadManager?.Dispose();
         _downloadManager = null;
         _wishlistMatcher = null;
+        _searchService?.Dispose();
         _searchService = null;
         _streamingDownloader = null;
         _releaseMonitor = null;

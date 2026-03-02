@@ -84,10 +84,14 @@ public class NotificationConfig
     public List<string> ExcludedCategories { get; set; } = [];
 }
 
+public enum SearchMethod { Auto, SiteSearch, CachedIndex, LiveCrawl }
+
 public class SearchConfig
 {
     public List<string> SearchPaths { get; set; } = ["/"];
     public int MaxDepth { get; set; } = 2;
+    public SearchMethod Method { get; set; } = SearchMethod.Auto;
+    public int IndexCacheMinutes { get; set; } = 60;
 }
 
 public class DownloadConfig
