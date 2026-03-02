@@ -64,7 +64,11 @@ public class WishlistMatcher
                     ServerName = _serverName
                 };
 
-                _downloadManager.Enqueue(downloadItem);
+                if (!_downloadManager.Enqueue(downloadItem))
+                {
+                    Log.Information("Wishlist match skipped (duplicate): {Release}", releaseName);
+                    continue;
+                }
 
                 item.GrabbedReleases.Add(releaseName);
                 _wishlist.Update(item);

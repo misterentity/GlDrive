@@ -35,7 +35,7 @@ public class TrayViewModel : INotifyPropertyChanged
                 UpdateStatusText();
                 OnPropertyChanged(nameof(StatusText));
 
-                // Wire up wishlist matcher notifications for newly connected servers
+                // Wire up wishlist matcher and download notifications for newly connected servers
                 if (state == MountState.Connected)
                 {
                     var server = _serverManager.GetServer(serverId);
@@ -44,6 +44,19 @@ public class TrayViewModel : INotifyPropertyChanged
                         server.Matcher.MatchFound += (item, cat, rel) =>
                             Application.Current?.Dispatcher.Invoke(() =>
                                 ShowNotification("Grabbed", $"{item.Title} [{cat}] ({serverName})"));
+                    }
+                    if (server?.Downloads != null)
+                    {
+                        server.Downloads.DownloadStatusChanged += downloadItem =>
+                        {
+                            if (downloadItem.Status == DownloadStatus.Completed)
+                                Application.Current?.Dispatcher.Invoke(() =>
+                                    ShowNotification("Download Complete", downloadItem.ReleaseName));
+                            else if (downloadItem.Status == DownloadStatus.Failed)
+                                Application.Current?.Dispatcher.Invoke(() =>
+                                    ShowNotification("Download Failed",
+                                        $"{downloadItem.ReleaseName}: {downloadItem.ErrorMessage ?? "Unknown error"}"));
+                        };
                     }
                 }
 

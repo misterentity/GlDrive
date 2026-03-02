@@ -21,7 +21,16 @@
                             <Button Content="Download" Command="{Binding DownloadNotificationCommand}"
                                     Padding="12,6" Margin="0,0,6,0" Style="{StaticResource PrimaryButton}"/>
                             <Button Content="Clear All" Command="{Binding ClearNotificationsCommand}"
-                                    Padding="12,6" Style="{StaticResource SecondaryButton}"/>
+                                    Padding="12,6" Margin="0,0,12,0" Style="{StaticResource SecondaryButton}"/>
+                            <TextBox Text="{Binding NotificationFilterText, UpdateSourceTrigger=PropertyChanged}"
+                                     Width="160" VerticalContentAlignment="Center" Margin="0,0,6,0"
+                                     ToolTip="Filter by release name"/>
+                            <ComboBox ItemsSource="{Binding NotificationCategories}"
+                                      SelectedItem="{Binding NotificationFilterCategory}"
+                                      Width="110" Margin="0,0,6,0" ToolTip="Filter by category"/>
+                            <ComboBox ItemsSource="{Binding NotificationServers}"
+                                      SelectedItem="{Binding NotificationFilterServer}"
+                                      Width="110" ToolTip="Filter by server"/>
                         </StackPanel>
                     </Border>
                     <!-- Detail panel — bottom -->
@@ -176,7 +185,13 @@
                             <Button Content="Retry" Command="{Binding RetryDownloadCommand}"
                                     Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"/>
                             <Button Content="Clear Completed" Command="{Binding ClearCompletedCommand}"
-                                    Padding="12,6" Style="{StaticResource SecondaryButton}"/>
+                                    Padding="12,6" Margin="0,0,12,0" Style="{StaticResource SecondaryButton}"/>
+                            <Button Content="Move Up" Command="{Binding MoveUpCommand}"
+                                    Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"
+                                    ToolTip="Move selected item up in queue"/>
+                            <Button Content="Move Down" Command="{Binding MoveDownCommand}"
+                                    Padding="12,6" Style="{StaticResource SecondaryButton}"
+                                    ToolTip="Move selected item down in queue"/>
                         </StackPanel>
                     </Border>
                     <DataGrid ItemsSource="{Binding DownloadItems}"
@@ -190,6 +205,34 @@
                             <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="80"/>
                             <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="90"/>
                             <DataGridTextColumn Header="Progress" Binding="{Binding ProgressText}" Width="*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </TabItem>
+
+            <!-- History Tab -->
+            <TabItem Header="History">
+                <DockPanel Margin="12">
+                    <Border DockPanel.Dock="Top" Background="{StaticResource SurfaceBrush}"
+                            CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="Clear History" Command="{Binding ClearHistoryCommand}"
+                                    Padding="12,6" Style="{StaticResource SecondaryButton}"/>
+                        </StackPanel>
+                    </Border>
+                    <DataGrid ItemsSource="{Binding HistoryItems}"
+                              SelectedItem="{Binding SelectedHistoryItem}"
+                              AutoGenerateColumns="False" IsReadOnly="True"
+                              SelectionMode="Single" GridLinesVisibility="Horizontal"
+                              HeadersVisibility="Column" CanUserAddRows="False">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Date" Binding="{Binding CompletedAt}" Width="130"/>
+                            <DataGridTextColumn Header="Release" Binding="{Binding ReleaseName}" Width="*"/>
+                            <DataGridTextColumn Header="Server" Binding="{Binding ServerName}" Width="90"/>
+                            <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="80"/>
+                            <DataGridTextColumn Header="Size" Binding="{Binding SizeText}" Width="80"/>
+                            <DataGridTextColumn Header="Status" Binding="{Binding FinalStatus}" Width="80"/>
+                            <DataGridTextColumn Header="Error" Binding="{Binding ErrorMessage}" Width="150"/>
                         </DataGrid.Columns>
                     </DataGrid>
                 </DockPanel>
