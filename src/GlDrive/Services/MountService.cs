@@ -29,7 +29,7 @@ public class MountService : IDisposable
     private bool _mounted;
 
     public event Action<MountState>? StateChanged;
-    public event Action<string, string>? NewReleaseDetected;
+    public event Action<string, string, string>? NewReleaseDetected; // category, release, remotePath
 
     public string ServerId => _serverConfig.Id;
     public string ServerName => _serverConfig.Name;
@@ -107,7 +107,7 @@ public class MountService : IDisposable
 
             // Start release monitor
             _releaseMonitor = new NewReleaseMonitor(_pool, _serverConfig.Notifications, () => CurrentState);
-            _releaseMonitor.NewReleaseDetected += (category, release) => NewReleaseDetected?.Invoke(category, release);
+            _releaseMonitor.NewReleaseDetected += (category, release, remotePath) => NewReleaseDetected?.Invoke(category, release, remotePath);
             _releaseMonitor.Start();
 
             // Initialize download subsystem
@@ -125,7 +125,8 @@ public class MountService : IDisposable
                 _serverConfig.Id, _serverConfig.Name);
 
             if (_downloadConfig.AutoDownloadWishlist)
-                _releaseMonitor.NewReleaseDetected += _wishlistMatcher.OnNewRelease;
+                _releaseMonitor.NewReleaseDetected += (category, release, remotePath) =>
+                    _wishlistMatcher.OnNewRelease(category, release, remotePath);
 
             _downloadManager.Start();
 

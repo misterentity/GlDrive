@@ -12,6 +12,7 @@ public class NotificationItem
     public string ServerName { get; set; } = "";
     public string Category { get; set; } = "";
     public string ReleaseName { get; set; } = "";
+    public string RemotePath { get; set; } = "";
     public DateTime Timestamp { get; set; } = DateTime.UtcNow;
 }
 
