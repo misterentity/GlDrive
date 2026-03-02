@@ -11,6 +11,7 @@ public class FtpSearchService : IDisposable
     private readonly FtpConnectionPool _pool;
     private readonly SearchConfig _searchConfig;
     private const int MaxResults = 200;
+    private static readonly TimeSpan BorrowTimeout = TimeSpan.FromSeconds(15);
 
     private static readonly HashSet<string> SkipDirs = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -36,7 +37,7 @@ public class FtpSearchService : IDisposable
 
     /// <summary>
     /// Main search entry point. Uses the configured method (or Auto to try all in order).
-    /// Retries once on transient failures.
+    /// Retries once on exception (not on empty results).
     /// </summary>
     public async Task<List<SearchResult>> Search(string keyword, IProgress<string>? progress = null, CancellationToken ct = default)
     {
@@ -50,11 +51,7 @@ public class FtpSearchService : IDisposable
                     await Task.Delay(1000, ct);
                 }
 
-                var results = await SearchOnce(keyword, progress, ct);
-                if (results.Count > 0 || attempt > 0)
-                    return results;
-
-                // Got 0 results on first attempt — retry in case of transient issue
+                return await SearchOnce(keyword, progress, ct);
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
@@ -64,7 +61,7 @@ public class FtpSearchService : IDisposable
                     Log.Error(ex, "Search failed after retry for: {Keyword}", keyword);
                     throw;
                 }
-                Log.Debug(ex, "Search failed on first attempt, retrying");
+                Log.Warning(ex, "Search failed on first attempt for {Keyword}, retrying", keyword);
             }
         }
 
@@ -107,11 +104,8 @@ public class FtpSearchService : IDisposable
         {
             progress?.Report("Searching cached index...");
             var results = FilterIndex(snapshot, keyword);
-            if (results.Count > 0)
-            {
-                progress?.Report($"{results.Count} result(s) from cached index");
-                return results;
-            }
+            progress?.Report($"{results.Count} result(s) from cached index");
+            return results;
         }
 
         // 3. Fall back to live crawl
@@ -142,7 +136,9 @@ public class FtpSearchService : IDisposable
         try
         {
             progress?.Report("Trying SITE SEARCH...");
-            await using var conn = await _pool.Borrow(ct);
+            using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            borrowCts.CancelAfter(BorrowTimeout);
+            await using var conn = await _pool.Borrow(borrowCts.Token);
             var reply = await conn.Client.Execute($"SITE SEARCH {keyword}", ct);
 
             if (!reply.Success)
@@ -158,6 +154,12 @@ public class FtpSearchService : IDisposable
             var results = ParseSiteSearchResponse(reply.Message);
             progress?.Report($"{results.Count} result(s) from SITE SEARCH");
             return results;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // Borrow timed out — pool is busy, don't block search
+            Log.Debug("SITE SEARCH skipped — pool borrow timed out");
+            return null;
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
@@ -263,6 +265,7 @@ public class FtpSearchService : IDisposable
 
     /// <summary>
     /// Fully rebuilds the in-memory index by crawling all search paths.
+    /// Borrows a connection per-listing to avoid holding pool connections for long crawls.
     /// </summary>
     public async Task RefreshIndex(IProgress<string>? progress = null, CancellationToken ct = default)
     {
@@ -274,8 +277,7 @@ public class FtpSearchService : IDisposable
             var root = searchPath.TrimEnd('/');
             try
             {
-                await using var conn = await _pool.Borrow(ct);
-                await CrawlForIndex(conn.Client, root, root, 0, _searchConfig.MaxDepth, entries, ct);
+                await CrawlForIndex(root, root, 0, _searchConfig.MaxDepth, entries, ct);
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
@@ -292,10 +294,15 @@ public class FtpSearchService : IDisposable
     }
 
     private async Task CrawlForIndex(
-        AsyncFtpClient client, string path, string searchRoot,
+        string path, string searchRoot,
         int depth, int maxDepth, List<IndexEntry> entries, CancellationToken ct)
     {
-        var items = await ListDirect(client, path, ct);
+        // Borrow per-listing so we don't hold a connection for the entire crawl
+        FtpListItem[] items;
+        await using (var conn = await _pool.Borrow(ct))
+        {
+            items = await ListDirect(conn.Client, path, ct);
+        }
 
         foreach (var item in items)
         {
@@ -316,7 +323,7 @@ public class FtpSearchService : IDisposable
             });
 
             if (depth < maxDepth)
-                await CrawlForIndex(client, item.FullName, searchRoot, depth + 1, maxDepth, entries, ct);
+                await CrawlForIndex(item.FullName, searchRoot, depth + 1, maxDepth, entries, ct);
         }
     }
 
@@ -391,12 +398,14 @@ public class FtpSearchService : IDisposable
 
         try
         {
-            var tasks = _searchConfig.SearchPaths.Select(path =>
-                SearchPath(path.TrimEnd('/'), normalizedKeyword, progress, ct));
-            var pathResults = await Task.WhenAll(tasks);
-
-            foreach (var batch in pathResults)
-                results.AddRange(batch);
+            // Search paths sequentially to avoid borrowing multiple connections at once
+            foreach (var path in _searchConfig.SearchPaths)
+            {
+                ct.ThrowIfCancellationRequested();
+                var pathResults = await SearchPath(path.TrimEnd('/'), normalizedKeyword, progress, ct);
+                results.AddRange(pathResults);
+                if (results.Count >= MaxResults) break;
+            }
 
             if (results.Count > MaxResults)
                 results.RemoveRange(MaxResults, results.Count - MaxResults);
@@ -417,8 +426,7 @@ public class FtpSearchService : IDisposable
 
         try
         {
-            await using var conn = await _pool.Borrow(ct);
-            await SearchRecursive(conn.Client, rootPath, keyword, 0, _searchConfig.MaxDepth, results, progress, ct);
+            await SearchRecursive(rootPath, keyword, 0, _searchConfig.MaxDepth, results, progress, ct);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
@@ -430,14 +438,22 @@ public class FtpSearchService : IDisposable
     }
 
     private async Task SearchRecursive(
-        AsyncFtpClient client, string path, string keyword,
+        string path, string keyword,
         int depth, int maxDepth, List<SearchResult> results,
         IProgress<string>? progress, CancellationToken ct)
     {
         if (results.Count >= MaxResults) return;
 
         progress?.Report($"Scanning {path}...");
-        var items = await ListDirect(client, path, ct);
+
+        // Borrow per-listing so we don't hold a connection for the entire crawl
+        FtpListItem[] items;
+        using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        borrowCts.CancelAfter(BorrowTimeout);
+        await using (var conn = await _pool.Borrow(borrowCts.Token))
+        {
+            items = await ListDirect(conn.Client, path, ct);
+        }
 
         foreach (var item in items)
         {
@@ -460,7 +476,7 @@ public class FtpSearchService : IDisposable
             }
 
             if (depth < maxDepth)
-                await SearchRecursive(client, item.FullName, keyword, depth + 1, maxDepth, results, progress, ct);
+                await SearchRecursive(item.FullName, keyword, depth + 1, maxDepth, results, progress, ct);
         }
     }
 
