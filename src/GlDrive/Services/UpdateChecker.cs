@@ -159,7 +159,7 @@ public class UpdateChecker
             "# Copy extracted files over install directory (robocopy avoids PowerShell Copy-Item nested folder bug)",
             $"$installDir = '{Esc(_installPath)}'",
             "Write-Host \"Copying files to $installDir\"",
-            "& robocopy $sourceDir $installDir /E /R:3 /W:1 /NFL /NDL /NJH /NJS",
+            "& robocopy \"$sourceDir\" \"$installDir\" /E /R:3 /W:1 /NFL /NDL /NJH /NJS",
             "if ($LASTEXITCODE -ge 8) { throw \"robocopy failed with exit code $LASTEXITCODE\" }",
             "",
             "# Clean up temp",
