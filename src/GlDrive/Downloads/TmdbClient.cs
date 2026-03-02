@@ -42,19 +42,27 @@ public class TmdbClient : IDisposable
 
         try
         {
-            var url = $"3/discover/movie?api_key={_apiKey}" +
-                      $"&with_release_type=4|5" +
-                      $"&release_date.gte={from:yyyy-MM-dd}" +
-                      $"&release_date.lte={to:yyyy-MM-dd}" +
-                      $"&sort_by=release_date.asc&region=US";
-            var response = await _http.GetStringAsync(url, ct);
-            var result = JsonSerializer.Deserialize<TmdbDiscoverResponse>(response, JsonOptions);
-            if (result?.Results == null) return [];
+            var baseUrl = $"3/discover/movie?api_key={_apiKey}" +
+                          $"&with_release_type=2|3" +
+                          $"&release_date.gte={from:yyyy-MM-dd}" +
+                          $"&release_date.lte={to:yyyy-MM-dd}" +
+                          $"&sort_by=popularity.desc&region=US";
 
-            foreach (var movie in result.Results)
+            var movies = new List<TmdbMovie>();
+            for (var page = 1; page <= 2; page++)
+            {
+                var response = await _http.GetStringAsync($"{baseUrl}&page={page}", ct);
+                var result = JsonSerializer.Deserialize<TmdbDiscoverResponse>(response, JsonOptions);
+                if (result?.Results != null)
+                    movies.AddRange(result.Results);
+                if (result == null || result.TotalResults <= page * 20)
+                    break;
+            }
+
+            foreach (var movie in movies)
                 movie.GenreText = ResolveGenres(movie.GenreIds);
 
-            return result.Results;
+            return movies.ToArray();
         }
         catch (Exception ex)
         {
