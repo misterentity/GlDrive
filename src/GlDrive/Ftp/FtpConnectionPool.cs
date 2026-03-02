@@ -63,8 +63,8 @@ public class FtpConnectionPool : IAsyncDisposable
             if (client.IsConnected)
                 return new PooledConnection(client, this);
 
-            // Stale connection, dispose and create new
-            client.Dispose();
+            // Stale connection, properly disconnect and create new
+            DisconnectAndDispose(client);
             Interlocked.Decrement(ref _created);
         }
 
@@ -91,7 +91,7 @@ public class FtpConnectionPool : IAsyncDisposable
             return new PooledConnection(client, this);
 
         // Stale, replace it
-        client.Dispose();
+        DisconnectAndDispose(client);
         client = await _factory.CreateAndConnect(ct);
         return new PooledConnection(client, this);
     }
@@ -100,16 +100,29 @@ public class FtpConnectionPool : IAsyncDisposable
     {
         if (_disposed || !client.IsConnected)
         {
-            client.Dispose();
+            DisconnectAndDispose(client);
             Interlocked.Decrement(ref _created);
             return;
         }
 
         if (!_pool.Writer.TryWrite(client))
         {
-            client.Dispose();
+            DisconnectAndDispose(client);
             Interlocked.Decrement(ref _created);
         }
+    }
+
+    /// <summary>
+    /// Sends QUIT before disposing so the server properly frees the connection slot.
+    /// Fire-and-forget since Return is synchronous.
+    /// </summary>
+    private static void DisconnectAndDispose(AsyncFtpClient client)
+    {
+        _ = Task.Run(async () =>
+        {
+            try { await client.Disconnect(); } catch { }
+            client.Dispose();
+        });
     }
 
     public async ValueTask DisposeAsync()
