@@ -4,18 +4,22 @@
         xmlns:ui="clr-namespace:GlDrive.UI"
         Title="GlDrive Dashboard" Width="960" Height="660"
         WindowStartupLocation="CenterScreen"
-        Background="{StaticResource BackgroundBrush}"
-        Foreground="{StaticResource ForegroundBrush}">
+        Background="{DynamicResource BackgroundBrush}"
+        Foreground="{DynamicResource ForegroundBrush}">
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
         <ui:ImageUrlConverter x:Key="ImageUrlConverter"/>
     </Window.Resources>
     <Grid Margin="0">
-        <TabControl Padding="0">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <TabControl Grid.Row="0" Padding="0">
             <!-- Notifications Tab -->
             <TabItem Header="Notifications">
                 <DockPanel Margin="12">
-                    <Border DockPanel.Dock="Top" Background="{StaticResource SurfaceBrush}"
+                    <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
                             CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
                         <StackPanel Orientation="Horizontal">
                             <Button Content="Download" Command="{Binding DownloadNotificationCommand}"
@@ -35,14 +39,14 @@
                     </Border>
                     <!-- Detail panel — bottom -->
                     <Border DockPanel.Dock="Bottom" Height="155"
-                            Background="{StaticResource SurfaceBrush}"
-                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                            Background="{DynamicResource SurfaceBrush}"
+                            BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
                             CornerRadius="6" Margin="0,10,0,0" Padding="14"
                             Visibility="{Binding HasNotificationSelection, Converter={StaticResource BoolToVisibility}}">
                         <DockPanel>
                             <Border DockPanel.Dock="Left" Width="95" Margin="0,0,16,0"
                                     CornerRadius="4" ClipToBounds="True"
-                                    Background="{StaticResource SurfaceLightBrush}"
+                                    Background="{DynamicResource SurfaceLightBrush}"
                                     Visibility="{Binding HasNotificationPoster, Converter={StaticResource BoolToVisibility}}">
                                 <Image Stretch="UniformToFill" VerticalAlignment="Top"
                                        RenderOptions.BitmapScalingMode="HighQuality"
@@ -55,15 +59,15 @@
                                 <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
                                     <TextBlock Text="{Binding NotificationRating}" FontSize="13"
                                                FontWeight="SemiBold"
-                                               Foreground="{StaticResource AccentBrush}"/>
+                                               Foreground="{DynamicResource AccentBrush}"/>
                                     <TextBlock Text="{Binding NotificationGenres}" FontSize="12.5"
-                                               Foreground="{StaticResource ForegroundDimBrush}"
+                                               Foreground="{DynamicResource ForegroundDimBrush}"
                                                Margin="14,0,0,0"/>
                                 </StackPanel>
                                 <TextBlock Text="{Binding NotificationPlot}" TextWrapping="Wrap"
                                            MaxHeight="65" FontSize="12.5" Margin="0,8,0,0"
                                            LineHeight="18"
-                                           Foreground="{StaticResource ForegroundDimBrush}"
+                                           Foreground="{DynamicResource ForegroundDimBrush}"
                                            TextTrimming="CharacterEllipsis"/>
                             </StackPanel>
                         </DockPanel>
@@ -73,7 +77,13 @@
                               SelectedItem="{Binding SelectedNotificationItem}"
                               AutoGenerateColumns="False" IsReadOnly="True"
                               SelectionMode="Single" GridLinesVisibility="Horizontal"
-                              HeadersVisibility="Column" CanUserAddRows="False">
+                              HeadersVisibility="Column" CanUserAddRows="False"
+                              x:Name="NotificationsGrid"
+                              PreviewMouseLeftButtonDown="DragSource_PreviewMouseLeftButtonDown"
+                              MouseMove="DragSource_MouseMove">
+                        <DataGrid.InputBindings>
+                            <KeyBinding Key="Return" Command="{Binding DownloadNotificationCommand}"/>
+                        </DataGrid.InputBindings>
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="Time" Binding="{Binding TimeDisplay}" Width="130"/>
                             <DataGridTextColumn Header="Server" Binding="{Binding ServerName}" Width="90"/>
@@ -88,7 +98,7 @@
             <TabItem Header="Wishlist">
                 <DockPanel Margin="12">
                     <!-- Action bar -->
-                    <Border DockPanel.Dock="Top" Background="{StaticResource SurfaceBrush}"
+                    <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
                             CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
                         <StackPanel Orientation="Horizontal">
                             <Button Content="+ Movie" Command="{Binding AddMovieCommand}"
@@ -100,21 +110,25 @@
                             <Button Content="Pause" Command="{Binding TogglePauseCommand}"
                                     Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"/>
                             <Button Content="Refresh Info" Command="{Binding RefreshMetadataCommand}"
-                                    Padding="12,6" Style="{StaticResource SecondaryButton}"
+                                    Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"
                                     ToolTip="Fetch posters, ratings, and plots for all items"/>
+                            <Button Content="Export" Command="{Binding ExportWishlistCommand}"
+                                    Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"/>
+                            <Button Content="Import" Command="{Binding ImportWishlistCommand}"
+                                    Padding="12,6" Style="{StaticResource SecondaryButton}"/>
                         </StackPanel>
                     </Border>
 
                     <!-- Detail panel — bottom -->
                     <Border DockPanel.Dock="Bottom" Height="155"
-                            Background="{StaticResource SurfaceBrush}"
-                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                            Background="{DynamicResource SurfaceBrush}"
+                            BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
                             CornerRadius="6" Margin="0,10,0,0" Padding="14"
                             Visibility="{Binding HasWishlistSelection, Converter={StaticResource BoolToVisibility}}">
                         <DockPanel>
                             <Border DockPanel.Dock="Left" Width="95" Margin="0,0,16,0"
                                     CornerRadius="4" ClipToBounds="True"
-                                    Background="{StaticResource SurfaceLightBrush}"
+                                    Background="{DynamicResource SurfaceLightBrush}"
                                     Visibility="{Binding HasSelectedPoster, Converter={StaticResource BoolToVisibility}}">
                                 <Image Stretch="UniformToFill" VerticalAlignment="Top"
                                        RenderOptions.BitmapScalingMode="HighQuality"
@@ -131,15 +145,15 @@
                                 <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
                                     <TextBlock Text="{Binding SelectedRating}" FontSize="13"
                                                FontWeight="SemiBold"
-                                               Foreground="{StaticResource AccentBrush}"/>
+                                               Foreground="{DynamicResource AccentBrush}"/>
                                     <TextBlock Text="{Binding SelectedGenres}" FontSize="12.5"
-                                               Foreground="{StaticResource ForegroundDimBrush}"
+                                               Foreground="{DynamicResource ForegroundDimBrush}"
                                                Margin="14,0,0,0"/>
                                 </StackPanel>
                                 <TextBlock Text="{Binding SelectedPlot}" TextWrapping="Wrap"
                                            MaxHeight="65" FontSize="12.5" Margin="0,8,0,0"
                                            LineHeight="18"
-                                           Foreground="{StaticResource ForegroundDimBrush}"
+                                           Foreground="{DynamicResource ForegroundDimBrush}"
                                            TextTrimming="CharacterEllipsis"/>
                             </StackPanel>
                         </DockPanel>
@@ -169,15 +183,23 @@
                     <!-- Active download progress -->
                     <StackPanel DockPanel.Dock="Top" Margin="0,0,0,10"
                                 Visibility="{Binding HasActiveDownload, Converter={StaticResource BoolToVisibility}}">
-                        <TextBlock Foreground="{StaticResource ForegroundBrush}" Margin="0,0,0,6">
+                        <TextBlock Foreground="{DynamicResource ForegroundBrush}" Margin="0,0,0,6">
                             <Run Text="{Binding ActiveDownloadName, Mode=OneWay}" FontWeight="SemiBold"/>
-                            <Run Text=" — " Foreground="{StaticResource ForegroundDimBrush}"/>
-                            <Run Text="{Binding ActiveDownloadSpeed, Mode=OneWay}" Foreground="{StaticResource AccentBrush}"/>
+                            <Run Text=" — " Foreground="{DynamicResource ForegroundDimBrush}"/>
+                            <Run Text="{Binding ActiveDownloadSpeed, Mode=OneWay}" Foreground="{DynamicResource AccentBrush}"/>
                         </TextBlock>
                         <ProgressBar Value="{Binding ActiveDownloadPercent}" Maximum="100" Height="6" Margin="0,0,0,0"/>
                     </StackPanel>
 
-                    <Border DockPanel.Dock="Top" Background="{StaticResource SurfaceBrush}"
+                    <!-- Bandwidth graph -->
+                    <Canvas DockPanel.Dock="Top" Height="40" Margin="0,0,0,6" ClipToBounds="True"
+                            Background="{DynamicResource SurfaceBrush}"
+                            Visibility="{Binding HasActiveDownload, Converter={StaticResource BoolToVisibility}}">
+                        <Polyline Points="{Binding SpeedGraphPoints}" Stroke="{DynamicResource AccentBrush}"
+                                  StrokeThickness="1.5" Canvas.Left="0" Canvas.Top="0"/>
+                    </Canvas>
+
+                    <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
                             CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
                         <StackPanel Orientation="Horizontal">
                             <Button Content="Cancel" Command="{Binding CancelDownloadCommand}"
@@ -185,7 +207,10 @@
                             <Button Content="Retry" Command="{Binding RetryDownloadCommand}"
                                     Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"/>
                             <Button Content="Clear Completed" Command="{Binding ClearCompletedCommand}"
-                                    Padding="12,6" Margin="0,0,12,0" Style="{StaticResource SecondaryButton}"/>
+                                    Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"/>
+                            <Button Content="Open Folder" Command="{Binding OpenFolderCommand}"
+                                    Padding="12,6" Margin="0,0,12,0" Style="{StaticResource SecondaryButton}"
+                                    ToolTip="Open download folder in Explorer"/>
                             <Button Content="Move Up" Command="{Binding MoveUpCommand}"
                                     Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"
                                     ToolTip="Move selected item up in queue"/>
@@ -198,7 +223,12 @@
                               SelectedItem="{Binding SelectedDownloadItem}"
                               AutoGenerateColumns="False" IsReadOnly="True"
                               SelectionMode="Single" GridLinesVisibility="Horizontal"
-                              HeadersVisibility="Column" CanUserAddRows="False">
+                              HeadersVisibility="Column" CanUserAddRows="False"
+                              AllowDrop="True" Drop="Downloads_Drop">
+                        <DataGrid.InputBindings>
+                            <KeyBinding Key="Delete" Command="{Binding CancelDownloadCommand}"/>
+                            <KeyBinding Key="R" Command="{Binding RetryDownloadCommand}"/>
+                        </DataGrid.InputBindings>
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="Release" Binding="{Binding ReleaseName}" Width="*"/>
                             <DataGridTextColumn Header="Server" Binding="{Binding ServerName}" Width="90"/>
@@ -213,7 +243,7 @@
             <!-- History Tab -->
             <TabItem Header="History">
                 <DockPanel Margin="12">
-                    <Border DockPanel.Dock="Top" Background="{StaticResource SurfaceBrush}"
+                    <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
                             CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
                         <StackPanel Orientation="Horizontal">
                             <Button Content="Clear History" Command="{Binding ClearHistoryCommand}"
@@ -255,7 +285,7 @@
                         </TextBox>
                     </DockPanel>
                     <TextBlock DockPanel.Dock="Top" Text="{Binding SearchStatus}" Margin="0,0,0,6"
-                               Foreground="{StaticResource ForegroundDimBrush}" FontSize="12"/>
+                               Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"/>
                     <DockPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
                         <Button Content="Download Selected" Command="{Binding DownloadSearchResultCommand}"
                                 Padding="16,6" Style="{StaticResource PrimaryButton}"/>
@@ -264,7 +294,13 @@
                               SelectedItem="{Binding SelectedSearchResult}"
                               AutoGenerateColumns="False" IsReadOnly="True"
                               SelectionMode="Single" GridLinesVisibility="Horizontal"
-                              HeadersVisibility="Column" CanUserAddRows="False">
+                              HeadersVisibility="Column" CanUserAddRows="False"
+                              x:Name="SearchGrid"
+                              PreviewMouseLeftButtonDown="DragSource_PreviewMouseLeftButtonDown"
+                              MouseMove="DragSource_MouseMove">
+                        <DataGrid.InputBindings>
+                            <KeyBinding Key="Return" Command="{Binding DownloadSearchResultCommand}"/>
+                        </DataGrid.InputBindings>
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="Release" Binding="{Binding ReleaseName}" Width="*"/>
                             <DataGridTextColumn Header="Server" Binding="{Binding ServerName}" Width="90"/>
@@ -278,7 +314,7 @@
             <TabItem Header="Upcoming">
                 <DockPanel Margin="12">
                     <!-- Action bar -->
-                    <Border DockPanel.Dock="Top" Background="{StaticResource SurfaceBrush}"
+                    <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
                             CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
                         <StackPanel Orientation="Horizontal">
                             <Button Content="Refresh" Command="{Binding LoadUpcomingCommand}"
@@ -289,20 +325,20 @@
                             <ComboBox ItemsSource="{Binding QualityOptions}"
                                       SelectedItem="{Binding UpcomingQualityText}" Width="90"/>
                             <TextBlock Text="{Binding UpcomingStatus}" VerticalAlignment="Center"
-                                       Margin="16,0,0,0" Foreground="{StaticResource ForegroundDimBrush}" FontSize="12"/>
+                                       Margin="16,0,0,0" Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"/>
                         </StackPanel>
                     </Border>
 
                     <!-- Detail panel — bottom -->
                     <Border DockPanel.Dock="Bottom" Height="155"
-                            Background="{StaticResource SurfaceBrush}"
-                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                            Background="{DynamicResource SurfaceBrush}"
+                            BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
                             CornerRadius="6" Margin="0,10,0,0" Padding="14"
                             Visibility="{Binding HasUpcomingSelection, Converter={StaticResource BoolToVisibility}}">
                         <DockPanel>
                             <Border DockPanel.Dock="Left" Width="95" Margin="0,0,16,0"
                                     CornerRadius="4" ClipToBounds="True"
-                                    Background="{StaticResource SurfaceLightBrush}"
+                                    Background="{DynamicResource SurfaceLightBrush}"
                                     Visibility="{Binding HasUpcomingPoster, Converter={StaticResource BoolToVisibility}}">
                                 <Image Stretch="UniformToFill" VerticalAlignment="Top"
                                        RenderOptions.BitmapScalingMode="HighQuality"
@@ -314,15 +350,15 @@
                                 <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
                                     <TextBlock Text="{Binding UpcomingRating}" FontSize="13"
                                                FontWeight="SemiBold"
-                                               Foreground="{StaticResource AccentBrush}"/>
+                                               Foreground="{DynamicResource AccentBrush}"/>
                                     <TextBlock Text="{Binding UpcomingGenres}" FontSize="12.5"
-                                               Foreground="{StaticResource ForegroundDimBrush}"
+                                               Foreground="{DynamicResource ForegroundDimBrush}"
                                                Margin="14,0,0,0"/>
                                 </StackPanel>
                                 <TextBlock Text="{Binding UpcomingPlot}" TextWrapping="Wrap"
                                            MaxHeight="65" FontSize="12.5" Margin="0,8,0,0"
                                            LineHeight="18"
-                                           Foreground="{StaticResource ForegroundDimBrush}"
+                                           Foreground="{DynamicResource ForegroundDimBrush}"
                                            TextTrimming="CharacterEllipsis"/>
                             </StackPanel>
                         </DockPanel>
@@ -363,7 +399,7 @@
                                 <Run Text="Movie Releases"/>
                             </TextBlock>
                             <TextBlock DockPanel.Dock="Top" Margin="0,0,0,6" FontSize="11"
-                                       Foreground="{StaticResource ForegroundDimBrush}"
+                                       Foreground="{DynamicResource ForegroundDimBrush}"
                                        Visibility="{Binding HasNoTmdbKey, Converter={StaticResource BoolToVisibility}}">
                                 <Run Text="Configure TMDb API key in Settings → Downloads to see movie releases."/>
                             </TextBlock>
@@ -384,5 +420,19 @@
                 </DockPanel>
             </TabItem>
         </TabControl>
+
+        <!-- Status Bar -->
+        <Border Grid.Row="1" Background="{DynamicResource SurfaceBrush}"
+                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0"
+                Padding="12,6">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="{Binding StatusBarSpeed}" Foreground="{DynamicResource AccentBrush}"
+                           FontWeight="SemiBold" Margin="0,0,20,0" FontSize="12"/>
+                <TextBlock Text="{Binding StatusBarQueueCount}" Foreground="{DynamicResource ForegroundDimBrush}"
+                           Margin="0,0,20,0" FontSize="12"/>
+                <TextBlock Text="{Binding StatusBarDiskSpace}" Foreground="{DynamicResource ForegroundDimBrush}"
+                           FontSize="12"/>
+            </StackPanel>
+        </Border>
     </Grid>
 </Window>

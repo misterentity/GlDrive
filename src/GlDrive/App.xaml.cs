@@ -81,6 +81,9 @@ public partial class App : Application
             config = ConfigManager.Load(); // Reload after wizard saves
         }
 
+        // Apply theme
+        ThemeManager.ApplyTheme(config.Downloads.Theme);
+
         // Init services
         var certManager = new CertificateManager();
         var notificationStore = new NotificationStore();

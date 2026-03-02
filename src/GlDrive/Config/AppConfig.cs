@@ -19,6 +19,7 @@ public class ServerConfig
     public PoolConfig Pool { get; set; } = new();
     public NotificationConfig Notifications { get; set; } = new();
     public SearchConfig Search { get; set; } = new();
+    public int SpeedLimitKbps { get; set; }
 }
 
 public class ConnectionConfig
@@ -122,4 +123,12 @@ public class DownloadConfig
     public bool DeleteArchivesAfterExtract { get; set; } = true;
     public int SpeedLimitKbps { get; set; }
     public bool SkipIncompleteReleases { get; set; }
+    public int MaxRetries { get; set; } = 3;
+    public int RetryDelaySeconds { get; set; } = 30;
+    public bool ScheduleEnabled { get; set; }
+    public int ScheduleStartHour { get; set; }
+    public int ScheduleEndHour { get; set; } = 6;
+    public bool VerifySfv { get; set; } = true;
+    public bool PlaySoundOnComplete { get; set; }
+    public string Theme { get; set; } = "Dark";
 }

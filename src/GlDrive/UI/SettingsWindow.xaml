@@ -3,8 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="GlDrive Settings" Width="600" Height="500"
         WindowStartupLocation="CenterScreen" ResizeMode="NoResize"
-        Background="{StaticResource BackgroundBrush}"
-        Foreground="{StaticResource ForegroundBrush}">
+        Background="{DynamicResource BackgroundBrush}"
+        Foreground="{DynamicResource ForegroundBrush}">
     <Grid Margin="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="*"/>
@@ -55,6 +55,15 @@
                         <TextBlock Text="Speed Limit (KB/s, 0=unlimited):" Margin="0,0,0,4"/>
                         <TextBox Text="{Binding SpeedLimitKbps, UpdateSourceTrigger=PropertyChanged}"
                                  Width="80" HorizontalAlignment="Left" Margin="0,0,0,12"/>
+
+                        <Separator Margin="0,0,0,12"/>
+                        <TextBlock Text="Auto-Retry" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                        <TextBlock Text="Max Retries (0=disabled):" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding MaxRetries, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+                        <TextBlock Text="Retry Delay (seconds):" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding RetryDelaySeconds, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,12"/>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
@@ -88,7 +97,24 @@
                         <CheckBox Content="Delete archives after successful extraction"
                                   IsChecked="{Binding DeleteArchivesAfterExtract}" Margin="0,0,0,4"/>
                         <CheckBox Content="Skip incomplete releases (require .nfo file)"
-                                  IsChecked="{Binding SkipIncompleteReleases}" Margin="0,0,0,12"/>
+                                  IsChecked="{Binding SkipIncompleteReleases}" Margin="0,0,0,4"/>
+                        <CheckBox Content="Verify SFV checksums after download"
+                                  IsChecked="{Binding VerifySfv}" Margin="0,0,0,4"/>
+                        <CheckBox Content="Play sound on download complete"
+                                  IsChecked="{Binding PlaySoundOnComplete}" Margin="0,0,0,8"/>
+
+                        <Separator Margin="0,4,0,8"/>
+                        <TextBlock Text="Download Schedule" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                        <CheckBox Content="Only download during scheduled hours"
+                                  IsChecked="{Binding ScheduleEnabled}" Margin="0,0,0,8"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                            <TextBlock Text="From hour:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBox Text="{Binding ScheduleStartHour, UpdateSourceTrigger=PropertyChanged}"
+                                     Width="50" Margin="0,0,16,0"/>
+                            <TextBlock Text="To hour:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBox Text="{Binding ScheduleEndHour, UpdateSourceTrigger=PropertyChanged}"
+                                     Width="50"/>
+                        </StackPanel>
 
                         <Separator Margin="0,0,0,12"/>
 
@@ -120,6 +146,10 @@
             <!-- Diagnostics Tab -->
             <TabItem Header="Diagnostics">
                 <StackPanel Margin="12">
+                    <TextBlock Text="Theme:" Margin="0,0,0,4"/>
+                    <ComboBox ItemsSource="{Binding ThemeOptions}"
+                              SelectedItem="{Binding Theme}" Width="150" HorizontalAlignment="Left" Margin="0,0,0,12"/>
+
                     <TextBlock Text="Log Level:" Margin="0,0,0,4"/>
                     <ComboBox ItemsSource="{Binding LogLevels}"
                               SelectedItem="{Binding LogLevel}" Width="150" HorizontalAlignment="Left" Margin="0,0,0,12"/>

@@ -84,6 +84,9 @@ public partial class ServerEditDialog : Window
             WatchPathBox.Text = existing.Notifications.WatchPath;
             ExcludedCategoriesBox.Text = string.Join(", ", existing.Notifications.ExcludedCategories);
 
+            // Speed limit
+            SpeedLimitBox.Text = existing.SpeedLimitKbps.ToString();
+
             // Search
             SearchPathsBox.Text = string.Join("\n", existing.Search.SearchPaths);
             SearchMaxDepthBox.Text = existing.Search.MaxDepth.ToString();
@@ -208,6 +211,7 @@ public partial class ServerEditDialog : Window
         _serverConfig.Mount.MountDrive = MountDriveBox.IsChecked == true;
         _serverConfig.Mount.AutoMountOnStart = AutoMountBox.IsChecked == true;
         _serverConfig.Tls.PreferTls12 = PreferTls12Box.IsChecked == true;
+        _serverConfig.SpeedLimitKbps = int.TryParse(SpeedLimitBox.Text, out var sl) ? Math.Clamp(sl, 0, 100000) : 0;
 
         // Cache
         _serverConfig.Cache.DirectoryListingTtlSeconds = int.TryParse(CacheTtlBox.Text, out var ttl) ? Math.Clamp(ttl, 5, 300) : 30;

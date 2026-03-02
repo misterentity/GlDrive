@@ -50,8 +50,12 @@ public class TrayViewModel : INotifyPropertyChanged
                         server.Downloads.DownloadStatusChanged += downloadItem =>
                         {
                             if (downloadItem.Status == DownloadStatus.Completed)
+                            {
                                 Application.Current?.Dispatcher.Invoke(() =>
                                     ShowNotification("Download Complete", downloadItem.ReleaseName));
+                                if (_config.Downloads.PlaySoundOnComplete)
+                                    System.Media.SystemSounds.Asterisk.Play();
+                            }
                             else if (downloadItem.Status == DownloadStatus.Failed)
                                 Application.Current?.Dispatcher.Invoke(() =>
                                     ShowNotification("Download Failed",
