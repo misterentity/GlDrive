@@ -118,4 +118,6 @@ public class DownloadConfig
     public string OmdbApiKey { get; set; } = "";
     public string TmdbApiKey { get; set; } = "";
     public bool AutoDownloadWishlist { get; set; } = true;
+    public bool AutoExtract { get; set; } = true;
+    public bool DeleteArchivesAfterExtract { get; set; } = true;
 }

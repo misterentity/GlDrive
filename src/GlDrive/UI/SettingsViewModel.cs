@@ -17,6 +17,8 @@ public class SettingsViewModel : INotifyPropertyChanged
     private string _omdbApiKey;
     private string _tmdbApiKey;
     private bool _autoDownloadWishlist;
+    private bool _autoExtract;
+    private bool _deleteArchivesAfterExtract;
 
     public SettingsViewModel(AppConfig config)
     {
@@ -30,6 +32,8 @@ public class SettingsViewModel : INotifyPropertyChanged
         _omdbApiKey = config.Downloads.OmdbApiKey;
         _tmdbApiKey = config.Downloads.TmdbApiKey;
         _autoDownloadWishlist = config.Downloads.AutoDownloadWishlist;
+        _autoExtract = config.Downloads.AutoExtract;
+        _deleteArchivesAfterExtract = config.Downloads.DeleteArchivesAfterExtract;
     }
 
     public string LogLevel { get => _logLevel; set { _logLevel = value; OnPropertyChanged(); } }
@@ -42,6 +46,8 @@ public class SettingsViewModel : INotifyPropertyChanged
     public string OmdbApiKey { get => _omdbApiKey; set { _omdbApiKey = value; OnPropertyChanged(); } }
     public string TmdbApiKey { get => _tmdbApiKey; set { _tmdbApiKey = value; OnPropertyChanged(); } }
     public bool AutoDownloadWishlist { get => _autoDownloadWishlist; set { _autoDownloadWishlist = value; OnPropertyChanged(); } }
+    public bool AutoExtract { get => _autoExtract; set { _autoExtract = value; OnPropertyChanged(); } }
+    public bool DeleteArchivesAfterExtract { get => _deleteArchivesAfterExtract; set { _deleteArchivesAfterExtract = value; OnPropertyChanged(); } }
 
     public string[] LogLevels { get; } = ["Verbose", "Debug", "Information", "Warning", "Error"];
     public string[] QualityOptions { get; } = ["Any", "SD", "720p", "1080p", "2160p"];
@@ -57,6 +63,8 @@ public class SettingsViewModel : INotifyPropertyChanged
         config.Downloads.OmdbApiKey = OmdbApiKey;
         config.Downloads.TmdbApiKey = TmdbApiKey;
         config.Downloads.AutoDownloadWishlist = AutoDownloadWishlist;
+        config.Downloads.AutoExtract = AutoExtract;
+        config.Downloads.DeleteArchivesAfterExtract = DeleteArchivesAfterExtract;
     }
 
     public void RefreshCertsInfo()

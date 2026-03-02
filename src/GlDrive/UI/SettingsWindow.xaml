@@ -79,7 +79,11 @@
                         <TextBox Text="{Binding TmdbApiKey, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
 
                         <CheckBox Content="Auto-download wishlist matches"
-                                  IsChecked="{Binding AutoDownloadWishlist}" Margin="0,8,0,12"/>
+                                  IsChecked="{Binding AutoDownloadWishlist}" Margin="0,8,0,4"/>
+                        <CheckBox Content="Auto-extract RAR archives after download"
+                                  IsChecked="{Binding AutoExtract}" Margin="0,0,0,4"/>
+                        <CheckBox Content="Delete archives after successful extraction"
+                                  IsChecked="{Binding DeleteArchivesAfterExtract}" Margin="0,0,0,12"/>
 
                         <Separator Margin="0,0,0,12"/>
 

@@ -1,0 +1,88 @@
+using System.IO;
+using System.Text.RegularExpressions;
+using SharpCompress.Archives;
+using SharpCompress.Archives.Rar;
+using Serilog;
+
+namespace GlDrive.Downloads;
+
+public static partial class ArchiveExtractor
+{
+    private static readonly Regex VolumeExtRegex = MyVolumeExtRegex();
+
+    public static async Task<bool> ExtractIfNeeded(string dirPath, CancellationToken ct)
+    {
+        var dir = new DirectoryInfo(dirPath);
+        if (!dir.Exists) return false;
+
+        // Find .rar files only (first volume) — skip numbered volumes like .r00, .r01, etc.
+        var rarFiles = dir.GetFiles("*.rar")
+            .Where(f => f.Extension.Equals(".rar", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (rarFiles.Count == 0) return false;
+
+        foreach (var rarFile in rarFiles)
+        {
+            ct.ThrowIfCancellationRequested();
+            Log.Information("Extracting archive: {File}", rarFile.Name);
+
+            try
+            {
+                using var archive = RarArchive.OpenArchive(rarFile.FullName);
+                foreach (var entry in archive.Entries.Where(e => !e.IsDirectory))
+                {
+                    ct.ThrowIfCancellationRequested();
+                    await entry.WriteToDirectoryAsync(dirPath, ct);
+                }
+                Log.Information("Extraction complete: {File}", rarFile.Name);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Failed to extract {File}", rarFile.Name);
+                throw;
+            }
+        }
+
+        return true;
+    }
+
+    public static void DeleteArchives(string dirPath)
+    {
+        var dir = new DirectoryInfo(dirPath);
+        if (!dir.Exists) return;
+
+        foreach (var file in dir.GetFiles())
+        {
+            if (IsArchiveFile(file.Name))
+            {
+                try
+                {
+                    file.Delete();
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "Failed to delete archive file: {File}", file.Name);
+                }
+            }
+        }
+    }
+
+    public static bool IsArchiveFile(string fileName)
+    {
+        var ext = Path.GetExtension(fileName);
+        if (string.IsNullOrEmpty(ext)) return false;
+
+        // .rar, .sfv
+        if (ext.Equals(".rar", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".sfv", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // .r00-.r99, .s00-.s99
+        return VolumeExtRegex.IsMatch(ext);
+    }
+
+    [GeneratedRegex(@"^\.[rs]\d{2}$", RegexOptions.IgnoreCase)]
+    private static partial Regex MyVolumeExtRegex();
+}

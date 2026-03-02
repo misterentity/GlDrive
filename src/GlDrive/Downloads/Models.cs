@@ -3,7 +3,7 @@ namespace GlDrive.Downloads;
 public enum MediaType { Movie, TvShow }
 public enum WishlistStatus { Watching, Completed, Paused }
 public enum QualityProfile { Any, SD, Q720p, Q1080p, Q2160p }
-public enum DownloadStatus { Queued, Downloading, Completed, Failed, Cancelled }
+public enum DownloadStatus { Queued, Downloading, Extracting, Completed, Failed, Cancelled }
 
 public class WishlistItem
 {

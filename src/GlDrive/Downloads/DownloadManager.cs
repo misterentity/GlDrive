@@ -204,6 +204,26 @@ public class DownloadManager : IDisposable
                 }
             }
 
+            // Auto-extract RAR archives if enabled
+            if (_config.AutoExtract && Directory.Exists(item.LocalPath))
+            {
+                try
+                {
+                    item.Status = DownloadStatus.Extracting;
+                    _store.Update(item);
+                    DownloadStatusChanged?.Invoke(item);
+
+                    var extracted = await ArchiveExtractor.ExtractIfNeeded(item.LocalPath, itemCts.Token);
+                    if (extracted && _config.DeleteArchivesAfterExtract)
+                        ArchiveExtractor.DeleteArchives(item.LocalPath);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "Extraction failed for {Release} — marking completed anyway", item.ReleaseName);
+                }
+            }
+
             item.Status = DownloadStatus.Completed;
             item.CompletedAt = DateTime.UtcNow;
             _store.Update(item);

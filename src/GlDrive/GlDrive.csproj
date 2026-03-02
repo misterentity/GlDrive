@@ -24,6 +24,7 @@
     <PackageReference Include="Meziantou.Framework.Win32.CredentialManager" Version="1.*" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.*" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.*" />
+    <PackageReference Include="SharpCompress" Version="0.*" />
   </ItemGroup>
 
   <ItemGroup>
