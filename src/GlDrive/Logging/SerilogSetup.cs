@@ -24,6 +24,7 @@ public static class SerilogSetup
                 Path.Combine(logFolder, "gldrive-.log"),
                 rollingInterval: RollingInterval.Day,
                 fileSizeLimitBytes: config.MaxFileSizeMb * 1024 * 1024,
+                rollOnFileSizeLimit: true,
                 retainedFileCountLimit: config.RetainedFiles,
                 outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
             .CreateLogger();

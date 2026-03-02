@@ -6,6 +6,7 @@ using FluentFTP.GnuTLS;
 using FluentFTP.GnuTLS.Enums;
 using FluentFTP.Proxy.AsyncProxy;
 using GlDrive.Config;
+using GlDrive.Ftp;
 using Serilog;
 using static GlDrive.Config.SearchMethod;
 
@@ -304,10 +305,22 @@ public partial class ServerEditDialog : Window
 
             await client.Connect();
 
+            var useCpsv = client.Capabilities.Contains(FtpCapability.CPSV);
+            var controlHost = host;
+            if (useCpsv)
+                Log.Information("Discover: server supports CPSV — using BNC-compatible listings");
+
+            async Task<FtpListItem[]> ListDir(string path)
+            {
+                if (useCpsv)
+                    return await CpsvDataHelper.ListDirectory(client, path, controlHost);
+                return await client.GetListing(path, FtpListOption.AllFiles);
+            }
+
             // List root to find top-level dirs
             var rootPath = string.IsNullOrWhiteSpace(RootPathBox.Text) ? "/" : RootPathBox.Text.TrimEnd('/');
             if (string.IsNullOrEmpty(rootPath)) rootPath = "/";
-            var rootItems = await client.GetListing(rootPath, FtpListOption.AllFiles);
+            var rootItems = await ListDir(rootPath);
 
             var topDirs = rootItems
                 .Where(i => i.Type == FtpObjectType.Directory && !NonContentDirs.Contains(i.Name))
@@ -319,7 +332,7 @@ public partial class ServerEditDialog : Window
             {
                 try
                 {
-                    var subItems = await client.GetListing(dir.FullName, FtpListOption.AllFiles);
+                    var subItems = await ListDir(dir.FullName);
                     var subDirCount = subItems.Count(i => i.Type == FtpObjectType.Directory
                         && !NonContentDirs.Contains(i.Name));
                     if (subDirCount >= 2)

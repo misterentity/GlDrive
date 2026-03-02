@@ -151,7 +151,7 @@ public class FtpSearchService : IDisposable
             }
 
             _siteSearchSupported = true;
-            var results = ParseSiteSearchResponse(reply.Message);
+            var results = ParseSiteSearchResponse(reply.InfoMessages ?? reply.Message);
             progress?.Report($"{results.Count} result(s) from SITE SEARCH");
             return results;
         }
