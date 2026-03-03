@@ -29,8 +29,11 @@ if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
 }
 
 # --- Check tag doesn't already exist ---
-$existing = gh release view $Tag 2>&1
-if ($LASTEXITCODE -eq 0) {
+$ErrorActionPreference = 'SilentlyContinue'
+gh release view $Tag *> $null
+$tagExists = $LASTEXITCODE -eq 0
+$ErrorActionPreference = 'Stop'
+if ($tagExists) {
     Write-Error "Release $Tag already exists. Bump the version in $CsprojPath first."
     exit 1
 }
