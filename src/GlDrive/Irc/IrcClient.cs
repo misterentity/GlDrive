@@ -40,7 +40,7 @@ public class IrcClient : IDisposable
                 if (cert == null) return false;
                 if (certManager != null)
                     return certManager.ValidateCertificate(host, port, cert).GetAwaiter().GetResult();
-                return true;
+                return false;
             });
 
             await sslStream.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
@@ -107,6 +107,7 @@ public class IrcClient : IDisposable
         if (_writer == null) return;
         try
         {
+            line = line.Replace("\r", "").Replace("\n", "");
             Log.Verbose("[IRC >] {Line}", line);
             await _writer.WriteLineAsync(line);
         }

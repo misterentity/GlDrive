@@ -21,6 +21,7 @@ public class TrayViewModel : INotifyPropertyChanged
     private string _statusText = "No servers";
     private DashboardWindow? _dashboardWindow;
     private GitHubRelease? _availableUpdate;
+    private readonly HashSet<string> _subscribedServers = new();
 
     public TrayViewModel(ServerManager serverManager, AppConfig config, NotificationStore notificationStore)
     {
@@ -37,7 +38,7 @@ public class TrayViewModel : INotifyPropertyChanged
                 OnPropertyChanged(nameof(StatusText));
 
                 // Wire up wishlist matcher and download notifications for newly connected servers
-                if (state == MountState.Connected)
+                if (state == MountState.Connected && _subscribedServers.Add(serverId))
                 {
                     var server = _serverManager.GetServer(serverId);
                     if (server?.Matcher != null)

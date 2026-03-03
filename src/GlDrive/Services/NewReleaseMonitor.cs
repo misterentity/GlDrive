@@ -105,7 +105,7 @@ public class NewReleaseMonitor
 
         var excluded = _config.ExcludedCategories;
         var categoryDirs = categories
-            .Where(i => i.Type == FtpObjectType.Directory)
+            .Where(i => i.Type is FtpObjectType.Directory or FtpObjectType.Link)
             .Select(i => i.Name)
             .Where(name => !excluded.Any(ex => string.Equals(ex, name, StringComparison.OrdinalIgnoreCase)))
             .ToList();
@@ -130,7 +130,7 @@ public class NewReleaseMonitor
             }
 
             var currentNames = releases
-                .Where(i => i.Type == FtpObjectType.Directory)
+                .Where(i => i.Type is FtpObjectType.Directory or FtpObjectType.Link)
                 .Select(i => i.Name)
                 .ToHashSet();
 

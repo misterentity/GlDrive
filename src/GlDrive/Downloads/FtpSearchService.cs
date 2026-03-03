@@ -35,6 +35,9 @@ public class FtpSearchService : IDisposable
 
     private static string Normalize(string s) => s.Replace('.', ' ').Replace('_', ' ').Replace('-', ' ');
 
+    private static string SanitizeFtpInput(string input) =>
+        input.Replace("\r", "").Replace("\n", "").Replace("\0", "");
+
     /// <summary>
     /// Main search entry point. Uses the configured method (or Auto to try all in order).
     /// Retries once on exception (not on empty results).
@@ -139,7 +142,7 @@ public class FtpSearchService : IDisposable
             using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             borrowCts.CancelAfter(BorrowTimeout);
             await using var conn = await _pool.Borrow(borrowCts.Token);
-            var reply = await conn.Client.Execute($"SITE SEARCH {keyword}", ct);
+            var reply = await conn.Client.Execute($"SITE SEARCH {SanitizeFtpInput(keyword)}", ct);
 
             if (!reply.Success)
             {

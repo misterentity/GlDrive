@@ -49,14 +49,18 @@ public static class FishBase64
             for (var j = 5; j >= 0; j--)
             {
                 right <<= 6;
-                right |= (uint)Alphabet.IndexOf(encoded[offset + j]);
+                var idx = Alphabet.IndexOf(encoded[offset + j]);
+                if (idx < 0) throw new FormatException($"Invalid FiSH base64 character: '{encoded[offset + j]}'");
+                right |= (uint)idx;
             }
 
             uint left = 0;
             for (var j = 5; j >= 0; j--)
             {
                 left <<= 6;
-                left |= (uint)Alphabet.IndexOf(encoded[offset + 6 + j]);
+                var idx = Alphabet.IndexOf(encoded[offset + 6 + j]);
+                if (idx < 0) throw new FormatException($"Invalid FiSH base64 character: '{encoded[offset + 6 + j]}'");
+                left |= (uint)idx;
             }
 
             var outOffset = block * 8;

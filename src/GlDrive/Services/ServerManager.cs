@@ -163,7 +163,8 @@ public class ServerManager : IDisposable
                 return "SITE INVITE skipped: server not mounted";
 
             await using var conn = await mountService.Pool.Borrow(ct);
-            var reply = await conn.Client.Execute($"SITE INVITE {nick}", ct);
+            var sanitized = nick.Replace("\r", "").Replace("\n", "").Replace("\0", "");
+            var reply = await conn.Client.Execute($"SITE INVITE {sanitized}", ct);
             return reply.Message;
         };
 

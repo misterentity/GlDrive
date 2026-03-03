@@ -17,7 +17,7 @@ using Serilog;
 
 namespace GlDrive.UI;
 
-public class DashboardViewModel : INotifyPropertyChanged
+public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 {
     private readonly ServerManager _serverManager;
     private readonly AppConfig _config;
@@ -29,6 +29,7 @@ public class DashboardViewModel : INotifyPropertyChanged
     private string _searchStatus = "";
     private bool _isSearching;
     private CancellationTokenSource? _searchCts;
+    private readonly HashSet<string> _subscribedServers = new();
     private WishlistItemVm? _selectedWishlistItem;
     private DownloadItemVm? _selectedDownloadItem;
     private SearchResultVm? _selectedSearchResult;
@@ -419,6 +420,7 @@ public class DashboardViewModel : INotifyPropertyChanged
     private void SubscribeToServer(MountService server)
     {
         if (server.Downloads == null) return;
+        if (!_subscribedServers.Add(server.ServerId)) return;
         server.Downloads.DownloadProgressChanged += OnDownloadProgress;
         server.Downloads.DownloadStatusChanged += OnDownloadStatusChanged;
     }
@@ -501,7 +503,6 @@ public class DashboardViewModel : INotifyPropertyChanged
 
         // Cancel any in-progress search
         _searchCts?.Cancel();
-        _searchCts?.Dispose();
         _searchCts = new CancellationTokenSource();
         var ct = _searchCts.Token;
 
@@ -1366,6 +1367,14 @@ public class DashboardViewModel : INotifyPropertyChanged
         double speed = bytesPerSecond;
         while (speed >= 1024 && i < units.Length - 1) { speed /= 1024; i++; }
         return $"{speed:F1} {units[i]}";
+    }
+
+    public void Dispose()
+    {
+        _statusTimer?.Stop();
+        _searchCts?.Cancel();
+        _searchCts?.Dispose();
+        _searchCts = null;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

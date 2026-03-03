@@ -21,11 +21,18 @@ public static class FishCipher
 
     public static string? Decrypt(string ciphertext, string key)
     {
-        if (ciphertext.StartsWith(CbcPrefix))
-            return DecryptCbc(ciphertext[CbcPrefix.Length..], key);
-        if (ciphertext.StartsWith(EcbPrefix))
-            return DecryptEcb(ciphertext[EcbPrefix.Length..], key);
-        return null;
+        try
+        {
+            if (ciphertext.StartsWith(CbcPrefix))
+                return DecryptCbc(ciphertext[CbcPrefix.Length..], key);
+            if (ciphertext.StartsWith(EcbPrefix))
+                return DecryptEcb(ciphertext[EcbPrefix.Length..], key);
+            return null;
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
     }
 
     public static bool IsEncrypted(string message) =>
