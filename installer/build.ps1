@@ -64,6 +64,13 @@ else {
     }
 }
 
+# --- Step 1b: Copy WebView2 bootstrapper into publish output ---
+$WebView2Bootstrapper = Join-Path $InstallerDir 'deps\MicrosoftEdgeWebview2Setup.exe'
+if (Test-Path $WebView2Bootstrapper) {
+    Copy-Item $WebView2Bootstrapper -Destination $PublishDir -Force
+    Write-Host "WebView2 bootstrapper copied to publish output" -ForegroundColor Green
+}
+
 # --- Step 2: Check WinFsp MSI ---
 $WinFspMsi = Join-Path $InstallerDir 'deps\winfsp.msi'
 if (-not (Test-Path $WinFspMsi)) {
