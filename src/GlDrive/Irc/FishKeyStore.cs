@@ -55,8 +55,11 @@ public class FishKeyStore
         try
         {
             var json = File.ReadAllText(_filePath);
-            _keys = JsonSerializer.Deserialize<Dictionary<string, FishKeyEntry>>(json, JsonOptions)
-                    ?? new(StringComparer.OrdinalIgnoreCase);
+            var loaded = JsonSerializer.Deserialize<Dictionary<string, FishKeyEntry>>(json, JsonOptions);
+            // Re-wrap to preserve case-insensitive lookup (deserializer uses default comparer)
+            _keys = loaded != null
+                ? new Dictionary<string, FishKeyEntry>(loaded, StringComparer.OrdinalIgnoreCase)
+                : new(StringComparer.OrdinalIgnoreCase);
         }
         catch (Exception ex)
         {

@@ -73,6 +73,7 @@ public class IrcViewModel : INotifyPropertyChanged
     // Per-channel message buffers: key = "serverId:target"
     private readonly Dictionary<string, List<IrcMessageVm>> _messageBuffers = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<string>> _nickBuffers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _subscribedServices = new();
     private const int MaxMessages = 500;
 
     // Nick colors (deterministic)
@@ -217,6 +218,7 @@ public class IrcViewModel : INotifyPropertyChanged
 
     private void SubscribeToIrcService(IrcService irc)
     {
+        if (!_subscribedServices.Add(irc.ServerId)) return;
         irc.MessageReceived += (target, item) =>
             Application.Current?.Dispatcher.Invoke(() => OnIrcMessage(irc.ServerId, irc.ServerName, target, item));
 
