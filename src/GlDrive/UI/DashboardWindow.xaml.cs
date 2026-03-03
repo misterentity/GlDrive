@@ -93,24 +93,57 @@ public partial class DashboardWindow : Window
             Serilog.Log.Warning(ex, "WebView2 runtime not available");
             PreDbBrowser.Visibility = Visibility.Collapsed;
 
-            // Find the PreDB tab and show a message instead
-            if (Content is Grid grid && grid.Children[0] is TabControl tc)
+            if (Content is not Grid grid || grid.Children[0] is not TabControl tc) return;
+            foreach (TabItem tab in tc.Items)
             {
-                foreach (TabItem tab in tc.Items)
+                if (tab.Header?.ToString() != "PreDB") continue;
+
+                var panel = new StackPanel { Margin = new Thickness(20), VerticalAlignment = VerticalAlignment.Center };
+                panel.Children.Add(new TextBlock
                 {
-                    if (tab.Header?.ToString() == "PreDB")
+                    Text = "WebView2 runtime is required for the PreDB browser.",
+                    Foreground = System.Windows.Media.Brushes.Gray,
+                    FontSize = 14,
+                    Margin = new Thickness(0, 0, 0, 12)
+                });
+
+                var bootstrapper = System.IO.Path.Combine(AppContext.BaseDirectory, "MicrosoftEdgeWebview2Setup.exe");
+                if (System.IO.File.Exists(bootstrapper))
+                {
+                    var btn = new Button
                     {
-                        tab.Content = new System.Windows.Controls.TextBlock
+                        Content = "Install WebView2 Runtime",
+                        Padding = new Thickness(16, 8, 16, 8),
+                        Style = (Style)FindResource("PrimaryButton")
+                    };
+                    btn.Click += (_, _) =>
+                    {
+                        try
                         {
-                            Text = "WebView2 runtime is required for PreDB.\nInstall from: https://developer.microsoft.com/en-us/microsoft-edge/webview2/",
-                            Margin = new Thickness(20),
-                            Foreground = System.Windows.Media.Brushes.Gray,
-                            FontSize = 14,
-                            TextWrapping = TextWrapping.Wrap
-                        };
-                        break;
-                    }
+                            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                            {
+                                FileName = bootstrapper,
+                                Arguments = "/install",
+                                UseShellExecute = true
+                            });
+                        }
+                        catch (Exception installEx)
+                        {
+                            Serilog.Log.Warning(installEx, "WebView2 install failed");
+                        }
+                    };
+                    panel.Children.Add(btn);
+                    panel.Children.Add(new TextBlock
+                    {
+                        Text = "Restart GlDrive after installation completes.",
+                        Foreground = System.Windows.Media.Brushes.Gray,
+                        FontSize = 12,
+                        Margin = new Thickness(0, 8, 0, 0)
+                    });
                 }
+
+                tab.Content = panel;
+                break;
             }
         }
     }

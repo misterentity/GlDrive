@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using System.IO;
 using System.Windows;
 using GlDrive.Config;
 using GlDrive.Downloads;
@@ -7,7 +5,6 @@ using GlDrive.Logging;
 using GlDrive.Services;
 using GlDrive.Tls;
 using GlDrive.UI;
-using Microsoft.Win32;
 using Serilog;
 
 namespace GlDrive;
@@ -38,9 +35,6 @@ public partial class App : Application
 
         // Clean up .old files from a previous update
         UpdateChecker.CleanupOldUpdateFiles();
-
-        // Install WebView2 runtime if missing and bootstrapper is bundled
-        EnsureWebView2();
 
         // Screenshot mode — capture all UI windows to PNGs and exit
         if (e.Args.Contains("--screenshots", StringComparer.OrdinalIgnoreCase))
@@ -128,43 +122,6 @@ public partial class App : Application
         {
             Log.Error(ex, "Auto-mount failed");
             _trayViewModel.ShowNotification("GlDrive", $"Mount failed: {ex.Message}");
-        }
-    }
-
-    private static void EnsureWebView2()
-    {
-        try
-        {
-            // Check if WebView2 runtime is installed
-            var regKey = Registry.LocalMachine.OpenSubKey(
-                @"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}");
-            regKey ??= Registry.LocalMachine.OpenSubKey(
-                @"SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}");
-
-            if (regKey != null)
-            {
-                regKey.Dispose();
-                return; // Already installed
-            }
-
-            // Look for bundled bootstrapper
-            var bootstrapper = Path.Combine(AppContext.BaseDirectory, "MicrosoftEdgeWebview2Setup.exe");
-            if (!File.Exists(bootstrapper)) return;
-
-            Log.Information("WebView2 runtime not found, installing from bundled bootstrapper");
-            var proc = Process.Start(new ProcessStartInfo
-            {
-                FileName = bootstrapper,
-                Arguments = "/silent /install",
-                UseShellExecute = true,
-                Verb = "runas"
-            });
-            proc?.WaitForExit(120_000);
-            Log.Information("WebView2 bootstrapper exited with code {Code}", proc?.ExitCode);
-        }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "WebView2 runtime install skipped");
         }
     }
 
