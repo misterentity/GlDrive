@@ -62,6 +62,33 @@ public class TvMazeClient : IDisposable
         }
     }
 
+    public async Task<TvMazeNextEpisodeResult?> GetShowWithNextEpisode(int id, CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await _http.GetStringAsync($"shows/{id}?embed=nextepisode", ct);
+            var doc = JsonDocument.Parse(response);
+            var root = doc.RootElement;
+
+            var show = JsonSerializer.Deserialize<TvMazeShow>(response, JsonOptions);
+            if (show == null) return null;
+
+            TvMazeScheduleEpisode? nextEp = null;
+            if (root.TryGetProperty("_embedded", out var embedded) &&
+                embedded.TryGetProperty("nextepisode", out var nextepisode))
+            {
+                nextEp = JsonSerializer.Deserialize<TvMazeScheduleEpisode>(nextepisode.GetRawText(), JsonOptions);
+            }
+
+            return new TvMazeNextEpisodeResult { Show = show, NextEpisode = nextEp };
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "TVMaze get show with next episode failed for id: {Id}", id);
+            return null;
+        }
+    }
+
     public void Dispose() => _http.Dispose();
 }
 
@@ -113,4 +140,10 @@ public class TvMazeNetwork
 {
     public int Id { get; set; }
     public string Name { get; set; } = "";
+}
+
+public class TvMazeNextEpisodeResult
+{
+    public TvMazeShow Show { get; set; } = null!;
+    public TvMazeScheduleEpisode? NextEpisode { get; set; }
 }

@@ -375,8 +375,25 @@
 
                         <!-- TV Schedule -->
                         <DockPanel Grid.Column="0">
-                            <TextBlock DockPanel.Dock="Top" Text="TV Schedule (Next 7 Days)"
-                                       FontWeight="SemiBold" Margin="0,0,0,6"/>
+                            <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                                <TextBlock Text="{Binding TvScheduleHeader}" FontWeight="SemiBold"
+                                           VerticalAlignment="Center"/>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <TextBox Text="{Binding ShowSearchQuery, UpdateSourceTrigger=PropertyChanged}"
+                                             Width="140" VerticalContentAlignment="Center" FontSize="11.5"
+                                             Margin="0,0,4,0">
+                                        <TextBox.InputBindings>
+                                            <KeyBinding Key="Return" Command="{Binding SearchShowScheduleCommand}"/>
+                                        </TextBox.InputBindings>
+                                    </TextBox>
+                                    <Button Content="Search" Command="{Binding SearchShowScheduleCommand}"
+                                            Padding="8,3" FontSize="11" Style="{StaticResource PrimaryButton}"/>
+                                    <Button Content="X" Command="{Binding ClearShowSearchCommand}"
+                                            Padding="6,3" Margin="4,0,0,0" FontSize="11"
+                                            Style="{StaticResource SecondaryButton}"
+                                            Visibility="{Binding IsShowSearchActive, Converter={StaticResource BoolToVisibility}}"/>
+                                </StackPanel>
+                            </DockPanel>
                             <DataGrid ItemsSource="{Binding UpcomingTvEpisodes}"
                                       SelectedItem="{Binding SelectedTvEpisode}"
                                       AutoGenerateColumns="False" IsReadOnly="True"
@@ -385,6 +402,7 @@
                                 <DataGrid.Columns>
                                     <DataGridTextColumn Header="Date" Binding="{Binding DateDisplay}" Width="75"/>
                                     <DataGridTextColumn Header="Show" Binding="{Binding ShowName}" Width="*"/>
+                                    <DataGridTextColumn Header="Network" Binding="{Binding NetworkDisplay}" Width="80"/>
                                     <DataGridTextColumn Header="Episode" Binding="{Binding EpisodeInfo}" Width="140"/>
                                     <DataGridTextColumn Header="Time" Binding="{Binding TimeDisplay}" Width="55"/>
                                 </DataGrid.Columns>
