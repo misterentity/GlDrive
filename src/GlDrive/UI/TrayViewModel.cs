@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Input;
 using GlDrive.Config;
 using GlDrive.Downloads;
+using GlDrive.Irc;
 using GlDrive.Services;
 using Serilog;
 
@@ -74,6 +75,22 @@ public class TrayViewModel : INotifyPropertyChanged
                         break;
                     case MountState.Error:
                         ShowNotification("GlDrive", $"{serverName} connection error");
+                        break;
+                }
+            });
+        };
+
+        _serverManager.IrcStateChanged += (serverId, serverName, state) =>
+        {
+            Application.Current?.Dispatcher.Invoke(() =>
+            {
+                switch (state)
+                {
+                    case IrcServiceState.Connected:
+                        ShowNotification("IRC", $"{serverName} IRC connected");
+                        break;
+                    case IrcServiceState.Disconnected:
+                        ShowNotification("IRC", $"{serverName} IRC disconnected");
                         break;
                 }
             });

@@ -24,6 +24,7 @@ public class DashboardViewModel : INotifyPropertyChanged
     private readonly WishlistStore _wishlistStore;
     private readonly NotificationStore _notificationStore;
     private readonly DownloadHistoryStore _historyStore;
+    private readonly IrcViewModel _ircViewModel;
     private string _searchQuery = "";
     private string _searchStatus = "";
     private bool _isSearching;
@@ -62,6 +63,8 @@ public class DashboardViewModel : INotifyPropertyChanged
     private readonly List<double> _speedHistory = new();
     private PointCollection _speedGraphPoints = new();
     private double _latestSpeed;
+
+    public IrcViewModel Irc => _ircViewModel;
 
     public ObservableCollection<NotificationItemVm> NotificationItems { get; } = new();
     public ObservableCollection<WishlistItemVm> WishlistItems { get; } = new();
@@ -318,6 +321,8 @@ public class DashboardViewModel : INotifyPropertyChanged
 
         _wishlistStore = new WishlistStore();
         _wishlistStore.Load();
+
+        _ircViewModel = new IrcViewModel(serverManager, config);
 
         AddMovieCommand = new RelayCommand(() => AddMedia(MediaType.Movie));
         AddTvShowCommand = new RelayCommand(() => AddMedia(MediaType.TvShow));

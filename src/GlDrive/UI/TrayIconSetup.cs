@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
+using GlDrive.Irc;
 using GlDrive.Services;
 using H.NotifyIcon;
 using H.NotifyIcon.Core;
@@ -48,6 +49,12 @@ public static class TrayIconSetup
                 taskbarIcon.ToolTipText = $"GlDrive v{versionStr} — {vm.StatusText}";
                 taskbarIcon.Icon = CyberpunkIconGenerator.Generate(bestState);
             });
+        };
+
+        // Rebuild menu when IRC state changes
+        vm.ServerManager.IrcStateChanged += (_, _, _) =>
+        {
+            Application.Current?.Dispatcher.Invoke(() => BuildMenu(menu, vm));
         };
 
         // Rebuild menu when an update becomes available
@@ -160,6 +167,22 @@ public static class TrayIconSetup
                         vm.ShowNotification("GlDrive", $"Cache cleared for {serverName}");
                     };
                     serverMenu.Items.Add(refreshItem);
+                }
+
+                // IRC status
+                var ircService = vm.ServerManager.GetIrcService(serverId);
+                if (ircService != null || serverConfig.Irc.Enabled)
+                {
+                    var ircState = ircService?.State ?? IrcServiceState.Disconnected;
+                    var ircLabel = ircState switch
+                    {
+                        IrcServiceState.Connected => "IRC: connected",
+                        IrcServiceState.Connecting => "IRC: connecting...",
+                        IrcServiceState.Reconnecting => "IRC: reconnecting...",
+                        _ => "IRC: disconnected"
+                    };
+                    var ircItem = new MenuItem { Header = ircLabel, IsEnabled = false };
+                    serverMenu.Items.Add(ircItem);
                 }
 
                 menu.Items.Add(serverMenu);
