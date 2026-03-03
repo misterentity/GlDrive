@@ -525,7 +525,7 @@
                                     </DataTemplate>
                                 </ListBox.ItemTemplate>
                                 <ListBox.ContextMenu>
-                                    <ContextMenu DataContext="{Binding DataContext, RelativeSource={RelativeSource Mode=Self, AncestorType=ContextMenu}, Path=PlacementTarget.DataContext}">
+                                    <ContextMenu>
                                         <MenuItem Header="Private Message"
                                                   Command="{Binding PlacementTarget.DataContext.Irc.PrivateMessageNickCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                                                   CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
