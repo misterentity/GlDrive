@@ -1,5 +1,7 @@
 #define MyAppName "GlDrive"
-#define MyAppVersion "1.8.0"
+#ifndef MyAppVersion
+  #define MyAppVersion "0.0.0"
+#endif
 #define MyAppPublisher "GlDrive"
 #define MyAppExeName "GlDrive.exe"
 #define MyAppDescription "Mount a glftpd FTPS server as a Windows drive letter"
@@ -13,7 +15,7 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=output
-OutputBaseFilename=GlDriveSetup
+OutputBaseFilename=GlDriveSetup-v{#MyAppVersion}
 SetupIconFile=..\src\GlDrive\Assets\gldrive.ico
 Compression=lzma2/ultra64
 SolidCompression=yes

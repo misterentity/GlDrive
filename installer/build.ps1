@@ -14,6 +14,15 @@ $CsprojPath = Join-Path $Root 'src\GlDrive\GlDrive.csproj'
 $IssPath = Join-Path $InstallerDir 'GlDrive.iss'
 $OutputDir = Join-Path $InstallerDir 'output'
 
+# --- Read version from csproj ---
+[xml]$Csproj = Get-Content $CsprojPath
+$Version = $Csproj.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+if (-not $Version) {
+    Write-Error "Could not read <Version> from $CsprojPath"
+    exit 1
+}
+Write-Host "Version: $Version" -ForegroundColor Cyan
+
 # Find ISCC.exe
 $IsccPaths = @(
     'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
@@ -78,14 +87,14 @@ or add ISCC.exe to your PATH.
     }
 
     Write-Host "`n=== Building installer with Inno Setup ===" -ForegroundColor Cyan
-    & $Iscc $IssPath
+    & $Iscc /DMyAppVersion=$Version $IssPath
 
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Inno Setup compilation failed with exit code $LASTEXITCODE"
         exit 1
     }
 
-    $installer = Join-Path $OutputDir 'GlDriveSetup.exe'
+    $installer = Join-Path $OutputDir "GlDriveSetup-v$Version.exe"
     if (Test-Path $installer) {
         $sizeMB = [math]::Round((Get-Item $installer).Length / 1MB, 1)
         Write-Host "`nInstaller created: $installer ($sizeMB MB)" -ForegroundColor Green
@@ -94,5 +103,22 @@ or add ISCC.exe to your PATH.
 else {
     Write-Host "`n=== Skipping installer build ===" -ForegroundColor Yellow
 }
+
+# --- Step 4: Create zip for auto-update ---
+Write-Host "`n=== Creating update zip ===" -ForegroundColor Cyan
+
+if (-not (Test-Path $OutputDir)) {
+    New-Item -ItemType Directory -Path $OutputDir | Out-Null
+}
+
+$ZipPath = Join-Path $OutputDir "GlDrive-v$Version-win-x64.zip"
+if (Test-Path $ZipPath) {
+    Remove-Item $ZipPath -Force
+}
+
+Compress-Archive -Path "$PublishDir\*" -DestinationPath $ZipPath -CompressionLevel Optimal
+
+$zipSizeMB = [math]::Round((Get-Item $ZipPath).Length / 1MB, 1)
+Write-Host "Zip created: $ZipPath ($zipSizeMB MB)" -ForegroundColor Green
 
 Write-Host "`n=== Done ===" -ForegroundColor Cyan
