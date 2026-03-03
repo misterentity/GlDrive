@@ -10,8 +10,9 @@
     <ApplicationIcon>Assets\gldrive.ico</ApplicationIcon>
     <AssemblyName>GlDrive</AssemblyName>
     <RootNamespace>GlDrive</RootNamespace>
-    <Version>1.12.0</Version>
+    <Version>1.12.1</Version>
     <Description>Mount a glftpd FTPS server as a Windows drive letter</Description>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
 
   <ItemGroup>
