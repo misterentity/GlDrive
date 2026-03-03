@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Reflection;
@@ -111,85 +112,152 @@ public class UpdateChecker
 
     private void LaunchUpdater(string zipPath)
     {
-        var scriptPath = Path.Combine(Path.GetTempPath(), "gldrive-update.ps1");
-        var exePath = Path.Combine(_installPath, "GlDrive.exe");
-        var logPath = Path.Combine(Path.GetTempPath(), "gldrive-update.log");
-        var extractTemp = Path.Combine(Path.GetTempPath(), "gldrive-update-extract");
+        var extractDir = Path.Combine(Path.GetTempPath(), "gldrive-update-extract");
 
-        // Escape for PowerShell single-quoted strings
-        string Esc(string s) => s.Replace("'", "''");
+        // Clean previous extraction
+        if (Directory.Exists(extractDir))
+            Directory.Delete(extractDir, true);
 
-        var script = string.Join(Environment.NewLine,
-            "# GlDrive auto-updater",
-            $"Start-Transcript -Path '{Esc(logPath)}' -Force",
-            "",
-            "try {",
-            "",
-            "# Wait for GlDrive to exit",
-            "$proc = Get-Process -Name 'GlDrive' -ErrorAction SilentlyContinue",
-            "if ($proc) {",
-            "    Write-Host 'Waiting for GlDrive to exit...'",
-            "    $proc | Wait-Process -Timeout 30 -ErrorAction SilentlyContinue",
-            "    Start-Sleep -Seconds 2",
-            "}",
-            "",
-            "# Extract to temp directory first",
-            $"$extractDir = '{Esc(extractTemp)}'",
-            "if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }",
-            $"Write-Host 'Extracting to temp: ' $extractDir",
-            $"Expand-Archive -Path '{Esc(zipPath)}' -DestinationPath $extractDir -Force",
-            "",
-            "# Detect nested folder — if zip contains a single subfolder with GlDrive.exe, use that",
-            "$sourceDir = $extractDir",
-            "$children = Get-ChildItem $extractDir",
-            "if ($children.Count -eq 1 -and $children[0].PSIsContainer) {",
-            "    $nested = $children[0].FullName",
-            "    if (Test-Path (Join-Path $nested 'GlDrive.exe')) {",
-            "        Write-Host \"Detected nested folder: $nested\"",
-            "        $sourceDir = $nested",
-            "    }",
-            "}",
-            "",
-            "# Verify extraction produced GlDrive.exe",
-            "if (-not (Test-Path (Join-Path $sourceDir 'GlDrive.exe'))) {",
-            "    Write-Error 'Extraction failed — GlDrive.exe not found in extracted files'",
-            "    throw 'Extraction failed'",
-            "}",
-            "",
-            "# Copy extracted files over install directory (robocopy avoids PowerShell Copy-Item nested folder bug)",
-            $"$installDir = '{Esc(_installPath.TrimEnd('\\'))}'",
-            "Write-Host \"Copying files to $installDir\"",
-            "& robocopy \"$sourceDir\" \"$installDir\" /E /R:3 /W:1 /NFL /NDL /NJH /NJS",
-            "if ($LASTEXITCODE -ge 8) { throw \"robocopy failed with exit code $LASTEXITCODE\" }",
-            "",
-            "# Clean up temp",
-            "Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue",
-            $"Remove-Item -Path '{Esc(zipPath)}' -Force -ErrorAction SilentlyContinue",
-            "",
-            "Write-Host 'Update complete, launching GlDrive...'",
-            $"Start-Process '{Esc(exePath)}'",
-            "",
-            "} catch {",
-            "    Write-Error \"Update failed: $_\"",
-            "    Write-Host 'Press any key to exit...'",
-            "    $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')",
-            "} finally {",
-            "    Stop-Transcript",
-            "}"
-        );
+        Log.Information("Extracting update to {Path}", extractDir);
+        ZipFile.ExtractToDirectory(zipPath, extractDir);
 
-        File.WriteAllText(scriptPath, script);
-        Log.Information("Updater script written to {Path}", scriptPath);
+        // Detect nested folder — if zip has single subfolder containing GlDrive.exe, use that
+        var entries = Directory.GetDirectories(extractDir);
+        if (entries.Length == 1 && File.Exists(Path.Combine(entries[0], "GlDrive.exe")))
+        {
+            Log.Information("Detected nested folder: {Path}", entries[0]);
+            extractDir = entries[0];
+        }
+
+        if (!File.Exists(Path.Combine(extractDir, "GlDrive.exe")))
+        {
+            Log.Error("Extraction failed — GlDrive.exe not found in {Path}", extractDir);
+            return;
+        }
+
+        // Clean up the downloaded zip
+        try { File.Delete(zipPath); } catch { /* best effort */ }
+
+        var pid = Environment.ProcessId;
+        var exePath = Path.Combine(extractDir, "GlDrive.exe");
+        var installDir = _installPath.TrimEnd(Path.DirectorySeparatorChar);
+
+        Log.Information("Launching elevated updater: --apply-update {Pid} \"{ExtractDir}\" \"{InstallDir}\"",
+            pid, extractDir, installDir);
 
         Process.Start(new ProcessStartInfo
         {
-            FileName = "powershell",
-            Arguments = $"-ExecutionPolicy Bypass -NoExit -File \"{scriptPath}\"",
+            FileName = exePath,
+            Arguments = $"--apply-update {pid} \"{extractDir}\" \"{installDir}\"",
             Verb = "runas",
             UseShellExecute = true
         });
 
         RestartRequested?.Invoke();
+    }
+
+    public static void ApplyUpdate(int pid, string extractDir, string installDir)
+    {
+        var logPath = Path.Combine(Path.GetTempPath(), "gldrive-update.log");
+        void LogUpdate(string msg)
+        {
+            var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {msg}";
+            try { File.AppendAllText(logPath, line + Environment.NewLine); } catch { /* best effort */ }
+        }
+
+        try
+        {
+            LogUpdate($"ApplyUpdate started — pid={pid}, extractDir={extractDir}, installDir={installDir}");
+
+            // Wait for the original process to exit
+            try
+            {
+                var proc = Process.GetProcessById(pid);
+                LogUpdate($"Waiting for PID {pid} to exit...");
+                proc.WaitForExit(30_000);
+            }
+            catch (ArgumentException)
+            {
+                // Process already exited
+                LogUpdate($"PID {pid} already exited");
+            }
+
+            // Small grace period for file handles to release
+            Thread.Sleep(1000);
+
+            // Rename existing files to .old (Windows allows renaming in-use files)
+            LogUpdate("Renaming existing files to .old");
+            foreach (var file in Directory.EnumerateFiles(installDir, "*", SearchOption.AllDirectories))
+            {
+                // Skip files already named .old
+                if (file.EndsWith(".old", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                try
+                {
+                    File.Move(file, file + ".old", overwrite: true);
+                }
+                catch (Exception ex)
+                {
+                    LogUpdate($"  Warning: could not rename {file}: {ex.Message}");
+                }
+            }
+
+            // Copy new files from extract dir to install dir
+            LogUpdate("Copying new files");
+            foreach (var sourceFile in Directory.EnumerateFiles(extractDir, "*", SearchOption.AllDirectories))
+            {
+                var relativePath = Path.GetRelativePath(extractDir, sourceFile);
+                var destFile = Path.Combine(installDir, relativePath);
+
+                var destDir = Path.GetDirectoryName(destFile)!;
+                if (!Directory.Exists(destDir))
+                    Directory.CreateDirectory(destDir);
+
+                File.Copy(sourceFile, destFile, overwrite: true);
+            }
+
+            // Clean up extract dir
+            LogUpdate("Cleaning up extract directory");
+            try { Directory.Delete(extractDir, true); } catch { /* best effort */ }
+
+            // If extractDir was a nested subfolder, also try to clean the parent temp extract dir
+            var parentExtract = Path.Combine(Path.GetTempPath(), "gldrive-update-extract");
+            if (Directory.Exists(parentExtract))
+                try { Directory.Delete(parentExtract, true); } catch { /* best effort */ }
+
+            // Launch the updated app
+            var newExe = Path.Combine(installDir, "GlDrive.exe");
+            LogUpdate($"Update complete, launching {newExe}");
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = newExe,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            LogUpdate($"Update FAILED: {ex}");
+        }
+
+        Environment.Exit(0);
+    }
+
+    public static void CleanupOldUpdateFiles()
+    {
+        try
+        {
+            var baseDir = AppContext.BaseDirectory;
+            foreach (var file in Directory.EnumerateFiles(baseDir, "*.old", SearchOption.AllDirectories))
+            {
+                try { File.Delete(file); }
+                catch { /* best effort — file may still be locked */ }
+            }
+        }
+        catch
+        {
+            // Non-critical, swallow
+        }
     }
 
     public void StartPeriodicCheck(CancellationToken cancellationToken = default)

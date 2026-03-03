@@ -20,6 +20,22 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // Update applicator mode — runs elevated, replaces files, relaunches, then exits
+        var applyIdx = Array.IndexOf(e.Args, "--apply-update");
+        if (applyIdx >= 0 && e.Args.Length >= applyIdx + 4)
+        {
+            if (int.TryParse(e.Args[applyIdx + 1], out var pid))
+            {
+                UpdateChecker.ApplyUpdate(pid, e.Args[applyIdx + 2], e.Args[applyIdx + 3]);
+                // ApplyUpdate calls Environment.Exit, but just in case:
+                Shutdown();
+                return;
+            }
+        }
+
+        // Clean up .old files from a previous update
+        UpdateChecker.CleanupOldUpdateFiles();
+
         // Screenshot mode — capture all UI windows to PNGs and exit
         if (e.Args.Contains("--screenshots", StringComparer.OrdinalIgnoreCase))
         {
