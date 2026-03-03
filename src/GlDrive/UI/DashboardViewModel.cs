@@ -47,6 +47,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private string _showSearchQuery = "";
     private bool _isShowSearchActive;
     private List<UpcomingTvEpisodeVm>? _cachedTvSchedule;
+    private string _tvTypeFilter = "Scripted";
 
     // PreDB
     private readonly PreDbClient _preDbClient = new();
@@ -209,6 +210,19 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     }
 
     public string TvScheduleHeader => _isShowSearchActive ? "Search Results" : "TV Schedule (Next 7 Days)";
+
+    public string[] TvTypeOptions { get; } = ["Scripted", "Reality", "Documentary", "All"];
+
+    public string TvTypeFilter
+    {
+        get => _tvTypeFilter;
+        set
+        {
+            _tvTypeFilter = value;
+            OnPropertyChanged();
+            ApplyTvTypeFilter();
+        }
+    }
 
     public string[] QualityOptions { get; } = ["Any", "SD", "720p", "1080p", "2160p"];
     public bool HasTmdbKey => !string.IsNullOrEmpty(_config.Downloads.TmdbApiKey);
@@ -749,6 +763,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                         {
                             ShowId = ep.Show!.Id,
                             ShowName = ep.Show.Name,
+                            ShowType = ep.Show.Type ?? "",
                             EpisodeInfo = $"S{ep.Season:D2}E{ep.Number:D2} — {ep.Name}",
                             TimeDisplay = ep.Airtime ?? "",
                             NetworkDisplay = ep.Show.Network?.Name ?? "",
@@ -768,9 +783,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                 _cachedTvSchedule = episodes;
                 IsShowSearchActive = false;
                 ShowSearchQuery = "";
-                UpcomingTvEpisodes.Clear();
-                foreach (var ep in episodes)
-                    UpcomingTvEpisodes.Add(ep);
+                ApplyTvTypeFilter();
 
                 _tvCacheTime = now;
             }
@@ -873,12 +886,21 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     {
         ShowSearchQuery = "";
         IsShowSearchActive = false;
+        ApplyTvTypeFilter();
+    }
+
+    private void ApplyTvTypeFilter()
+    {
+        if (_cachedTvSchedule == null) return;
+
+        var filtered = _tvTypeFilter == "All"
+            ? _cachedTvSchedule
+            : _cachedTvSchedule.Where(e => e.ShowType.Equals(_tvTypeFilter, StringComparison.OrdinalIgnoreCase)).ToList();
+
         UpcomingTvEpisodes.Clear();
-        if (_cachedTvSchedule != null)
-        {
-            foreach (var ep in _cachedTvSchedule)
-                UpcomingTvEpisodes.Add(ep);
-        }
+        foreach (var ep in filtered)
+            UpcomingTvEpisodes.Add(ep);
+
         var tvCount = UpcomingTvEpisodes.Count;
         var movieCount = UpcomingMovies.Count;
         UpcomingStatus = $"{tvCount} episode(s), {movieCount} movie(s)";
@@ -1599,6 +1621,7 @@ public class UpcomingTvEpisodeVm
 {
     public int ShowId { get; set; }
     public string ShowName { get; set; } = "";
+    public string ShowType { get; set; } = "";
     public string EpisodeInfo { get; set; } = "";
     public string TimeDisplay { get; set; } = "";
     public string NetworkDisplay { get; set; } = "";
