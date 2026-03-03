@@ -10,7 +10,7 @@
     <ApplicationIcon>Assets\gldrive.ico</ApplicationIcon>
     <AssemblyName>GlDrive</AssemblyName>
     <RootNamespace>GlDrive</RootNamespace>
-    <Version>1.14.3</Version>
+    <Version>1.15.0</Version>
     <Description>Mount a glftpd FTPS server as a Windows drive letter</Description>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
@@ -28,7 +28,6 @@
     <PackageReference Include="SharpCompress" Version="0.*" />
     <PackageReference Include="System.IO.Hashing" Version="9.*" />
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.*" />
-    <PackageReference Include="Microsoft.Web.WebView2" Version="1.*" />
   </ItemGroup>
 
   <ItemGroup>
