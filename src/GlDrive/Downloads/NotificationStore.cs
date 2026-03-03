@@ -29,37 +29,52 @@ public class NotificationStore
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
+    private readonly object _lock = new();
     private List<NotificationItem> _items = [];
+    private int _pendingSaves;
 
-    public IReadOnlyList<NotificationItem> Items => _items;
+    public IReadOnlyList<NotificationItem> Items
+    {
+        get { lock (_lock) return _items.ToList(); }
+    }
 
     public void Load()
     {
-        if (!File.Exists(FilePath))
+        lock (_lock)
         {
-            _items = [];
-            return;
-        }
+            if (!File.Exists(FilePath))
+            {
+                _items = [];
+                return;
+            }
 
-        try
-        {
-            var json = File.ReadAllText(FilePath);
-            _items = JsonSerializer.Deserialize<List<NotificationItem>>(json, JsonOptions) ?? [];
-        }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "Failed to load notifications, starting empty");
-            _items = [];
+            try
+            {
+                var json = File.ReadAllText(FilePath);
+                _items = JsonSerializer.Deserialize<List<NotificationItem>>(json, JsonOptions) ?? [];
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to load notifications, starting empty");
+                _items = [];
+            }
         }
     }
 
     public void Save()
     {
+        string json;
+        lock (_lock)
+        {
+            json = JsonSerializer.Serialize(_items, JsonOptions);
+        }
+
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            var json = JsonSerializer.Serialize(_items, JsonOptions);
-            File.WriteAllText(FilePath, json);
+            var tmp = FilePath + ".tmp";
+            File.WriteAllText(tmp, json);
+            File.Move(tmp, FilePath, overwrite: true);
         }
         catch (Exception ex)
         {
@@ -69,15 +84,29 @@ public class NotificationStore
 
     public void Add(NotificationItem item)
     {
-        _items.Insert(0, item); // newest first
-        if (_items.Count > MaxItems)
-            _items.RemoveRange(MaxItems, _items.Count - MaxItems);
-        Save();
+        lock (_lock)
+        {
+            _items.Insert(0, item); // newest first
+            if (_items.Count > MaxItems)
+                _items.RemoveRange(MaxItems, _items.Count - MaxItems);
+        }
+        ScheduleSave();
     }
 
     public void Clear()
     {
-        _items.Clear();
+        lock (_lock) _items.Clear();
         Save();
+    }
+
+    private void ScheduleSave()
+    {
+        if (Interlocked.Increment(ref _pendingSaves) > 1) return;
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(500); // debounce rapid adds
+            Interlocked.Exchange(ref _pendingSaves, 0);
+            Save();
+        });
     }
 }
