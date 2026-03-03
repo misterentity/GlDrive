@@ -48,6 +48,14 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private bool _isShowSearchActive;
     private List<UpcomingTvEpisodeVm>? _cachedTvSchedule;
 
+    // PreDB
+    private readonly PreDbClient _preDbClient = new();
+    private string _preDbQuery = "";
+    private string _preDbStatus = "";
+    private bool _isPreDbSearching;
+    private CancellationTokenSource? _preDbCts;
+    private PreDbItemVm? _selectedPreDbItem;
+
     // Notification filter state
     private List<NotificationItemVm> _allNotifications = new();
     private string _notificationFilterText = "";
@@ -77,6 +85,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     public ObservableCollection<UpcomingTvEpisodeVm> UpcomingTvEpisodes { get; } = new();
     public ObservableCollection<UpcomingMovieVm> UpcomingMovies { get; } = new();
     public ObservableCollection<DownloadHistoryItemVm> HistoryItems { get; } = new();
+    public ObservableCollection<PreDbItemVm> PreDbItems { get; } = new();
     public ObservableCollection<string> NotificationCategories { get; } = new() { "All" };
     public ObservableCollection<string> NotificationServers { get; } = new() { "All" };
 
@@ -266,6 +275,31 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(UpcomingPlot));
     }
 
+    // PreDB properties
+    public string PreDbQuery
+    {
+        get => _preDbQuery;
+        set { _preDbQuery = value; OnPropertyChanged(); }
+    }
+
+    public string PreDbStatus
+    {
+        get => _preDbStatus;
+        set { _preDbStatus = value; OnPropertyChanged(); }
+    }
+
+    public bool IsPreDbSearching
+    {
+        get => _isPreDbSearching;
+        set { _isPreDbSearching = value; OnPropertyChanged(); }
+    }
+
+    public PreDbItemVm? SelectedPreDbItem
+    {
+        get => _selectedPreDbItem;
+        set { _selectedPreDbItem = value; OnPropertyChanged(); }
+    }
+
     public string SearchQuery
     {
         get => _searchQuery;
@@ -331,6 +365,9 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     public ICommand ImportWishlistCommand { get; }
     public ICommand SearchShowScheduleCommand { get; }
     public ICommand ClearShowSearchCommand { get; }
+    public ICommand SearchPreDbCommand { get; }
+    public ICommand CancelPreDbSearchCommand { get; }
+    public ICommand LoadLatestPreDbCommand { get; }
 
     public DashboardViewModel(ServerManager serverManager, AppConfig config, NotificationStore notificationStore)
     {
@@ -367,6 +404,9 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         ImportWishlistCommand = new RelayCommand(ImportWishlist);
         SearchShowScheduleCommand = new RelayCommand(async () => await SearchShowSchedule());
         ClearShowSearchCommand = new RelayCommand(ClearShowSearch);
+        SearchPreDbCommand = new RelayCommand(async () => await PerformPreDbSearch());
+        CancelPreDbSearchCommand = new RelayCommand(CancelPreDbSearch);
+        LoadLatestPreDbCommand = new RelayCommand(async () => await LoadLatestPreDb());
 
         // Status bar timer
         _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
@@ -1371,17 +1411,113 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         return $"{speed:F1} {units[i]}";
     }
 
+    // --- PreDB ---
+
+    public async Task LoadLatestPreDb()
+    {
+        if (IsPreDbSearching) return;
+        IsPreDbSearching = true;
+        PreDbStatus = "Loading latest releases...";
+
+        try
+        {
+            _preDbCts?.Cancel();
+            _preDbCts = new CancellationTokenSource();
+            var results = await _preDbClient.GetLatestAsync(ct: _preDbCts.Token);
+            PopulatePreDbItems(results);
+            PreDbStatus = $"{results.Length} releases";
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            PreDbStatus = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            IsPreDbSearching = false;
+        }
+    }
+
+    private async Task PerformPreDbSearch()
+    {
+        if (string.IsNullOrWhiteSpace(_preDbQuery)) return;
+        IsPreDbSearching = true;
+        PreDbStatus = $"Searching \"{_preDbQuery}\"...";
+
+        try
+        {
+            _preDbCts?.Cancel();
+            _preDbCts = new CancellationTokenSource();
+            var results = await _preDbClient.SearchAsync(_preDbQuery, ct: _preDbCts.Token);
+            PopulatePreDbItems(results);
+            PreDbStatus = $"{results.Length} results for \"{_preDbQuery}\"";
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            PreDbStatus = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            IsPreDbSearching = false;
+        }
+    }
+
+    private void CancelPreDbSearch()
+    {
+        _preDbCts?.Cancel();
+        IsPreDbSearching = false;
+        PreDbStatus = "Cancelled";
+    }
+
+    private void PopulatePreDbItems(PreDbRelease[] releases)
+    {
+        PreDbItems.Clear();
+        foreach (var r in releases)
+        {
+            PreDbItems.Add(new PreDbItemVm
+            {
+                Name = r.Name,
+                Team = r.Team,
+                Category = r.Cat,
+                Genre = r.Genre,
+                Size = r.SizeFormatted,
+                Files = r.Files > 0 ? r.Files.ToString() : "",
+                Time = r.PreTime.ToString("g"),
+                IsNuked = r.Nuke != null,
+                NukeReason = r.Nuke?.Reason ?? ""
+            });
+        }
+    }
+
     public void Dispose()
     {
         _statusTimer?.Stop();
         _searchCts?.Cancel();
         _searchCts?.Dispose();
         _searchCts = null;
+        _preDbCts?.Cancel();
+        _preDbCts?.Dispose();
+        _preDbCts = null;
+        _preDbClient.Dispose();
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
     protected void OnPropertyChanged([CallerMemberName] string? name = null) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+}
+
+public class PreDbItemVm
+{
+    public string Name { get; set; } = "";
+    public string Team { get; set; } = "";
+    public string Category { get; set; } = "";
+    public string Genre { get; set; } = "";
+    public string Size { get; set; } = "";
+    public string Files { get; set; } = "";
+    public string Time { get; set; } = "";
+    public bool IsNuked { get; set; }
+    public string NukeReason { get; set; } = "";
 }
 
 public class WishlistItemVm
