@@ -85,13 +85,15 @@ public static class FishCipher
         Buffer.BlockCopy(iv, 0, withIv, 0, 8);
         Buffer.BlockCopy(output, 0, withIv, 8, output.Length);
 
-        return CbcPrefix + FishBase64.Encode(withIv);
+        // FiSH CBC uses standard base64, not FiSH base64
+        return CbcPrefix + Convert.ToBase64String(withIv);
     }
 
     public static string DecryptCbc(string encoded, string key)
     {
         var keyBytes = Encoding.UTF8.GetBytes(key);
-        var data = FishBase64.Decode(encoded);
+        // FiSH CBC uses standard base64, not FiSH base64
+        var data = Convert.FromBase64String(encoded);
 
         // First 8 bytes are IV
         var iv = data[..8];
