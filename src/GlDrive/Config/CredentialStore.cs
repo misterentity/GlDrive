@@ -85,4 +85,49 @@ public static class CredentialStore
             Log.Warning(ex, "Failed to delete credential");
         }
     }
+
+    private static string GetIrcTargetName(string host, int port, string nick) =>
+        $"GlDrive:irc:{host}:{port}:{nick}";
+
+    public static string? GetIrcPassword(string host, int port, string nick)
+    {
+        var target = GetIrcTargetName(host, port, nick);
+        try
+        {
+            var cred = CredentialManager.ReadCredential(target);
+            return cred?.Password;
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to read IRC credential");
+            return null;
+        }
+    }
+
+    public static void SaveIrcPassword(string host, int port, string nick, string password)
+    {
+        var target = GetIrcTargetName(host, port, nick);
+        try
+        {
+            CredentialManager.WriteCredential(target, nick, password, CredentialPersistence.LocalMachine);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Failed to save IRC credential");
+            throw;
+        }
+    }
+
+    public static void DeleteIrcPassword(string host, int port, string nick)
+    {
+        var target = GetIrcTargetName(host, port, nick);
+        try
+        {
+            CredentialManager.DeleteCredential(target);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to delete IRC credential");
+        }
+    }
 }

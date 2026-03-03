@@ -179,6 +179,49 @@
 
                 <Separator Margin="0,4,0,12"/>
 
+                <!-- IRC Settings -->
+                <TextBlock Text="IRC" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                <CheckBox x:Name="IrcEnabledBox" Content="Enable IRC client" Margin="0,0,0,8"/>
+                <Grid Margin="0,0,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="100"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                        <TextBlock Text="IRC Host:" Margin="0,0,0,2"/>
+                        <TextBox x:Name="IrcHostBox"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Text="Port:" Margin="0,0,0,2"/>
+                        <TextBox x:Name="IrcPortBox" Text="6697"/>
+                    </StackPanel>
+                </Grid>
+                <CheckBox x:Name="IrcUseTlsBox" Content="Use TLS" IsChecked="True" Margin="0,0,0,8"/>
+                <Grid Margin="0,0,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                        <TextBlock Text="Nickname:" Margin="0,0,0,2"/>
+                        <TextBox x:Name="IrcNickBox"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Text="Alt Nickname:" Margin="0,0,0,2"/>
+                        <TextBox x:Name="IrcAltNickBox"/>
+                    </StackPanel>
+                </Grid>
+                <TextBlock Text="Server Password (optional):" Margin="0,0,0,2"/>
+                <PasswordBox x:Name="IrcPasswordBox" Margin="0,0,0,8"/>
+                <TextBlock Text="Channels (one per line: #channel [key]):" Margin="0,0,0,2"/>
+                <TextBox x:Name="IrcChannelsBox" AcceptsReturn="True" TextWrapping="Wrap"
+                         Height="60" VerticalScrollBarVisibility="Auto" Margin="0,0,0,8"
+                         ToolTip="e.g. #channel&#x0a;#secret mykey"/>
+                <CheckBox x:Name="IrcAutoConnectBox" Content="Auto-connect with server" Margin="0,0,0,4"/>
+                <CheckBox x:Name="IrcFishEnabledBox" Content="Enable FiSH encryption" Margin="0,0,0,8"/>
+
+                <Separator Margin="0,4,0,12"/>
+
                 <Button Content="Test Connection" Click="TestConnection_Click"
                         HorizontalAlignment="Left" Padding="16,6"/>
                 <TextBlock x:Name="TestResultText" Margin="0,8,0,0" TextWrapping="Wrap"/>

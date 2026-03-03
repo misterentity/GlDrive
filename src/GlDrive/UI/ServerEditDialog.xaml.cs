@@ -93,6 +93,25 @@ public partial class ServerEditDialog : Window
             SearchMethodBox.SelectedIndex = (int)existing.Search.Method;
             IndexCacheMinutesBox.Text = existing.Search.IndexCacheMinutes.ToString();
 
+            // IRC
+            IrcEnabledBox.IsChecked = existing.Irc.Enabled;
+            IrcHostBox.Text = existing.Irc.Host;
+            IrcPortBox.Text = existing.Irc.Port.ToString();
+            IrcUseTlsBox.IsChecked = existing.Irc.UseTls;
+            IrcNickBox.Text = existing.Irc.Nick;
+            IrcAltNickBox.Text = existing.Irc.AltNick;
+            IrcAutoConnectBox.IsChecked = existing.Irc.AutoConnect;
+            IrcFishEnabledBox.IsChecked = existing.Irc.FishEnabled;
+            IrcChannelsBox.Text = string.Join("\n", existing.Irc.Channels.Select(c =>
+                string.IsNullOrEmpty(c.Key) ? c.Name : $"{c.Name} {c.Key}"));
+
+            if (!string.IsNullOrEmpty(existing.Irc.Host) && !string.IsNullOrEmpty(existing.Irc.Nick))
+            {
+                var ircPw = CredentialStore.GetIrcPassword(existing.Irc.Host, existing.Irc.Port, existing.Irc.Nick);
+                if (!string.IsNullOrEmpty(ircPw))
+                    IrcPasswordBox.Password = ircPw;
+            }
+
             // Load stored password hint
             var storedPw = CredentialStore.GetPassword(existing.Connection.Host, existing.Connection.Port, existing.Connection.Username);
             if (!string.IsNullOrEmpty(storedPw))
@@ -239,6 +258,39 @@ public partial class ServerEditDialog : Window
         _serverConfig.Search.MaxDepth = int.TryParse(SearchMaxDepthBox.Text, out var md) ? Math.Clamp(md, 1, 10) : 2;
         _serverConfig.Search.Method = (SearchMethod)(SearchMethodBox.SelectedIndex >= 0 ? SearchMethodBox.SelectedIndex : 0);
         _serverConfig.Search.IndexCacheMinutes = int.TryParse(IndexCacheMinutesBox.Text, out var icm) ? Math.Clamp(icm, 1, 1440) : 60;
+
+        // IRC
+        _serverConfig.Irc.Enabled = IrcEnabledBox.IsChecked == true;
+        _serverConfig.Irc.Host = IrcHostBox.Text ?? "";
+        _serverConfig.Irc.Port = int.TryParse(IrcPortBox.Text, out var ircPort) ? Math.Clamp(ircPort, 1, 65535) : 6697;
+        _serverConfig.Irc.UseTls = IrcUseTlsBox.IsChecked == true;
+        _serverConfig.Irc.Nick = IrcNickBox.Text ?? "";
+        _serverConfig.Irc.AltNick = IrcAltNickBox.Text ?? "";
+        _serverConfig.Irc.AutoConnect = IrcAutoConnectBox.IsChecked == true;
+        _serverConfig.Irc.FishEnabled = IrcFishEnabledBox.IsChecked == true;
+
+        // Parse channels
+        _serverConfig.Irc.Channels = (IrcChannelsBox.Text ?? "")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(l => l.Length > 0)
+            .Select(line =>
+            {
+                var parts = line.Split(' ', 2);
+                return new IrcChannelConfig
+                {
+                    Name = parts[0],
+                    Key = parts.Length > 1 ? parts[1] : "",
+                    AutoJoin = true
+                };
+            }).ToList();
+
+        // Save IRC password
+        if (!string.IsNullOrEmpty(IrcPasswordBox.Password) && !string.IsNullOrEmpty(_serverConfig.Irc.Host)
+            && !string.IsNullOrEmpty(_serverConfig.Irc.Nick))
+        {
+            CredentialStore.SaveIrcPassword(_serverConfig.Irc.Host, _serverConfig.Irc.Port,
+                _serverConfig.Irc.Nick, IrcPasswordBox.Password);
+        }
 
         // Save password
         _password = PasswordBox.Password;

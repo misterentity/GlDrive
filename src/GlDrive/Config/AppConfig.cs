@@ -19,6 +19,7 @@ public class ServerConfig
     public PoolConfig Pool { get; set; } = new();
     public NotificationConfig Notifications { get; set; } = new();
     public SearchConfig Search { get; set; } = new();
+    public IrcConfig Irc { get; set; } = new();
     public int SpeedLimitKbps { get; set; }
 }
 
