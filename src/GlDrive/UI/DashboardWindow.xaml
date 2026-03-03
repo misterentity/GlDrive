@@ -2,6 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ui="clr-namespace:GlDrive.UI"
+        xmlns:wpf="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
         Title="GlDrive Dashboard" Width="960" Height="660"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource BackgroundBrush}"
@@ -419,6 +420,119 @@
                     </Grid>
                 </DockPanel>
             </TabItem>
+
+            <!-- IRC Tab -->
+            <TabItem Header="IRC">
+                <DockPanel Margin="0">
+                    <!-- Topic bar -->
+                    <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
+                            BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
+                            Padding="8,4">
+                        <TextBlock Text="{Binding Irc.TopicText}" TextTrimming="CharacterEllipsis"
+                                   Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"/>
+                    </Border>
+
+                    <!-- Input bar -->
+                    <DockPanel DockPanel.Dock="Bottom" Margin="0">
+                        <Border Background="{DynamicResource SurfaceBrush}"
+                                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0"
+                                Padding="8,6">
+                            <DockPanel>
+                                <Button DockPanel.Dock="Right" Content="Send" Command="{Binding Irc.SendCommand}"
+                                        Padding="16,6" Margin="6,0,0,0" Style="{StaticResource PrimaryButton}"/>
+                                <TextBox Text="{Binding Irc.InputText, UpdateSourceTrigger=PropertyChanged}"
+                                         VerticalContentAlignment="Center" x:Name="IrcInputBox">
+                                    <TextBox.InputBindings>
+                                        <KeyBinding Key="Return" Command="{Binding Irc.SendCommand}"/>
+                                    </TextBox.InputBindings>
+                                </TextBox>
+                            </DockPanel>
+                        </Border>
+                    </DockPanel>
+
+                    <!-- Main 3-column layout -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="160"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="140"/>
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Channel sidebar -->
+                        <Border Grid.Column="0" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,1,0">
+                            <ListBox ItemsSource="{Binding Irc.Channels}"
+                                     SelectedItem="{Binding Irc.SelectedChannel}"
+                                     Background="Transparent" BorderThickness="0">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#x1F512;" FontSize="10" Margin="0,0,4,0"
+                                                       Visibility="{Binding HasFishKey, Converter={StaticResource BoolToVisibility}}"/>
+                                            <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ForegroundBrush}"/>
+                                            <TextBlock Text="{Binding UnreadDisplay}" Foreground="{DynamicResource AccentBrush}"
+                                                       FontWeight="Bold"/>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </Border>
+
+                        <!-- Message area -->
+                        <ListBox Grid.Column="1" ItemsSource="{Binding Irc.Messages}"
+                                 x:Name="IrcMessageList"
+                                 Background="Transparent" BorderThickness="0"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 VirtualizingPanel.ScrollUnit="Pixel">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal" Margin="4,1">
+                                        <TextBlock Text="{Binding Timestamp}" Foreground="{DynamicResource ForegroundDimBrush}"
+                                                   FontSize="11" Margin="0,0,6,0" FontFamily="Consolas"/>
+                                        <TextBlock Text="&#x1F512;" FontSize="9" Margin="0,0,3,0"
+                                                   Visibility="{Binding WasEncrypted, Converter={StaticResource BoolToVisibility}}"/>
+                                        <TextBlock Text="{Binding FormattedLine}" TextWrapping="Wrap"
+                                                   Foreground="{Binding NickColor}" FontFamily="Consolas" FontSize="12.5">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsSystemMessage}" Value="True">
+                                                            <Setter Property="Foreground" Value="{DynamicResource ForegroundDimBrush}"/>
+                                                            <Setter Property="FontStyle" Value="Italic"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+
+                        <!-- Nick list -->
+                        <Border Grid.Column="2" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1,0,0,0">
+                            <ListBox ItemsSource="{Binding Irc.NickList}"
+                                     Background="Transparent" BorderThickness="0" FontSize="12">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding}" Foreground="{DynamicResource ForegroundBrush}"/>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                                <ListBox.ContextMenu>
+                                    <ContextMenu>
+                                        <MenuItem Header="Private Message"/>
+                                        <MenuItem Header="FiSH Key Exchange"/>
+                                    </ContextMenu>
+                                </ListBox.ContextMenu>
+                            </ListBox>
+                        </Border>
+                    </Grid>
+                </DockPanel>
+            </TabItem>
+
+            <!-- PreDB Tab -->
+            <TabItem Header="PreDB">
+                <wpf:WebView2 x:Name="PreDbBrowser"/>
+            </TabItem>
         </TabControl>
 
         <!-- Status Bar -->
@@ -432,6 +546,8 @@
                            Margin="0,0,20,0" FontSize="12"/>
                 <TextBlock Text="{Binding StatusBarDiskSpace}" Foreground="{DynamicResource ForegroundDimBrush}"
                            FontSize="12"/>
+                <TextBlock Text="{Binding Irc.StatusText}" Foreground="{DynamicResource ForegroundDimBrush}"
+                           Margin="20,0,0,0" FontSize="12"/>
             </StackPanel>
         </Border>
     </Grid>

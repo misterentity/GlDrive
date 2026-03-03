@@ -10,12 +10,21 @@ namespace GlDrive.UI;
 public partial class DashboardWindow : Window
 {
     private bool _upcomingLoaded;
+    private bool _preDbLoaded;
     private Point _dragStartPoint;
 
     public DashboardWindow(ServerManager serverManager, AppConfig config, NotificationStore notificationStore)
     {
         InitializeComponent();
-        DataContext = new DashboardViewModel(serverManager, config, notificationStore);
+        var vm = new DashboardViewModel(serverManager, config, notificationStore);
+        DataContext = vm;
+
+        // Auto-scroll IRC messages
+        vm.Irc.ScrollToBottom += () =>
+        {
+            if (IrcMessageList.Items.Count > 0)
+                IrcMessageList.ScrollIntoView(IrcMessageList.Items[^1]);
+        };
     }
 
     protected override void OnContentRendered(EventArgs e)
@@ -33,11 +42,19 @@ public partial class DashboardWindow : Window
     {
         if (e.Source is not TabControl tc) return;
         if (tc.SelectedItem is not TabItem tab) return;
-        if (tab.Header?.ToString() != "Upcoming" || _upcomingLoaded) return;
+        var header = tab.Header?.ToString();
 
-        _upcomingLoaded = true;
-        if (DataContext is DashboardViewModel vm)
-            await vm.LoadUpcoming();
+        if (header == "Upcoming" && !_upcomingLoaded)
+        {
+            _upcomingLoaded = true;
+            if (DataContext is DashboardViewModel vm)
+                await vm.LoadUpcoming();
+        }
+        else if (header == "PreDB" && !_preDbLoaded)
+        {
+            _preDbLoaded = true;
+            PreDbBrowser.Source = new Uri("https://predb.me/");
+        }
     }
 
     // Drag-and-drop: record start point
