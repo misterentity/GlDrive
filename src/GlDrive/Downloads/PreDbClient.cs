@@ -16,7 +16,7 @@ public class PreDbClient : IDisposable
 
     public PreDbClient()
     {
-        _http = new HttpClient { BaseAddress = new Uri("https://predb.ovh/api/v1/") };
+        _http = new HttpClient { BaseAddress = new Uri("https://api.predb.net/") };
         var version = typeof(PreDbClient).Assembly.GetName().Version;
         _http.DefaultRequestHeaders.UserAgent.ParseAdd($"GlDrive/{version}");
     }
@@ -28,7 +28,7 @@ public class PreDbClient : IDisposable
             var url = $"?q={Uri.EscapeDataString(query)}&count={count}&page={page}";
             var json = await _http.GetStringAsync(url, ct);
             var resp = JsonSerializer.Deserialize<PreDbResponse>(json, JsonOptions);
-            return resp?.Data?.Rows ?? [];
+            return resp?.Data ?? [];
         }
         catch (Exception ex)
         {
@@ -44,7 +44,7 @@ public class PreDbClient : IDisposable
             var url = $"?count={count}";
             var json = await _http.GetStringAsync(url, ct);
             var resp = JsonSerializer.Deserialize<PreDbResponse>(json, JsonOptions);
-            return resp?.Data?.Rows ?? [];
+            return resp?.Data ?? [];
         }
         catch (Exception ex)
         {
@@ -59,46 +59,36 @@ public class PreDbClient : IDisposable
 public class PreDbResponse
 {
     public string Status { get; set; } = "";
-    public PreDbData? Data { get; set; }
-}
-
-public class PreDbData
-{
-    [JsonPropertyName("rowCount")]
-    public int Total { get; set; }
-    public PreDbRelease[] Rows { get; set; } = [];
+    public int Results { get; set; }
+    public PreDbRelease[] Data { get; set; } = [];
 }
 
 public class PreDbRelease
 {
     public int Id { get; set; }
-    public string Name { get; set; } = "";
-    public string Team { get; set; } = "";
-    public string Cat { get; set; } = "";
+    public string Release { get; set; } = "";
+    public string Group { get; set; } = "";
+    public string Section { get; set; } = "";
     public string Genre { get; set; } = "";
     public double Size { get; set; }
     public int Files { get; set; }
+    [JsonPropertyName("pretime")]
     public long PreAt { get; set; }
-    public PreDbNuke? Nuke { get; set; }
+    public int Status { get; set; }
+    public string Reason { get; set; } = "";
 
     public DateTime PreTime => DateTimeOffset.FromUnixTimeSeconds(PreAt).LocalDateTime;
+    public bool IsNuked => Status == 3;
 
     public string SizeFormatted
     {
         get
         {
             if (Size <= 0) return "";
-            double kb = Size;
-            if (kb < 1024) return $"{kb:F0} KB";
-            double mb = kb / 1024;
+            double mb = Size;
             if (mb < 1024) return $"{mb:F1} MB";
             double gb = mb / 1024;
             return $"{gb:F2} GB";
         }
     }
-}
-
-public class PreDbNuke
-{
-    public string Reason { get; set; } = "";
 }
