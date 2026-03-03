@@ -47,7 +47,7 @@ if (Test-Path $InstallerExe) {
     $assets += $InstallerExe
     Write-Host "Installer: $InstallerExe" -ForegroundColor Green
 } else {
-    Write-Warning "Installer not found at $InstallerExe — releasing zip only"
+    Write-Warning "Installer not found at $InstallerExe - releasing zip only"
 }
 
 if (Test-Path $ZipFile) {
