@@ -67,18 +67,21 @@ public partial class DashboardWindow : Window
         if (e.Source is not TabControl tc) return;
         if (tc.SelectedItem is not TabItem tab) return;
         var header = tab.Header?.ToString();
+        var vm = DataContext as DashboardViewModel;
 
         if (header == "Upcoming" && !_upcomingLoaded)
         {
             _upcomingLoaded = true;
-            if (DataContext is DashboardViewModel vm)
-                await vm.LoadUpcoming();
+            if (vm != null) await vm.LoadUpcoming();
         }
-        else if (header == "PreDB" && !_preDbLoaded)
+
+        if (vm != null)
+            vm.IsPreDbTabActive = header == "PreDB";
+
+        if (header == "PreDB" && !_preDbLoaded)
         {
             _preDbLoaded = true;
-            if (DataContext is DashboardViewModel vm)
-                _ = vm.LoadLatestPreDb();
+            if (vm != null) _ = vm.LoadLatestPreDb();
         }
     }
 

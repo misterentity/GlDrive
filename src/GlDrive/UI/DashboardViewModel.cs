@@ -55,6 +55,8 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private bool _isPreDbSearching;
     private CancellationTokenSource? _preDbCts;
     private PreDbItemVm? _selectedPreDbItem;
+    private bool _isPreDbTabActive;
+    private DispatcherTimer? _preDbRefreshTimer;
 
     // Notification filter state
     private List<NotificationItemVm> _allNotifications = new();
@@ -300,6 +302,19 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         set { _selectedPreDbItem = value; OnPropertyChanged(); }
     }
 
+    public bool IsPreDbTabActive
+    {
+        get => _isPreDbTabActive;
+        set
+        {
+            _isPreDbTabActive = value;
+            if (value)
+                _preDbRefreshTimer?.Start();
+            else
+                _preDbRefreshTimer?.Stop();
+        }
+    }
+
     public string SearchQuery
     {
         get => _searchQuery;
@@ -412,6 +427,14 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _statusTimer.Tick += (_, _) => UpdateStatusBar();
         _statusTimer.Start();
+
+        // PreDB auto-refresh (30s, only ticks while tab is active)
+        _preDbRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+        _preDbRefreshTimer.Tick += async (_, _) =>
+        {
+            if (!_isPreDbSearching && string.IsNullOrWhiteSpace(_preDbQuery))
+                await LoadLatestPreDb();
+        };
 
         RefreshNotifications();
         RefreshWishlist();
@@ -1493,6 +1516,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     public void Dispose()
     {
         _statusTimer?.Stop();
+        _preDbRefreshTimer?.Stop();
         _searchCts?.Cancel();
         _searchCts?.Dispose();
         _searchCts = null;
