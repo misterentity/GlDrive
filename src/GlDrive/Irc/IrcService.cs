@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using GlDrive.Config;
 using GlDrive.Tls;
 using Serilog;
@@ -96,7 +97,12 @@ public class IrcService : IDisposable
                 var tcs = new TaskCompletionSource();
                 using var reg = ct.Register(() => tcs.TrySetCanceled());
                 if (_client != null)
+                {
                     _client.Disconnected += _ => tcs.TrySetResult();
+                    // If ReadLoop already fired Disconnected before we attached, unblock now
+                    if (!_client.IsConnected)
+                        tcs.TrySetResult();
+                }
 
                 await tcs.Task;
 
@@ -220,7 +226,7 @@ public class IrcService : IDisposable
             default:
                 // Show unhandled server messages (MOTD, errors, info, etc.)
                 if (!string.IsNullOrEmpty(msg.Trailing))
-                    AddSystemMessage("*", msg.Trailing);
+                    AddSystemMessage("*", StripFormatting(msg.Trailing));
                 break;
         }
     }
@@ -235,7 +241,7 @@ public class IrcService : IDisposable
         // CTCP ACTION
         if (text.StartsWith("\x01ACTION ") && text.EndsWith('\x01'))
         {
-            var action = text[8..^1];
+            var action = StripFormatting(text[8..^1]);
             var displayTarget = IsChannel(target) ? target : nick;
             AddMessage(displayTarget, new IrcMessageItem { Nick = nick, Text = action, Type = IrcMessageType.Action });
             return;
@@ -257,7 +263,7 @@ public class IrcService : IDisposable
             }
         }
 
-        AddMessage(effectiveTarget, new IrcMessageItem { Nick = nick, Text = text, WasEncrypted = wasEncrypted });
+        AddMessage(effectiveTarget, new IrcMessageItem { Nick = nick, Text = StripFormatting(text), WasEncrypted = wasEncrypted });
     }
 
     private void HandleNotice(IrcMessage msg)
@@ -295,6 +301,7 @@ public class IrcService : IDisposable
             }
         }
 
+        text = StripFormatting(text);
         if (string.IsNullOrEmpty(nick))
             AddSystemMessage("*", text);
         else
@@ -696,6 +703,12 @@ public class IrcService : IDisposable
         }
         return ch;
     }
+
+    private static readonly Regex MircFormatRegex = new(
+        @"\x03(\d{1,2}(,\d{1,2})?)?|\x02|\x1D|\x1F|\x16|\x0F|\x1E",
+        RegexOptions.Compiled);
+
+    private static string StripFormatting(string text) => MircFormatRegex.Replace(text, "");
 
     private static bool IsChannel(string target) =>
         target.Length > 0 && (target[0] == '#' || target[0] == '&' || target[0] == '!' || target[0] == '+');
