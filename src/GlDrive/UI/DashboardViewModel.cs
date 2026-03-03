@@ -43,6 +43,9 @@ public class DashboardViewModel : INotifyPropertyChanged
     private string _upcomingStatus = "";
     private DateTime _tvCacheTime;
     private DateTime _movieCacheTime;
+    private string _showSearchQuery = "";
+    private bool _isShowSearchActive;
+    private List<UpcomingTvEpisodeVm>? _cachedTvSchedule;
 
     // Notification filter state
     private List<NotificationItemVm> _allNotifications = new();
@@ -181,6 +184,20 @@ public class DashboardViewModel : INotifyPropertyChanged
         set { _upcomingStatus = value; OnPropertyChanged(); }
     }
 
+    public string ShowSearchQuery
+    {
+        get => _showSearchQuery;
+        set { _showSearchQuery = value; OnPropertyChanged(); }
+    }
+
+    public bool IsShowSearchActive
+    {
+        get => _isShowSearchActive;
+        set { _isShowSearchActive = value; OnPropertyChanged(); OnPropertyChanged(nameof(TvScheduleHeader)); }
+    }
+
+    public string TvScheduleHeader => _isShowSearchActive ? "Search Results" : "TV Schedule (Next 7 Days)";
+
     public string[] QualityOptions { get; } = ["Any", "SD", "720p", "1080p", "2160p"];
     public bool HasTmdbKey => !string.IsNullOrEmpty(_config.Downloads.TmdbApiKey);
     public bool HasNoTmdbKey => string.IsNullOrEmpty(_config.Downloads.TmdbApiKey);
@@ -311,6 +328,8 @@ public class DashboardViewModel : INotifyPropertyChanged
     public ICommand OpenFolderCommand { get; }
     public ICommand ExportWishlistCommand { get; }
     public ICommand ImportWishlistCommand { get; }
+    public ICommand SearchShowScheduleCommand { get; }
+    public ICommand ClearShowSearchCommand { get; }
 
     public DashboardViewModel(ServerManager serverManager, AppConfig config, NotificationStore notificationStore)
     {
@@ -345,6 +364,8 @@ public class DashboardViewModel : INotifyPropertyChanged
         OpenFolderCommand = new RelayCommand(OpenFolder);
         ExportWishlistCommand = new RelayCommand(ExportWishlist);
         ImportWishlistCommand = new RelayCommand(ImportWishlist);
+        SearchShowScheduleCommand = new RelayCommand(async () => await SearchShowSchedule());
+        ClearShowSearchCommand = new RelayCommand(ClearShowSearch);
 
         // Status bar timer
         _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
@@ -680,6 +701,9 @@ public class DashboardViewModel : INotifyPropertyChanged
                     if (d < 6) await Task.Delay(600); // Rate limit: 20 req/10s
                 }
 
+                _cachedTvSchedule = episodes;
+                IsShowSearchActive = false;
+                ShowSearchQuery = "";
                 UpcomingTvEpisodes.Clear();
                 foreach (var ep in episodes)
                     UpcomingTvEpisodes.Add(ep);
@@ -723,6 +747,77 @@ public class DashboardViewModel : INotifyPropertyChanged
             UpcomingStatus = $"Error: {ex.Message}";
             Log.Error(ex, "Failed to load upcoming data");
         }
+    }
+
+    private async Task SearchShowSchedule()
+    {
+        var query = _showSearchQuery?.Trim();
+        if (string.IsNullOrEmpty(query)) return;
+
+        UpcomingStatus = "Searching...";
+
+        try
+        {
+            using var tvMaze = new TvMazeClient();
+            var shows = await tvMaze.Search(query);
+            var results = new List<UpcomingTvEpisodeVm>();
+
+            foreach (var show in shows.Take(10))
+            {
+                var result = await tvMaze.GetShowWithNextEpisode(show.Id);
+                if (result == null) continue;
+
+                var ep = result.NextEpisode;
+                results.Add(new UpcomingTvEpisodeVm
+                {
+                    ShowId = result.Show.Id,
+                    ShowName = result.Show.Name,
+                    EpisodeInfo = ep != null
+                        ? $"S{ep.Season:D2}E{ep.Number:D2} — {ep.Name}"
+                        : "No upcoming episodes",
+                    TimeDisplay = ep?.Airtime ?? "",
+                    NetworkDisplay = result.Show.Network?.Name ?? "",
+                    DateDisplay = ep?.Airdate is { } ad && DateOnly.TryParse(ad, out var d)
+                        ? d.ToString("ddd M/d") : "",
+                    AirDate = ep?.Airdate is { } ad2 && DateOnly.TryParse(ad2, out var d2)
+                        ? d2 : default,
+                    PosterUrl = result.Show.Image?.Medium,
+                    Plot = StripHtml(result.Show.Summary),
+                    Rating = result.Show.Rating?.Average?.ToString("F1"),
+                    Genres = result.Show.Genres != null ? string.Join(", ", result.Show.Genres) : "",
+                    TvMazeId = result.Show.Id
+                });
+
+                await Task.Delay(300); // Rate limit
+            }
+
+            IsShowSearchActive = true;
+            UpcomingTvEpisodes.Clear();
+            foreach (var r in results)
+                UpcomingTvEpisodes.Add(r);
+
+            UpcomingStatus = $"{results.Count} show(s) found";
+        }
+        catch (Exception ex)
+        {
+            UpcomingStatus = $"Search error: {ex.Message}";
+            Log.Error(ex, "TV show search failed for: {Query}", query);
+        }
+    }
+
+    private void ClearShowSearch()
+    {
+        ShowSearchQuery = "";
+        IsShowSearchActive = false;
+        UpcomingTvEpisodes.Clear();
+        if (_cachedTvSchedule != null)
+        {
+            foreach (var ep in _cachedTvSchedule)
+                UpcomingTvEpisodes.Add(ep);
+        }
+        var tvCount = UpcomingTvEpisodes.Count;
+        var movieCount = UpcomingMovies.Count;
+        UpcomingStatus = $"{tvCount} episode(s), {movieCount} movie(s)";
     }
 
     private async Task AddUpcomingToWishlist()
