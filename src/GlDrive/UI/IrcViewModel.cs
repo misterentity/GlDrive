@@ -230,6 +230,18 @@ public class IrcViewModel : INotifyPropertyChanged
 
         irc.StateChanged += state =>
             Application.Current?.Dispatcher.Invoke(UpdateStatus);
+
+        // Hydrate sidebar with existing channels if IRC already connected
+        // (Dashboard opened after IRC was up)
+        if (irc.State == IrcServiceState.Connected)
+        {
+            EnsureChannelVm(irc.ServerId, irc.ServerName, "*");
+            foreach (var (name, ch) in irc.Channels)
+            {
+                var vm = EnsureChannelVm(irc.ServerId, irc.ServerName, name);
+                vm.HasFishKey = ch.HasFishKey;
+            }
+        }
     }
 
     private void OnIrcMessage(string serverId, string serverName, string target, IrcMessageItem item)
