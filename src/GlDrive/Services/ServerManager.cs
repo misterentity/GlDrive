@@ -156,6 +156,17 @@ public class ServerManager : IDisposable
         ircService.StateChanged += state =>
             IrcStateChanged?.Invoke(serverConfig.Id, serverConfig.Name, state);
 
+        // Wire up SITE INVITE via the FTP connection pool
+        ircService.SiteInviteFunc = async (nick, ct) =>
+        {
+            if (!_servers.TryGetValue(serverConfig.Id, out var mountService) || mountService.Pool == null)
+                return "SITE INVITE skipped: server not mounted";
+
+            await using var conn = await mountService.Pool.Borrow(ct);
+            var reply = await conn.Client.Execute($"SITE INVITE {nick}", ct);
+            return reply.Message;
+        };
+
         _ircServices[serverConfig.Id] = ircService;
         await ircService.StartAsync();
     }

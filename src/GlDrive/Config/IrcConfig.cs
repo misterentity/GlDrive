@@ -12,6 +12,7 @@ public class IrcConfig
     public string AltNick { get; set; } = "";
     public string RealName { get; set; } = "GlDrive";
     public bool AutoConnect { get; set; }
+    public string InviteNick { get; set; } = "";
     public bool FishEnabled { get; set; }
     public FishMode FishMode { get; set; } = FishMode.ECB;
     public List<IrcChannelConfig> Channels { get; set; } = [];

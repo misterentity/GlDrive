@@ -430,6 +430,8 @@
                             Padding="8,4">
                         <DockPanel>
                             <Button DockPanel.Dock="Right" Content="Reconnect" Command="{Binding Irc.ReconnectCommand}"
+                                    Padding="10,2" Margin="4,0,0,0" Style="{StaticResource SecondaryButton}" FontSize="11"/>
+                            <Button DockPanel.Dock="Right" Content="Disconnect" Command="{Binding Irc.DisconnectCommand}"
                                     Padding="10,2" Margin="8,0,0,0" Style="{StaticResource SecondaryButton}" FontSize="11"/>
                             <TextBlock Text="{Binding Irc.TopicText}" TextTrimming="CharacterEllipsis"
                                        Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"
@@ -473,7 +475,7 @@
                                         <StackPanel Orientation="Horizontal">
                                             <TextBlock Text="&#x1F512;" FontSize="10" Margin="0,0,4,0"
                                                        Visibility="{Binding HasFishKey, Converter={StaticResource BoolToVisibility}}"/>
-                                            <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ForegroundBrush}"/>
+                                            <TextBlock Text="{Binding SidebarDisplay}" Foreground="{DynamicResource ForegroundBrush}"/>
                                             <TextBlock Text="{Binding UnreadDisplay}" Foreground="{DynamicResource AccentBrush}"
                                                        FontWeight="Bold"/>
                                         </StackPanel>
@@ -515,7 +517,7 @@
 
                         <!-- Nick list -->
                         <Border Grid.Column="2" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1,0,0,0">
-                            <ListBox ItemsSource="{Binding Irc.NickList}"
+                            <ListBox ItemsSource="{Binding Irc.NickList}" x:Name="IrcNickList"
                                      Background="Transparent" BorderThickness="0" FontSize="12">
                                 <ListBox.ItemTemplate>
                                     <DataTemplate>
@@ -523,9 +525,13 @@
                                     </DataTemplate>
                                 </ListBox.ItemTemplate>
                                 <ListBox.ContextMenu>
-                                    <ContextMenu>
-                                        <MenuItem Header="Private Message"/>
-                                        <MenuItem Header="FiSH Key Exchange"/>
+                                    <ContextMenu DataContext="{Binding DataContext, RelativeSource={RelativeSource Mode=Self, AncestorType=ContextMenu}, Path=PlacementTarget.DataContext}">
+                                        <MenuItem Header="Private Message"
+                                                  Command="{Binding PlacementTarget.DataContext.Irc.PrivateMessageNickCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                  CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                        <MenuItem Header="FiSH Key Exchange"
+                                                  Command="{Binding PlacementTarget.DataContext.Irc.KeyExchangeNickCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                  CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
                                     </ContextMenu>
                                 </ListBox.ContextMenu>
                             </ListBox>
@@ -544,16 +550,21 @@
         <Border Grid.Row="1" Background="{DynamicResource SurfaceBrush}"
                 BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0"
                 Padding="12,6">
-            <StackPanel Orientation="Horizontal">
-                <TextBlock Text="{Binding StatusBarSpeed}" Foreground="{DynamicResource AccentBrush}"
-                           FontWeight="SemiBold" Margin="0,0,20,0" FontSize="12"/>
-                <TextBlock Text="{Binding StatusBarQueueCount}" Foreground="{DynamicResource ForegroundDimBrush}"
-                           Margin="0,0,20,0" FontSize="12"/>
-                <TextBlock Text="{Binding StatusBarDiskSpace}" Foreground="{DynamicResource ForegroundDimBrush}"
-                           FontSize="12"/>
-                <TextBlock Text="{Binding Irc.StatusText}" Foreground="{DynamicResource ForegroundDimBrush}"
-                           Margin="20,0,0,0" FontSize="12"/>
-            </StackPanel>
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Content="&#x2699; Settings" Click="Settings_Click"
+                        Padding="10,3" Style="{StaticResource SecondaryButton}" FontSize="12"
+                        VerticalAlignment="Center"/>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding StatusBarSpeed}" Foreground="{DynamicResource AccentBrush}"
+                               FontWeight="SemiBold" Margin="0,0,20,0" FontSize="12"/>
+                    <TextBlock Text="{Binding StatusBarQueueCount}" Foreground="{DynamicResource ForegroundDimBrush}"
+                               Margin="0,0,20,0" FontSize="12"/>
+                    <TextBlock Text="{Binding StatusBarDiskSpace}" Foreground="{DynamicResource ForegroundDimBrush}"
+                               FontSize="12"/>
+                    <TextBlock Text="{Binding Irc.StatusText}" Foreground="{DynamicResource ForegroundDimBrush}"
+                               Margin="20,0,0,0" FontSize="12"/>
+                </StackPanel>
+            </DockPanel>
         </Border>
     </Grid>
 </Window>

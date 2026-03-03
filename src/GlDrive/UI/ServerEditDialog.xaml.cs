@@ -100,10 +100,16 @@ public partial class ServerEditDialog : Window
             IrcUseTlsBox.IsChecked = existing.Irc.UseTls;
             IrcNickBox.Text = existing.Irc.Nick;
             IrcAltNickBox.Text = existing.Irc.AltNick;
+            IrcRealNameBox.Text = existing.Irc.RealName;
             IrcAutoConnectBox.IsChecked = existing.Irc.AutoConnect;
+            IrcInviteNickBox.Text = existing.Irc.InviteNick;
             IrcFishEnabledBox.IsChecked = existing.Irc.FishEnabled;
+            IrcFishModeBox.SelectedIndex = existing.Irc.FishMode == FishMode.CBC ? 1 : 0;
             IrcChannelsBox.Text = string.Join("\n", existing.Irc.Channels.Select(c =>
-                string.IsNullOrEmpty(c.Key) ? c.Name : $"{c.Name} {c.Key}"));
+            {
+                var prefix = c.AutoJoin ? "" : "-";
+                return string.IsNullOrEmpty(c.Key) ? $"{prefix}{c.Name}" : $"{prefix}{c.Name} {c.Key}";
+            }));
 
             if (!string.IsNullOrEmpty(existing.Irc.Host) && !string.IsNullOrEmpty(existing.Irc.Nick))
             {
@@ -266,21 +272,30 @@ public partial class ServerEditDialog : Window
         _serverConfig.Irc.UseTls = IrcUseTlsBox.IsChecked == true;
         _serverConfig.Irc.Nick = IrcNickBox.Text ?? "";
         _serverConfig.Irc.AltNick = IrcAltNickBox.Text ?? "";
+        _serverConfig.Irc.RealName = string.IsNullOrWhiteSpace(IrcRealNameBox.Text) ? "GlDrive" : IrcRealNameBox.Text;
         _serverConfig.Irc.AutoConnect = IrcAutoConnectBox.IsChecked == true;
+        _serverConfig.Irc.InviteNick = IrcInviteNickBox.Text ?? "";
         _serverConfig.Irc.FishEnabled = IrcFishEnabledBox.IsChecked == true;
+        _serverConfig.Irc.FishMode = IrcFishModeBox.SelectedIndex == 1 ? FishMode.CBC : FishMode.ECB;
 
-        // Parse channels
+        // Parse channels (prefix with - to disable auto-join)
         _serverConfig.Irc.Channels = (IrcChannelsBox.Text ?? "")
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(l => l.Length > 0)
             .Select(line =>
             {
+                var autoJoin = true;
+                if (line.StartsWith('-'))
+                {
+                    autoJoin = false;
+                    line = line[1..];
+                }
                 var parts = line.Split(' ', 2);
                 return new IrcChannelConfig
                 {
                     Name = parts[0],
                     Key = parts.Length > 1 ? parts[1] : "",
-                    AutoJoin = true
+                    AutoJoin = autoJoin
                 };
             }).ToList();
 

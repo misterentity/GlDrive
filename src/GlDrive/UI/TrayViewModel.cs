@@ -283,3 +283,29 @@ public class RelayCommand : ICommand
             _syncExecute?.Invoke();
     }
 }
+
+public class RelayCommand<T> : ICommand
+{
+    private readonly Func<T, Task>? _asyncExecute;
+    private readonly Action<T>? _syncExecute;
+
+    public RelayCommand(Action<T> execute) => _syncExecute = execute;
+    public RelayCommand(Func<T, Task> execute) => _asyncExecute = execute;
+
+    public event EventHandler? CanExecuteChanged
+    {
+        add => CommandManager.RequerySuggested += value;
+        remove => CommandManager.RequerySuggested -= value;
+    }
+    public bool CanExecute(object? parameter) => true;
+
+    public async void Execute(object? parameter)
+    {
+        var value = parameter is T typed ? typed : default;
+        if (value == null) return;
+        if (_asyncExecute != null)
+            await _asyncExecute(value);
+        else
+            _syncExecute?.Invoke(value);
+    }
+}
