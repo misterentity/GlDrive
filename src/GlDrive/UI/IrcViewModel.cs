@@ -22,6 +22,7 @@ public class IrcChannelVm : INotifyPropertyChanged
     public bool HasFishKey { get; set; }
 
     public string DisplayName => IsChannel ? $"{ServerName}: {Name}" : $"{ServerName}: {Name} (PM)";
+    public string SidebarDisplay => Name == "*" ? $"[{ServerName}]" : IsChannel ? Name : $"{Name} (PM)";
 
     public int UnreadCount
     {
@@ -133,8 +134,12 @@ public class IrcViewModel : INotifyPropertyChanged
     public ICommand JoinChannelCommand { get; }
     public ICommand PartChannelCommand { get; }
     public ICommand ReconnectCommand { get; }
+    public ICommand DisconnectCommand { get; }
+    public ICommand PrivateMessageNickCommand { get; }
+    public ICommand KeyExchangeNickCommand { get; }
 
     public event Action? ScrollToBottom;
+    public event Action? FocusInput;
 
     public IrcViewModel(ServerManager serverManager, AppConfig config)
     {
@@ -167,6 +172,27 @@ public class IrcViewModel : INotifyPropertyChanged
                     }
                 }
             }
+        });
+        DisconnectCommand = new RelayCommand(async () =>
+        {
+            foreach (var (_, ircService) in _serverManager.GetIrcServices())
+            {
+                if (ircService.State != IrcServiceState.Disconnected)
+                    await ircService.StopAsync();
+            }
+        });
+        PrivateMessageNickCommand = new RelayCommand<string>(nick =>
+        {
+            if (!string.IsNullOrEmpty(nick))
+                InputText = $"/msg {nick.TrimStart('@', '+', '%', '~', '&')} ";
+        });
+        KeyExchangeNickCommand = new RelayCommand<string>(async nick =>
+        {
+            if (string.IsNullOrEmpty(nick) || _selectedChannel == null) return;
+            var cleanNick = nick.TrimStart('@', '+', '%', '~', '&');
+            var irc = _serverManager.GetIrcService(_selectedChannel.ServerId);
+            if (irc != null)
+                await irc.InitiateKeyExchange(cleanNick);
         });
 
         // Subscribe to existing IRC services
@@ -258,10 +284,19 @@ public class IrcViewModel : INotifyPropertyChanged
         if (irc.Channels.TryGetValue(channel, out var ch))
         {
             NickList.Clear();
-            foreach (var nick in ch.Nicks.OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
+            foreach (var nick in SortNicks(ch.Nicks))
                 NickList.Add(nick);
         }
     }
+
+    private static int NickSortOrder(string n) => n.Length > 0 ? n[0] switch
+    {
+        '~' => 0, '&' => 1, '@' => 2, '%' => 3, '+' => 4, _ => 5
+    } : 5;
+
+    private static IEnumerable<string> SortNicks(List<string> nicks) =>
+        nicks.OrderBy(NickSortOrder)
+             .ThenBy(n => n.TrimStart('@', '+', '%', '~', '&'), StringComparer.OrdinalIgnoreCase);
 
     private void OnTopicChanged(string serverId, string channel, string topic)
     {
@@ -310,7 +345,7 @@ public class IrcViewModel : INotifyPropertyChanged
         if (irc != null && irc.Channels.TryGetValue(channel.Name, out var ch))
         {
             TopicText = ch.Topic;
-            foreach (var nick in ch.Nicks.OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
+            foreach (var nick in SortNicks(ch.Nicks))
                 NickList.Add(nick);
         }
 
@@ -323,6 +358,7 @@ public class IrcViewModel : INotifyPropertyChanged
 
         var text = _inputText;
         InputText = "";
+        FocusInput?.Invoke();
 
         var irc = _serverManager.GetIrcService(_selectedChannel.ServerId);
         if (irc == null) return;
@@ -395,13 +431,28 @@ public class IrcViewModel : INotifyPropertyChanged
                     await irc.SendNotice(noticeParts[0], noticeParts[1]);
                 break;
 
+            case "/quit":
+                await irc.StopAsync();
+                break;
+
+            case "/help":
+                AddLocalSystem("Available commands:");
+                AddLocalSystem("  /join #channel [key]  — Join a channel");
+                AddLocalSystem("  /part [#channel]      — Leave current or named channel");
+                AddLocalSystem("  /msg nick text        — Send a private message");
+                AddLocalSystem("  /me action            — Send an action");
+                AddLocalSystem("  /topic text           — Set channel topic");
+                AddLocalSystem("  /notice target text   — Send a notice");
+                AddLocalSystem("  /key [target] key     — Set FiSH key");
+                AddLocalSystem("  /keyx nick            — Initiate DH1080 key exchange");
+                AddLocalSystem("  /quit                 — Disconnect from IRC");
+                AddLocalSystem("  /help                 — Show this help");
+                AddLocalSystem("  /command ...          — Any other /command sent as raw IRC");
+                break;
+
             default:
-                // Send as raw
-                if (_selectedChannel != null)
-                {
-                    var raw = input[1..]; // strip leading /
-                    await irc.SendMessage(_selectedChannel.Name, raw);
-                }
+                // Send unknown commands as raw IRC
+                await irc.SendRaw(input[1..]); // strip leading /
                 break;
         }
     }
@@ -426,6 +477,69 @@ public class IrcViewModel : INotifyPropertyChanged
             _ when connected == total && total == 1 => "IRC connected",
             _ => $"IRC: {connected}/{total} connected"
         };
+    }
+
+    // Tab-completion state
+    private string? _tabPrefix;
+    private List<string>? _tabMatches;
+    private int _tabIndex;
+
+    public bool HandleTabComplete()
+    {
+        if (NickList.Count == 0) return false;
+
+        if (_tabMatches == null || _tabPrefix == null)
+        {
+            // Start new completion: find the partial word at end of input
+            var text = _inputText ?? "";
+            var lastSpace = text.LastIndexOf(' ');
+            _tabPrefix = lastSpace >= 0 ? text[(lastSpace + 1)..] : text;
+            if (string.IsNullOrEmpty(_tabPrefix)) return false;
+
+            _tabMatches = NickList
+                .Select(n => n.TrimStart('@', '+', '%', '~', '&'))
+                .Where(n => n.StartsWith(_tabPrefix, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            _tabIndex = 0;
+
+            if (_tabMatches.Count == 0)
+            {
+                ResetTabComplete();
+                return false;
+            }
+        }
+        else
+        {
+            _tabIndex = (_tabIndex + 1) % _tabMatches.Count;
+        }
+
+        // Replace the partial word with the match
+        var input = _inputText ?? "";
+        var lastSp = input.LastIndexOf(' ');
+        var before = lastSp >= 0 ? input[..(lastSp + 1)] : "";
+        var suffix = string.IsNullOrEmpty(before) ? ": " : " ";
+        InputText = before + _tabMatches[_tabIndex] + suffix;
+        return true;
+    }
+
+    public void ResetTabComplete()
+    {
+        _tabPrefix = null;
+        _tabMatches = null;
+        _tabIndex = 0;
+    }
+
+    private void AddLocalSystem(string text)
+    {
+        var vm = new IrcMessageVm
+        {
+            Timestamp = DateTime.Now.ToString("HH:mm:ss"),
+            Text = text,
+            Type = IrcMessageType.System,
+            NickColor = Brushes.Gray
+        };
+        Messages.Add(vm);
+        ScrollToBottom?.Invoke();
     }
 
     private static SolidColorBrush GetNickColor(string nick)

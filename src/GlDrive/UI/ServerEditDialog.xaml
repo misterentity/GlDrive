@@ -211,14 +211,29 @@
                         <TextBox x:Name="IrcAltNickBox"/>
                     </StackPanel>
                 </Grid>
+                <TextBlock Text="Real Name:" Margin="0,0,0,2"/>
+                <TextBox x:Name="IrcRealNameBox" Text="GlDrive" Margin="0,0,0,8"
+                         ToolTip="Sent as the REAL NAME field during IRC registration"/>
                 <TextBlock Text="Server Password (optional):" Margin="0,0,0,2"/>
                 <PasswordBox x:Name="IrcPasswordBox" Margin="0,0,0,8"/>
-                <TextBlock Text="Channels (one per line: #channel [key]):" Margin="0,0,0,2"/>
+                <TextBlock Text="Invite Nick (for SITE INVITE before joining):" Margin="0,0,0,2"/>
+                <TextBox x:Name="IrcInviteNickBox" Margin="0,0,0,8"
+                         ToolTip="IRC nick to pass to SITE INVITE on the FTP server before auto-joining channels"/>
+                <TextBlock Text="Channels (one per line: #channel [key], prefix with - to skip auto-join):" Margin="0,0,0,2"/>
                 <TextBox x:Name="IrcChannelsBox" AcceptsReturn="True" TextWrapping="Wrap"
                          Height="60" VerticalScrollBarVisibility="Auto" Margin="0,0,0,8"
-                         ToolTip="e.g. #channel&#x0a;#secret mykey"/>
+                         ToolTip="e.g. #channel&#x0a;#secret mykey&#x0a;-#nochat (won't auto-join)"/>
                 <CheckBox x:Name="IrcAutoConnectBox" Content="Auto-connect with server" Margin="0,0,0,4"/>
-                <CheckBox x:Name="IrcFishEnabledBox" Content="Enable FiSH encryption" Margin="0,0,0,8"/>
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <CheckBox x:Name="IrcFishEnabledBox" Content="Enable FiSH encryption"
+                              VerticalAlignment="Center" Margin="0,0,12,0"/>
+                    <TextBlock Text="Mode:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <ComboBox x:Name="IrcFishModeBox" Width="80" VerticalAlignment="Center"
+                              ToolTip="ECB is standard, CBC is more secure but requires both sides to support it">
+                        <ComboBoxItem Content="ECB"/>
+                        <ComboBoxItem Content="CBC"/>
+                    </ComboBox>
+                </StackPanel>
 
                 <Separator Margin="0,4,0,12"/>
 

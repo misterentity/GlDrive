@@ -10,12 +10,16 @@ namespace GlDrive.UI;
 
 public partial class DashboardWindow : Window
 {
+    private readonly AppConfig _config;
+    private readonly ServerManager _serverManager;
     private bool _upcomingLoaded;
     private bool _preDbLoaded;
     private Point _dragStartPoint;
 
     public DashboardWindow(ServerManager serverManager, AppConfig config, NotificationStore notificationStore)
     {
+        _config = config;
+        _serverManager = serverManager;
         InitializeComponent();
         var vm = new DashboardViewModel(serverManager, config, notificationStore);
         DataContext = vm;
@@ -25,6 +29,24 @@ public partial class DashboardWindow : Window
         {
             if (IrcMessageList.Items.Count > 0)
                 IrcMessageList.ScrollIntoView(IrcMessageList.Items[^1]);
+        };
+
+        // Re-focus input after sending
+        vm.Irc.FocusInput += () => IrcInputBox.Focus();
+
+        // Tab-complete nicks
+        IrcInputBox.PreviewKeyDown += (s, e) =>
+        {
+            if (e.Key == System.Windows.Input.Key.Tab)
+            {
+                e.Handled = true;
+                if (vm.Irc.HandleTabComplete())
+                    IrcInputBox.CaretIndex = IrcInputBox.Text?.Length ?? 0;
+            }
+            else
+            {
+                vm.Irc.ResetTabComplete();
+            }
         };
     }
 
@@ -89,6 +111,13 @@ public partial class DashboardWindow : Window
 
         var data = new DataObject("DashboardDragItem", grid.SelectedItem);
         DragDrop.DoDragDrop(grid, data, DragDropEffects.Copy);
+    }
+
+    private void Settings_Click(object sender, RoutedEventArgs e)
+    {
+        var window = new SettingsWindow(_config, _serverManager);
+        window.Owner = this;
+        window.ShowDialog();
     }
 
     // Drag-and-drop: handle drop on Downloads grid

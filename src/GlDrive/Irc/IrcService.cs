@@ -44,6 +44,7 @@ public class IrcService : IDisposable
     public IReadOnlyDictionary<string, IrcChannel> Channels => _channels;
     public string CurrentNick => _currentNick;
     public FishKeyStore KeyStore => _fishKeyStore;
+    public Func<string, CancellationToken, Task<string?>>? SiteInviteFunc { get; set; }
 
     public event Action<IrcServiceState>? StateChanged;
     public event Action<string, IrcMessageItem>? MessageReceived; // target, message
@@ -107,6 +108,7 @@ public class IrcService : IDisposable
             catch (Exception ex)
             {
                 Log.Warning(ex, "IRC connection failed for {Server}", _serverConfig.Name);
+                AddSystemMessage("*", $"Connection failed: {ex.Message}");
             }
 
             if (ct.IsCancellationRequested) break;
@@ -127,12 +129,17 @@ public class IrcService : IDisposable
     {
         var irc = _serverConfig.Irc;
         SetState(IrcServiceState.Connecting);
+        AddSystemMessage("*", $"Connecting to {irc.Host}:{irc.Port}...");
 
         _client?.Dispose();
         _client = new IrcClient();
         _client.MessageReceived += HandleMessage;
         _client.Connected += () => Log.Information("IRC connected to {Host}:{Port}", irc.Host, irc.Port);
-        _client.Disconnected += reason => Log.Information("IRC disconnected from {Host}: {Reason}", irc.Host, reason);
+        _client.Disconnected += reason =>
+        {
+            Log.Information("IRC disconnected from {Host}: {Reason}", irc.Host, reason);
+            AddSystemMessage("*", $"Disconnected: {reason}");
+        };
 
         await _client.ConnectAsync(irc.Host, irc.Port, irc.UseTls, _certManager, ct);
 
@@ -208,6 +215,12 @@ public class IrcService : IDisposable
 
             case "NICK":
                 HandleNickChange(msg);
+                break;
+
+            default:
+                // Show unhandled server messages (MOTD, errors, info, etc.)
+                if (!string.IsNullOrEmpty(msg.Trailing))
+                    AddSystemMessage("*", msg.Trailing);
                 break;
         }
     }
@@ -300,7 +313,8 @@ public class IrcService : IDisposable
         }
         else
         {
-            if (_channels.TryGetValue(channel, out var ch) && !ch.Nicks.Contains(nick, StringComparer.OrdinalIgnoreCase))
+            if (_channels.TryGetValue(channel, out var ch) &&
+                !ch.Nicks.Any(n => StripNickPrefix(n).Equals(nick, StringComparison.OrdinalIgnoreCase)))
             {
                 ch.Nicks.Add(nick);
                 NamesUpdated?.Invoke(channel);
@@ -321,7 +335,7 @@ public class IrcService : IDisposable
         }
         else if (_channels.TryGetValue(channel, out var ch))
         {
-            ch.Nicks.RemoveAll(n => n.Equals(nick, StringComparison.OrdinalIgnoreCase));
+            ch.Nicks.RemoveAll(n => StripNickPrefix(n).Equals(nick, StringComparison.OrdinalIgnoreCase));
             NamesUpdated?.Invoke(channel);
         }
 
@@ -340,7 +354,7 @@ public class IrcService : IDisposable
 
         foreach (var (channel, ch) in _channels)
         {
-            if (ch.Nicks.RemoveAll(n => n.Equals(nick, StringComparison.OrdinalIgnoreCase)) > 0)
+            if (ch.Nicks.RemoveAll(n => StripNickPrefix(n).Equals(nick, StringComparison.OrdinalIgnoreCase)) > 0)
             {
                 NamesUpdated?.Invoke(channel);
                 AddMessage(channel, new IrcMessageItem
@@ -365,7 +379,7 @@ public class IrcService : IDisposable
         }
         else if (_channels.TryGetValue(channel, out var ch))
         {
-            ch.Nicks.RemoveAll(n => n.Equals(kicked, StringComparison.OrdinalIgnoreCase));
+            ch.Nicks.RemoveAll(n => StripNickPrefix(n).Equals(kicked, StringComparison.OrdinalIgnoreCase));
             NamesUpdated?.Invoke(channel);
         }
 
@@ -409,7 +423,7 @@ public class IrcService : IDisposable
 
     private void HandleNamesReply(IrcMessage msg)
     {
-        // :server 353 nick = #channel :nick1 @nick2 +nick3
+        // :server 353 nick = #channel :@nick1 +nick2 nick3
         if (msg.Params.Count < 3) return;
         var channel = msg.Params[2];
         var names = (msg.Trailing ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
@@ -417,11 +431,14 @@ public class IrcService : IDisposable
         var ch = EnsureChannel(channel);
         foreach (var name in names)
         {
-            var clean = name.TrimStart('@', '+', '%', '~', '&');
-            if (!ch.Nicks.Contains(clean, StringComparer.OrdinalIgnoreCase))
-                ch.Nicks.Add(clean);
+            var clean = StripNickPrefix(name);
+            // Remove existing entry (may have different prefix) then re-add with current prefix
+            ch.Nicks.RemoveAll(n => StripNickPrefix(n).Equals(clean, StringComparison.OrdinalIgnoreCase));
+            ch.Nicks.Add(name);
         }
     }
+
+    private static string StripNickPrefix(string nick) => nick.TrimStart('@', '+', '%', '~', '&');
 
     private void HandleMode(IrcMessage msg)
     {
@@ -432,6 +449,39 @@ public class IrcService : IDisposable
 
         if (IsChannel(target))
         {
+            // Update nick prefixes for +o/-o/+v/-v
+            if (_channels.TryGetValue(target, out var ch) && msg.Params.Count >= 3)
+            {
+                var modes = msg.Params[1];
+                var nickArgs = msg.Params.Skip(2).ToList();
+                var adding = true;
+                var nickIdx = 0;
+                foreach (var c in modes)
+                {
+                    switch (c)
+                    {
+                        case '+': adding = true; break;
+                        case '-': adding = false; break;
+                        case 'o' or 'v' or 'h' when nickIdx < nickArgs.Count:
+                            var modeNick = nickArgs[nickIdx++];
+                            var prefix = c == 'o' ? '@' : c == 'h' ? '%' : '+';
+                            var idx = ch.Nicks.FindIndex(n =>
+                                StripNickPrefix(n).Equals(modeNick, StringComparison.OrdinalIgnoreCase));
+                            if (idx >= 0)
+                            {
+                                var clean = StripNickPrefix(ch.Nicks[idx]);
+                                ch.Nicks[idx] = adding ? $"{prefix}{clean}" : clean;
+                            }
+                            break;
+                        default:
+                            // Other modes with params (b, k, l, etc.)
+                            if ("bklIeq".Contains(c) && nickIdx < nickArgs.Count) nickIdx++;
+                            break;
+                    }
+                }
+                NamesUpdated?.Invoke(target);
+            }
+
             AddMessage(target, new IrcMessageItem
             {
                 Nick = msg.Nick,
@@ -451,10 +501,12 @@ public class IrcService : IDisposable
 
         foreach (var (channel, ch) in _channels)
         {
-            var idx = ch.Nicks.FindIndex(n => n.Equals(oldNick, StringComparison.OrdinalIgnoreCase));
+            var idx = ch.Nicks.FindIndex(n => StripNickPrefix(n).Equals(oldNick, StringComparison.OrdinalIgnoreCase));
             if (idx >= 0)
             {
-                ch.Nicks[idx] = newNick;
+                // Preserve the mode prefix when renaming
+                var prefix = ch.Nicks[idx][..^StripNickPrefix(ch.Nicks[idx]).Length];
+                ch.Nicks[idx] = prefix + newNick;
                 NamesUpdated?.Invoke(channel);
                 AddMessage(channel, new IrcMessageItem
                 {
@@ -487,6 +539,23 @@ public class IrcService : IDisposable
     private async void AutoJoinChannels()
     {
         if (_client == null) return;
+
+        // Run SITE INVITE before joining channels
+        var inviteNick = _serverConfig.Irc.InviteNick;
+        if (!string.IsNullOrEmpty(inviteNick) && SiteInviteFunc != null)
+        {
+            try
+            {
+                AddSystemMessage("*", $"Running SITE INVITE {inviteNick}...");
+                var reply = await SiteInviteFunc(inviteNick, CancellationToken.None);
+                AddSystemMessage("*", reply ?? "SITE INVITE completed (no reply)");
+            }
+            catch (Exception ex)
+            {
+                AddSystemMessage("*", $"SITE INVITE failed: {ex.Message}");
+            }
+        }
+
         foreach (var ch in _serverConfig.Irc.Channels.Where(c => c.AutoJoin))
         {
             var key = string.IsNullOrEmpty(ch.Key) ? null : ch.Key;
@@ -546,6 +615,12 @@ public class IrcService : IDisposable
     {
         if (_client == null || !_client.IsConnected) return;
         await _client.NoticeAsync(target, text);
+    }
+
+    public async Task SendRaw(string line)
+    {
+        if (_client == null || !_client.IsConnected) return;
+        await _client.SendRawAsync(line);
     }
 
     public async Task InitiateKeyExchange(string nick)
