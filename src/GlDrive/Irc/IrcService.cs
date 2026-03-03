@@ -556,10 +556,27 @@ public class IrcService : IDisposable
             }
         }
 
-        foreach (var ch in _serverConfig.Irc.Channels.Where(c => c.AutoJoin))
+        foreach (var ch in _serverConfig.Irc.Channels)
         {
-            var key = string.IsNullOrEmpty(ch.Key) ? null : ch.Key;
-            await _client.JoinAsync(ch.Name, key);
+            // Parse FiSH key from channel key field: [cbc:key] or [ecb:key]
+            string? joinKey = null;
+            if (!string.IsNullOrEmpty(ch.Key))
+            {
+                var fishMatch = System.Text.RegularExpressions.Regex.Match(ch.Key, @"^\[(cbc|ecb):(.+)\]$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (fishMatch.Success)
+                {
+                    var mode = fishMatch.Groups[1].Value.Equals("cbc", StringComparison.OrdinalIgnoreCase)
+                        ? FishMode.CBC : FishMode.ECB;
+                    _fishKeyStore.SetKey(ch.Name, fishMatch.Groups[2].Value, mode);
+                }
+                else
+                {
+                    joinKey = ch.Key; // Regular IRC channel key
+                }
+            }
+
+            if (ch.AutoJoin)
+                await _client.JoinAsync(ch.Name, joinKey);
         }
     }
 
