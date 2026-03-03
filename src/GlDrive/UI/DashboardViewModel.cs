@@ -1477,15 +1477,15 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         {
             PreDbItems.Add(new PreDbItemVm
             {
-                Name = r.Name,
-                Team = r.Team,
-                Category = r.Cat,
+                Name = r.Release,
+                Team = r.Group,
+                Category = r.Section,
                 Genre = r.Genre,
                 Size = r.SizeFormatted,
                 Files = r.Files > 0 ? r.Files.ToString() : "",
                 Time = r.PreTime.ToString("g"),
-                IsNuked = r.Nuke != null,
-                NukeReason = r.Nuke?.Reason ?? ""
+                IsNuked = r.IsNuked,
+                NukeReason = r.Reason
             });
         }
     }
