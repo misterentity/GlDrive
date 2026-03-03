@@ -312,7 +312,18 @@ public class DownloadManager : IDisposable
                 {
                     itemCts.Token.ThrowIfCancellationRequested();
 
-                    var localFilePath = Path.Combine(item.LocalPath, file.Name);
+                    var safeName = Path.GetFileName(file.Name);
+                    if (string.IsNullOrEmpty(safeName) || safeName.Contains(".."))
+                    {
+                        Log.Warning("Skipping file with unsafe name: {Name}", file.Name);
+                        continue;
+                    }
+                    var localFilePath = Path.Combine(item.LocalPath, safeName);
+                    if (!Path.GetFullPath(localFilePath).StartsWith(Path.GetFullPath(item.LocalPath), StringComparison.OrdinalIgnoreCase))
+                    {
+                        Log.Warning("Skipping file that escapes download directory: {Name}", file.Name);
+                        continue;
+                    }
 
                     // Resume: check existing file
                     long resumeOffset = 0;
@@ -383,7 +394,13 @@ public class DownloadManager : IDisposable
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
-                    Log.Warning(ex, "Extraction failed for {Release} — marking completed anyway", item.ReleaseName);
+                    Log.Error(ex, "Extraction failed for {Release}", item.ReleaseName);
+                    item.Status = DownloadStatus.Failed;
+                    item.ErrorMessage = $"Extraction failed: {ex.Message}";
+                    _store.Update(item);
+                    DownloadStatusChanged?.Invoke(item);
+                    AddHistoryEntry(item);
+                    return;
                 }
             }
 
@@ -416,11 +433,12 @@ public class DownloadManager : IDisposable
                 item.ErrorMessage = $"Retry {item.RetryCount}/{_config.MaxRetries}: {ex.Message}";
                 _store.Update(item);
                 DownloadStatusChanged?.Invoke(item);
+                var retryToken = _cts?.Token ?? CancellationToken.None;
                 _ = Task.Run(async () =>
                 {
                     try
                     {
-                        await Task.Delay(TimeSpan.FromSeconds(delay), _cts?.Token ?? CancellationToken.None);
+                        await Task.Delay(TimeSpan.FromSeconds(delay), retryToken);
                         lock (_queueLock) _pendingQueue.Add(item);
                         _queueSignal.Release();
                     }

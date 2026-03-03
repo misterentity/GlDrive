@@ -14,6 +14,8 @@ public class WishlistMatcher
     private readonly string _serverId;
     private readonly string _serverName;
 
+    private readonly object _matchLock = new();
+
     public event Action<WishlistItem, string, string>? MatchFound; // item, category, release
 
     public WishlistMatcher(WishlistStore wishlist, DownloadManager downloadManager, FtpOperations ftp,
@@ -27,53 +29,56 @@ public class WishlistMatcher
         _serverName = serverName;
     }
 
-    public async void OnNewRelease(string category, string releaseName, string remotePath)
+    public void OnNewRelease(string category, string releaseName, string remotePath)
     {
         try
         {
-            foreach (var item in _wishlist.Items)
+            lock (_matchLock)
             {
-                if (item.Status == WishlistStatus.Paused || item.Status == WishlistStatus.Completed)
-                    continue;
-
-                if (item.GrabbedReleases.Contains(releaseName, StringComparer.OrdinalIgnoreCase))
-                    continue;
-
-                bool matches = item.Type switch
+                foreach (var item in _wishlist.Items)
                 {
-                    MediaType.Movie => SceneNameParser.MatchesMovie(releaseName, item.Title, item.Year, item.Quality),
-                    MediaType.TvShow => SceneNameParser.MatchesTvEpisode(releaseName, item.Title, item.Quality),
-                    _ => false
-                };
+                    if (item.Status == WishlistStatus.Paused || item.Status == WishlistStatus.Completed)
+                        continue;
 
-                if (!matches) continue;
+                    if (item.GrabbedReleases.Contains(releaseName, StringComparer.OrdinalIgnoreCase))
+                        continue;
 
-                Log.Information("Wishlist match: [{Category}] {Release} -> {Title} (server: {Server})",
-                    category, releaseName, item.Title, _serverName);
+                    bool matches = item.Type switch
+                    {
+                        MediaType.Movie => SceneNameParser.MatchesMovie(releaseName, item.Title, item.Year, item.Quality),
+                        MediaType.TvShow => SceneNameParser.MatchesTvEpisode(releaseName, item.Title, item.Quality),
+                        _ => false
+                    };
 
-                var localPath = BuildLocalPath(item, category, releaseName);
+                    if (!matches) continue;
 
-                var downloadItem = new DownloadItem
-                {
-                    RemotePath = remotePath,
-                    ReleaseName = releaseName,
-                    LocalPath = localPath,
-                    WishlistItemId = item.Id,
-                    Category = category,
-                    ServerId = _serverId,
-                    ServerName = _serverName
-                };
+                    Log.Information("Wishlist match: [{Category}] {Release} -> {Title} (server: {Server})",
+                        category, releaseName, item.Title, _serverName);
 
-                if (!_downloadManager.Enqueue(downloadItem))
-                {
-                    Log.Information("Wishlist match skipped (duplicate): {Release}", releaseName);
-                    continue;
+                    var localPath = BuildLocalPath(item, category, releaseName);
+
+                    var downloadItem = new DownloadItem
+                    {
+                        RemotePath = remotePath,
+                        ReleaseName = releaseName,
+                        LocalPath = localPath,
+                        WishlistItemId = item.Id,
+                        Category = category,
+                        ServerId = _serverId,
+                        ServerName = _serverName
+                    };
+
+                    if (!_downloadManager.Enqueue(downloadItem))
+                    {
+                        Log.Information("Wishlist match skipped (duplicate): {Release}", releaseName);
+                        continue;
+                    }
+
+                    item.GrabbedReleases.Add(releaseName);
+                    _wishlist.Update(item);
+
+                    MatchFound?.Invoke(item, category, releaseName);
                 }
-
-                item.GrabbedReleases.Add(releaseName);
-                _wishlist.Update(item);
-
-                MatchFound?.Invoke(item, category, releaseName);
             }
         }
         catch (Exception ex)

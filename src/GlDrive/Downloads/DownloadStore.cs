@@ -56,7 +56,9 @@ public class DownloadStore
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
             var json = JsonSerializer.Serialize(_items, JsonOptions);
-            File.WriteAllText(_filePath, json);
+            var tmp = _filePath + ".tmp";
+            File.WriteAllText(tmp, json);
+            File.Move(tmp, _filePath, overwrite: true);
         }
         catch (Exception ex)
         {

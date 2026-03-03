@@ -61,7 +61,9 @@ public class DownloadHistoryStore
         {
             Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
             var json = JsonSerializer.Serialize(_items, JsonOptions);
-            File.WriteAllText(FilePath, json);
+            var tmp = FilePath + ".tmp";
+            File.WriteAllText(tmp, json);
+            File.Move(tmp, FilePath, overwrite: true);
         }
         catch (Exception ex)
         {

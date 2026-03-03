@@ -30,12 +30,21 @@ public static partial class ArchiveExtractor
             try
             {
                 using var archive = RarArchive.OpenArchive(rarFile.FullName);
-                foreach (var entry in archive.Entries.Where(e => !e.IsDirectory))
+                var entries = archive.Entries.Where(e => !e.IsDirectory).ToList();
+                if (entries.Count == 0)
+                {
+                    Log.Warning("Archive has no file entries: {File}", rarFile.Name);
+                    continue;
+                }
+
+                Log.Information("Extracting {Count} entries from {File}", entries.Count, rarFile.Name);
+                foreach (var entry in entries)
                 {
                     ct.ThrowIfCancellationRequested();
+                    Log.Debug("Extracting entry: {Key} ({Size} bytes)", entry.Key, entry.Size);
                     await entry.WriteToDirectoryAsync(dirPath, ct);
                 }
-                Log.Information("Extraction complete: {File}", rarFile.Name);
+                Log.Information("Extraction complete: {File} ({Count} files)", rarFile.Name, entries.Count);
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)

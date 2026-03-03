@@ -23,6 +23,7 @@ public partial class DashboardWindow : Window
         InitializeComponent();
         var vm = new DashboardViewModel(serverManager, config, notificationStore);
         DataContext = vm;
+        Closed += (_, _) => vm.Dispose();
 
         // Auto-scroll IRC messages
         vm.Irc.ScrollToBottom += () =>

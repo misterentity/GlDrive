@@ -136,7 +136,7 @@ public partial class ServerEditDialog : Window
         try
         {
             var host = HostBox.Text;
-            var port = int.TryParse(PortBox.Text, out var p) ? p : 21;
+            var port = int.TryParse(PortBox.Text, out var p) ? Math.Clamp(p, 1, 65535) : 21;
             var username = UsernameBox.Text;
             var password = PasswordBox.Password;
             if (string.IsNullOrEmpty(password))
@@ -146,7 +146,7 @@ public partial class ServerEditDialog : Window
 
             if (ProxyEnabledBox.IsChecked == true && !string.IsNullOrWhiteSpace(ProxyHostBox.Text))
             {
-                var proxyPort = int.TryParse(ProxyPortBox.Text, out var pp) ? pp : 1080;
+                var proxyPort = int.TryParse(ProxyPortBox.Text, out var pp) ? Math.Clamp(pp, 1, 65535) : 1080;
                 var proxyUser = ProxyUsernameBox.Text ?? "";
                 var proxyPw = !string.IsNullOrEmpty(proxyUser) ? ProxyPasswordBox.Password : "";
 
@@ -203,7 +203,7 @@ public partial class ServerEditDialog : Window
 
         _serverConfig.Name = string.IsNullOrWhiteSpace(NameBox.Text) ? HostBox.Text : NameBox.Text;
         _serverConfig.Connection.Host = HostBox.Text;
-        _serverConfig.Connection.Port = int.TryParse(PortBox.Text, out var p) ? p : 21;
+        _serverConfig.Connection.Port = int.TryParse(PortBox.Text, out var p) ? Math.Clamp(p, 1, 65535) : 21;
         _serverConfig.Connection.Username = UsernameBox.Text;
         _serverConfig.Connection.RootPath = RootPathBox.Text;
 
@@ -213,7 +213,7 @@ public partial class ServerEditDialog : Window
             _serverConfig.Connection.Proxy ??= new ProxyConfig();
             _serverConfig.Connection.Proxy.Enabled = true;
             _serverConfig.Connection.Proxy.Host = ProxyHostBox.Text;
-            _serverConfig.Connection.Proxy.Port = int.TryParse(ProxyPortBox.Text, out var pp) ? pp : 1080;
+            _serverConfig.Connection.Proxy.Port = int.TryParse(ProxyPortBox.Text, out var pp) ? Math.Clamp(pp, 1, 65535) : 1080;
             _serverConfig.Connection.Proxy.Username = ProxyUsernameBox.Text ?? "";
 
             if (!string.IsNullOrEmpty(ProxyUsernameBox.Text) && !string.IsNullOrEmpty(ProxyPasswordBox.Password))
@@ -333,7 +333,7 @@ public partial class ServerEditDialog : Window
         try
         {
             var host = HostBox.Text;
-            var port = int.TryParse(PortBox.Text, out var p) ? p : 21;
+            var port = int.TryParse(PortBox.Text, out var p) ? Math.Clamp(p, 1, 65535) : 21;
             var username = UsernameBox.Text;
             var password = PasswordBox.Password;
             if (string.IsNullOrEmpty(password))
@@ -343,7 +343,7 @@ public partial class ServerEditDialog : Window
 
             if (ProxyEnabledBox.IsChecked == true && !string.IsNullOrWhiteSpace(ProxyHostBox.Text))
             {
-                var proxyPort = int.TryParse(ProxyPortBox.Text, out var pp) ? pp : 1080;
+                var proxyPort = int.TryParse(ProxyPortBox.Text, out var pp) ? Math.Clamp(pp, 1, 65535) : 1080;
                 var proxyUser = ProxyUsernameBox.Text ?? "";
                 var proxyPw = !string.IsNullOrEmpty(proxyUser) ? ProxyPasswordBox.Password : "";
 
