@@ -999,10 +999,12 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                 !item.ReleaseName.Contains(_notificationFilterText, StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            if (_notificationFilterCategory != "All" && item.Category != _notificationFilterCategory)
+            if (!string.IsNullOrEmpty(_notificationFilterCategory) && _notificationFilterCategory != "All"
+                && item.Category != _notificationFilterCategory)
                 continue;
 
-            if (_notificationFilterServer != "All" && item.ServerName != _notificationFilterServer)
+            if (!string.IsNullOrEmpty(_notificationFilterServer) && _notificationFilterServer != "All"
+                && item.ServerName != _notificationFilterServer)
                 continue;
 
             NotificationItems.Add(item);
