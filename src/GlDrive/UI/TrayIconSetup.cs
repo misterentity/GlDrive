@@ -23,8 +23,8 @@ public static class TrayIconSetup
         BuildMenu(menu, vm);
         taskbarIcon.ContextMenu = menu;
 
-        // Double-click opens first connected drive
-        taskbarIcon.TrayLeftMouseDown += (_, _) => vm.OpenDriveCommand.Execute(null);
+        // Left-click opens dashboard
+        taskbarIcon.TrayLeftMouseDown += (_, _) => vm.DashboardCommand.Execute(null);
 
         // Rebuild menu and update icon when server states change
         vm.ServerManager.ServerStateChanged += (_, _, _) =>
