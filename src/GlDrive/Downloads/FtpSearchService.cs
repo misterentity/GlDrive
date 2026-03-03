@@ -115,7 +115,7 @@ public class FtpSearchService : IDisposable
     #region SITE SEARCH
 
     private static readonly Regex SiteSearchLineRegex = new(
-        @"^(?<path>/\S+)\s+\((?<files>\d+)F/(?<size>[\d.]+)(?<unit>[KMG]?)/(?<age>\S+)\)",
+        @"^(?<path>/\S+)\s+\((?<files>\d+)F/(?<size>[\d.]+)(?<unit>[KMG]?)/(?<age>[^)]+)\)",
         RegexOptions.Compiled);
 
     private async Task<List<SearchResult>> RunSiteSearch(string keyword, IProgress<string>? progress, CancellationToken ct)
@@ -151,7 +151,9 @@ public class FtpSearchService : IDisposable
             }
 
             _siteSearchSupported = true;
-            var results = ParseSiteSearchResponse(reply.InfoMessages ?? reply.Message);
+            var raw = reply.InfoMessages ?? reply.Message ?? "";
+            Log.Debug("SITE SEARCH raw response ({Length} chars): {Response}", raw.Length, raw);
+            var results = ParseSiteSearchResponse(raw);
             progress?.Report($"{results.Count} result(s) from SITE SEARCH");
             return results;
         }

@@ -14,6 +14,7 @@ public class NewReleaseMonitor
     private CancellationTokenSource? _cts;
     private Task? _pollTask;
     private bool _seeded;
+    private int _consecutiveErrors;
 
     public event Action<string, string, string>? NewReleaseDetected; // category, release, remotePath
 
@@ -65,12 +66,16 @@ public class NewReleaseMonitor
         {
             try
             {
-                await Task.Delay(TimeSpan.FromSeconds(_config.PollIntervalSeconds), ct);
+                var delay = _consecutiveErrors >= 3
+                    ? Math.Min(_config.PollIntervalSeconds * 2, 300)
+                    : _config.PollIntervalSeconds;
+                await Task.Delay(TimeSpan.FromSeconds(delay), ct);
 
                 if (_getState() != MountState.Connected)
                     continue;
 
                 await PollCycle(ct);
+                _consecutiveErrors = 0;
             }
             catch (OperationCanceledException)
             {
@@ -78,7 +83,11 @@ public class NewReleaseMonitor
             }
             catch (Exception ex)
             {
-                Log.Debug(ex, "NewReleaseMonitor poll error");
+                _consecutiveErrors++;
+                if (_consecutiveErrors <= 3)
+                    Log.Warning(ex, "NewReleaseMonitor poll error ({Count} consecutive)", _consecutiveErrors);
+                else
+                    Log.Debug(ex, "NewReleaseMonitor poll error ({Count} consecutive, backing off)", _consecutiveErrors);
             }
         }
     }

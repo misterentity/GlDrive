@@ -4,6 +4,7 @@ using System.Windows.Input;
 using GlDrive.Config;
 using GlDrive.Downloads;
 using GlDrive.Services;
+using Microsoft.Web.WebView2.Core;
 
 namespace GlDrive.UI;
 
@@ -53,8 +54,19 @@ public partial class DashboardWindow : Window
         else if (header == "PreDB" && !_preDbLoaded)
         {
             _preDbLoaded = true;
-            PreDbBrowser.Source = new Uri("https://predb.me/");
+            await InitPreDbBrowser();
         }
+    }
+
+    private async Task InitPreDbBrowser()
+    {
+        await PreDbBrowser.EnsureCoreWebView2Async();
+        PreDbBrowser.CoreWebView2.ServerCertificateErrorDetected += (_, args) =>
+        {
+            // Allow predb.me despite certificate issues
+            args.Action = CoreWebView2ServerCertificateErrorAction.AlwaysAllow;
+        };
+        PreDbBrowser.CoreWebView2.Navigate("https://predb.me/");
     }
 
     // Drag-and-drop: record start point

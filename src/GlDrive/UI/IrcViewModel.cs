@@ -132,6 +132,7 @@ public class IrcViewModel : INotifyPropertyChanged
     public ICommand SendCommand { get; }
     public ICommand JoinChannelCommand { get; }
     public ICommand PartChannelCommand { get; }
+    public ICommand ReconnectCommand { get; }
 
     public event Action? ScrollToBottom;
 
@@ -148,6 +149,24 @@ public class IrcViewModel : INotifyPropertyChanged
             var irc = _serverManager.GetIrcService(_selectedChannel.ServerId);
             if (irc != null && _selectedChannel.IsChannel)
                 await irc.PartChannel(_selectedChannel.Name);
+        });
+        ReconnectCommand = new RelayCommand(async () =>
+        {
+            foreach (var (serverId, ircService) in _serverManager.GetIrcServices())
+            {
+                if (ircService.State != IrcServiceState.Connected)
+                {
+                    try
+                    {
+                        await ircService.StopAsync();
+                        await ircService.StartAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning(ex, "IRC reconnect failed for {ServerId}", serverId);
+                    }
+                }
+            }
         });
 
         // Subscribe to existing IRC services
