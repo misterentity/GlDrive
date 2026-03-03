@@ -83,8 +83,36 @@ public partial class DashboardWindow : Window
 
     private async Task InitPreDbBrowser()
     {
-        await PreDbBrowser.EnsureCoreWebView2Async();
-        PreDbBrowser.CoreWebView2.Navigate("https://predb.net/");
+        try
+        {
+            await PreDbBrowser.EnsureCoreWebView2Async();
+            PreDbBrowser.CoreWebView2.Navigate("https://predb.net/");
+        }
+        catch (Exception ex)
+        {
+            Serilog.Log.Warning(ex, "WebView2 runtime not available");
+            PreDbBrowser.Visibility = Visibility.Collapsed;
+
+            // Find the PreDB tab and show a message instead
+            if (Content is Grid grid && grid.Children[0] is TabControl tc)
+            {
+                foreach (TabItem tab in tc.Items)
+                {
+                    if (tab.Header?.ToString() == "PreDB")
+                    {
+                        tab.Content = new System.Windows.Controls.TextBlock
+                        {
+                            Text = "WebView2 runtime is required for PreDB.\nInstall from: https://developer.microsoft.com/en-us/microsoft-edge/webview2/",
+                            Margin = new Thickness(20),
+                            Foreground = System.Windows.Media.Brushes.Gray,
+                            FontSize = 14,
+                            TextWrapping = TextWrapping.Wrap
+                        };
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     // Drag-and-drop: record start point

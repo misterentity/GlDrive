@@ -40,6 +40,9 @@ Source: "publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs creat
 ; WinFsp installer (bundled for silent install if needed)
 Source: "deps\winfsp.msi"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: not IsWinFspInstalled
 
+; WebView2 Evergreen bootstrapper (for PreDB browser tab)
+Source: "deps\MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: not IsWebView2Installed
+
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
@@ -51,6 +54,9 @@ Root: HKCU; Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 [Run]
 ; Install WinFsp silently if not already installed
 Filename: "msiexec.exe"; Parameters: "/i ""{tmp}\winfsp.msi"" /qn /norestart"; StatusMsg: "Installing WinFsp driver..."; Flags: runhidden waituntilterminated; Check: not IsWinFspInstalled
+
+; Install WebView2 runtime silently if not already installed
+Filename: "{tmp}\MicrosoftEdgeWebview2Setup.exe"; Parameters: "/silent /install"; StatusMsg: "Installing WebView2 runtime..."; Flags: runhidden waituntilterminated; Check: not IsWebView2Installed
 
 ; Launch after install
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
@@ -75,6 +81,13 @@ begin
   // Also check registry as fallback
   if not Result then
     Result := RegKeyExists(HKEY_LOCAL_MACHINE, 'SOFTWARE\WinFsp');
+end;
+
+function IsWebView2Installed: Boolean;
+begin
+  Result := RegKeyExists(HKEY_LOCAL_MACHINE, 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}');
+  if not Result then
+    Result := RegKeyExists(HKEY_LOCAL_MACHINE, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}');
 end;
 
 function InitializeSetup(): Boolean;
