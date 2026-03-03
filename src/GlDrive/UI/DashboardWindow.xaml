@@ -378,6 +378,10 @@
                                 <TextBlock Text="{Binding TvScheduleHeader}" FontWeight="SemiBold"
                                            VerticalAlignment="Center"/>
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <ComboBox ItemsSource="{Binding TvTypeOptions}"
+                                              SelectedItem="{Binding TvTypeFilter}"
+                                              Width="90" FontSize="11" Margin="0,0,6,0"
+                                              ToolTip="Filter by show type"/>
                                     <TextBox Text="{Binding ShowSearchQuery, UpdateSourceTrigger=PropertyChanged}"
                                              Width="140" VerticalContentAlignment="Center" FontSize="11.5"
                                              Margin="0,0,4,0">
