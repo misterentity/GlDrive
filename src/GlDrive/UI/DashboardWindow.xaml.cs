@@ -83,12 +83,7 @@ public partial class DashboardWindow : Window
     private async Task InitPreDbBrowser()
     {
         await PreDbBrowser.EnsureCoreWebView2Async();
-        PreDbBrowser.CoreWebView2.ServerCertificateErrorDetected += (_, args) =>
-        {
-            // Allow predb.me despite certificate issues
-            args.Action = CoreWebView2ServerCertificateErrorAction.AlwaysAllow;
-        };
-        PreDbBrowser.CoreWebView2.Navigate("https://predb.me/");
+        PreDbBrowser.CoreWebView2.Navigate("https://predb.net/");
     }
 
     // Drag-and-drop: record start point
