@@ -14,6 +14,7 @@ public partial class DashboardWindow : Window
     private bool _upcomingLoaded;
     private bool _preDbLoaded;
     private bool _worldMonitorLoaded;
+    private bool _discordLoaded;
     private Point _dragStartPoint;
 
     public DashboardWindow(ServerManager serverManager, AppConfig config, NotificationStore notificationStore)
@@ -88,6 +89,12 @@ public partial class DashboardWindow : Window
         {
             _worldMonitorLoaded = true;
             _ = WorldMonitorHost.InitializeAsync("https://www.worldmonitor.app/");
+        }
+
+        if (header == "Discord" && !_discordLoaded)
+        {
+            _discordLoaded = true;
+            _ = DiscordHost.InitializeAsync("https://discord.com/app");
         }
     }
 

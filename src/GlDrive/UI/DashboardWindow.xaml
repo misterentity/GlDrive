@@ -602,6 +602,11 @@
             <TabItem Header="World Monitor">
                 <ui:WebViewHost x:Name="WorldMonitorHost"/>
             </TabItem>
+
+            <!-- Discord Tab -->
+            <TabItem Header="Discord">
+                <ui:WebViewHost x:Name="DiscordHost"/>
+            </TabItem>
         </TabControl>
 
         <!-- Status Bar -->
