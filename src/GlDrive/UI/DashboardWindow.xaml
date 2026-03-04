@@ -597,6 +597,11 @@
                     </DataGrid>
                 </DockPanel>
             </TabItem>
+
+            <!-- World Monitor Tab -->
+            <TabItem Header="World Monitor">
+                <ui:WebViewHost x:Name="WorldMonitorHost"/>
+            </TabItem>
         </TabControl>
 
         <!-- Status Bar -->

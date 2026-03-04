@@ -42,7 +42,7 @@ public static partial class ArchiveExtractor
                 {
                     ct.ThrowIfCancellationRequested();
                     Log.Debug("Extracting entry: {Key} ({Size} bytes)", entry.Key, entry.Size);
-                    await entry.WriteToDirectoryAsync(dirPath, ct);
+                    await entry.WriteToDirectoryAsync(dirPath);
                 }
                 Log.Information("Extraction complete: {File} ({Count} files)", rarFile.Name, entries.Count);
             }

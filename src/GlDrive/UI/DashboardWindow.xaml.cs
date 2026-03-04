@@ -13,8 +13,8 @@ public partial class DashboardWindow : Window
     private readonly ServerManager _serverManager;
     private bool _upcomingLoaded;
     private bool _preDbLoaded;
+    private bool _worldMonitorLoaded;
     private Point _dragStartPoint;
-
 
     public DashboardWindow(ServerManager serverManager, AppConfig config, NotificationStore notificationStore)
     {
@@ -82,6 +82,12 @@ public partial class DashboardWindow : Window
         {
             _preDbLoaded = true;
             if (vm != null) _ = vm.LoadLatestPreDb();
+        }
+
+        if (header == "World Monitor" && !_worldMonitorLoaded)
+        {
+            _worldMonitorLoaded = true;
+            _ = WorldMonitorHost.InitializeAsync("https://www.worldmonitor.app/");
         }
     }
 
