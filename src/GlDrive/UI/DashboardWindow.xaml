@@ -607,6 +607,11 @@
             <TabItem Header="Discord">
                 <ui:WebViewHost x:Name="DiscordHost"/>
             </TabItem>
+
+            <!-- Streems Tab -->
+            <TabItem Header="Streems">
+                <ui:WebViewHost x:Name="StreemsHost"/>
+            </TabItem>
         </TabControl>
 
         <!-- Status Bar -->
