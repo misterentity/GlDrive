@@ -7,9 +7,6 @@ using Serilog;
 
 namespace GlDrive.UI;
 
-/// <summary>
-/// Hosts a WebView2 control with graceful fallback when the runtime isn't installed.
-/// </summary>
 public class WebViewHost : ContentControl
 {
     private WebView2? _webView;
@@ -39,7 +36,11 @@ public class WebViewHost : ContentControl
         {
             _webView = new WebView2();
             Content = _webView;
-            await _webView.EnsureCoreWebView2Async();
+            var dataDir = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "GlDrive", "WebView2");
+            var env = await CoreWebView2Environment.CreateAsync(userDataFolder: dataDir);
+            await _webView.EnsureCoreWebView2Async(env);
             _webView.CoreWebView2.Settings.UserAgent =
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
             _webView.CoreWebView2.Navigate(url);
@@ -54,57 +55,110 @@ public class WebViewHost : ContentControl
         }
     }
 
+    private const string InstallScript =
+        "irm https://go.microsoft.com/fwlink/p/?LinkId=2124703 -OutFile $env:TEMP\\MicrosoftEdgeWebview2Setup.exe; Start-Process $env:TEMP\\MicrosoftEdgeWebview2Setup.exe -ArgumentList '/install' -Wait; Remove-Item $env:TEMP\\MicrosoftEdgeWebview2Setup.exe";
+
     private void ShowFallback()
     {
         var panel = new StackPanel
         {
             Margin = new Thickness(24),
             VerticalAlignment = VerticalAlignment.Center,
-            HorizontalAlignment = HorizontalAlignment.Center
+            HorizontalAlignment = HorizontalAlignment.Left,
+            MaxWidth = 700
         };
 
         panel.Children.Add(new TextBlock
         {
-            Text = "Microsoft Edge WebView2 Runtime is required for this tab.",
-            Foreground = Brushes.Gray,
-            FontSize = 14,
+            Text = "WebView2 Runtime Required",
+            Foreground = Brushes.White,
+            FontSize = 16,
+            FontWeight = FontWeights.SemiBold,
             Margin = new Thickness(0, 0, 0, 8)
         });
 
         panel.Children.Add(new TextBlock
         {
-            Text = "It ships with Windows 11 and Microsoft Edge. If you don't have it:",
+            Text = "This tab requires the Microsoft Edge WebView2 Runtime. It ships with Windows 11 and Edge, but may be missing on some Windows 10 machines.",
             Foreground = Brushes.Gray,
-            FontSize = 12,
+            FontSize = 13,
+            TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 16)
         });
 
-        var link = new Button
+        panel.Children.Add(new TextBlock
         {
-            Content = "Download WebView2 Runtime",
-            Padding = new Thickness(16, 8, 16, 8),
-            Cursor = System.Windows.Input.Cursors.Hand
+            Text = "Run this in PowerShell (as Administrator):",
+            Foreground = Brushes.Gray,
+            FontSize = 12,
+            Margin = new Thickness(0, 0, 0, 6)
+        });
+
+        var scriptBox = new TextBox
+        {
+            Text = InstallScript,
+            IsReadOnly = true,
+            TextWrapping = TextWrapping.Wrap,
+            FontFamily = new FontFamily("Consolas"),
+            FontSize = 12,
+            Padding = new Thickness(10),
+            Margin = new Thickness(0, 0, 0, 8),
+            Background = new SolidColorBrush(Color.FromRgb(30, 30, 30)),
+            Foreground = new SolidColorBrush(Color.FromRgb(200, 200, 200)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(60, 60, 60))
         };
-        link.Click += (_, _) =>
+        panel.Children.Add(scriptBox);
+
+        var buttonPanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 16) };
+
+        var copyBtn = new Button
+        {
+            Content = "Copy to Clipboard",
+            Padding = new Thickness(14, 6, 14, 6),
+            Margin = new Thickness(0, 0, 8, 0)
+        };
+        copyBtn.Click += (_, _) =>
+        {
+            Clipboard.SetText(InstallScript);
+            copyBtn.Content = "Copied!";
+        };
+        buttonPanel.Children.Add(copyBtn);
+
+        var runBtn = new Button
+        {
+            Content = "Run Installer Now",
+            Padding = new Thickness(14, 6, 14, 6)
+        };
+        runBtn.Click += (_, _) =>
         {
             try
             {
+                runBtn.Content = "Installing...";
+                runBtn.IsEnabled = false;
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                 {
-                    FileName = "https://developer.microsoft.com/en-us/microsoft-edge/webview2/#download",
+                    FileName = "powershell.exe",
+                    Arguments = $"-NoProfile -ExecutionPolicy Bypass -Command \"{InstallScript}\"",
+                    Verb = "runas",
                     UseShellExecute = true
                 });
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "WebView2 install launch failed");
+                runBtn.Content = "Run Installer Now";
+                runBtn.IsEnabled = true;
+            }
         };
-        panel.Children.Add(link);
+        buttonPanel.Children.Add(runBtn);
+
+        panel.Children.Add(buttonPanel);
 
         panel.Children.Add(new TextBlock
         {
-            Text = "Restart GlDrive after installing.",
+            Text = "Restart GlDrive after installation completes.",
             Foreground = Brushes.Gray,
-            FontSize = 12,
-            Margin = new Thickness(0, 12, 0, 0)
+            FontSize = 12
         });
 
         Content = panel;
