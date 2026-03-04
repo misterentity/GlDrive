@@ -15,6 +15,7 @@ public partial class DashboardWindow : Window
     private bool _preDbLoaded;
     private bool _worldMonitorLoaded;
     private bool _discordLoaded;
+    private bool _streemsLoaded;
     private Point _dragStartPoint;
 
     public DashboardWindow(ServerManager serverManager, AppConfig config, NotificationStore notificationStore)
@@ -95,6 +96,12 @@ public partial class DashboardWindow : Window
         {
             _discordLoaded = true;
             _ = DiscordHost.InitializeAsync("https://discord.com/app");
+        }
+
+        if (header == "Streems" && !_streemsLoaded)
+        {
+            _streemsLoaded = true;
+            _ = StreemsHost.InitializeAsync("https://streems.redactor.site/");
         }
     }
 
