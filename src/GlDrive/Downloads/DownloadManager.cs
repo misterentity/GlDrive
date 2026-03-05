@@ -20,6 +20,7 @@ public class DownloadManager : IDisposable
     private CancellationTokenSource? _cts;
     private Task? _processorTask;
     private readonly Dictionary<string, CancellationTokenSource> _activeCts = new();
+    private Task? _progressPersistTask;
 
     public event Action<DownloadItem, DownloadProgress>? DownloadProgressChanged;
     public event Action<DownloadItem>? DownloadStatusChanged;
@@ -49,6 +50,7 @@ public class DownloadManager : IDisposable
         }
 
         _processorTask = ProcessLoop(_cts.Token);
+        _progressPersistTask = PersistProgressLoop(_cts.Token);
         Log.Information("DownloadManager started (max concurrent: {Max})", _config.MaxConcurrentDownloads);
     }
 
@@ -177,6 +179,22 @@ public class DownloadManager : IDisposable
                 (_pendingQueue[idx], _pendingQueue[idx + 1]) = (_pendingQueue[idx + 1], _pendingQueue[idx]);
             }
         }
+    }
+
+    private async Task PersistProgressLoop(CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(10), ct);
+                // Periodically save download progress so resume works across restarts
+                var hasActive = _store.Items.Any(i => i.Status == DownloadStatus.Downloading);
+                if (hasActive)
+                    _store.Save();
+            }
+        }
+        catch (OperationCanceledException) { }
     }
 
     private async Task ProcessLoop(CancellationToken ct)

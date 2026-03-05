@@ -22,6 +22,9 @@ public class TrayViewModel : INotifyPropertyChanged
     private DashboardWindow? _dashboardWindow;
     private GitHubRelease? _availableUpdate;
     private readonly HashSet<string> _subscribedServers = new();
+    private double _lastDownloadSpeed;
+    private int _activeDownloadCount;
+    private DateTime _lastSpeedUpdate;
 
     public TrayViewModel(ServerManager serverManager, AppConfig config, NotificationStore notificationStore)
     {
@@ -49,8 +52,24 @@ public class TrayViewModel : INotifyPropertyChanged
                     }
                     if (server?.Downloads != null)
                     {
+                        server.Downloads.DownloadProgressChanged += (downloadItem, progress) =>
+                        {
+                            _lastDownloadSpeed = progress.BytesPerSecond;
+                            // Throttle UI updates to once per second
+                            var now = DateTime.UtcNow;
+                            if ((now - _lastSpeedUpdate).TotalSeconds < 1) return;
+                            _lastSpeedUpdate = now;
+                            Application.Current?.Dispatcher.InvokeAsync(() =>
+                            {
+                                UpdateStatusText();
+                                OnPropertyChanged(nameof(StatusText));
+                            });
+                        };
                         server.Downloads.DownloadStatusChanged += downloadItem =>
                         {
+                            // Track active download count for status text
+                            _activeDownloadCount = server.Downloads.Store.Items
+                                .Count(i => i.Status == DownloadStatus.Downloading);
                             if (downloadItem.Status == DownloadStatus.Completed)
                             {
                                 Application.Current?.Dispatcher.Invoke(() =>
@@ -175,6 +194,12 @@ public class TrayViewModel : INotifyPropertyChanged
             Application.Current?.Dispatcher.Invoke(() => ExitCommand.Execute(null));
         };
 
+        _serverManager.BncRateLimitDetected += (serverName, message) =>
+        {
+            Application.Current?.Dispatcher.Invoke(() =>
+                ShowNotification("BNC Rate Limit", $"{serverName}: {message}"));
+        };
+
         _updateChecker.StartPeriodicCheck();
 
         UpdateStatusText();
@@ -227,7 +252,7 @@ public class TrayViewModel : INotifyPropertyChanged
         if (total == 1 && mounted.Count > 0)
         {
             var server = mounted[0];
-            StatusText = server.CurrentState switch
+            var baseStatus = server.CurrentState switch
             {
                 MountState.Connected => $"Connected ({server.DriveLetter}:)",
                 MountState.Connecting => "Connecting...",
@@ -235,6 +260,9 @@ public class TrayViewModel : INotifyPropertyChanged
                 MountState.Error => "Error",
                 _ => "Unmounted"
             };
+            StatusText = _activeDownloadCount > 0 && _lastDownloadSpeed > 0
+                ? $"{baseStatus} | {FormatSpeed(_lastDownloadSpeed)}"
+                : baseStatus;
             return;
         }
 
@@ -245,6 +273,19 @@ public class TrayViewModel : INotifyPropertyChanged
         StatusText = connectedCount > 0
             ? $"{connectedCount}/{total} connected"
             : "No servers connected";
+
+        // Append active transfer info
+        if (_activeDownloadCount > 0 && _lastDownloadSpeed > 0)
+            StatusText += $" | {FormatSpeed(_lastDownloadSpeed)}";
+    }
+
+    private static string FormatSpeed(double bytesPerSecond)
+    {
+        if (bytesPerSecond >= 1024 * 1024)
+            return $"{bytesPerSecond / (1024 * 1024):F1} MB/s";
+        if (bytesPerSecond >= 1024)
+            return $"{bytesPerSecond / 1024:F0} KB/s";
+        return $"{bytesPerSecond:F0} B/s";
     }
 
     public void ShowNotification(string title, string message)

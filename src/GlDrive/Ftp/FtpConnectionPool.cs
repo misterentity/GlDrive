@@ -120,7 +120,12 @@ public class FtpConnectionPool : IAsyncDisposable
     {
         _ = Task.Run(async () =>
         {
-            try { await client.Disconnect(); } catch { }
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+                await client.Disconnect(cts.Token);
+            }
+            catch { }
             client.Dispose();
         });
     }

@@ -18,6 +18,7 @@ public class ServerManager : IDisposable
     public event Action<string, string, MountState>? ServerStateChanged; // serverId, serverName, state
     public event Action<string, string, string, string, string>? NewReleaseDetected; // serverId, serverName, category, release, remotePath
     public event Action<string, string, IrcServiceState>? IrcStateChanged; // serverId, serverName, state
+    public event Action<string, string>? BncRateLimitDetected; // serverName, message
 
     public DownloadHistoryStore HistoryStore => _historyStore;
 
@@ -49,6 +50,9 @@ public class ServerManager : IDisposable
 
         service.StateChanged += state =>
             ServerStateChanged?.Invoke(serverId, serverConfig.Name, state);
+
+        service.BncRateLimitDetected += msg =>
+            BncRateLimitDetected?.Invoke(serverConfig.Name, msg);
 
         service.NewReleaseDetected += (category, release, remotePath) =>
         {

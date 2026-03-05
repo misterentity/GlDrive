@@ -31,6 +31,7 @@ public class MountService : IDisposable
 
     public event Action<MountState>? StateChanged;
     public event Action<string, string, string>? NewReleaseDetected; // category, release, remotePath
+    public event Action<string>? BncRateLimitDetected;
 
     public string ServerId => _serverConfig.Id;
     public string ServerName => _serverConfig.Name;
@@ -68,6 +69,20 @@ public class MountService : IDisposable
             _cache = new DirectoryCache(
                 _serverConfig.Cache.DirectoryListingTtlSeconds,
                 _serverConfig.Cache.MaxCachedDirectories);
+            // Wire stale-while-revalidate: when a cached listing expires, return stale
+            // data immediately and refresh in the background
+            _cache.BackgroundRefresh = async remotePath =>
+            {
+                try
+                {
+                    var items = await _ftp.ListDirectory(remotePath);
+                    _cache.Set(remotePath, items);
+                }
+                catch (Exception ex)
+                {
+                    Log.Debug(ex, "Background refresh failed for {Path}", remotePath);
+                }
+            };
 
             // Mount WinFsp drive if enabled
             if (_serverConfig.Mount.MountDrive)
@@ -79,7 +94,8 @@ public class MountService : IDisposable
                     _serverConfig.Connection.RootPath,
                     _serverConfig.Mount.VolumeLabel,
                     _serverConfig.Cache.FileInfoTimeoutMs,
-                    _serverConfig.Cache.DirectoryListTimeoutSeconds);
+                    _serverConfig.Cache.DirectoryListTimeoutSeconds,
+                    _serverConfig.Cache.ReadBufferSpillThresholdMb);
 
                 _host = new FileSystemHost(_fileSystem);
                 _host.Prefix = @$"\GlDrive\{_serverConfig.Id}";
@@ -106,6 +122,8 @@ public class MountService : IDisposable
             _monitor = new ConnectionMonitor(_pool, _factory, _serverConfig.Pool);
             _monitor.ConnectionLost += () => SetState(MountState.Reconnecting);
             _monitor.ConnectionRestored += () => SetState(MountState.Connected);
+            _monitor.BncRateLimitDetected += msg => BncRateLimitDetected?.Invoke(msg);
+            _monitor.PeriodicMetricsCallback = () => _cache?.LogMetrics();
             _monitor.Start();
 
             // Start release monitor
@@ -269,13 +287,20 @@ public class MountService : IDisposable
         _cache = null;
         _ftp = null;
 
-        // Fire-and-forget pool dispose — don't block on dead TCP connections
+        // Fire-and-forget pool dispose with timeout — don't block on dead TCP connections
         var pool = _pool;
         _pool = null;
         if (pool != null)
             _ = Task.Run(async () =>
             {
-                try { await pool.DisposeAsync(); }
+                try
+                {
+                    await pool.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+                }
+                catch (TimeoutException)
+                {
+                    Log.Warning("Pool dispose timed out (sync cleanup) — abandoning connections");
+                }
                 catch (Exception ex) { Log.Debug(ex, "Pool dispose error"); }
             });
 

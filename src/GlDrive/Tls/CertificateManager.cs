@@ -54,12 +54,18 @@ public class CertificateManager
         }
 
         // TOFU: first time seeing this cert
-        Log.Information("New certificate encountered: {Fingerprint}", fingerprint);
+        Log.Information("New certificate encountered for {Key}: {Fingerprint}", key, fingerprint);
 
         if (CertificatePrompt != null)
         {
             var accepted = await CertificatePrompt(key, fingerprint);
             if (!accepted) return false;
+        }
+        else
+        {
+            // No UI prompt available (e.g. headless reconnect) — reject unknown certs
+            Log.Warning("No certificate prompt handler registered — rejecting unknown cert for {Key}", key);
+            return false;
         }
 
         TrustCertificate(key, fingerprint);
