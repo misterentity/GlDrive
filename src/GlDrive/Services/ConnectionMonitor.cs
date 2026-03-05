@@ -1,3 +1,4 @@
+using FluentFTP.Exceptions;
 using GlDrive.Config;
 using GlDrive.Ftp;
 using Serilog;
@@ -12,9 +13,12 @@ public class ConnectionMonitor
     private CancellationTokenSource? _cts;
     private Task? _monitorTask;
     private bool _wasConnected = true;
+    private int _healthCheckCount;
 
     public event Action? ConnectionLost;
     public event Action? ConnectionRestored;
+    public event Action<string>? BncRateLimitDetected;
+    public Action? PeriodicMetricsCallback { get; set; }
 
     public ConnectionMonitor(FtpConnectionPool pool, FtpClientFactory factory, PoolConfig config)
     {
@@ -77,6 +81,10 @@ public class ConnectionMonitor
                     healthy = false;
                 }
 
+                // Log periodic metrics every ~5 minutes (10 cycles at 30s interval)
+                if (++_healthCheckCount % 10 == 0)
+                    PeriodicMetricsCallback?.Invoke();
+
                 if (healthy && !_wasConnected)
                 {
                     _wasConnected = true;
@@ -126,8 +134,22 @@ public class ConnectionMonitor
             }
             catch (Exception ex)
             {
-                Log.Warning(ex, "Reconnect attempt failed");
-                delay = Math.Min(delay * 2, maxDelay);
+                // Detect BNC rate limiting (421 = service not available, 450 = too many connections)
+                if (ex is FtpCommandException ftpEx &&
+                    (ftpEx.CompletionCode is "421" or "450"))
+                {
+                    var bncCooldown = 7200; // 2 hours in seconds
+                    Log.Warning("BNC rate-limit detected ({Code}: {Message}) — backing off for {Cooldown}s",
+                        ftpEx.CompletionCode, ftpEx.Message, bncCooldown);
+                    BncRateLimitDetected?.Invoke(
+                        $"BNC rate-limit ({ftpEx.CompletionCode}) — cooldown ~2 hours");
+                    delay = bncCooldown;
+                }
+                else
+                {
+                    Log.Warning(ex, "Reconnect attempt failed");
+                    delay = Math.Min(delay * 2, maxDelay);
+                }
             }
         }
     }

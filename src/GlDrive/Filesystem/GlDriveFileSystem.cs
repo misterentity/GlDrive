@@ -20,10 +20,12 @@ public class GlDriveFileSystem : FileSystemBase
     private readonly string _volumeLabel;
     private readonly int _fileInfoTimeoutMs;
     private readonly int _dirListTimeoutSeconds;
+    private readonly long _spillThresholdBytes;
+    private readonly SemaphoreSlim _ftpGate;
     private readonly byte[] _defaultSecurityDescriptor;
 
     public GlDriveFileSystem(FtpOperations ftp, DirectoryCache cache, string rootPath, string volumeLabel,
-        int fileInfoTimeoutMs = 1000, int dirListTimeoutSeconds = 30)
+        int fileInfoTimeoutMs = 1000, int dirListTimeoutSeconds = 30, int readBufferSpillThresholdMb = 50)
     {
         _ftp = ftp;
         _cache = cache;
@@ -31,6 +33,9 @@ public class GlDriveFileSystem : FileSystemBase
         _volumeLabel = volumeLabel;
         _fileInfoTimeoutMs = fileInfoTimeoutMs;
         _dirListTimeoutSeconds = dirListTimeoutSeconds;
+        _spillThresholdBytes = readBufferSpillThresholdMb > 0 ? readBufferSpillThresholdMb * 1024L * 1024 : 0;
+        // Bound concurrent FTP operations to avoid saturating the global ThreadPool
+        _ftpGate = new SemaphoreSlim(Environment.ProcessorCount, Environment.ProcessorCount);
 
         // Build a security descriptor granting the current user full access
         var sid = WindowsIdentity.GetCurrent().User!;
@@ -161,7 +166,7 @@ public class GlDriveFileSystem : FileSystemBase
             FileNode node;
             if (remotePath == _rootPath || remotePath == "/")
             {
-                node = new FileNode(remotePath, true);
+                node = new FileNode(remotePath, true) { SpillThresholdBytes = _spillThresholdBytes };
             }
             else
             {
@@ -175,6 +180,7 @@ public class GlDriveFileSystem : FileSystemBase
                     return STATUS_OBJECT_NAME_NOT_FOUND;
 
                 node = FileNode.FromListItem(parentRemote, match);
+                node.SpillThresholdBytes = _spillThresholdBytes;
             }
 
             fileNode = node;
@@ -225,7 +231,7 @@ public class GlDriveFileSystem : FileSystemBase
 
             _cache.InvalidateParent(remotePath);
 
-            var node = new FileNode(remotePath, isDir);
+            var node = new FileNode(remotePath, isDir) { SpillThresholdBytes = _spillThresholdBytes };
             if (!isDir)
             {
                 node.WriteBuffer = new MemoryStream();
@@ -262,6 +268,8 @@ public class GlDriveFileSystem : FileSystemBase
             node.ReadBuffer?.Dispose();
             node.ReadBuffer = null;
             node.ReadBufferLoaded = false;
+            node.WriteBufferFile?.Dispose();
+            node.WriteBufferFile = null;
             node.WriteBuffer = new MemoryStream();
             node.IsDirty = true;
             node.FileSize = 0;
@@ -298,7 +306,7 @@ public class GlDriveFileSystem : FileSystemBase
                 node.FileSize = data.Length;
             }
 
-            var stream = node.WriteBuffer ?? node.ReadBuffer;
+            var stream = (Stream?)node.WriteBufferFile ?? node.WriteBuffer ?? node.ReadBuffer;
             if (stream == null)
                 return STATUS_END_OF_FILE;
 
@@ -337,36 +345,36 @@ public class GlDriveFileSystem : FileSystemBase
 
         try
         {
-            node.WriteBuffer ??= new MemoryStream();
+            var writeStream = node.GetOrCreateWriteStream();
 
-            // If we had a read buffer but no write buffer yet, copy read data to write buffer
-            if (node.ReadBufferLoaded && node.WriteBuffer.Length == 0 && node.ReadBuffer != null && node.ReadBuffer.Length > 0)
+            // If we had a read buffer but no writes yet, copy read data to write stream
+            if (node.ReadBufferLoaded && writeStream.Length == 0 && node.ReadBuffer != null && node.ReadBuffer.Length > 0)
             {
                 node.ReadBuffer.Position = 0;
-                node.ReadBuffer.CopyTo(node.WriteBuffer);
+                node.ReadBuffer.CopyTo(writeStream);
             }
 
-            var pos = writeToEndOfFile ? node.WriteBuffer.Length : (long)offset;
+            var pos = writeToEndOfFile ? writeStream.Length : (long)offset;
 
-            if (constrainedIo && pos + length > node.WriteBuffer.Length)
+            if (constrainedIo && pos + length > writeStream.Length)
             {
-                length = (uint)Math.Max(0, node.WriteBuffer.Length - pos);
+                length = (uint)Math.Max(0, writeStream.Length - pos);
                 if (length == 0)
                     return STATUS_SUCCESS;
             }
 
             // Expand if needed
-            if (pos + length > node.WriteBuffer.Length)
-                node.WriteBuffer.SetLength(pos + length);
+            if (pos + length > writeStream.Length)
+                writeStream.SetLength(pos + length);
 
-            node.WriteBuffer.Position = pos;
+            writeStream.Position = pos;
             var buf = new byte[length];
             Marshal.Copy(buffer, buf, 0, (int)length);
-            node.WriteBuffer.Write(buf, 0, (int)length);
+            writeStream.Write(buf, 0, (int)length);
 
             bytesTransferred = length;
             node.IsDirty = true;
-            node.FileSize = node.WriteBuffer.Length;
+            node.FileSize = writeStream.Length;
             node.LastWriteTime = DateTime.UtcNow;
             FillFileInfo(node, out fileInfo);
             return STATUS_SUCCESS;
@@ -431,8 +439,8 @@ public class GlDriveFileSystem : FileSystemBase
 
         if (!setAllocationSize)
         {
-            node.WriteBuffer ??= new MemoryStream();
-            node.WriteBuffer.SetLength((long)newSize);
+            var writeStream = node.GetOrCreateWriteStream();
+            writeStream.SetLength((long)newSize);
             node.FileSize = (long)newSize;
             node.IsDirty = true;
         }
@@ -472,15 +480,22 @@ public class GlDriveFileSystem : FileSystemBase
             }
 
             // Upload dirty write buffer on close
-            if (node.IsDirty && node.WriteBuffer != null)
+            if (node.IsDirty)
             {
-                Log.Debug("Cleanup upload: {Path} ({Bytes} bytes)", node.RemotePath, node.WriteBuffer.Length);
-                node.WriteBuffer.Position = 0;
-                var uploadStream = node.WriteBuffer;
-                Task.Run(() => _ftp.UploadFile(node.RemotePath, uploadStream)).GetAwaiter().GetResult();
-                node.IsDirty = false;
-                _cache.InvalidateParent(node.RemotePath);
+                var uploadStream = node.GetWriteStreamForUpload();
+                if (uploadStream != null)
+                {
+                    Log.Debug("Cleanup upload: {Path} ({Bytes} bytes)", node.RemotePath, uploadStream.Length);
+                    Task.Run(() => _ftp.UploadFile(node.RemotePath, uploadStream)).GetAwaiter().GetResult();
+                    node.IsDirty = false;
+                    _cache.InvalidateParent(node.RemotePath);
+                }
             }
+
+            // Free read buffer eagerly to reduce memory pressure
+            node.ReadBuffer?.Dispose();
+            node.ReadBuffer = null;
+            node.ReadBufferLoaded = false;
         }
         catch (Exception ex)
         {
@@ -633,18 +648,30 @@ public override int CanDelete(
 
         Log.Debug("Listing {Path} (cache miss, fetching from server)...", remotePath);
 
-        // Use Task.Run to avoid potential deadlocks, with a configurable timeout
-        var task = Task.Run(() => _ftp.ListDirectory(remotePath));
-        if (!task.Wait(TimeSpan.FromSeconds(_dirListTimeoutSeconds)))
+        // Bound concurrent FTP calls to avoid ThreadPool starvation
+        _ftpGate.Wait();
+        try
         {
-            Log.Warning("ListDirectory timed out after {Seconds}s: {Path}", _dirListTimeoutSeconds, remotePath);
-            throw new TimeoutException($"ListDirectory timed out: {remotePath}");
-        }
+            // Re-check cache after acquiring gate (another thread may have populated it)
+            if (_cache.TryGet(remotePath, out cached))
+                return cached;
 
-        var items = task.Result;
-        Log.Debug("Listed {Path}: {Count} entries", remotePath, items.Length);
-        _cache.Set(remotePath, items);
-        return items;
+            var task = Task.Run(() => _ftp.ListDirectory(remotePath));
+            if (!task.Wait(TimeSpan.FromSeconds(_dirListTimeoutSeconds)))
+            {
+                Log.Warning("ListDirectory timed out after {Seconds}s: {Path}", _dirListTimeoutSeconds, remotePath);
+                throw new TimeoutException($"ListDirectory timed out: {remotePath}");
+            }
+
+            var items = task.Result;
+            Log.Debug("Listed {Path}: {Count} entries", remotePath, items.Length);
+            _cache.Set(remotePath, items);
+            return items;
+        }
+        finally
+        {
+            _ftpGate.Release();
+        }
     }
 
     private static void FillFileInfo(FileNode node, out FileInfo fileInfo)

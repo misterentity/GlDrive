@@ -61,6 +61,7 @@ public class CacheConfig
     public int MaxCachedDirectories { get; set; } = 500;
     public int DirectoryListTimeoutSeconds { get; set; } = 30;
     public int FileInfoTimeoutMs { get; set; } = 1000;
+    public int ReadBufferSpillThresholdMb { get; set; } = 50;
 }
 
 public class PoolConfig
