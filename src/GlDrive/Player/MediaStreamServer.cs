@@ -62,6 +62,7 @@ public class MediaStreamServer : IDisposable
     {
         try
         {
+            Log.Debug("Media stream request: {Method} {Url}", ctx.Request.HttpMethod, ctx.Request.RawUrl);
             var serverId = ctx.Request.QueryString["server"];
             var remotePath = ctx.Request.QueryString["path"];
 
@@ -86,6 +87,8 @@ public class MediaStreamServer : IDisposable
             {
                 fileSize = await sizeConn.Client.GetFileSize(remotePath, -1, _cts.Token);
             }
+
+            Log.Debug("Streaming {Path} (size={Size}) from server {Server}", remotePath, fileSize, serverId);
 
             // Parse Range header
             long offset = 0;
@@ -140,7 +143,7 @@ public class MediaStreamServer : IDisposable
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            Log.Debug(ex, "Media stream request error");
+            Log.Warning(ex, "Media stream request error for {Url}", ctx.Request.RawUrl);
             try { ctx.Response.StatusCode = 500; ctx.Response.Close(); } catch { }
         }
     }
@@ -148,9 +151,7 @@ public class MediaStreamServer : IDisposable
     private static async Task StreamStandard(AsyncFtpClient client, string remotePath, long offset,
         Stream output, CancellationToken ct)
     {
-        await using var ftpStream = offset > 0
-            ? await client.OpenRead(remotePath, FtpDataType.Binary, offset, token: ct)
-            : await client.OpenRead(remotePath, token: ct);
+        await using var ftpStream = await client.OpenRead(remotePath, FtpDataType.Binary, offset, token: ct);
 
         var buffer = new byte[256 * 1024];
         int read;

@@ -28,6 +28,8 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     private string _playerStatus = "";
     private bool _isLoading;
     private bool _isPlaying;
+    private bool _isBuffering;
+    private double _bufferProgress;
     private MediaCardVm? _selectedMovie;
     private MediaCardVm? _selectedTvShow;
     private PlayerSearchResultVm? _selectedFtpResult;
@@ -115,6 +117,18 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         set { _isPlaying = value; OnPropertyChanged(); }
     }
 
+    public bool IsBuffering
+    {
+        get => _isBuffering;
+        set { _isBuffering = value; OnPropertyChanged(); }
+    }
+
+    public double BufferProgress
+    {
+        get => _bufferProgress;
+        set { _bufferProgress = value; OnPropertyChanged(); }
+    }
+
     public double Volume
     {
         get => _volume;
@@ -164,7 +178,13 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         try
         {
             Core.Initialize();
-            _libVLC = new LibVLC("--no-video-title-show");
+            _libVLC = new LibVLC(
+                "--no-video-title-show",
+                "--network-caching=10000",
+                "--file-caching=5000",
+                "--live-caching=5000",
+                "--http-reconnect"
+            );
             _mediaPlayer = new MediaPlayer(_libVLC);
             _mediaPlayer.PositionChanged += (_, e) =>
             {
@@ -175,14 +195,30 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
                     UpdateTimeDisplay();
                 });
             };
+            _mediaPlayer.Buffering += (_, e) =>
+            {
+                Application.Current?.Dispatcher.Invoke(() =>
+                {
+                    BufferProgress = e.Cache;
+                    IsBuffering = e.Cache < 100;
+                    if (e.Cache < 100)
+                        PlayerStatus = $"Buffering... {e.Cache:F0}%";
+                });
+            };
+            _mediaPlayer.Opening += (_, _) =>
+                Application.Current?.Dispatcher.Invoke(() =>
+                {
+                    IsBuffering = true;
+                    PlayerStatus = "Connecting to stream...";
+                });
             _mediaPlayer.Playing += (_, _) =>
-                Application.Current?.Dispatcher.Invoke(() => IsPlaying = true);
+                Application.Current?.Dispatcher.Invoke(() => { IsPlaying = true; IsBuffering = false; });
             _mediaPlayer.Stopped += (_, _) =>
-                Application.Current?.Dispatcher.Invoke(() => { IsPlaying = false; PlayerStatus = "Stopped"; });
+                Application.Current?.Dispatcher.Invoke(() => { IsPlaying = false; IsBuffering = false; PlayerStatus = "Stopped"; });
             _mediaPlayer.EndReached += (_, _) =>
-                Application.Current?.Dispatcher.Invoke(() => { IsPlaying = false; PlayerStatus = "Finished"; });
+                Application.Current?.Dispatcher.Invoke(() => { IsPlaying = false; IsBuffering = false; PlayerStatus = "Finished"; });
             _mediaPlayer.EncounteredError += (_, _) =>
-                Application.Current?.Dispatcher.Invoke(() => { IsPlaying = false; PlayerStatus = "Playback error"; });
+                Application.Current?.Dispatcher.Invoke(() => { IsPlaying = false; IsBuffering = false; PlayerStatus = "Playback error"; });
             _mediaPlayer.Volume = (int)_volume;
 
             _streamServer = new MediaStreamServer(_serverManager);
@@ -380,15 +416,22 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     private async Task PlayFromFtp(string serverId, string remotePath)
     {
         var url = $"{_streamServer!.BaseUrl}stream?server={Uri.EscapeDataString(serverId)}&path={Uri.EscapeDataString(remotePath)}";
+        Log.Information("Playing FTP stream: {Url}", url);
+
         var media = new Media(_libVLC!, new Uri(url));
-        media.AddOption(":network-caching=5000");
+        media.AddOption(":network-caching=10000");
+        media.AddOption(":file-caching=5000");
+        media.AddOption(":http-reconnect");
+
+        IsBuffering = true;
+        PlayerStatus = "Connecting to stream...";
 
         // Stop current playback first (on threadpool to avoid deadlock)
         await Task.Run(() => _mediaPlayer!.Stop());
         _mediaPlayer!.Play(media);
 
         var fileName = Path.GetFileName(remotePath);
-        PlayerStatus = $"Playing: {fileName}";
+        PlayerStatus = $"Buffering: {fileName}...";
     }
 
     private async Task PlayFromRar(MountService server, string releasePath, List<FtpListItem> files)
