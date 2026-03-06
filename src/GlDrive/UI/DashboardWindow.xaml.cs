@@ -51,6 +51,7 @@ public partial class DashboardWindow : Window
                 vm.Irc.ResetTabComplete();
             }
         };
+
     }
 
     protected override void OnContentRendered(EventArgs e)

@@ -108,7 +108,8 @@ public class IrcClient : IDisposable
         try
         {
             line = line.Replace("\r", "").Replace("\n", "");
-            Log.Verbose("[IRC >] {Line}", line);
+            var logLine = line.StartsWith("PASS ", StringComparison.OrdinalIgnoreCase) ? "PASS [REDACTED]" : line;
+            Log.Verbose("[IRC >] {Line}", logLine);
             await _writer.WriteLineAsync(line);
         }
         catch (Exception ex)

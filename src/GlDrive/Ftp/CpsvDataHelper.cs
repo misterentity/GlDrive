@@ -71,6 +71,8 @@ public static class CpsvDataHelper
     /// </summary>
     internal static async Task<SslStream> NegotiateDataTls(NetworkStream networkStream, CancellationToken ct)
     {
+        // We are the TLS server; glftpd connects to us as TLS client.
+        // ClientCertificateRequired is false, so remote cert callback is not security-relevant here.
         var ssl = new SslStream(networkStream, true, (_, _, _, _) => true);
         using var tlsCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         tlsCts.CancelAfter(TimeSpan.FromSeconds(10));

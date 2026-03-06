@@ -1,4 +1,6 @@
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using GlDrive.Config;
 using Serilog;
@@ -54,12 +56,30 @@ public class FishKeyStore
         if (!File.Exists(_filePath)) return;
         try
         {
-            var json = File.ReadAllText(_filePath);
+            var fileBytes = File.ReadAllBytes(_filePath);
+
+            // Try DPAPI-encrypted format first, fall back to plaintext for migration
+            string json;
+            try
+            {
+                var decrypted = ProtectedData.Unprotect(fileBytes, null, DataProtectionScope.CurrentUser);
+                json = Encoding.UTF8.GetString(decrypted);
+            }
+            catch (CryptographicException)
+            {
+                // Legacy plaintext format — will be re-saved as encrypted
+                json = Encoding.UTF8.GetString(fileBytes);
+                Log.Information("Migrating FiSH keys to encrypted storage");
+            }
+
             var loaded = JsonSerializer.Deserialize<Dictionary<string, FishKeyEntry>>(json, JsonOptions);
             // Re-wrap to preserve case-insensitive lookup (deserializer uses default comparer)
             _keys = loaded != null
                 ? new Dictionary<string, FishKeyEntry>(loaded, StringComparer.OrdinalIgnoreCase)
                 : new(StringComparer.OrdinalIgnoreCase);
+
+            // Re-save to ensure encrypted format
+            Save();
         }
         catch (Exception ex)
         {
@@ -74,7 +94,11 @@ public class FishKeyStore
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
             var json = JsonSerializer.Serialize(_keys, JsonOptions);
-            File.WriteAllText(_filePath, json);
+            var encrypted = ProtectedData.Protect(
+                Encoding.UTF8.GetBytes(json), null, DataProtectionScope.CurrentUser);
+            var tempPath = _filePath + ".tmp";
+            File.WriteAllBytes(tempPath, encrypted);
+            File.Move(tempPath, _filePath, overwrite: true);
         }
         catch (Exception ex)
         {

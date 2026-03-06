@@ -10,12 +10,13 @@
     <ApplicationIcon>Assets\gldrive.ico</ApplicationIcon>
     <AssemblyName>GlDrive</AssemblyName>
     <RootNamespace>GlDrive</RootNamespace>
-    <Version>1.17.0</Version>
+    <Version>1.17.1</Version>
     <Description>Mount a glftpd FTPS server as a Windows drive letter</Description>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.3" />
     <PackageReference Include="winfsp.net" Version="2.*" />
     <PackageReference Include="FluentFTP" Version="53.*" />
     <PackageReference Include="FluentFTP.GnuTLS" Version="1.0.*" />

@@ -38,11 +38,28 @@ public static partial class ArchiveExtractor
                 }
 
                 Log.Information("Extracting {Count} entries from {File}", entries.Count, rarFile.Name);
+                var safeDirPath = Path.GetFullPath(dirPath);
                 foreach (var entry in entries)
                 {
                     ct.ThrowIfCancellationRequested();
+
+                    // Prevent path traversal (Zip Slip)
+                    if (entry.Key != null)
+                    {
+                        var fullPath = Path.GetFullPath(Path.Combine(safeDirPath, entry.Key));
+                        if (!fullPath.StartsWith(safeDirPath, StringComparison.OrdinalIgnoreCase))
+                        {
+                            Log.Warning("Skipping archive entry with path traversal: {Key}", entry.Key);
+                            continue;
+                        }
+                    }
+
                     Log.Debug("Extracting entry: {Key} ({Size} bytes)", entry.Key, entry.Size);
-                    await entry.WriteToDirectoryAsync(dirPath);
+                    await entry.WriteToDirectoryAsync(dirPath, new SharpCompress.Common.ExtractionOptions
+                    {
+                        ExtractFullPath = true,
+                        Overwrite = true,
+                    });
                 }
                 Log.Information("Extraction complete: {File} ({Count} files)", rarFile.Name, entries.Count);
             }
