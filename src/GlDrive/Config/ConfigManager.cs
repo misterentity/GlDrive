@@ -54,7 +54,9 @@ public class ConfigManager
     {
         Directory.CreateDirectory(AppDataFolder);
         var json = JsonSerializer.Serialize(config, JsonOptions);
-        File.WriteAllText(ConfigFilePath, json);
+        var tempPath = ConfigFilePath + ".tmp";
+        File.WriteAllText(tempPath, json);
+        File.Move(tempPath, ConfigFilePath, overwrite: true);
     }
 
     private static bool NeedsMigration(string json)

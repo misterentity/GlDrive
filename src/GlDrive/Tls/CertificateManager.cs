@@ -116,7 +116,9 @@ public class CertificateManager
     {
         Directory.CreateDirectory(Path.GetDirectoryName(_fingerprintFile)!);
         var json = JsonSerializer.Serialize(_trustedCerts, JsonOptions);
-        File.WriteAllText(_fingerprintFile, json);
+        var tempPath = _fingerprintFile + ".tmp";
+        File.WriteAllText(tempPath, json);
+        File.Move(tempPath, _fingerprintFile, overwrite: true);
     }
 }
 

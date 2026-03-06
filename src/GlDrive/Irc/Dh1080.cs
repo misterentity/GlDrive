@@ -49,6 +49,8 @@ public class Dh1080
     {
         var theirBytes = Convert.FromBase64String(theirPubKeyBase64);
         var theirPubKey = new BigInteger(theirBytes, isUnsigned: true, isBigEndian: true);
+        if (theirPubKey <= 1 || theirPubKey >= Prime - 1)
+            throw new CryptographicException("Invalid DH1080 public key (out of safe range)");
         var shared = BigInteger.ModPow(theirPubKey, _privateKey, Prime);
 
         var sharedBytes = shared.ToByteArray(isUnsigned: true, isBigEndian: true);
