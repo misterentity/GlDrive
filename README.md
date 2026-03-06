@@ -2,29 +2,66 @@
 
 A Windows 11 system tray application that mounts glftpd FTPS servers as local drive letters. Browse your FTP sites in Windows Explorer like any other drive. Supports multiple servers, each on its own drive letter.
 
-Built with WinFsp, FluentFTP, and GnuTLS.
+Built with WinFsp, FluentFTP, GnuTLS, and .NET 10.
 
 ## Features
 
+### Drive Mounting
 - **Multi-server support** — mount multiple glftpd servers simultaneously, each on its own drive letter (G:, H:, etc.)
-- **Optional drive mounting** — servers can connect without a drive letter while retaining full functionality (search, downloads, notifications)
-- **SOCKS5 proxy** — connect to FTP servers through a SOCKS5 proxy with optional authentication
+- **Optional drive mounting** — servers can connect without a drive letter while retaining full functionality (search, downloads, notifications, IRC)
 - **Native drive letter** — use mounted servers in Explorer, cmd, or any app
-- **Cross-server search** — search all connected servers in parallel from the Dashboard
-- **Per-server tray menu** — connect/disconnect, open drive, and refresh cache per server from the tray icon
 - **CPSV support** — works with glftpd behind a BNC (CPSV data connections with reverse TLS)
-- **TOFU certificate pinning** — trust-on-first-use with SHA-256 fingerprint storage
+- **SOCKS5 proxy** — connect to FTP servers through a SOCKS5 proxy with optional authentication
 - **Connection pooling** — bounded pool of FTPS connections per server with automatic reconnection
 - **Directory caching** — TTL-based cache with LRU eviction for responsive browsing
-- **Setup wizard** — first-run wizard walks through server configuration
-- **New release notifications** — polls `/recent/` categories with configurable excluded categories, shows Windows toast notifications
-- **Wishlist & auto-download** — track TV shows (TVMaze) and movies (OMDB), auto-download matching releases from any server
+
+### Downloads
+- **Download manager** — streaming FTP-to-disk downloads with real-time progress, speed display, and queue management
+- **Download resume** — interrupted downloads resume from where they left off
+- **Auto-retry** — failed downloads retry automatically with exponential backoff (configurable max retries)
+- **Speed limiting** — global and per-server bandwidth limits
+- **Auto-extraction** — RAR archives are automatically extracted after download with SFV verification
 - **Category download paths** — route downloads from specific categories to custom local folders
+- **Download scheduling** — restrict downloads to specific hours (e.g., overnight only)
+- **Download history** — completed and failed downloads are recorded for review
+- **Drag-and-drop** — drag releases from notifications/search onto the download queue
+
+### Notifications & Wishlist
+- **New release notifications** — polls categories with configurable exclusions, shows Windows toast notifications with debounce batching
+- **Wishlist & auto-download** — track TV shows (TVMaze/TMDB) and movies (OMDB/TMDB), auto-download matching releases from any server with quality profiles (Any/SD/720p/1080p/2160p)
 - **Rich media dashboard** — posters, ratings, genres, and plot summaries for wishlist items
-- **Download manager** — streaming FTP-to-disk downloads with progress, queue management, and auto-organization
-- **Dark theme** — black/red/white UI throughout
-- **System tray** — lives in the tray with per-server status and controls
+- **Wishlist import/export** — share wishlists as JSON files
+- **Completion notifications** — toast notifications and optional sound when downloads finish
+- **Skip incomplete releases** — optionally skip downloads missing an NFO file
+
+### IRC Client
+- **Built-in IRC client** — connect to IRC servers with TLS support directly from the Dashboard
+- **FiSH encryption** — Blowfish ECB/CBC message encryption with DH1080 key exchange
+- **SITE INVITE integration** — automatically runs SITE INVITE via the FTP connection before joining channels
+- **Channel management** — join, part, private messages, nick list with mode prefixes (@/+/%), Tab nick-completion
+- **Slash commands** — /join /part /msg /me /topic /notice /key /keyx /quit /help and raw IRC passthrough
+- **Per-server IRC** — each server has its own IRC connection, channels, and FiSH key store
+
+### Search
+- **Cross-server search** — search all connected servers in parallel from the Dashboard with server-tagged results
+- **Per-category parallel search** — searches all categories within each server concurrently, throttled by the connection pool
+
+### UI & System
+- **Dark/Light theme** — switchable theme with live preview
+- **System tray** — per-server status and controls (connect/disconnect, open drive, refresh cache)
+- **Setup wizard** — 5-step first-run wizard walks through server configuration
 - **Auto-connect** — optionally connect each server on Windows startup
+- **Auto-update** — checks GitHub releases daily and offers in-app update with UAC elevation
+- **Embedded web views** — Discord and Streems web clients in Dashboard tabs
+
+### Security
+- **TOFU certificate pinning** — trust-on-first-use with SHA-256 fingerprint storage
+- **Encrypted credential storage** — passwords stored in Windows Credential Manager (DPAPI)
+- **Encrypted key storage** — FiSH encryption keys encrypted at rest using DPAPI
+- **Log redaction** — FTP and IRC passwords are redacted before logging
+- **Atomic config writes** — write-to-temp-then-rename prevents config corruption on crash
+- **DH1080 key validation** — rejects weak public keys to prevent trivial secret recovery
+- **Archive path traversal protection** — validates archive entry paths before extraction
 
 ## Screenshots
 
@@ -95,18 +132,23 @@ dotnet run --project src/GlDrive/GlDrive.csproj
 - [Inno Setup 6](https://jrsoftware.org/isinfo.php)
 
 ```powershell
+# Build installer + update zip
 .\installer\build.ps1
-```
 
-This publishes a self-contained release build and compiles the Inno Setup installer to `installer/output/GlDriveSetup.exe`.
+# Build + publish GitHub release
+.\installer\release.ps1
+```
 
 ## Usage
 
 1. **First run** — the setup wizard appears. Enter your glftpd server address, port, username, and password. Choose a drive letter.
-2. **Add more servers** — open Settings > Servers tab to add, edit, or remove servers. Each gets its own drive letter.
-3. **Tray icon** — GlDrive runs in the system tray. Right-click for per-server mount/unmount, open drive, refresh cache, settings, and exit.
+2. **Add more servers** — open Settings > Servers tab to add, edit, or remove servers. Each gets its own drive letter and optional IRC connection.
+3. **Tray icon** — GlDrive runs in the system tray. Right-click for per-server connect/disconnect, open drive, refresh cache, settings, and exit.
 4. **Browse** — open Explorer and navigate to any mounted drive letter.
 5. **Search** — Dashboard > Search queries all connected servers in parallel and shows results with server labels.
+6. **Downloads** — right-click search results or drag releases to the download queue. Monitor progress in Dashboard > Downloads.
+7. **Wishlist** — add movies/TV shows in Dashboard > Wishlist. Matching releases are auto-downloaded from any connected server.
+8. **IRC** — configure IRC in server settings. Chat, FiSH-encrypted channels, and DH1080 key exchange from Dashboard > IRC.
 
 ### Configuration
 
@@ -116,35 +158,53 @@ All settings are stored locally on your machine:
 |------|----------|
 | App config | `%AppData%\GlDrive\appsettings.json` |
 | Downloads (per server) | `%AppData%\GlDrive\downloads-{serverId}.json` |
+| Download history | `%AppData%\GlDrive\download-history.json` |
 | Wishlist | `%AppData%\GlDrive\wishlist.json` |
 | Trusted certs | `%AppData%\GlDrive\trusted_certs.json` |
+| FiSH keys (per server) | `%AppData%\GlDrive\fish-keys-{serverId}.json` (DPAPI encrypted) |
 | Logs | `%AppData%\GlDrive\logs\gldrive-{date}.log` |
 | Passwords | Windows Credential Manager |
+
+### Keyboard shortcuts
+
+| Key | Context | Action |
+|-----|---------|--------|
+| Delete | Downloads tab | Cancel selected download |
+| R | Downloads tab | Retry failed download |
+| Enter | Notifications/Search tab | Download selected release |
+| Tab | IRC input | Cycle nick completion |
 
 ## Architecture
 
 ```
 App.xaml.cs (startup)
-  ├── SingleInstanceGuard
-  ├── ConfigManager → AppConfig { Servers[], Downloads, Logging }
-  ├── SerilogSetup
-  ├── WizardWindow (first-run only)
-  ├── CertificateManager (TOFU, shared across servers)
-  ├── ServerManager (orchestrates all servers)
-  │     └── per server: MountService
-  │           ├── FtpClientFactory (FluentFTP + GnuTLS)
-  │           ├── FtpConnectionPool (bounded Channel<T>)
-  │           ├── FtpOperations → CpsvDataHelper (for BNC)
-  │           ├── DirectoryCache (TTL + LRU)
-  │           ├── GlDriveFileSystem (WinFsp, unique prefix per server)
-  │           ├── ConnectionMonitor (NOOP keepalive)
-  │           ├── NewReleaseMonitor (polls /recent/)
-  │           ├── FtpSearchService (parallel category search)
-  │           ├── DownloadManager + DownloadStore (per-server)
-  │           └── WishlistMatcher (global wishlist, per-server matching)
-  ├── WishlistStore (global)
-  ├── DashboardWindow (cross-server search / downloads / wishlist)
-  └── TrayIcon (H.NotifyIcon, dynamic per-server menu)
+  +-- SingleInstanceGuard
+  +-- ConfigManager -> AppConfig { Servers[], Downloads, Logging }
+  +-- SerilogSetup
+  +-- WizardWindow (first-run only)
+  +-- CertificateManager (TOFU, shared across servers)
+  +-- ServerManager (orchestrates all servers)
+  |     +-- per server: MountService
+  |     |     +-- FtpClientFactory (FluentFTP + GnuTLS / SOCKS5 proxy)
+  |     |     +-- FtpConnectionPool (bounded Channel<T>)
+  |     |     +-- FtpOperations -> CpsvDataHelper (for BNC)
+  |     |     +-- DirectoryCache (TTL + LRU)
+  |     |     +-- GlDriveFileSystem (WinFsp, unique prefix per server)
+  |     |     +-- ConnectionMonitor (NOOP keepalive)
+  |     |     +-- NewReleaseMonitor (polls /recent/)
+  |     |     +-- FtpSearchService (parallel category search)
+  |     |     +-- DownloadManager + DownloadStore (per-server queue)
+  |     |     +-- WishlistMatcher (global wishlist, per-server matching)
+  |     +-- per server: IrcService
+  |           +-- IrcClient (TcpClient + SslStream)
+  |           +-- FishCipher (Blowfish ECB/CBC via BouncyCastle)
+  |           +-- FishKeyStore (DPAPI-encrypted, per-server)
+  |           +-- Dh1080 (key exchange)
+  +-- WishlistStore (global)
+  +-- DownloadHistoryStore (global)
+  +-- UpdateChecker (periodic GitHub release polling)
+  +-- DashboardWindow (search / downloads / wishlist / IRC / notifications)
+  +-- TrayIcon (H.NotifyIcon, dynamic per-server menu)
 ```
 
 ### Mounting
@@ -199,6 +259,14 @@ Downloads that were in-progress when the app closed are automatically reset to q
 
 In Settings > Downloads, you can map specific categories to custom local folders. For example, map `x265` to `D:\Movies\x265` and `tv-hd` to `T:\TV`. When a download is initiated (manually or via wishlist), GlDrive checks the category against the mapping table and uses the custom path if one is set. Unmatched categories fall back to the default download folder.
 
+### IRC
+
+Each server can have an associated IRC connection configured in the server edit dialog. The IRC client supports TLS, auto-reconnect with exponential backoff, and SITE INVITE integration (borrows an FTP pool connection to run `SITE INVITE {nick}` before auto-joining channels).
+
+FiSH encryption is supported in both ECB and CBC modes. DH1080 key exchange can be initiated from the nick context menu. Keys are stored per-server in DPAPI-encrypted files.
+
+The IRC tab in the Dashboard provides a channel sidebar (with PM and server windows), message area, nick list with mode prefixes, and an input box with Tab nick-completion and slash command support.
+
 ### CPSV data connections
 
 glftpd behind a BNC requires CPSV instead of PASV for data connections. FluentFTP doesn't support this natively, so `CpsvDataHelper` implements it manually:
@@ -208,22 +276,29 @@ glftpd behind a BNC requires CPSV instead of PASV for data connections. FluentFT
 3. Sends the data command (LIST/RETR/STOR) on the control channel
 4. Negotiates TLS **as server** — glftpd calls `SSL_connect` on data channels, so we must call `AuthenticateAsServerAsync` with an in-memory self-signed certificate
 
-## Security Assessment
+### Auto-update
+
+GlDrive checks for new releases on GitHub every 24 hours. When an update is available, a notification is shown. The update downloads the release ZIP, extracts it to a temp directory, and launches the new binary with UAC elevation to overwrite the install directory. The old process exits, old files are renamed to `.old`, new files are copied in, and the updated app is launched.
+
+## Security
 
 ### Credential handling
 
 - **Passwords are never stored in files.** They are stored exclusively in [Windows Credential Manager](https://support.microsoft.com/en-us/windows/accessing-credential-manager-1b5c916a-6a16-889f-8581-fc16e8165ac0), a system-level encrypted credential store.
-- **Passwords are never logged.** The FTP log adapter explicitly redacts `PASS` commands before they reach Serilog.
+- **Passwords are never logged.** Both the FTP log adapter and IRC client explicitly redact `PASS` commands before they reach Serilog.
 - **No credentials exist in source code.** The repository has been scanned — no hardcoded hostnames, IPs, usernames, passwords, API keys, or connection strings are present in any tracked file or git history.
 - **Config files contain no secrets.** `appsettings.json` stores connection settings (host, port, username, drive letter) but never passwords. This file lives in `%AppData%`, not in the repository.
+- **FiSH keys are encrypted at rest.** Per-server key stores are encrypted using Windows DPAPI (CurrentUser scope). Legacy plaintext stores are automatically migrated on first load.
 
 ### TLS / certificate security
 
-- **FTPS with explicit TLS** — all control and data connections are encrypted.
+- **FTPS with explicit TLS** — all FTP control and data connections are encrypted.
+- **IRC TLS** — IRC connections support TLS with the same TOFU certificate validation as FTP.
 - **GnuTLS backend** — uses FluentFTP.GnuTLS rather than SChannel for broader cipher suite support.
-- **TOFU (Trust On First Use)** — on first connection, the server's certificate SHA-256 fingerprint is stored locally. Subsequent connections reject fingerprint mismatches, protecting against MITM attacks.
+- **TOFU (Trust On First Use)** — on first connection, the server’s certificate SHA-256 fingerprint is stored locally. Subsequent connections reject fingerprint mismatches, protecting against MITM attacks.
 - **TLS 1.2 preferred** — TLS 1.3 session tickets are disabled (`GnuAdvanced.NoTickets`) to work around a known glftpd bug.
 - **Data channel TLS** — CPSV data connections use a self-signed RSA 2048 certificate generated in-memory at runtime. No private key material is stored on disk.
+- **DH1080 key validation** — public keys are bounds-checked to prevent trivial shared secret recovery attacks.
 
 ### Local data storage
 
@@ -231,14 +306,16 @@ glftpd behind a BNC requires CPSV instead of PASV for data connections. FluentFT
 |------|---------|------------|
 | Passwords | Windows Credential Manager | OS-level DPAPI encryption |
 | Proxy passwords | Windows Credential Manager | OS-level DPAPI encryption |
-| Server configs (host/port/username) | `%AppData%\GlDrive\appsettings.json` | User-profile ACLs |
-| Certificate fingerprints | `%AppData%\GlDrive\trusted_certs.json` | User-profile ACLs |
-| Logs | `%AppData%\GlDrive\logs\` | Passwords redacted, auto-rotated |
+| IRC passwords | Windows Credential Manager | OS-level DPAPI encryption |
+| FiSH encryption keys | `fish-keys-{serverId}.json` | DPAPI encryption (CurrentUser) |
+| Server configs (host/port/username) | `appsettings.json` | User-profile ACLs |
+| Certificate fingerprints | `trusted_certs.json` | User-profile ACLs, atomic writes |
+| Logs | `logs/gldrive-{date}.log` | Passwords redacted, auto-rotated |
 
 ### What GlDrive does NOT do
 
 - Does not transmit credentials to any third party
-- Does not phone home or collect telemetry
+- Does not phone home or collect telemetry (update checks go directly to the GitHub API)
 - Does not store passwords in config files, registry, or environment variables
 - Does not bypass TLS certificate validation (uses TOFU pinning)
 - Does not run any network services (the TLS server role in CPSV is outbound-only to the glftpd backend)
