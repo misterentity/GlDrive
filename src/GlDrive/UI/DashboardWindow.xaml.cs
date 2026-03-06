@@ -98,13 +98,18 @@ public partial class DashboardWindow : Window
         {
             _playerLoaded = true;
             _playerVm = new PlayerViewModel(_serverManager, _config);
-            _playerVm.InitVLC();
+            _playerVm.PlayerStatus = "Initializing player...";
             PlayerTab.DataContext = _playerVm;
 
-            // Wire up the VideoView
-            PlayerVideoView.MediaPlayer = _playerVm.Player;
-
-            _ = _playerVm.LoadTrending();
+            // Defer heavy VLC init so the tab appears instantly
+            _ = Task.Run(() => _playerVm.InitVLC()).ContinueWith(_ =>
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    PlayerVideoView.MediaPlayer = _playerVm.Player;
+                    _ = _playerVm.LoadTrending();
+                });
+            }, TaskScheduler.Default);
         }
 
         if (header == "World Monitor" && !_worldMonitorLoaded)
