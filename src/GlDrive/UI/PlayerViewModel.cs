@@ -11,8 +11,6 @@ using GlDrive.Player;
 using GlDrive.Services;
 using LibVLCSharp.Shared;
 using Serilog;
-using SharpCompress.Archives;
-using SharpCompress.Archives.Rar;
 
 namespace GlDrive.UI;
 
@@ -436,61 +434,22 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
     private async Task PlayFromRar(MountService server, string releasePath, List<FtpListItem> files)
     {
-        PlayerStatus = "Downloading RAR files for extraction...";
+        // Stream RAR extraction via HTTP — volumes download on-demand, VLC plays immediately
+        var url = $"{_streamServer!.BaseUrl}rar-stream?server={Uri.EscapeDataString(server.ServerId)}&path={Uri.EscapeDataString(releasePath)}";
+        Log.Information("Playing RAR stream: {Url}", url);
 
-        var tempDir = Path.Combine(Path.GetTempPath(), "GlDrive", "player", Guid.NewGuid().ToString("N")[..8]);
-        Directory.CreateDirectory(tempDir);
+        var media = new Media(_libVLC!, new Uri(url));
+        media.AddOption(":network-caching=15000");
+        media.AddOption(":file-caching=5000");
+        media.AddOption(":http-reconnect");
 
-        try
-        {
-            // Download all archive parts
-            var archiveFiles = files
-                .Where(f => ArchiveExtractor.IsArchiveFile(f.Name))
-                .OrderBy(f => f.Name)
-                .ToList();
+        IsBuffering = true;
+        PlayerStatus = "Downloading & extracting RAR...";
 
-            var totalBytes = archiveFiles.Sum(f => f.Size);
-            long downloaded = 0;
+        await Task.Run(() => _mediaPlayer!.Stop());
+        _mediaPlayer!.Play(media);
 
-            foreach (var af in archiveFiles)
-            {
-                var localPath = Path.Combine(tempDir, af.Name);
-                var data = await server.Ftp!.DownloadFile(af.FullName);
-                await File.WriteAllBytesAsync(localPath, data);
-                downloaded += af.Size;
-                var pct = totalBytes > 0 ? (int)(downloaded * 100 / totalBytes) : 0;
-                PlayerStatus = $"Downloading: {pct}% ({af.Name})";
-            }
-
-            // Extract
-            PlayerStatus = "Extracting...";
-            await ArchiveExtractor.ExtractIfNeeded(tempDir, CancellationToken.None);
-
-            // Find extracted video
-            var videoFile = Directory.GetFiles(tempDir, "*", SearchOption.AllDirectories)
-                .Where(f => IsVideoFile(f))
-                .OrderByDescending(f => new FileInfo(f).Length)
-                .FirstOrDefault();
-
-            if (videoFile != null)
-            {
-                await Task.Run(() => _mediaPlayer!.Stop());
-                var media = new Media(_libVLC!, new Uri($"file:///{videoFile.Replace('\\', '/')}"));
-                _mediaPlayer!.Play(media);
-                PlayerStatus = $"Playing: {Path.GetFileName(videoFile)}";
-            }
-            else
-            {
-                PlayerStatus = "No video file found after extraction";
-            }
-        }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "RAR extraction/playback failed");
-            PlayerStatus = $"Extraction failed: {ex.Message}";
-            // Clean up temp on failure
-            try { Directory.Delete(tempDir, true); } catch { }
-        }
+        PlayerStatus = $"Buffering: {Path.GetFileName(releasePath)}...";
     }
 
     private void TogglePlayPause()
