@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using GlDrive.Config;
 using GlDrive.Downloads;
@@ -16,7 +17,9 @@ public partial class DashboardWindow : Window
     private bool _worldMonitorLoaded;
     private bool _discordLoaded;
     private bool _streemsLoaded;
+    private bool _playerLoaded;
     private Point _dragStartPoint;
+    private PlayerViewModel? _playerVm;
 
     public DashboardWindow(ServerManager serverManager, AppConfig config, NotificationStore notificationStore)
     {
@@ -25,7 +28,11 @@ public partial class DashboardWindow : Window
         InitializeComponent();
         var vm = new DashboardViewModel(serverManager, config, notificationStore);
         DataContext = vm;
-        Closed += (_, _) => vm.Dispose();
+        Closed += (_, _) =>
+        {
+            vm.Dispose();
+            _playerVm?.Dispose();
+        };
 
         // Auto-scroll IRC messages
         vm.Irc.ScrollToBottom += () =>
@@ -87,6 +94,19 @@ public partial class DashboardWindow : Window
             if (vm != null) _ = vm.LoadLatestPreDb();
         }
 
+        if (header == "Player" && !_playerLoaded)
+        {
+            _playerLoaded = true;
+            _playerVm = new PlayerViewModel(_serverManager, _config);
+            _playerVm.InitVLC();
+            PlayerTab.DataContext = _playerVm;
+
+            // Wire up the VideoView
+            PlayerVideoView.MediaPlayer = _playerVm.Player;
+
+            _ = _playerVm.LoadTrending();
+        }
+
         if (header == "World Monitor" && !_worldMonitorLoaded)
         {
             _worldMonitorLoaded = true;
@@ -104,6 +124,34 @@ public partial class DashboardWindow : Window
             _streemsLoaded = true;
             _ = StreemsHost.InitializeAsync("https://streems.redactor.site/");
         }
+    }
+
+    // Movie poster card clicked
+    private void MovieCard_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.DataContext is MediaCardVm card && _playerVm != null)
+            _playerVm.SelectedMovie = card;
+    }
+
+    // TV poster card clicked
+    private void TvCard_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.DataContext is MediaCardVm card && _playerVm != null)
+            _playerVm.SelectedTvShow = card;
+    }
+
+    // Double-click FTP result to play
+    private void PlayerResult_DoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (_playerVm?.PlayResultCommand is ICommand cmd && cmd.CanExecute(null))
+            cmd.Execute(null);
+    }
+
+    // Seek bar drag completed
+    private void SeekBar_DragCompleted(object sender, DragCompletedEventArgs e)
+    {
+        if (sender is Slider slider && _playerVm != null)
+            _playerVm.SeekTo(slider.Value);
     }
 
     // Drag-and-drop: record start point
