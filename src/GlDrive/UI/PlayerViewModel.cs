@@ -808,7 +808,10 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         catch (Exception ex)
         {
             Log.Warning(ex, "RAR download failed for {Path}", releasePath);
-            PlayerStatus = $"RAR download failed: {ex.Message}";
+            var msg = ex.Message;
+            if (msg.Contains("actively refused") || msg.Contains("connection"))
+                msg = "Server refused connection — try again when other downloads finish";
+            PlayerStatus = msg;
             IsBuffering = false;
         }
     }
