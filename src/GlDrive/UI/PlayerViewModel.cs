@@ -289,7 +289,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
             _mediaPlayer = new MediaPlayer(_libVLC);
             _mediaPlayer.PositionChanged += (_, e) =>
             {
-                Application.Current?.Dispatcher.Invoke(() =>
+                Application.Current?.Dispatcher.BeginInvoke(() =>
                 {
                     _position = e.Position * 100;
                     OnPropertyChanged(nameof(Position));
@@ -298,7 +298,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
             };
             _mediaPlayer.Buffering += (_, e) =>
             {
-                Application.Current?.Dispatcher.Invoke(() =>
+                Application.Current?.Dispatcher.BeginInvoke(() =>
                 {
                     BufferProgress = e.Cache;
                     IsBuffering = e.Cache < 100;
@@ -307,13 +307,13 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
                 });
             };
             _mediaPlayer.Opening += (_, _) =>
-                Application.Current?.Dispatcher.Invoke(() =>
+                Application.Current?.Dispatcher.BeginInvoke(() =>
                 {
                     IsBuffering = true;
                     PlayerStatus = "Connecting to stream...";
                 });
             _mediaPlayer.Playing += (_, _) =>
-                Application.Current?.Dispatcher.Invoke(() =>
+                Application.Current?.Dispatcher.BeginInvoke(() =>
                 {
                     IsPlaying = true;
                     IsBuffering = false;
@@ -330,7 +330,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
                     }
                 });
             _mediaPlayer.Stopped += (_, _) =>
-                Application.Current?.Dispatcher.Invoke(() =>
+                Application.Current?.Dispatcher.BeginInvoke(() =>
                 {
                     SaveCurrentPosition();
                     IsPlaying = false;
@@ -340,7 +340,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
                     SubtitleTracks.Clear();
                 });
             _mediaPlayer.EndReached += (_, _) =>
-                Application.Current?.Dispatcher.Invoke(() =>
+                Application.Current?.Dispatcher.BeginInvoke(() =>
                 {
                     if (!string.IsNullOrEmpty(_currentReleaseName))
                         _resumeStore?.ClearPosition(_currentReleaseName);
@@ -353,7 +353,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
                     _ = PlayNextEpisode();
                 });
             _mediaPlayer.EncounteredError += (_, _) =>
-                Application.Current?.Dispatcher.Invoke(() =>
+                Application.Current?.Dispatcher.BeginInvoke(() =>
                 {
                     IsPlaying = false;
                     IsBuffering = false;
@@ -782,7 +782,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
                 await _streamServer!.DownloadAndExtractRar(server, releasePath, files,
                     onProgress: (msg, pct) =>
                     {
-                        Application.Current?.Dispatcher.Invoke(() =>
+                        Application.Current?.Dispatcher.BeginInvoke(() =>
                         {
                             PlayerStatus = msg;
                             BufferProgress = pct;
