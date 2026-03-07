@@ -104,6 +104,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(DetailPosterUrl));
         OnPropertyChanged(nameof(HasDetailPoster));
         OnPropertyChanged(nameof(ShowEpisodePicker));
+        OnPropertyChanged(nameof(HasNoSelection));
     }
 
     public MediaCardVm? SelectedMedia => _selectedMovie ?? _selectedTvShow;
