@@ -170,6 +170,57 @@ public static class CpsvDataHelper
         }
     }
 
+    /// <summary>
+    /// Downloads a file via CPSV RETR, streaming to the provided output stream.
+    /// Calls onProgress with bytes read so far after each chunk.
+    /// </summary>
+    public static async Task DownloadFileToStream(
+        AsyncFtpClient client, string remotePath, Stream output,
+        Action<long>? onProgress = null, CancellationToken ct = default)
+    {
+        Log.Debug("CPSV RETR (stream) {Path}", remotePath);
+
+        await client.Execute("TYPE I", ct);
+
+        var tcp = await OpenDataTcp(client, ct);
+
+        try
+        {
+            var retrReply = await client.Execute($"RETR {remotePath}", ct);
+            if (retrReply.Code != "150" && retrReply.Code != "125")
+                throw new IOException($"RETR failed: {retrReply.Code} {retrReply.Message}");
+
+            var ssl = await NegotiateDataTls(tcp.GetStream(), ct);
+
+            try
+            {
+                var buf = new byte[256 * 1024];
+                long totalRead = 0;
+                int rd;
+                while ((rd = await ssl.ReadAsync(buf, ct)) > 0)
+                {
+                    await output.WriteAsync(buf.AsMemory(0, rd), ct);
+                    totalRead += rd;
+                    onProgress?.Invoke(totalRead);
+                }
+
+                ssl.Close();
+                tcp.Close();
+
+                var completeReply = await client.GetReply(ct);
+                Log.Debug("RETR complete: {Code} {Message}", completeReply.Code, completeReply.Message);
+            }
+            finally
+            {
+                ssl.Dispose();
+            }
+        }
+        finally
+        {
+            tcp.Dispose();
+        }
+    }
+
     public static async Task UploadFile(
         AsyncFtpClient client, string remotePath, byte[] data, string controlHost, CancellationToken ct = default)
     {

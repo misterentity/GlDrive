@@ -632,22 +632,38 @@ public class MediaStreamServer : IDisposable
                 if (conn == null)
                     throw new IOException("No FTP connection available — pause other downloads and retry");
 
+                var volStartBytes = downloadedBytes;
                 try
                 {
                     await using var _ = conn;
-                    await using var ftpStream = await conn.Client.OpenRead(vol.FullName, FtpDataType.Binary, 0, token: ct);
                     await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None);
-                    var buf = new byte[256 * 1024];
-                    int rd;
-                    while ((rd = await ftpStream.ReadAsync(buf, ct)) > 0)
+
+                    if (server.Pool!.UseCpsv)
                     {
-                        await fileStream.WriteAsync(buf.AsMemory(0, rd), ct);
-                        downloadedBytes += rd;
-                        var pct = totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0;
-                        onProgress?.Invoke($"Downloading {i + 1}/{volumes.Count} — {pct}%", pct);
+                        // Use CPSV data connection for BNC-compatible download
+                        await CpsvDataHelper.DownloadFileToStream(conn.Client, vol.FullName, fileStream,
+                            bytesRead =>
+                            {
+                                downloadedBytes += bytesRead - (downloadedBytes - volStartBytes);
+                                var pct = totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0;
+                                onProgress?.Invoke($"Downloading {i + 1}/{volumes.Count} — {pct}%", pct);
+                            }, ct);
                     }
-                    ftpStream.Close();
-                    await conn.Client.GetReply(ct);
+                    else
+                    {
+                        await using var ftpStream = await conn.Client.OpenRead(vol.FullName, FtpDataType.Binary, 0, token: ct);
+                        var buf = new byte[256 * 1024];
+                        int rd;
+                        while ((rd = await ftpStream.ReadAsync(buf, ct)) > 0)
+                        {
+                            await fileStream.WriteAsync(buf.AsMemory(0, rd), ct);
+                            downloadedBytes += rd;
+                            var pct = totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0;
+                            onProgress?.Invoke($"Downloading {i + 1}/{volumes.Count} — {pct}%", pct);
+                        }
+                        ftpStream.Close();
+                        await conn.Client.GetReply(ct);
+                    }
                     break; // Success — exit retry loop
                 }
                 catch (OperationCanceledException) { throw; }

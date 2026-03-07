@@ -114,6 +114,12 @@ public class NewReleaseMonitor
         {
             ct.ThrowIfCancellationRequested();
 
+            // Throttle: if other connections are active (downloads), wait before next LIST
+            if (_pool.ActiveCount > 1)
+                await Task.Delay(2000, ct);
+            else
+                await Task.Delay(200, ct); // Small delay between categories to avoid hammering data connections
+
             var categoryPath = _config.WatchPath.TrimEnd('/') + "/" + category;
             FtpListItem[] releases;
             try
