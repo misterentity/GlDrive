@@ -671,17 +671,12 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         finally { IsLoading = false; }
     }
 
-    // ── Search & Play ──
+    // ── Search FTP for selected media ──
     private async Task SearchAndPlay()
     {
         var media = SelectedMedia;
         if (media == null) return;
         await SearchFtpDirect(media.SearchTitle);
-
-        if (FtpResults.Count > 0)
-        {
-            SelectedFtpResult = FtpResults[0];
-        }
     }
 
     private async Task PlaySelectedResult()

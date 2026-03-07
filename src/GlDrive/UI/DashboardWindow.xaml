@@ -552,7 +552,7 @@
                                                            LineHeight="15"
                                                            Foreground="{DynamicResource ForegroundDimBrush}"
                                                            TextTrimming="CharacterEllipsis"/>
-                                                <Button Content="&#x25B6; Search &amp; Play" Margin="0,8,0,0"
+                                                <Button Content="&#x1F50D; Search FTP" Margin="0,8,0,0"
                                                         Command="{Binding SearchAndPlayCommand}"
                                                         Padding="14,6" Style="{StaticResource PrimaryButton}"
                                                         HorizontalAlignment="Left" FontSize="11"/>
