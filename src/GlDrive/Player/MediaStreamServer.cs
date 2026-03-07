@@ -285,7 +285,7 @@ public class MediaStreamServer : IDisposable
             var tempFiles = new List<string>();
             foreach (var vol in volumes)
             {
-                var localPath = Path.Combine(releaseDir, vol.Name);
+                var localPath = Path.Combine(releaseDir, Path.GetFileName(vol.Name));
                 if (!File.Exists(localPath))
                 {
                     Log.Information("Downloading RAR volume: {Name} ({Size} bytes)", vol.Name, vol.Size);
