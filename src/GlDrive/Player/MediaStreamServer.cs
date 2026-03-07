@@ -560,13 +560,11 @@ public class MediaStreamServer : IDisposable
     /// <summary>
     /// Downloads RAR volumes and extracts the video to the library folder.
     /// Reports progress via the callback: (message, percentComplete).
-    /// Invokes onPlayReady with the .rar path as soon as the first volume is ready.
     /// Returns the local path to the first .rar, or null on failure.
     /// </summary>
     public async Task<string?> DownloadAndExtractRar(
         MountService server, string releasePath, List<FtpListItem> files,
-        Action<string, int>? onProgress = null, Action<string>? onPlayReady = null,
-        CancellationToken ct = default)
+        Action<string, int>? onProgress = null, CancellationToken ct = default)
     {
         var releaseName = Path.GetFileName(releasePath);
         var releaseDir = Path.Combine(LibraryPath, SanitizeName(releaseName));
@@ -588,8 +586,6 @@ public class MediaStreamServer : IDisposable
         long downloadedBytes = 0;
         var localFiles = new List<string>();
 
-        var playSignaled = false;
-
         // Download volumes with progress
         for (int i = 0; i < volumes.Count; i++)
         {
@@ -601,12 +597,7 @@ public class MediaStreamServer : IDisposable
                 downloadedBytes += vol.Size;
                 localFiles.Add(localPath);
                 onProgress?.Invoke($"Volume {i + 1}/{volumes.Count} cached", totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0);
-                if (!playSignaled && localPath.EndsWith(".rar", StringComparison.OrdinalIgnoreCase))
-                {
-                    playSignaled = true;
-                    onPlayReady?.Invoke(localPath);
-                }
-                continue;
+continue;
             }
 
             var tempPath = localPath + ".partial";
@@ -693,12 +684,6 @@ public class MediaStreamServer : IDisposable
             File.Move(tempPath, localPath);
             localFiles.Add(localPath);
 
-            // Signal VLC to start playing as soon as the first .rar volume is ready
-            if (!playSignaled && localPath.EndsWith(".rar", StringComparison.OrdinalIgnoreCase))
-            {
-                playSignaled = true;
-                onPlayReady?.Invoke(localPath);
-            }
         }
 
         // VLC can play directly from RAR files — no extraction needed
