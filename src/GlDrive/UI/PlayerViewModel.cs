@@ -246,6 +246,11 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     public ICommand PlayEpisodeCommand { get; }
     public ICommand SeekForwardCommand { get; }
     public ICommand SeekBackwardCommand { get; }
+    public ICommand ClearSearchCommand { get; }
+
+    public bool HasSearchResults => SearchResults.Count > 0;
+    public bool HasFtpResults => FtpResults.Count > 0;
+    public bool HasNoSelection => !HasSelection;
 
     public PlayerViewModel(ServerManager serverManager, AppConfig config)
     {
@@ -263,6 +268,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         PlayEpisodeCommand = new RelayCommand<TmdbEpisode>(async ep => { if (ep != null) await PlayEpisode(ep); });
         SeekForwardCommand = new RelayCommand(() => SeekRelative(10));
         SeekBackwardCommand = new RelayCommand(() => SeekRelative(-10));
+        ClearSearchCommand = new RelayCommand(() => { SearchResults.Clear(); OnPropertyChanged(nameof(HasSearchResults)); });
     }
 
     public void InitVLC()
@@ -829,6 +835,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     }
 
     public event Action? FullscreenRequested;
+    public event Action? SwitchToNowPlaying;
 
     private void UpdateTimeDisplay()
     {
