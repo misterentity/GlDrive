@@ -176,6 +176,13 @@ public partial class DashboardWindow : Window
             _playerVm.SeekTo(slider.Value);
     }
 
+    // Click-to-seek (IsMoveToPointEnabled handles the click position)
+    private void SeekBar_MouseUp(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is Slider slider && _playerVm != null)
+            _playerVm.SeekTo(slider.Value);
+    }
+
     // Drag-and-drop: record start point
     private void DragSource_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
@@ -337,6 +344,12 @@ public partial class DashboardWindow : Window
     {
         if (sender is FrameworkElement fe && fe.DataContext is TmdbEpisode ep && _playerVm != null)
             _playerVm.PlayEpisodeCommand.Execute(ep);
+    }
+
+    // Library mode selected — refresh library list
+    private void LibraryMode_Checked(object sender, RoutedEventArgs e)
+    {
+        _playerVm?.LoadLibrary();
     }
 
         private void Settings_Click(object sender, RoutedEventArgs e)
