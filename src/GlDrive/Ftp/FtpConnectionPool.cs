@@ -11,6 +11,7 @@ public class FtpConnectionPool : IAsyncDisposable
     private readonly int _maxSize;
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private int _created;
+    private int _active;
     private bool _disposed;
 
     public FtpConnectionPool(FtpClientFactory factory, int maxSize = 3)
@@ -20,6 +21,9 @@ public class FtpConnectionPool : IAsyncDisposable
         _pool = Channel.CreateBounded<AsyncFtpClient>(maxSize);
     }
 
+    public int ActiveCount => _active;
+    public int TotalCreated => _created;
+    public int MaxSize => _maxSize;
     public bool IsConnected { get; private set; }
     public bool UseCpsv { get; private set; }
     public string ControlHost { get; private set; } = "";
@@ -61,7 +65,10 @@ public class FtpConnectionPool : IAsyncDisposable
         if (_pool.Reader.TryRead(out var client))
         {
             if (client.IsConnected)
+            {
+                Interlocked.Increment(ref _active);
                 return new PooledConnection(client, this);
+            }
 
             // Stale connection, properly disconnect and create new
             DisconnectAndDispose(client);
@@ -74,6 +81,7 @@ public class FtpConnectionPool : IAsyncDisposable
             try
             {
                 client = await _factory.CreateAndConnect(ct);
+                Interlocked.Increment(ref _active);
                 return new PooledConnection(client, this);
             }
             catch
@@ -88,16 +96,21 @@ public class FtpConnectionPool : IAsyncDisposable
         // At capacity — wait for one to be returned
         client = await _pool.Reader.ReadAsync(ct);
         if (client.IsConnected)
+        {
+            Interlocked.Increment(ref _active);
             return new PooledConnection(client, this);
+        }
 
         // Stale, replace it
         DisconnectAndDispose(client);
         client = await _factory.CreateAndConnect(ct);
+        Interlocked.Increment(ref _active);
         return new PooledConnection(client, this);
     }
 
     internal void Return(AsyncFtpClient client)
     {
+        Interlocked.Decrement(ref _active);
         if (_disposed || !client.IsConnected)
         {
             DisconnectAndDispose(client);
