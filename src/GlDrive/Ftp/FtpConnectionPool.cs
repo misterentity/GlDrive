@@ -84,16 +84,19 @@ public class FtpConnectionPool : IAsyncDisposable
                 Interlocked.Increment(ref _active);
                 return new PooledConnection(client, this);
             }
-            catch
+            catch (Exception ex)
             {
                 Interlocked.Decrement(ref _created);
-                throw;
+                // Server refused new connection — fall through to wait for an existing one
+                Log.Debug(ex, "Pool: new connection failed, waiting for existing one to be returned");
             }
         }
+        else
+        {
+            Interlocked.Decrement(ref _created);
+        }
 
-        Interlocked.Decrement(ref _created);
-
-        // At capacity — wait for one to be returned
+        // At capacity or new connection failed — wait for one to be returned
         client = await _pool.Reader.ReadAsync(ct);
         if (client.IsConnected)
         {
