@@ -312,32 +312,119 @@
 
                     <!-- Left: Browse + Search + Detail -->
                     <DockPanel Grid.Column="0">
+                        <!-- Top bar: Search + Library toggle -->
+                        <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
+                                Padding="8,6" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
+                            <DockPanel>
+                                <Button DockPanel.Dock="Right" Content="&#x1F4C1; Library"
+                                        Command="{Binding ToggleLibraryCommand}"
+                                        Padding="8,4" Margin="4,0,0,0" Style="{StaticResource SecondaryButton}" FontSize="11"
+                                        ToolTip="Show/hide downloaded library"/>
+                                <Button DockPanel.Dock="Right" Content="&#x21BB;"
+                                        Command="{Binding RefreshTrendingCommand}"
+                                        Padding="8,4" Margin="4,0,0,0" Style="{StaticResource SecondaryButton}" FontSize="11"
+                                        ToolTip="Refresh trending"/>
+                                <Button DockPanel.Dock="Right" Content="&#x1F50D;"
+                                        Command="{Binding SearchCommand}"
+                                        Padding="8,4" Margin="4,0,0,0" Style="{StaticResource PrimaryButton}" FontSize="11"/>
+                                <TextBox x:Name="PlayerSearchBox" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                                         Padding="6,4" FontSize="12" VerticalContentAlignment="Center"
+                                         Background="{DynamicResource SurfaceLightBrush}"
+                                         Foreground="{DynamicResource ForegroundBrush}"
+                                         BorderBrush="{DynamicResource BorderBrush}"/>
+                            </DockPanel>
+                        </Border>
+
                         <!-- Status bar -->
                         <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
-                                Padding="8,6" Margin="0,0,0,0"
-                                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
-                            <DockPanel>
-                                <Button DockPanel.Dock="Right" Content="&#x21BB; Refresh"
-                                        Command="{Binding RefreshTrendingCommand}"
-                                        Padding="10,4" Style="{StaticResource SecondaryButton}" FontSize="11"/>
-                                <TextBlock Text="{Binding PlayerStatus}"
-                                           Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"
-                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-                            </DockPanel>
+                                Padding="8,4" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
+                            <TextBlock Text="{Binding PlayerStatus}"
+                                       Foreground="{DynamicResource ForegroundDimBrush}" FontSize="11"
+                                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
                         </Border>
 
                         <!-- Scrollable content -->
                         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                             <StackPanel Margin="10,8,10,8">
 
+                                <!-- Library view (toggled) -->
+                                <Border Visibility="{Binding ShowLibrary, Converter={StaticResource BoolToVisibility}}"
+                                        Margin="0,0,0,8">
+                                    <StackPanel>
+                                        <TextBlock Text="&#x1F4BF; Library" FontWeight="SemiBold" FontSize="13"
+                                                   Foreground="{DynamicResource ForegroundBrush}" Margin="0,0,0,6"/>
+                                        <ItemsControl ItemsSource="{Binding LibraryItems}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Background="{DynamicResource SurfaceBrush}" CornerRadius="4"
+                                                            Padding="8,6" Margin="0,0,0,4" Cursor="Hand"
+                                                            MouseLeftButtonDown="LibraryItem_Click">
+                                                        <DockPanel>
+                                                            <TextBlock DockPanel.Dock="Right" Text="{Binding SizeText}" FontSize="10"
+                                                                       Foreground="{DynamicResource ForegroundDimBrush}" Margin="8,0,0,0"
+                                                                       VerticalAlignment="Center"/>
+                                                            <TextBlock DockPanel.Dock="Right" Text="{Binding ResumePercent}" FontSize="10"
+                                                                       Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold"
+                                                                       Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                                            <StackPanel>
+                                                                <TextBlock Text="{Binding ReleaseName}" FontWeight="SemiBold" FontSize="11"
+                                                                           Foreground="{DynamicResource ForegroundBrush}"
+                                                                           TextTrimming="CharacterEllipsis"/>
+                                                                <TextBlock Text="{Binding FileName}" FontSize="10"
+                                                                           Foreground="{DynamicResource ForegroundDimBrush}"
+                                                                           TextTrimming="CharacterEllipsis"/>
+                                                            </StackPanel>
+                                                        </DockPanel>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- Search results from TMDb -->
+                                <ItemsControl ItemsSource="{Binding SearchResults}"
+                                              >
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel/>
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Width="105" Margin="0,0,6,6" Cursor="Hand"
+                                                    Background="{DynamicResource SurfaceBrush}"
+                                                    CornerRadius="4" ClipToBounds="True"
+                                                    MouseLeftButtonDown="SearchCard_Click">
+                                                <StackPanel>
+                                                    <Border Height="150" ClipToBounds="True" CornerRadius="4,4,0,0">
+                                                        <Image Source="{Binding PosterUrl, Converter={StaticResource ImageUrlConverter}, ConverterParameter=105}"
+                                                               Stretch="UniformToFill" VerticalAlignment="Top"
+                                                               RenderOptions.BitmapScalingMode="HighQuality"/>
+                                                    </Border>
+                                                    <StackPanel Margin="4,3,4,4">
+                                                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="10.5"
+                                                                   Foreground="{DynamicResource ForegroundBrush}"
+                                                                   TextTrimming="CharacterEllipsis" MaxHeight="28"/>
+                                                        <StackPanel Orientation="Horizontal" Margin="0,1,0,0">
+                                                            <TextBlock Text="{Binding RatingDisplay}" FontSize="10"
+                                                                       Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold"/>
+                                                            <TextBlock Text="{Binding Year}" FontSize="10" Margin="6,0,0,0"
+                                                                       Foreground="{DynamicResource ForegroundDimBrush}"/>
+                                                        </StackPanel>
+                                                    </StackPanel>
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
                                 <!-- Trending Movies -->
                                 <TextBlock Text="&#x1F3AC; Trending Movies" FontWeight="SemiBold" FontSize="13"
                                            Foreground="{DynamicResource ForegroundBrush}" Margin="0,0,0,6"/>
                                 <ItemsControl ItemsSource="{Binding TrendingMovies}">
                                     <ItemsControl.ItemsPanel>
-                                        <ItemsPanelTemplate>
-                                            <WrapPanel/>
-                                        </ItemsPanelTemplate>
+                                        <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
                                     </ItemsControl.ItemsPanel>
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
@@ -373,9 +460,7 @@
                                            Foreground="{DynamicResource ForegroundBrush}" Margin="0,6,0,6"/>
                                 <ItemsControl ItemsSource="{Binding TrendingTvShows}">
                                     <ItemsControl.ItemsPanel>
-                                        <ItemsPanelTemplate>
-                                            <WrapPanel/>
-                                        </ItemsPanelTemplate>
+                                        <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
                                     </ItemsControl.ItemsPanel>
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
@@ -447,6 +532,39 @@
                                                            TextTrimming="CharacterEllipsis"/>
                                             </StackPanel>
                                         </DockPanel>
+
+                                        <!-- TV Episode Picker -->
+                                        <Border Visibility="{Binding ShowEpisodePicker, Converter={StaticResource BoolToVisibility}}"
+                                                Margin="0,6,0,0">
+                                            <StackPanel>
+                                                <DockPanel Margin="0,0,0,4">
+                                                    <TextBlock Text="Season:" FontSize="11" VerticalAlignment="Center"
+                                                               Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,6,0"/>
+                                                    <ComboBox ItemsSource="{Binding Seasons}" SelectedItem="{Binding SelectedSeason}"
+                                                              DisplayMemberPath="Name" Width="160" FontSize="11"/>
+                                                </DockPanel>
+                                                <ItemsControl ItemsSource="{Binding Episodes}" MaxHeight="150">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Border Background="{DynamicResource SurfaceLightBrush}" CornerRadius="3"
+                                                                    Padding="8,4" Margin="0,0,0,2" Cursor="Hand"
+                                                                    MouseLeftButtonDown="Episode_Click">
+                                                                <DockPanel>
+                                                                    <TextBlock DockPanel.Dock="Right" Text="{Binding Runtime, StringFormat={}{0}m}"
+                                                                               FontSize="10" Foreground="{DynamicResource ForegroundDimBrush}"
+                                                                               VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                                                    <StackPanel>
+                                                                        <TextBlock Text="{Binding DisplayName}" FontSize="11" FontWeight="SemiBold"
+                                                                                   Foreground="{DynamicResource ForegroundBrush}"/>
+                                                                    </StackPanel>
+                                                                </DockPanel>
+                                                            </Border>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </StackPanel>
+                                        </Border>
+
                                         <!-- FTP Search Results -->
                                         <DataGrid ItemsSource="{Binding FtpResults}"
                                                   SelectedItem="{Binding SelectedFtpResult}"
@@ -489,7 +607,7 @@
                                     <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
                                         <Button Content="&#x25B6;&#xFE0E;" Command="{Binding PlayPauseCommand}"
                                                 Padding="6,3" Margin="0,0,4,0" Style="{StaticResource PrimaryButton}"
-                                                FontSize="13" Width="32" ToolTip="Play / Pause"/>
+                                                FontSize="13" Width="32" ToolTip="Play / Pause (Space)"/>
                                         <Button Content="&#x25A0;" Command="{Binding StopCommand}"
                                                 Padding="6,3" Margin="0,0,8,0" Style="{StaticResource SecondaryButton}"
                                                 FontSize="11" Width="32" ToolTip="Stop"/>
@@ -498,6 +616,18 @@
                                                    VerticalAlignment="Center"/>
                                     </StackPanel>
                                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <!-- Audio track selector -->
+                                        <ComboBox ItemsSource="{Binding AudioTracks}"
+                                                  SelectedIndex="{Binding AudioTrackIndex}"
+                                                  Width="80" FontSize="10" Margin="0,0,6,0"
+                                                  ToolTip="Audio track"
+                                                  />
+                                        <!-- Subtitle selector -->
+                                        <ComboBox ItemsSource="{Binding SubtitleTracks}"
+                                                  SelectedIndex="{Binding SubtitleTrackIndex}"
+                                                  Width="80" FontSize="10" Margin="0,0,6,0"
+                                                  ToolTip="Subtitle track"
+                                                  />
                                         <TextBlock Text="&#x1F50A;" VerticalAlignment="Center" Margin="0,0,4,0" FontSize="11"/>
                                         <Slider Value="{Binding Volume}" Minimum="0" Maximum="100" Width="70"
                                                 VerticalAlignment="Center"/>
@@ -508,7 +638,7 @@
                         </Border>
 
                         <!-- Video area -->
-                        <Grid Background="Black">
+                        <Grid Background="Black" x:Name="PlayerVideoArea" MouseLeftButtonDown="VideoArea_MouseDown">
                             <vlc:VideoView x:Name="PlayerVideoView"/>
                             <!-- Buffering overlay -->
                             <Border Background="#CC000000" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"

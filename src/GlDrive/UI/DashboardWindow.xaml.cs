@@ -20,6 +20,7 @@ public partial class DashboardWindow : Window
     private bool _playerLoaded;
     private Point _dragStartPoint;
     private PlayerViewModel? _playerVm;
+    private Window? _fullscreenWindow;
 
     public DashboardWindow(ServerManager serverManager, AppConfig config, NotificationStore notificationStore)
     {
@@ -101,6 +102,22 @@ public partial class DashboardWindow : Window
             _playerVm.PlayerStatus = "Initializing player...";
             PlayerTab.DataContext = _playerVm;
 
+            // Keyboard shortcuts for player
+            PlayerTab.PreviewKeyDown += PlayerTab_KeyDown;
+
+            // Enter key in search box triggers search
+            PlayerSearchBox.PreviewKeyDown += (s, ev) =>
+            {
+                if (ev.Key == System.Windows.Input.Key.Enter)
+                {
+                    ev.Handled = true;
+                    _playerVm.SearchCommand.Execute(null);
+                }
+            };
+
+            // Fullscreen handler
+            _playerVm.FullscreenRequested += TogglePlayerFullscreen;
+
             // Defer heavy VLC init so the tab appears instantly
             _ = Task.Run(() => _playerVm.InitVLC()).ContinueWith(_ =>
             {
@@ -181,7 +198,148 @@ public partial class DashboardWindow : Window
         DragDrop.DoDragDrop(grid, data, DragDropEffects.Copy);
     }
 
-    private void Settings_Click(object sender, RoutedEventArgs e)
+    // Keyboard shortcuts for the Player tab
+    private void PlayerTab_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (_playerVm == null) return;
+
+        // Don't handle if typing in a text box
+        if (e.OriginalSource is System.Windows.Controls.TextBox) return;
+
+        switch (e.Key)
+        {
+            case System.Windows.Input.Key.Space:
+                e.Handled = true;
+                _playerVm.PlayPauseCommand.Execute(null);
+                break;
+            case System.Windows.Input.Key.F:
+            case System.Windows.Input.Key.F11:
+                e.Handled = true;
+                TogglePlayerFullscreen();
+                break;
+            case System.Windows.Input.Key.Escape:
+                e.Handled = true;
+                ExitFullscreen();
+                break;
+            case System.Windows.Input.Key.Right:
+                e.Handled = true;
+                _playerVm.SeekForwardCommand.Execute(null);
+                break;
+            case System.Windows.Input.Key.Left:
+                e.Handled = true;
+                _playerVm.SeekBackwardCommand.Execute(null);
+                break;
+            case System.Windows.Input.Key.Up:
+                e.Handled = true;
+                _playerVm.Volume = Math.Min(100, _playerVm.Volume + 5);
+                break;
+            case System.Windows.Input.Key.Down:
+                e.Handled = true;
+                _playerVm.Volume = Math.Max(0, _playerVm.Volume - 5);
+                break;
+        }
+    }
+
+    // Double-click video area → fullscreen
+    private void VideoArea_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ClickCount == 2)
+        {
+            e.Handled = true;
+            TogglePlayerFullscreen();
+        }
+    }
+
+    private void TogglePlayerFullscreen()
+    {
+        if (_fullscreenWindow != null)
+        {
+            ExitFullscreen();
+            return;
+        }
+
+        _fullscreenWindow = new Window
+        {
+            WindowStyle = WindowStyle.None,
+            WindowState = WindowState.Maximized,
+            Background = System.Windows.Media.Brushes.Black,
+            Title = "GlDrive Player"
+        };
+
+        // Move VideoView to fullscreen window
+        var parent = PlayerVideoView.Parent as System.Windows.Controls.Panel;
+        parent?.Children.Remove(PlayerVideoView);
+        _fullscreenWindow.Content = PlayerVideoView;
+
+        _fullscreenWindow.PreviewKeyDown += (s, e) =>
+        {
+            if (e.Key == System.Windows.Input.Key.Escape || e.Key == System.Windows.Input.Key.F ||
+                e.Key == System.Windows.Input.Key.F11)
+            {
+                e.Handled = true;
+                ExitFullscreen();
+            }
+            else if (e.Key == System.Windows.Input.Key.Space)
+            {
+                e.Handled = true;
+                _playerVm?.PlayPauseCommand.Execute(null);
+            }
+            else if (e.Key == System.Windows.Input.Key.Right)
+            {
+                e.Handled = true;
+                _playerVm?.SeekForwardCommand.Execute(null);
+            }
+            else if (e.Key == System.Windows.Input.Key.Left)
+            {
+                e.Handled = true;
+                _playerVm?.SeekBackwardCommand.Execute(null);
+            }
+        };
+
+        _fullscreenWindow.Closed += (_, _) => ExitFullscreen();
+        _fullscreenWindow.Show();
+    }
+
+    private void ExitFullscreen()
+    {
+        if (_fullscreenWindow == null) return;
+
+        // Move VideoView back to the player tab
+        _fullscreenWindow.Content = null;
+        if (PlayerVideoArea != null)
+            PlayerVideoArea.Children.Insert(0, PlayerVideoView);
+
+        _fullscreenWindow.Close();
+        _fullscreenWindow = null;
+    }
+
+    // Search result card clicked
+    private void SearchCard_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.DataContext is MediaCardVm card && _playerVm != null)
+        {
+            if (card.MediaType == "TV")
+                _playerVm.SelectedTvShow = card;
+            else
+                _playerVm.SelectedMovie = card;
+        }
+    }
+
+    // Library item clicked
+    private void LibraryItem_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.DataContext is LibraryItemVm item && _playerVm != null)
+            _playerVm.PlayLibraryItemCommand.Execute(item);
+    }
+
+    // Episode clicked
+    private void Episode_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.DataContext is TmdbEpisode ep && _playerVm != null)
+            _playerVm.PlayEpisodeCommand.Execute(ep);
+    }
+
+        private void Settings_Click(object sender, RoutedEventArgs e)
     {
         var window = new SettingsWindow(_config, _serverManager);
         window.Owner = this;

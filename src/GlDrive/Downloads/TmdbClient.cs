@@ -133,6 +133,44 @@ public class TmdbClient : IDisposable
         return string.Join(", ", ids.Select(id => TvGenreNames.GetValueOrDefault(id, GenreNames.GetValueOrDefault(id, "Unknown"))).Take(3));
     }
 
+
+    public async Task<TmdbSearchResult[]> SearchMulti(string query, CancellationToken ct = default)
+    {
+        if (!HasApiKey || string.IsNullOrWhiteSpace(query)) return [];
+        try
+        {
+            var url = $"3/search/multi?api_key={_apiKey}&query={Uri.EscapeDataString(query)}&page=1";
+            var response = await _http.GetStringAsync(url, ct);
+            var result = JsonSerializer.Deserialize<TmdbSearchMultiResponse>(response, JsonOptions);
+            return result?.Results?.Where(r => r.MediaType is "movie" or "tv").ToArray() ?? [];
+        }
+        catch (Exception ex) { Log.Warning(ex, "TMDb search failed"); return []; }
+    }
+
+    public async Task<TmdbTvDetail?> GetTvDetail(int tvId, CancellationToken ct = default)
+    {
+        if (!HasApiKey) return null;
+        try
+        {
+            var url = $"3/tv/{tvId}?api_key={_apiKey}";
+            var response = await _http.GetStringAsync(url, ct);
+            return JsonSerializer.Deserialize<TmdbTvDetail>(response, JsonOptions);
+        }
+        catch (Exception ex) { Log.Warning(ex, "TMDb TV detail failed for id: {Id}", tvId); return null; }
+    }
+
+    public async Task<TmdbSeason?> GetTvSeason(int tvId, int seasonNumber, CancellationToken ct = default)
+    {
+        if (!HasApiKey) return null;
+        try
+        {
+            var url = $"3/tv/{tvId}/season/{seasonNumber}?api_key={_apiKey}";
+            var response = await _http.GetStringAsync(url, ct);
+            return JsonSerializer.Deserialize<TmdbSeason>(response, JsonOptions);
+        }
+        catch (Exception ex) { Log.Warning(ex, "TMDb season failed for tv:{TvId} s:{Season}", tvId, seasonNumber); return null; }
+    }
+
     public void Dispose() => _http.Dispose();
 }
 
@@ -213,3 +251,91 @@ public class TmdbGenre
     public int Id { get; set; }
     public string Name { get; set; } = "";
 }
+
+public class TmdbSearchMultiResponse
+{
+    public TmdbSearchResult[]? Results { get; set; }
+    [JsonPropertyName("total_results")]
+    public int TotalResults { get; set; }
+}
+
+public class TmdbSearchResult
+{
+    public int Id { get; set; }
+    public string Title { get; set; } = "";
+    public string Name { get; set; } = "";
+    [JsonPropertyName("media_type")]
+    public string MediaType { get; set; } = "";
+    [JsonPropertyName("release_date")]
+    public string? ReleaseDate { get; set; }
+    [JsonPropertyName("first_air_date")]
+    public string? FirstAirDate { get; set; }
+    [JsonPropertyName("poster_path")]
+    public string? PosterPath { get; set; }
+    public string? Overview { get; set; }
+    [JsonPropertyName("vote_average")]
+    public double VoteAverage { get; set; }
+    [JsonPropertyName("genre_ids")]
+    public int[]? GenreIds { get; set; }
+
+    [JsonIgnore] public string DisplayTitle => !string.IsNullOrEmpty(Title) ? Title : Name;
+    [JsonIgnore] public string? PosterUrl => PosterPath != null ? $"https://image.tmdb.org/t/p/w342{PosterPath}" : null;
+    [JsonIgnore] public string? DateStr => ReleaseDate ?? FirstAirDate;
+    [JsonIgnore] public int? YearParsed => DateStr is { Length: >= 4 } ? int.TryParse(DateStr[..4], out var y) ? y : null : null;
+}
+
+public class TmdbTvDetail
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = "";
+    [JsonPropertyName("number_of_seasons")]
+    public int NumberOfSeasons { get; set; }
+    public TmdbSeasonSummary[]? Seasons { get; set; }
+    [JsonPropertyName("poster_path")]
+    public string? PosterPath { get; set; }
+    public string? Overview { get; set; }
+    [JsonPropertyName("vote_average")]
+    public double VoteAverage { get; set; }
+}
+
+public class TmdbSeasonSummary
+{
+    public int Id { get; set; }
+    [JsonPropertyName("season_number")]
+    public int SeasonNumber { get; set; }
+    public string Name { get; set; } = "";
+    [JsonPropertyName("episode_count")]
+    public int EpisodeCount { get; set; }
+    [JsonPropertyName("air_date")]
+    public string? AirDate { get; set; }
+}
+
+public class TmdbSeason
+{
+    public int Id { get; set; }
+    [JsonPropertyName("season_number")]
+    public int SeasonNumber { get; set; }
+    public string Name { get; set; } = "";
+    public TmdbEpisode[]? Episodes { get; set; }
+}
+
+public class TmdbEpisode
+{
+    public int Id { get; set; }
+    [JsonPropertyName("episode_number")]
+    public int EpisodeNumber { get; set; }
+    public string Name { get; set; } = "";
+    public string? Overview { get; set; }
+    [JsonPropertyName("air_date")]
+    public string? AirDate { get; set; }
+    [JsonPropertyName("still_path")]
+    public string? StillPath { get; set; }
+    [JsonPropertyName("vote_average")]
+    public double VoteAverage { get; set; }
+    public int? Runtime { get; set; }
+
+    [JsonIgnore] public string DisplayName => $"E{EpisodeNumber:D2} - {Name}";
+    public string SearchQuery(string showName, int season) =>
+        $"{showName} S{season:D2}E{EpisodeNumber:D2}";
+}
+

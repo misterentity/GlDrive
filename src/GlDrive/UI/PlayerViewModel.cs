@@ -19,6 +19,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     private readonly ServerManager _serverManager;
     private readonly AppConfig _config;
     private MediaStreamServer? _streamServer;
+    private PlayerResumeStore? _resumeStore;
     private LibVLC? _libVLC;
     private MediaPlayer? _mediaPlayer;
     private bool _vlcInitialized;
@@ -34,10 +35,31 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     private double _volume = 80;
     private double _position;
     private string _timeDisplay = "00:00 / 00:00";
+    private string _searchText = "";
+    private string _currentReleaseName = "";
+    private bool _showLibrary;
+    private int _audioTrackIndex;
+    private int _subtitleTrackIndex = -1;
+
+    // TV episode state
+    private int _selectedTvId;
+    private string _selectedTvName = "";
+    private TmdbSeasonSummary? _selectedSeason;
+    private TmdbEpisode? _selectedEpisode;
+
+    // Auto-play next episode
+    private List<TmdbEpisode>? _episodePlaylist;
+    private int _playlistIndex = -1;
 
     public ObservableCollection<MediaCardVm> TrendingMovies { get; } = new();
     public ObservableCollection<MediaCardVm> TrendingTvShows { get; } = new();
     public ObservableCollection<PlayerSearchResultVm> FtpResults { get; } = new();
+    public ObservableCollection<LibraryItemVm> LibraryItems { get; } = new();
+    public ObservableCollection<MediaCardVm> SearchResults { get; } = new();
+    public ObservableCollection<TmdbSeasonSummary> Seasons { get; } = new();
+    public ObservableCollection<TmdbEpisode> Episodes { get; } = new();
+    public ObservableCollection<TrackInfo> AudioTracks { get; } = new();
+    public ObservableCollection<TrackInfo> SubtitleTracks { get; } = new();
 
     public MediaCardVm? SelectedMovie
     {
@@ -45,18 +67,10 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         set
         {
             _selectedMovie = value;
-            if (value != null) _selectedTvShow = null;
+            if (value != null) { _selectedTvShow = null; ClearEpisodePicker(); }
             OnPropertyChanged();
             OnPropertyChanged(nameof(SelectedTvShow));
-            OnPropertyChanged(nameof(SelectedMedia));
-            OnPropertyChanged(nameof(HasSelection));
-            OnPropertyChanged(nameof(DetailTitle));
-            OnPropertyChanged(nameof(DetailYear));
-            OnPropertyChanged(nameof(DetailRating));
-            OnPropertyChanged(nameof(DetailGenres));
-            OnPropertyChanged(nameof(DetailPlot));
-            OnPropertyChanged(nameof(DetailPosterUrl));
-            OnPropertyChanged(nameof(HasDetailPoster));
+            NotifyDetailChanged();
         }
     }
 
@@ -66,19 +80,29 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         set
         {
             _selectedTvShow = value;
-            if (value != null) _selectedMovie = null;
+            if (value != null)
+            {
+                _selectedMovie = null;
+                if (value.TmdbId > 0) _ = LoadTvSeasons(value.TmdbId, value.Title);
+            }
             OnPropertyChanged();
             OnPropertyChanged(nameof(SelectedMovie));
-            OnPropertyChanged(nameof(SelectedMedia));
-            OnPropertyChanged(nameof(HasSelection));
-            OnPropertyChanged(nameof(DetailTitle));
-            OnPropertyChanged(nameof(DetailYear));
-            OnPropertyChanged(nameof(DetailRating));
-            OnPropertyChanged(nameof(DetailGenres));
-            OnPropertyChanged(nameof(DetailPlot));
-            OnPropertyChanged(nameof(DetailPosterUrl));
-            OnPropertyChanged(nameof(HasDetailPoster));
+            NotifyDetailChanged();
         }
+    }
+
+    private void NotifyDetailChanged()
+    {
+        OnPropertyChanged(nameof(SelectedMedia));
+        OnPropertyChanged(nameof(HasSelection));
+        OnPropertyChanged(nameof(DetailTitle));
+        OnPropertyChanged(nameof(DetailYear));
+        OnPropertyChanged(nameof(DetailRating));
+        OnPropertyChanged(nameof(DetailGenres));
+        OnPropertyChanged(nameof(DetailPlot));
+        OnPropertyChanged(nameof(DetailPosterUrl));
+        OnPropertyChanged(nameof(HasDetailPoster));
+        OnPropertyChanged(nameof(ShowEpisodePicker));
     }
 
     public MediaCardVm? SelectedMedia => _selectedMovie ?? _selectedTvShow;
@@ -90,11 +114,41 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     public string DetailPlot => SelectedMedia?.Plot ?? "";
     public string? DetailPosterUrl => SelectedMedia?.PosterUrl;
     public bool HasDetailPoster => !string.IsNullOrEmpty(DetailPosterUrl);
+    public bool ShowEpisodePicker => _selectedTvShow != null && Seasons.Count > 0;
+
+    public TmdbSeasonSummary? SelectedSeason
+    {
+        get => _selectedSeason;
+        set
+        {
+            _selectedSeason = value;
+            OnPropertyChanged();
+            if (value != null) _ = LoadEpisodes(_selectedTvId, value.SeasonNumber);
+        }
+    }
+
+    public TmdbEpisode? SelectedEpisode
+    {
+        get => _selectedEpisode;
+        set { _selectedEpisode = value; OnPropertyChanged(); }
+    }
 
     public PlayerSearchResultVm? SelectedFtpResult
     {
         get => _selectedFtpResult;
         set { _selectedFtpResult = value; OnPropertyChanged(); }
+    }
+
+    public string SearchText
+    {
+        get => _searchText;
+        set { _searchText = value; OnPropertyChanged(); }
+    }
+
+    public bool ShowLibrary
+    {
+        get => _showLibrary;
+        set { _showLibrary = value; OnPropertyChanged(); if (value) LoadLibrary(); }
     }
 
     public string PlayerStatus
@@ -150,6 +204,35 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         set { _timeDisplay = value; OnPropertyChanged(); }
     }
 
+    public int AudioTrackIndex
+    {
+        get => _audioTrackIndex;
+        set
+        {
+            _audioTrackIndex = value;
+            OnPropertyChanged();
+            if (_mediaPlayer != null && value >= 0 && value < AudioTracks.Count)
+                _mediaPlayer.SetAudioTrack(AudioTracks[value].Id);
+        }
+    }
+
+    public int SubtitleTrackIndex
+    {
+        get => _subtitleTrackIndex;
+        set
+        {
+            _subtitleTrackIndex = value;
+            OnPropertyChanged();
+            if (_mediaPlayer != null)
+            {
+                if (value < 0 || value >= SubtitleTracks.Count)
+                    _mediaPlayer.SetSpu(-1); // disable
+                else
+                    _mediaPlayer.SetSpu(SubtitleTracks[value].Id);
+            }
+        }
+    }
+
     public MediaPlayer? Player => _mediaPlayer;
 
     public ICommand SearchAndPlayCommand { get; }
@@ -157,6 +240,12 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     public ICommand PlayPauseCommand { get; }
     public ICommand StopCommand { get; }
     public ICommand RefreshTrendingCommand { get; }
+    public ICommand SearchCommand { get; }
+    public ICommand ToggleLibraryCommand { get; }
+    public ICommand PlayLibraryItemCommand { get; }
+    public ICommand PlayEpisodeCommand { get; }
+    public ICommand SeekForwardCommand { get; }
+    public ICommand SeekBackwardCommand { get; }
 
     public PlayerViewModel(ServerManager serverManager, AppConfig config)
     {
@@ -168,6 +257,12 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         PlayPauseCommand = new RelayCommand(TogglePlayPause);
         StopCommand = new RelayCommand(StopPlayback);
         RefreshTrendingCommand = new RelayCommand(async () => await LoadTrending());
+        SearchCommand = new RelayCommand(async () => await SearchTmdb());
+        ToggleLibraryCommand = new RelayCommand(() => ShowLibrary = !ShowLibrary);
+        PlayLibraryItemCommand = new RelayCommand<LibraryItemVm>(async item => { if (item != null) await PlayLocalFile(item.FilePath); });
+        PlayEpisodeCommand = new RelayCommand<TmdbEpisode>(async ep => { if (ep != null) await PlayEpisode(ep); });
+        SeekForwardCommand = new RelayCommand(() => SeekRelative(10));
+        SeekBackwardCommand = new RelayCommand(() => SeekRelative(-10));
     }
 
     public void InitVLC()
@@ -210,17 +305,57 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
                     PlayerStatus = "Connecting to stream...";
                 });
             _mediaPlayer.Playing += (_, _) =>
-                Application.Current?.Dispatcher.Invoke(() => { IsPlaying = true; IsBuffering = false; });
+                Application.Current?.Dispatcher.Invoke(() =>
+                {
+                    IsPlaying = true;
+                    IsBuffering = false;
+                    UpdateTrackLists();
+                    // Resume from saved position
+                    if (_resumeStore != null && !string.IsNullOrEmpty(_currentReleaseName))
+                    {
+                        var savedPos = _resumeStore.GetPosition(_currentReleaseName);
+                        if (savedPos > 2)
+                        {
+                            _mediaPlayer!.Position = (float)(savedPos / 100.0);
+                            PlayerStatus = $"Resumed from {savedPos:F0}%";
+                        }
+                    }
+                });
             _mediaPlayer.Stopped += (_, _) =>
-                Application.Current?.Dispatcher.Invoke(() => { IsPlaying = false; IsBuffering = false; PlayerStatus = "Stopped"; });
+                Application.Current?.Dispatcher.Invoke(() =>
+                {
+                    SaveCurrentPosition();
+                    IsPlaying = false;
+                    IsBuffering = false;
+                    PlayerStatus = "Stopped";
+                    AudioTracks.Clear();
+                    SubtitleTracks.Clear();
+                });
             _mediaPlayer.EndReached += (_, _) =>
-                Application.Current?.Dispatcher.Invoke(() => { IsPlaying = false; IsBuffering = false; PlayerStatus = "Finished"; });
+                Application.Current?.Dispatcher.Invoke(() =>
+                {
+                    if (!string.IsNullOrEmpty(_currentReleaseName))
+                        _resumeStore?.ClearPosition(_currentReleaseName);
+                    IsPlaying = false;
+                    IsBuffering = false;
+                    PlayerStatus = "Finished";
+                    AudioTracks.Clear();
+                    SubtitleTracks.Clear();
+                    // Auto-play next episode
+                    _ = PlayNextEpisode();
+                });
             _mediaPlayer.EncounteredError += (_, _) =>
-                Application.Current?.Dispatcher.Invoke(() => { IsPlaying = false; IsBuffering = false; PlayerStatus = "Playback error"; });
+                Application.Current?.Dispatcher.Invoke(() =>
+                {
+                    IsPlaying = false;
+                    IsBuffering = false;
+                    PlayerStatus = "Playback error";
+                });
             _mediaPlayer.Volume = (int)_volume;
 
             _streamServer = new MediaStreamServer(_serverManager, _config);
             _streamServer.Start();
+            _resumeStore = new PlayerResumeStore(_streamServer.LibraryPath);
 
             _vlcInitialized = true;
             OnPropertyChanged(nameof(Player));
@@ -232,6 +367,248 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
+    private void UpdateTrackLists()
+    {
+        if (_mediaPlayer == null) return;
+
+        AudioTracks.Clear();
+        var audioDesc = _mediaPlayer.AudioTrackDescription;
+        foreach (var t in audioDesc)
+        {
+            if (t.Id == -1) continue; // skip "Disable"
+            AudioTracks.Add(new TrackInfo { Id = t.Id, Name = t.Name ?? $"Track {t.Id}" });
+        }
+        if (AudioTracks.Count > 0) AudioTrackIndex = 0;
+
+        SubtitleTracks.Clear();
+        var spuDesc = _mediaPlayer.SpuDescription;
+        foreach (var t in spuDesc)
+        {
+            if (t.Id == -1) continue;
+            SubtitleTracks.Add(new TrackInfo { Id = t.Id, Name = t.Name ?? $"Sub {t.Id}" });
+        }
+        OnPropertyChanged(nameof(AudioTracks));
+        OnPropertyChanged(nameof(SubtitleTracks));
+    }
+
+    private void SaveCurrentPosition()
+    {
+        if (_mediaPlayer != null && !string.IsNullOrEmpty(_currentReleaseName))
+        {
+            var pos = _mediaPlayer.Position * 100;
+            _resumeStore?.SavePosition(_currentReleaseName, pos);
+        }
+    }
+
+    // ── Search TMDB ──
+    private async Task SearchTmdb()
+    {
+        if (string.IsNullOrWhiteSpace(_searchText)) return;
+        if (string.IsNullOrEmpty(_config.Downloads.TmdbApiKey))
+        {
+            // No TMDB key — search FTP directly
+            await SearchFtpDirect(_searchText);
+            return;
+        }
+
+        IsLoading = true;
+        SearchResults.Clear();
+        PlayerStatus = $"Searching TMDb for \"{_searchText}\"...";
+
+        try
+        {
+            using var tmdb = new TmdbClient(_config.Downloads.TmdbApiKey);
+            var results = await tmdb.SearchMulti(_searchText);
+
+            foreach (var r in results.Take(20))
+            {
+                SearchResults.Add(new MediaCardVm
+                {
+                    Title = r.DisplayTitle,
+                    Year = r.YearParsed?.ToString() ?? "",
+                    PosterUrl = r.PosterUrl,
+                    Plot = r.Overview ?? "",
+                    VoteAverage = r.VoteAverage,
+                    SearchTitle = r.DisplayTitle,
+                    MediaType = r.MediaType == "tv" ? "TV" : "Movie",
+                    TmdbId = r.Id
+                });
+            }
+
+            PlayerStatus = SearchResults.Count > 0
+                ? $"{SearchResults.Count} result(s) from TMDb"
+                : $"No results for \"{_searchText}\"";
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "TMDb search failed");
+            PlayerStatus = "Search failed";
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+
+    private async Task SearchFtpDirect(string query)
+    {
+        var mounted = _serverManager.GetMountedServers()
+            .Where(s => s.Search != null && s.CurrentState == MountState.Connected)
+            .ToList();
+
+        if (mounted.Count == 0) { PlayerStatus = "No connected servers"; return; }
+
+        IsLoading = true;
+        FtpResults.Clear();
+        PlayerStatus = $"Searching FTP for \"{query}\"...";
+
+        try
+        {
+            var tasks = mounted.Select(async server =>
+            {
+                var results = await server.Search!.Search(query);
+                return results.Select(r => new PlayerSearchResultVm
+                {
+                    ReleaseName = r.ReleaseName, Category = r.Category,
+                    RemotePath = r.RemotePath, Size = r.Size,
+                    SizeText = FormatSize(r.Size), ServerId = server.ServerId,
+                    ServerName = server.ServerName
+                });
+            });
+
+            var allResults = await Task.WhenAll(tasks);
+            foreach (var sr in allResults)
+                foreach (var r in sr) FtpResults.Add(r);
+
+            PlayerStatus = FtpResults.Count > 0
+                ? $"{FtpResults.Count} result(s) found"
+                : $"No results for \"{query}\"";
+
+            if (FtpResults.Count > 0) SelectedFtpResult = FtpResults[0];
+        }
+        catch (Exception ex) { Log.Warning(ex, "FTP search failed"); PlayerStatus = "Search failed"; }
+        finally { IsLoading = false; }
+    }
+
+    // ── TV episode picker ──
+    private async Task LoadTvSeasons(int tvId, string tvName)
+    {
+        if (string.IsNullOrEmpty(_config.Downloads.TmdbApiKey)) return;
+
+        _selectedTvId = tvId;
+        _selectedTvName = tvName;
+        Seasons.Clear();
+        Episodes.Clear();
+
+        try
+        {
+            using var tmdb = new TmdbClient(_config.Downloads.TmdbApiKey);
+            var detail = await tmdb.GetTvDetail(tvId);
+            if (detail?.Seasons == null) return;
+
+            foreach (var s in detail.Seasons.Where(s => s.SeasonNumber > 0))
+                Seasons.Add(s);
+
+            OnPropertyChanged(nameof(ShowEpisodePicker));
+
+            if (Seasons.Count > 0)
+                SelectedSeason = Seasons[^1]; // select latest season
+        }
+        catch (Exception ex) { Log.Warning(ex, "Failed to load TV seasons"); }
+    }
+
+    private async Task LoadEpisodes(int tvId, int seasonNumber)
+    {
+        if (string.IsNullOrEmpty(_config.Downloads.TmdbApiKey)) return;
+
+        Episodes.Clear();
+        try
+        {
+            using var tmdb = new TmdbClient(_config.Downloads.TmdbApiKey);
+            var season = await tmdb.GetTvSeason(tvId, seasonNumber);
+            if (season?.Episodes == null) return;
+
+            _episodePlaylist = season.Episodes.ToList();
+            foreach (var ep in season.Episodes)
+                Episodes.Add(ep);
+        }
+        catch (Exception ex) { Log.Warning(ex, "Failed to load episodes"); }
+    }
+
+    private void ClearEpisodePicker()
+    {
+        Seasons.Clear();
+        Episodes.Clear();
+        _selectedSeason = null;
+        _selectedEpisode = null;
+        _episodePlaylist = null;
+        _playlistIndex = -1;
+        OnPropertyChanged(nameof(ShowEpisodePicker));
+    }
+
+    private async Task PlayEpisode(TmdbEpisode episode)
+    {
+        if (_selectedSeason == null) return;
+        _selectedEpisode = episode;
+        _playlistIndex = _episodePlaylist?.IndexOf(episode) ?? -1;
+
+        var query = episode.SearchQuery(_selectedTvName, _selectedSeason.SeasonNumber);
+        SearchText = query;
+        await SearchFtpDirect(query);
+
+        // Auto-play first result
+        if (FtpResults.Count > 0)
+        {
+            SelectedFtpResult = FtpResults[0];
+            await PlaySelectedResult();
+        }
+    }
+
+    private async Task PlayNextEpisode()
+    {
+        if (_episodePlaylist == null || _playlistIndex < 0) return;
+        var nextIdx = _playlistIndex + 1;
+        if (nextIdx >= _episodePlaylist.Count) return;
+
+        PlayerStatus = "Auto-playing next episode...";
+        await Task.Delay(2000); // brief pause between episodes
+        await PlayEpisode(_episodePlaylist[nextIdx]);
+    }
+
+    // ── Library browser ──
+    public void LoadLibrary()
+    {
+        LibraryItems.Clear();
+        if (_streamServer == null) return;
+
+        var libPath = _streamServer.LibraryPath;
+        if (!Directory.Exists(libPath)) return;
+
+        foreach (var dir in Directory.GetDirectories(libPath).OrderByDescending(d => Directory.GetLastWriteTime(d)))
+        {
+            var videos = Directory.GetFiles(dir, "*", SearchOption.AllDirectories)
+                .Where(f => IsVideoFile(f))
+                .ToList();
+
+            if (videos.Count == 0) continue;
+
+            var largest = videos.OrderByDescending(f => new FileInfo(f).Length).First();
+            var fi = new FileInfo(largest);
+            var releaseName = Path.GetFileName(dir);
+            var resumePos = _resumeStore?.GetPosition(releaseName) ?? 0;
+
+            LibraryItems.Add(new LibraryItemVm
+            {
+                ReleaseName = releaseName,
+                FilePath = largest,
+                FileName = fi.Name,
+                SizeText = FormatSize(fi.Length),
+                ResumePercent = resumePos > 2 ? $"{resumePos:F0}%" : ""
+            });
+        }
+    }
+
+    // ── Trending ──
     public async Task LoadTrending()
     {
         if (string.IsNullOrEmpty(_config.Downloads.TmdbApiKey))
@@ -253,14 +630,10 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
             {
                 TrendingMovies.Add(new MediaCardVm
                 {
-                    Title = m.Title,
-                    Year = m.YearParsed?.ToString() ?? "",
-                    PosterUrl = m.PosterUrl,
-                    Plot = m.Overview ?? "",
-                    Genres = m.GenreText,
-                    VoteAverage = m.VoteAverage,
-                    SearchTitle = m.Title,
-                    MediaType = "Movie"
+                    Title = m.Title, Year = m.YearParsed?.ToString() ?? "",
+                    PosterUrl = m.PosterUrl, Plot = m.Overview ?? "",
+                    Genres = m.GenreText, VoteAverage = m.VoteAverage,
+                    SearchTitle = m.Title, MediaType = "Movie", TmdbId = m.Id
                 });
             }
 
@@ -270,14 +643,10 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
             {
                 TrendingTvShows.Add(new MediaCardVm
                 {
-                    Title = s.Name,
-                    Year = s.YearParsed?.ToString() ?? "",
-                    PosterUrl = s.PosterUrl,
-                    Plot = s.Overview ?? "",
-                    Genres = s.GenreText,
-                    VoteAverage = s.VoteAverage,
-                    SearchTitle = s.Name,
-                    MediaType = "TV"
+                    Title = s.Name, Year = s.YearParsed?.ToString() ?? "",
+                    PosterUrl = s.PosterUrl, Plot = s.Overview ?? "",
+                    Genres = s.GenreText, VoteAverage = s.VoteAverage,
+                    SearchTitle = s.Name, MediaType = "TV", TmdbId = s.Id
                 });
             }
 
@@ -288,71 +657,19 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
             Log.Warning(ex, "Failed to load trending");
             PlayerStatus = "Failed to load trending content";
         }
-        finally
-        {
-            IsLoading = false;
-        }
+        finally { IsLoading = false; }
     }
 
+    // ── Search & Play ──
     private async Task SearchAndPlay()
     {
         var media = SelectedMedia;
         if (media == null) return;
+        await SearchFtpDirect(media.SearchTitle);
 
-        var mounted = _serverManager.GetMountedServers()
-            .Where(s => s.Search != null && s.CurrentState == MountState.Connected)
-            .ToList();
-
-        if (mounted.Count == 0)
+        if (FtpResults.Count > 0)
         {
-            PlayerStatus = "No connected servers";
-            return;
-        }
-
-        IsLoading = true;
-        FtpResults.Clear();
-        PlayerStatus = $"Searching for \"{media.SearchTitle}\"...";
-
-        try
-        {
-            var tasks = mounted.Select(async server =>
-            {
-                var results = await server.Search!.Search(media.SearchTitle);
-                return results.Select(r => new PlayerSearchResultVm
-                {
-                    ReleaseName = r.ReleaseName,
-                    Category = r.Category,
-                    RemotePath = r.RemotePath,
-                    Size = r.Size,
-                    SizeText = FormatSize(r.Size),
-                    ServerId = server.ServerId,
-                    ServerName = server.ServerName
-                });
-            });
-
-            var allResults = await Task.WhenAll(tasks);
-            foreach (var serverResults in allResults)
-                foreach (var r in serverResults)
-                    FtpResults.Add(r);
-
-            PlayerStatus = FtpResults.Count > 0
-                ? $"{FtpResults.Count} result(s) found — select one and click Play"
-                : $"No results found for \"{media.SearchTitle}\"";
-
-            // Auto-select and play the first result
-            if (FtpResults.Count > 0)
-            {
-                SelectedFtpResult = FtpResults[0];
-            }
-        }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "Player search failed");
-            PlayerStatus = "Search failed";
-        }
-        finally
-        {
-            IsLoading = false;
+            SelectedFtpResult = FtpResults[0];
         }
     }
 
@@ -365,6 +682,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         if (server?.Pool == null) return;
 
         IsLoading = true;
+        _currentReleaseName = result.ReleaseName;
         PlayerStatus = $"Loading {result.ReleaseName}...";
 
         try
@@ -378,10 +696,8 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
                 return;
             }
 
-            // List files in the release directory
             var files = await server.Search!.GetReleaseFiles(result.RemotePath);
 
-            // Find a direct video file first
             var videoFile = files
                 .Where(f => IsVideoFile(f.Name))
                 .OrderByDescending(f => f.Size)
@@ -389,12 +705,10 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
             if (videoFile != null)
             {
-                // Direct video file — stream via HTTP (saves to library)
                 await PlayFromFtp(result.ServerId, videoFile.FullName, result.ReleaseName);
                 return;
             }
 
-            // Check for RAR files
             var rarFile = files
                 .Where(f => f.Name.EndsWith(".rar", StringComparison.OrdinalIgnoreCase))
                 .OrderBy(f => f.Name)
@@ -402,7 +716,6 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
             if (rarFile != null)
             {
-                // RAR content — download, extract to library, play
                 await PlayFromRar(server, result.RemotePath, files);
                 return;
             }
@@ -414,16 +727,16 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
             Log.Warning(ex, "Failed to play {Release}", result.ReleaseName);
             PlayerStatus = $"Failed to play: {ex.Message}";
         }
-        finally
-        {
-            IsLoading = false;
-        }
+        finally { IsLoading = false; }
     }
 
     private async Task PlayFromFtp(string serverId, string remotePath, string releaseName = "")
     {
         var url = $"{_streamServer!.BaseUrl}stream?server={Uri.EscapeDataString(serverId)}&path={Uri.EscapeDataString(remotePath)}&release={Uri.EscapeDataString(releaseName)}";
         Log.Information("Playing FTP stream: {Url}", url);
+
+        SaveCurrentPosition();
+        _currentReleaseName = releaseName;
 
         var media = new Media(_libVLC!, new Uri(url));
         media.AddOption(":network-caching=10000");
@@ -433,19 +746,20 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         IsBuffering = true;
         PlayerStatus = "Connecting to stream...";
 
-        // Stop current playback first (on threadpool to avoid deadlock)
         await Task.Run(() => _mediaPlayer!.Stop());
         _mediaPlayer!.Play(media);
 
-        var fileName = Path.GetFileName(remotePath);
-        PlayerStatus = $"Buffering: {fileName}...";
+        PlayerStatus = $"Buffering: {Path.GetFileName(remotePath)}...";
     }
 
     private async Task PlayFromRar(MountService server, string releasePath, List<FtpListItem> files)
     {
-        // Stream RAR extraction via HTTP — volumes download on-demand, VLC plays immediately
+        var releaseName = Path.GetFileName(releasePath);
         var url = $"{_streamServer!.BaseUrl}rar-stream?server={Uri.EscapeDataString(server.ServerId)}&path={Uri.EscapeDataString(releasePath)}";
         Log.Information("Playing RAR stream: {Url}", url);
+
+        SaveCurrentPosition();
+        _currentReleaseName = releaseName;
 
         var media = new Media(_libVLC!, new Uri(url));
         media.AddOption(":network-caching=15000");
@@ -458,12 +772,16 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         await Task.Run(() => _mediaPlayer!.Stop());
         _mediaPlayer!.Play(media);
 
-        PlayerStatus = $"Buffering: {Path.GetFileName(releasePath)}...";
+        PlayerStatus = $"Buffering: {releaseName}...";
     }
 
     private async Task PlayLocalFile(string localPath)
     {
         Log.Information("Playing from library: {Path}", localPath);
+
+        SaveCurrentPosition();
+        // Derive release name from parent directory
+        _currentReleaseName = Path.GetFileName(Path.GetDirectoryName(localPath) ?? "");
 
         var media = new Media(_libVLC!, new Uri($"file:///{localPath.Replace('\\', '/')}"));
 
@@ -473,7 +791,8 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         PlayerStatus = $"Playing: {Path.GetFileName(localPath)} (from library)";
     }
 
-        private void TogglePlayPause()
+    // ── Playback controls ──
+    private void TogglePlayPause()
     {
         if (_mediaPlayer == null) return;
         if (_mediaPlayer.IsPlaying)
@@ -485,6 +804,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     private void StopPlayback()
     {
         if (_mediaPlayer == null) return;
+        SaveCurrentPosition();
         Task.Run(() => _mediaPlayer.Stop());
     }
 
@@ -493,6 +813,22 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         if (_mediaPlayer == null || !_mediaPlayer.IsPlaying) return;
         _mediaPlayer.Position = (float)(percent / 100.0);
     }
+
+    public void SeekRelative(int seconds)
+    {
+        if (_mediaPlayer == null || !_mediaPlayer.IsPlaying) return;
+        var lengthMs = _mediaPlayer.Length;
+        if (lengthMs <= 0) return;
+        var newTime = _mediaPlayer.Time + (seconds * 1000L);
+        _mediaPlayer.Time = Math.Clamp(newTime, 0, lengthMs);
+    }
+
+    public void ToggleFullscreen()
+    {
+        FullscreenRequested?.Invoke();
+    }
+
+    public event Action? FullscreenRequested;
 
     private void UpdateTimeDisplay()
     {
@@ -523,15 +859,11 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
     public void Dispose()
     {
+        SaveCurrentPosition();
         _mediaPlayer?.Stop();
         _mediaPlayer?.Dispose();
         _libVLC?.Dispose();
         _streamServer?.Dispose();
-
-        // Clean up temp files
-        var tempDir = Path.Combine(Path.GetTempPath(), "GlDrive", "player");
-        try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); } catch { }
-
         GC.SuppressFinalize(this);
     }
 }
@@ -546,6 +878,7 @@ public class MediaCardVm
     public double VoteAverage { get; set; }
     public string SearchTitle { get; set; } = "";
     public string MediaType { get; set; } = "";
+    public int TmdbId { get; set; }
 
     public string RatingDisplay => VoteAverage > 0 ? $"\u2605 {VoteAverage:F1}" : "";
     public string TitleWithYear => !string.IsNullOrEmpty(Year) ? $"{Title} ({Year})" : Title;
@@ -560,4 +893,20 @@ public class PlayerSearchResultVm
     public string SizeText { get; set; } = "";
     public string ServerId { get; set; } = "";
     public string ServerName { get; set; } = "";
+}
+
+public class LibraryItemVm
+{
+    public string ReleaseName { get; set; } = "";
+    public string FilePath { get; set; } = "";
+    public string FileName { get; set; } = "";
+    public string SizeText { get; set; } = "";
+    public string ResumePercent { get; set; } = "";
+}
+
+public class TrackInfo
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = "";
+    public override string ToString() => Name;
 }
