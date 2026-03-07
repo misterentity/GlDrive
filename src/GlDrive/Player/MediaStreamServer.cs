@@ -558,9 +558,9 @@ public class MediaStreamServer : IDisposable
     }
 
     /// <summary>
-    /// Downloads RAR volumes and extracts the video to the library folder.
-    /// Downloads and extraction run in parallel — extraction starts as soon as all volumes are ready.
-    /// Invokes onPlayReady once 10 MB of video has been extracted.
+    /// Downloads RAR volumes to the library folder.
+    /// Invokes onPlayReady with the first .rar path as soon as it's downloaded.
+    /// Remaining volumes download in background so VLC finds them as needed.
     /// </summary>
     public async Task<string?> DownloadAndExtractRar(
         MountService server, string releasePath, List<FtpListItem> files,
@@ -569,7 +569,7 @@ public class MediaStreamServer : IDisposable
         var releaseName = Path.GetFileName(releasePath);
         var releaseDir = Path.Combine(LibraryPath, SanitizeName(releaseName));
 
-        // Check cache
+        // Check cache — if first .rar or extracted video exists, return it
         var cached = FindCachedVideo(releaseName);
         if (cached != null) return cached;
 
@@ -584,201 +584,120 @@ public class MediaStreamServer : IDisposable
         Directory.CreateDirectory(releaseDir);
         var totalBytes = volumes.Sum(v => v.Size);
         long downloadedBytes = 0;
-
-        // Track which volumes are fully downloaded
-        var volumeReady = new TaskCompletionSource[volumes.Count];
-        for (int vi = 0; vi < volumes.Count; vi++)
-            volumeReady[vi] = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        var localPaths = new string[volumes.Count];
+        bool playSignaled = false;
         string? firstRarPath = null;
 
-        // ══ Download task: fetch volumes sequentially ══
-        var downloadTask = Task.Run(async () =>
+        // Download volumes sequentially
+        for (int i = 0; i < volumes.Count; i++)
         {
-            for (int i = 0; i < volumes.Count; i++)
+            var vol = volumes[i];
+            var localPath = Path.Combine(releaseDir, Path.GetFileName(vol.Name));
+
+            if (firstRarPath == null && localPath.EndsWith(".rar", StringComparison.OrdinalIgnoreCase))
+                firstRarPath = localPath;
+
+            if (File.Exists(localPath))
             {
-                var vol = volumes[i];
-                var localPath = Path.Combine(releaseDir, Path.GetFileName(vol.Name));
-                localPaths[i] = localPath;
+                downloadedBytes += vol.Size;
+                onProgress?.Invoke($"Volume {i + 1}/{volumes.Count} cached", totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0);
 
-                if (firstRarPath == null && localPath.EndsWith(".rar", StringComparison.OrdinalIgnoreCase))
-                    firstRarPath = localPath;
-
-                if (File.Exists(localPath))
+                // Signal VLC as soon as first .rar is ready
+                if (!playSignaled && localPath.EndsWith(".rar", StringComparison.OrdinalIgnoreCase))
                 {
-                    downloadedBytes += vol.Size;
-                    onProgress?.Invoke($"Volume {i + 1}/{volumes.Count} cached", totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0);
-                    volumeReady[i].TrySetResult();
-                    continue;
+                    playSignaled = true;
+                    onPlayReady?.Invoke(localPath);
                 }
+                continue;
+            }
 
-                var tempPath = localPath + ".partial";
+            var tempPath = localPath + ".partial";
 
-                for (int attempt = 0; ; attempt++)
+            // Retry the entire borrow+download up to 5 times
+            for (int attempt = 0; ; attempt++)
+            {
+                onProgress?.Invoke($"Downloading {i + 1}/{volumes.Count}: {Path.GetFileName(vol.Name)}", totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0);
+
+                PooledConnection? conn = null;
+                for (int wait = 0; wait < 60 && conn == null; wait++)
                 {
-                    onProgress?.Invoke($"Downloading {i + 1}/{volumes.Count}: {Path.GetFileName(vol.Name)}", totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0);
-
-                    PooledConnection? conn = null;
-                    for (int wait = 0; wait < 60 && conn == null; wait++)
-                    {
-                        try
-                        {
-                            using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                            borrowCts.CancelAfter(TimeSpan.FromSeconds(2));
-                            conn = await server.Pool!.Borrow(borrowCts.Token);
-                        }
-                        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-                        {
-                            onProgress?.Invoke($"Waiting for FTP connection... {wait + 1}s", totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0);
-                        }
-                        catch (Exception) when (!ct.IsCancellationRequested)
-                        {
-                            onProgress?.Invoke($"Connection error, retrying... {wait + 1}s", totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0);
-                            await Task.Delay(1000, ct);
-                        }
-                    }
-                    if (conn == null)
-                        throw new IOException("No FTP connection available — pause other downloads and retry");
-
-                    var volStartBytes = downloadedBytes;
                     try
                     {
-                        await using var _ = conn;
-                        await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None);
+                        using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                        borrowCts.CancelAfter(TimeSpan.FromSeconds(2));
+                        conn = await server.Pool!.Borrow(borrowCts.Token);
+                    }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                    {
+                        onProgress?.Invoke($"Waiting for FTP connection... {wait + 1}s", totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0);
+                    }
+                    catch (Exception) when (!ct.IsCancellationRequested)
+                    {
+                        onProgress?.Invoke($"Connection error, retrying... {wait + 1}s", totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0);
+                        await Task.Delay(1000, ct);
+                    }
+                }
+                if (conn == null)
+                    throw new IOException("No FTP connection available — pause other downloads and retry");
 
-                        if (server.Pool!.UseCpsv)
-                        {
-                            await CpsvDataHelper.DownloadFileToStream(conn.Client, vol.FullName, fileStream,
-                                bytesRead =>
-                                {
-                                    downloadedBytes += bytesRead - (downloadedBytes - volStartBytes);
-                                    var pct = totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0;
-                                    onProgress?.Invoke($"Downloading {i + 1}/{volumes.Count} — {pct}%", pct);
-                                }, ct);
-                        }
-                        else
-                        {
-                            await using var ftpStream = await conn.Client.OpenRead(vol.FullName, FtpDataType.Binary, 0, token: ct);
-                            var buf = new byte[256 * 1024];
-                            int rd;
-                            while ((rd = await ftpStream.ReadAsync(buf, ct)) > 0)
+                var volStartBytes = downloadedBytes;
+                try
+                {
+                    await using var _ = conn;
+                    await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None);
+
+                    if (server.Pool!.UseCpsv)
+                    {
+                        await CpsvDataHelper.DownloadFileToStream(conn.Client, vol.FullName, fileStream,
+                            bytesRead =>
                             {
-                                await fileStream.WriteAsync(buf.AsMemory(0, rd), ct);
-                                downloadedBytes += rd;
+                                downloadedBytes += bytesRead - (downloadedBytes - volStartBytes);
                                 var pct = totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0;
                                 onProgress?.Invoke($"Downloading {i + 1}/{volumes.Count} — {pct}%", pct);
-                            }
-                            ftpStream.Close();
-                            await conn.Client.GetReply(ct);
+                            }, ct);
+                    }
+                    else
+                    {
+                        await using var ftpStream = await conn.Client.OpenRead(vol.FullName, FtpDataType.Binary, 0, token: ct);
+                        var buf = new byte[256 * 1024];
+                        int rd;
+                        while ((rd = await ftpStream.ReadAsync(buf, ct)) > 0)
+                        {
+                            await fileStream.WriteAsync(buf.AsMemory(0, rd), ct);
+                            downloadedBytes += rd;
+                            var pct = totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0;
+                            onProgress?.Invoke($"Downloading {i + 1}/{volumes.Count} — {pct}%", pct);
                         }
-                        break;
+                        ftpStream.Close();
+                        await conn.Client.GetReply(ct);
                     }
-                    catch (OperationCanceledException) { throw; }
-                    catch (Exception ex) when (attempt < 4 && !ct.IsCancellationRequested)
-                    {
-                        try { File.Delete(tempPath); } catch { }
-                        onProgress?.Invoke($"Download failed ({ex.Message}), retry {attempt + 1}/5...", totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0);
-                        Log.Warning(ex, "Volume download attempt {Attempt} failed, retrying", attempt + 1);
-                        await Task.Delay(TimeSpan.FromSeconds(2 * (attempt + 1)), ct);
-                    }
-                    catch
-                    {
-                        try { File.Delete(tempPath); } catch { }
-                        throw;
-                    }
+                    break;
                 }
-                File.Move(tempPath, localPath);
-                volumeReady[i].TrySetResult();
-            }
-        }, ct);
-
-        // ══ Extraction task: waits for all volumes, then extracts with early VLC playback ══
-        string? extractedPath = null;
-        var extractTask = Task.Run(async () =>
-        {
-            // Wait for all volumes (SharpCompress needs all files present at open time)
-            for (int i = 0; i < volumes.Count; i++)
-                await volumeReady[i].Task;
-
-            if (firstRarPath == null) firstRarPath = localPaths[0];
-
-            onProgress?.Invoke("Extracting video...", 95);
-
-            using var archive = RarArchive.OpenArchive(firstRarPath);
-            var videoEntry = archive.Entries
-                .Where(e => !e.IsDirectory && IsVideoFile(e.Key ?? ""))
-                .OrderByDescending(e => e.Size)
-                .FirstOrDefault();
-
-            if (videoEntry == null) return;
-
-            var videoName = Path.GetFileName(videoEntry.Key ?? "video.mkv");
-            extractedPath = Path.Combine(releaseDir, videoName);
-
-            if (File.Exists(extractedPath)) return;
-
-            var tempExtract = extractedPath + ".partial";
-            bool playSignaled = false;
-            try
-            {
-                await using var entryStream = videoEntry.OpenEntryStream();
-                await using var outStream = new FileStream(tempExtract, FileMode.Create, FileAccess.Write, FileShare.Read);
-                var buf = new byte[256 * 1024];
-                int rd;
-                long written = 0;
-                while ((rd = await entryStream.ReadAsync(buf, ct)) > 0)
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) when (attempt < 4 && !ct.IsCancellationRequested)
                 {
-                    await outStream.WriteAsync(buf.AsMemory(0, rd), ct);
-                    await outStream.FlushAsync(ct);
-                    written += rd;
-
-                    if (!playSignaled && written >= 10 * 1024 * 1024)
-                    {
-                        playSignaled = true;
-                        onPlayReady?.Invoke(tempExtract);
-                    }
-
-                    if (videoEntry.Size > 0)
-                    {
-                        var pct = (int)(written * 100 / videoEntry.Size);
-                        onProgress?.Invoke($"Extracting... {pct}%", pct);
-                    }
+                    try { File.Delete(tempPath); } catch { }
+                    onProgress?.Invoke($"Download failed ({ex.Message}), retry {attempt + 1}/5...", totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0);
+                    Log.Warning(ex, "Volume download attempt {Attempt} failed, retrying", attempt + 1);
+                    await Task.Delay(TimeSpan.FromSeconds(2 * (attempt + 1)), ct);
                 }
-
-                if (!playSignaled)
-                    onPlayReady?.Invoke(tempExtract);
+                catch
+                {
+                    try { File.Delete(tempPath); } catch { }
+                    throw;
+                }
             }
-            catch
+            File.Move(tempPath, localPath);
+
+            // Signal VLC to start playing as soon as first .rar volume is downloaded
+            if (!playSignaled && localPath.EndsWith(".rar", StringComparison.OrdinalIgnoreCase))
             {
-                try { File.Delete(tempExtract); } catch { }
-                throw;
+                playSignaled = true;
+                onPlayReady?.Invoke(localPath);
             }
-
-            File.Move(tempExtract, extractedPath, true);
-        }, ct);
-
-        // Wait for both tasks
-        await Task.WhenAll(downloadTask, extractTask);
-
-        // Clean up RAR volumes
-        foreach (var lp in localPaths)
-            if (lp != null) try { File.Delete(lp); } catch { }
-
-        if (extractedPath != null && File.Exists(extractedPath))
-        {
-            onProgress?.Invoke("Extraction complete", 100);
-            return extractedPath;
         }
 
-        // Fallback: return first rar
-        if (firstRarPath != null)
-        {
-            onProgress?.Invoke("Ready to play", 100);
-            return firstRarPath;
-        }
-
-        return null;
+        onProgress?.Invoke("All volumes downloaded", 100);
+        return firstRarPath;
     }
 
     public void Dispose()

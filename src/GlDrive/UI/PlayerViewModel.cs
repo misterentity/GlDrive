@@ -776,7 +776,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
         try
         {
-            // Download all volumes, extract, and start VLC as soon as 10MB is extracted
+            // Download volumes; VLC starts as soon as first .rar is ready
             var playStarted = false;
             var localVideo = await Task.Run(async () =>
                 await _streamServer!.DownloadAndExtractRar(server, releasePath, files,
@@ -808,7 +808,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
             }
 
             if (playStarted)
-                PlayerStatus = "Extraction complete";
+                PlayerStatus = "All volumes downloaded";
             else
             {
                 IsBuffering = false;
