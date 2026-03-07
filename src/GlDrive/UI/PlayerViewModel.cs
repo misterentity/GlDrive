@@ -776,7 +776,8 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
         try
         {
-            // Download + extract entirely in background, with progress updates
+            // Download volumes in background; start VLC as soon as first .rar is ready
+            var playStarted = false;
             var localVideo = await Task.Run(async () =>
                 await _streamServer!.DownloadAndExtractRar(server, releasePath, files,
                     onProgress: (msg, pct) =>
@@ -786,19 +787,29 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
                             PlayerStatus = msg;
                             BufferProgress = pct;
                         });
+                    },
+                    onPlayReady: rarPath =>
+                    {
+                        Application.Current?.Dispatcher.InvokeAsync(async () =>
+                        {
+                            if (playStarted) return;
+                            playStarted = true;
+                            IsBuffering = false;
+                            await PlayLocalFile(rarPath);
+                        });
                     })
             );
 
-            if (localVideo == null)
+            if (localVideo == null && !playStarted)
             {
                 PlayerStatus = "No video found in RAR archive";
                 IsBuffering = false;
                 return;
             }
 
-            // Play the extracted local file
-            IsBuffering = false;
-            await PlayLocalFile(localVideo);
+            // Remaining volumes finished downloading
+            if (playStarted)
+                PlayerStatus = "All volumes downloaded";
         }
         catch (OperationCanceledException)
         {
