@@ -603,9 +603,35 @@ public class MediaStreamServer : IDisposable
             onProgress?.Invoke($"Downloading volume {i + 1}/{volumes.Count}: {Path.GetFileName(vol.Name)}", totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0);
 
             var tempPath = localPath + ".partial";
+
+            // Wait for a free connection with retry (other downloads may hold all connections)
+            PooledConnection? conn = null;
+            for (int wait = 0; wait < 60 && conn == null; wait++)
+            {
+                try
+                {
+                    using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    borrowCts.CancelAfter(TimeSpan.FromSeconds(2));
+                    conn = await server.Pool!.Borrow(borrowCts.Token);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    var waitPct = totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0;
+                    onProgress?.Invoke($"Waiting for FTP connection... {wait + 1}s", waitPct);
+                }
+                catch (Exception) when (!ct.IsCancellationRequested)
+                {
+                    var waitPct = totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0;
+                    onProgress?.Invoke($"Connection error, retrying... {wait + 1}s", waitPct);
+                    await Task.Delay(1000, ct);
+                }
+            }
+            if (conn == null)
+                throw new IOException("No FTP connection available — pause other downloads and retry");
+
             try
             {
-                await using var conn = await server.Pool!.Borrow(ct);
+                await using var _ = conn;
                 await using var ftpStream = await conn.Client.OpenRead(vol.FullName, FtpDataType.Binary, 0, token: ct);
                 await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None);
                 var buf = new byte[256 * 1024];
@@ -620,6 +646,7 @@ public class MediaStreamServer : IDisposable
                 ftpStream.Close();
                 await conn.Client.GetReply(ct);
             }
+            catch (OperationCanceledException) { throw; }
             catch
             {
                 try { File.Delete(tempPath); } catch { }
