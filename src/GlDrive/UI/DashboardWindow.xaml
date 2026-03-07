@@ -561,6 +561,32 @@
                                     </StackPanel>
                                 </Border>
 
+                                <!-- FTP Search Results -->
+                                <Border Background="{DynamicResource SurfaceBrush}" CornerRadius="6"
+                                        Padding="10"
+                                        Visibility="{Binding HasFtpResults, Converter={StaticResource BoolToVisibility}}">
+                                    <StackPanel>
+                                        <TextBlock Text="FTP Results" FontWeight="SemiBold" FontSize="12"
+                                                   Foreground="{DynamicResource ForegroundBrush}" Margin="0,0,0,6"/>
+                                        <DataGrid ItemsSource="{Binding FtpResults}"
+                                                  SelectedItem="{Binding SelectedFtpResult}"
+                                                  AutoGenerateColumns="False" IsReadOnly="True"
+                                                  SelectionMode="Single" GridLinesVisibility="Horizontal"
+                                                  HeadersVisibility="Column" CanUserAddRows="False"
+                                                  MaxHeight="160"
+                                                  MouseDoubleClick="PlayerResult_DoubleClick">
+                                            <DataGrid.Columns>
+                                                <DataGridTextColumn Header="Release" Binding="{Binding ReleaseName}" Width="*"/>
+                                                <DataGridTextColumn Header="Server" Binding="{Binding ServerName}" Width="60"/>
+                                                <DataGridTextColumn Header="Size" Binding="{Binding SizeText}" Width="55"/>
+                                            </DataGrid.Columns>
+                                        </DataGrid>
+                                        <Button Content="&#x25B6; Play Selected" Command="{Binding PlayResultCommand}"
+                                                Padding="14,5" Margin="0,6,0,0" HorizontalAlignment="Left"
+                                                Style="{StaticResource PrimaryButton}" FontSize="11"/>
+                                    </StackPanel>
+                                </Border>
+
                                 <!-- Empty state hint -->
                                 <Border Visibility="{Binding HasNoSelection, Converter={StaticResource BoolToVisibility}}"
                                         Margin="0,30,0,0">
@@ -608,31 +634,6 @@
                                     </StackPanel>
                                 </Border>
 
-                                <!-- FTP Search Results -->
-                                <Border Background="{DynamicResource SurfaceBrush}" CornerRadius="6"
-                                        Padding="10"
-                                        Visibility="{Binding HasFtpResults, Converter={StaticResource BoolToVisibility}}">
-                                    <StackPanel>
-                                        <TextBlock Text="FTP Results" FontWeight="SemiBold" FontSize="12"
-                                                   Foreground="{DynamicResource ForegroundBrush}" Margin="0,0,0,6"/>
-                                        <DataGrid ItemsSource="{Binding FtpResults}"
-                                                  SelectedItem="{Binding SelectedFtpResult}"
-                                                  AutoGenerateColumns="False" IsReadOnly="True"
-                                                  SelectionMode="Single" GridLinesVisibility="Horizontal"
-                                                  HeadersVisibility="Column" CanUserAddRows="False"
-                                                  MaxHeight="160"
-                                                  MouseDoubleClick="PlayerResult_DoubleClick">
-                                            <DataGrid.Columns>
-                                                <DataGridTextColumn Header="Release" Binding="{Binding ReleaseName}" Width="*"/>
-                                                <DataGridTextColumn Header="Server" Binding="{Binding ServerName}" Width="60"/>
-                                                <DataGridTextColumn Header="Size" Binding="{Binding SizeText}" Width="55"/>
-                                            </DataGrid.Columns>
-                                        </DataGrid>
-                                        <Button Content="&#x25B6; Play Selected" Command="{Binding PlayResultCommand}"
-                                                Padding="14,5" Margin="0,6,0,0" HorizontalAlignment="Left"
-                                                Style="{StaticResource PrimaryButton}" FontSize="11"/>
-                                    </StackPanel>
-                                </Border>
                             </StackPanel>
                         </ScrollViewer>
 
