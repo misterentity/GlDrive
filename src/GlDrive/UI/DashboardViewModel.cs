@@ -72,6 +72,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private string _statusBarSpeed = "";
     private string _statusBarQueueCount = "";
     private string _statusBarDiskSpace = "";
+    private string _statusBarConnections = "";
     private DispatcherTimer? _statusTimer;
 
     // Bandwidth graph
@@ -271,6 +272,12 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     {
         get => _statusBarDiskSpace;
         set { _statusBarDiskSpace = value; OnPropertyChanged(); }
+    }
+
+    public string StatusBarConnections
+    {
+        get => _statusBarConnections;
+        set { _statusBarConnections = value; OnPropertyChanged(); }
     }
 
     // Bandwidth graph
@@ -1410,6 +1417,17 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             }
         }
         catch { StatusBarDiskSpace = ""; }
+
+        // FTP connection counts per server
+        var connParts = new List<string>();
+        foreach (var server in _serverManager.GetMountedServers())
+        {
+            if (server.Pool == null || !server.Pool.IsConnected) continue;
+            var active = server.Pool.ActiveCount;
+            var total = server.Pool.TotalCreated;
+            connParts.Add($"{server.ServerName}: {active}/{total}");
+        }
+        StatusBarConnections = connParts.Count > 0 ? string.Join("  ", connParts) : "";
 
         // Update bandwidth graph points
         UpdateSpeedGraph();
