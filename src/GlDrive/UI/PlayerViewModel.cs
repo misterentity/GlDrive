@@ -219,7 +219,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
                 Application.Current?.Dispatcher.Invoke(() => { IsPlaying = false; IsBuffering = false; PlayerStatus = "Playback error"; });
             _mediaPlayer.Volume = (int)_volume;
 
-            _streamServer = new MediaStreamServer(_serverManager);
+            _streamServer = new MediaStreamServer(_serverManager, _config);
             _streamServer.Start();
 
             _vlcInitialized = true;
@@ -369,6 +369,15 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
         try
         {
+            // Check library cache first
+            var cached = _streamServer.FindCachedVideo(result.ReleaseName);
+            if (cached != null)
+            {
+                PlayerStatus = $"Playing from library: {result.ReleaseName}";
+                await PlayLocalFile(cached);
+                return;
+            }
+
             // List files in the release directory
             var files = await server.Search!.GetReleaseFiles(result.RemotePath);
 
@@ -380,8 +389,8 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
             if (videoFile != null)
             {
-                // Direct video file — stream via HTTP
-                await PlayFromFtp(result.ServerId, videoFile.FullName);
+                // Direct video file — stream via HTTP (saves to library)
+                await PlayFromFtp(result.ServerId, videoFile.FullName, result.ReleaseName);
                 return;
             }
 
@@ -393,7 +402,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
             if (rarFile != null)
             {
-                // RAR content — download, extract, play
+                // RAR content — download, extract to library, play
                 await PlayFromRar(server, result.RemotePath, files);
                 return;
             }
@@ -411,9 +420,9 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
-    private async Task PlayFromFtp(string serverId, string remotePath)
+    private async Task PlayFromFtp(string serverId, string remotePath, string releaseName = "")
     {
-        var url = $"{_streamServer!.BaseUrl}stream?server={Uri.EscapeDataString(serverId)}&path={Uri.EscapeDataString(remotePath)}";
+        var url = $"{_streamServer!.BaseUrl}stream?server={Uri.EscapeDataString(serverId)}&path={Uri.EscapeDataString(remotePath)}&release={Uri.EscapeDataString(releaseName)}";
         Log.Information("Playing FTP stream: {Url}", url);
 
         var media = new Media(_libVLC!, new Uri(url));
@@ -452,7 +461,19 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         PlayerStatus = $"Buffering: {Path.GetFileName(releasePath)}...";
     }
 
-    private void TogglePlayPause()
+    private async Task PlayLocalFile(string localPath)
+    {
+        Log.Information("Playing from library: {Path}", localPath);
+
+        var media = new Media(_libVLC!, new Uri($"file:///{localPath.Replace('\\', '/')}"));
+
+        await Task.Run(() => _mediaPlayer!.Stop());
+        _mediaPlayer!.Play(media);
+
+        PlayerStatus = $"Playing: {Path.GetFileName(localPath)} (from library)";
+    }
+
+        private void TogglePlayPause()
     {
         if (_mediaPlayer == null) return;
         if (_mediaPlayer.IsPlaying)
