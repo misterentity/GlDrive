@@ -714,6 +714,9 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
                 .OrderByDescending(f => f.Size)
                 .FirstOrDefault();
 
+            // Stop loading spinner — VLC buffering overlay takes over from here
+            IsLoading = false;
+
             if (videoFile != null)
             {
                 await PlayFromFtp(result.ServerId, videoFile.FullName, result.ReleaseName);
