@@ -67,7 +67,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         set
         {
             _selectedMovie = value;
-            if (value != null) { _selectedTvShow = null; ClearEpisodePicker(); }
+            if (value != null) { _selectedTvShow = null; ClearEpisodePicker(); SwitchToNowPlaying?.Invoke(); }
             OnPropertyChanged();
             OnPropertyChanged(nameof(SelectedTvShow));
             NotifyDetailChanged();
