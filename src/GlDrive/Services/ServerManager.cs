@@ -168,6 +168,8 @@ public class ServerManager : IDisposable
 
             await using var conn = await mountService.Pool.Borrow(ct);
             var sanitized = nick.Replace("\r", "").Replace("\n", "").Replace("\0", "");
+                if (sanitized.Contains(' ') || sanitized.Length == 0 || sanitized.Length > 30)
+                    return "SITE INVITE skipped: invalid nick";
             var reply = await conn.Client.Execute($"SITE INVITE {sanitized}", ct);
             return reply.Message;
         };

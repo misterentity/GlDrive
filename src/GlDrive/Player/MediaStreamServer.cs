@@ -17,10 +17,12 @@ public class MediaStreamServer : IDisposable
     private readonly AppConfig _config;
     private HttpListener? _listener;
     private CancellationTokenSource _cts = new();
+    private readonly string _authToken = Guid.NewGuid().ToString("N");
     private int _port;
 
     public int Port => _port;
     public string BaseUrl => $"http://127.0.0.1:{_port}/";
+    public string AuthToken => _authToken;
 
     /// <summary>
     /// The library directory where player caches downloaded/extracted video files.
@@ -74,6 +76,14 @@ public class MediaStreamServer : IDisposable
         try
         {
             var rawUrl = ctx.Request.RawUrl ?? "";
+
+            // Verify auth token on all requests
+            if (ctx.Request.QueryString["token"] != _authToken)
+            {
+                ctx.Response.StatusCode = 403;
+                ctx.Response.Close();
+                return;
+            }
             Log.Debug("Media stream request: {Method} {Url}", ctx.Request.HttpMethod, rawUrl);
 
             if (rawUrl.StartsWith("/rar-stream"))
