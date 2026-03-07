@@ -557,6 +557,130 @@ public class MediaStreamServer : IDisposable
         finally { tcp.Dispose(); }
     }
 
+    /// <summary>
+    /// Downloads RAR volumes and extracts the video to the library folder.
+    /// Reports progress via the callback: (message, percentComplete).
+    /// Returns the local path to the extracted video, or null on failure.
+    /// </summary>
+    public async Task<string?> DownloadAndExtractRar(
+        MountService server, string releasePath, List<FtpListItem> files,
+        Action<string, int>? onProgress = null, CancellationToken ct = default)
+    {
+        var releaseName = Path.GetFileName(releasePath);
+        var releaseDir = Path.Combine(LibraryPath, SanitizeName(releaseName));
+
+        // Check cache
+        var cached = FindCachedVideo(releaseName);
+        if (cached != null) return cached;
+
+        var volumes = files
+            .Where(f => ArchiveExtractor.IsArchiveFile(f.Name) &&
+                        !f.Name.EndsWith(".sfv", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(f => GetVolumeOrder(f.Name))
+            .ToList();
+
+        if (volumes.Count == 0) return null;
+
+        Directory.CreateDirectory(releaseDir);
+        var totalBytes = volumes.Sum(v => v.Size);
+        long downloadedBytes = 0;
+        var localFiles = new List<string>();
+
+        // Download volumes with progress
+        for (int i = 0; i < volumes.Count; i++)
+        {
+            var vol = volumes[i];
+            var localPath = Path.Combine(releaseDir, Path.GetFileName(vol.Name));
+
+            if (File.Exists(localPath))
+            {
+                downloadedBytes += vol.Size;
+                localFiles.Add(localPath);
+                onProgress?.Invoke($"Volume {i + 1}/{volumes.Count} cached", totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0);
+                continue;
+            }
+
+            onProgress?.Invoke($"Downloading volume {i + 1}/{volumes.Count}: {Path.GetFileName(vol.Name)}", totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0);
+
+            var tempPath = localPath + ".partial";
+            try
+            {
+                await using var conn = await server.Pool!.Borrow(ct);
+                await using var ftpStream = await conn.Client.OpenRead(vol.FullName, FtpDataType.Binary, 0, token: ct);
+                await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None);
+                var buf = new byte[256 * 1024];
+                int rd;
+                while ((rd = await ftpStream.ReadAsync(buf, ct)) > 0)
+                {
+                    await fileStream.WriteAsync(buf.AsMemory(0, rd), ct);
+                    downloadedBytes += rd;
+                    var pct = totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0;
+                    onProgress?.Invoke($"Downloading {i + 1}/{volumes.Count} — {pct}%", pct);
+                }
+                ftpStream.Close();
+                await conn.Client.GetReply(ct);
+            }
+            catch
+            {
+                try { File.Delete(tempPath); } catch { }
+                throw;
+            }
+            File.Move(tempPath, localPath);
+            localFiles.Add(localPath);
+        }
+
+        // Extract video from RAR
+        onProgress?.Invoke("Extracting video from RAR...", 95);
+
+        var firstRar = localFiles.First(f => f.EndsWith(".rar", StringComparison.OrdinalIgnoreCase));
+        using var archive = RarArchive.OpenArchive(firstRar);
+        var videoEntry = archive.Entries
+            .Where(e => !e.IsDirectory && IsVideoFile(e.Key ?? ""))
+            .OrderByDescending(e => e.Size)
+            .FirstOrDefault();
+
+        if (videoEntry == null) return null;
+
+        var videoName = Path.GetFileName(videoEntry.Key ?? "video.mkv");
+        var extractedPath = Path.Combine(releaseDir, videoName);
+
+        if (!File.Exists(extractedPath))
+        {
+            var tempExtract = extractedPath + ".partial";
+            try
+            {
+                await using var entryStream = videoEntry.OpenEntryStream();
+                await using var outStream = new FileStream(tempExtract, FileMode.Create, FileAccess.Write, FileShare.None);
+                var buf = new byte[256 * 1024];
+                int rd;
+                long written = 0;
+                while ((rd = await entryStream.ReadAsync(buf, ct)) > 0)
+                {
+                    await outStream.WriteAsync(buf.AsMemory(0, rd), ct);
+                    written += rd;
+                    if (videoEntry.Size > 0)
+                    {
+                        var pct = (int)(written * 100 / videoEntry.Size);
+                        onProgress?.Invoke($"Extracting... {pct}%", pct);
+                    }
+                }
+            }
+            catch
+            {
+                try { File.Delete(tempExtract); } catch { }
+                throw;
+            }
+            File.Move(tempExtract, extractedPath);
+
+            // Clean up RAR volumes
+            foreach (var lf in localFiles)
+                try { File.Delete(lf); } catch { }
+        }
+
+        onProgress?.Invoke("Ready to play", 100);
+        return extractedPath;
+    }
+
     public void Dispose()
     {
         _cts.Cancel();

@@ -766,24 +766,51 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     private async Task PlayFromRar(MountService server, string releasePath, List<FtpListItem> files)
     {
         var releaseName = Path.GetFileName(releasePath);
-        var url = $"{_streamServer!.BaseUrl}rar-stream?token={_streamServer.AuthToken}&server={Uri.EscapeDataString(server.ServerId)}&path={Uri.EscapeDataString(releasePath)}";
-        Log.Information("Playing RAR stream: {Url}", url);
+        Log.Information("RAR background download+extract for {Path}", releasePath);
 
         SaveCurrentPosition();
         _currentReleaseName = releaseName;
-
-        var media = new Media(_libVLC!, new Uri(url));
-        media.AddOption(":network-caching=15000");
-        media.AddOption(":file-caching=5000");
-        media.AddOption(":http-reconnect");
-
         IsBuffering = true;
-        PlayerStatus = "Downloading & extracting RAR...";
+        BufferProgress = 0;
+        PlayerStatus = "Preparing RAR download...";
 
-        await Task.Run(() => _mediaPlayer!.Stop());
-        _mediaPlayer!.Play(media);
+        try
+        {
+            // Download + extract entirely in background, with progress updates
+            var localVideo = await Task.Run(async () =>
+                await _streamServer!.DownloadAndExtractRar(server, releasePath, files,
+                    onProgress: (msg, pct) =>
+                    {
+                        Application.Current?.Dispatcher.Invoke(() =>
+                        {
+                            PlayerStatus = msg;
+                            BufferProgress = pct;
+                        });
+                    })
+            );
 
-        PlayerStatus = $"Buffering: {releaseName}...";
+            if (localVideo == null)
+            {
+                PlayerStatus = "No video found in RAR archive";
+                IsBuffering = false;
+                return;
+            }
+
+            // Play the extracted local file
+            IsBuffering = false;
+            await PlayLocalFile(localVideo);
+        }
+        catch (OperationCanceledException)
+        {
+            PlayerStatus = "Download cancelled";
+            IsBuffering = false;
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "RAR download failed for {Path}", releasePath);
+            PlayerStatus = $"RAR download failed: {ex.Message}";
+            IsBuffering = false;
+        }
     }
 
     private async Task PlayLocalFile(string localPath)
