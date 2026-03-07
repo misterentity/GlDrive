@@ -564,7 +564,7 @@ public class MediaStreamServer : IDisposable
     /// </summary>
     public async Task<string?> DownloadAndExtractRar(
         MountService server, string releasePath, List<FtpListItem> files,
-        Action<string, int>? onProgress = null, CancellationToken ct = default)
+Action<string, int>? onProgress = null, Action<string>? onPlayReady = null, CancellationToken ct = default)
     {
         var releaseName = Path.GetFileName(releasePath);
         var releaseDir = Path.Combine(LibraryPath, SanitizeName(releaseName));
@@ -686,12 +686,81 @@ continue;
 
         }
 
-        // VLC can play directly from RAR files — no extraction needed
+        // Extract video from RAR — start VLC as soon as enough data is written
         var firstRar = localFiles.FirstOrDefault(f => f.EndsWith(".rar", StringComparison.OrdinalIgnoreCase));
         if (firstRar == null) return null;
 
-        onProgress?.Invoke("Ready to play", 100);
-        return firstRar;
+        onProgress?.Invoke("Extracting video...", 95);
+
+        using var archive = RarArchive.OpenArchive(firstRar);
+        var videoEntry = archive.Entries
+            .Where(e => !e.IsDirectory && IsVideoFile(e.Key ?? ""))
+            .OrderByDescending(e => e.Size)
+            .FirstOrDefault();
+
+        if (videoEntry == null)
+        {
+            // No extractable video — fall back to playing the .rar directly
+            onProgress?.Invoke("Ready to play", 100);
+            return firstRar;
+        }
+
+        var videoName = Path.GetFileName(videoEntry.Key ?? "video.mkv");
+        var extractedPath = Path.Combine(releaseDir, videoName);
+
+        if (File.Exists(extractedPath))
+        {
+            foreach (var lf in localFiles) try { File.Delete(lf); } catch { }
+            onProgress?.Invoke("Ready to play", 100);
+            return extractedPath;
+        }
+
+        // Extract with FileShare.Read so VLC can play the growing file
+        var tempExtract = extractedPath + ".partial";
+        bool playSignaled = false;
+        try
+        {
+            await using var entryStream = videoEntry.OpenEntryStream();
+            await using var outStream = new FileStream(tempExtract, FileMode.Create, FileAccess.Write, FileShare.Read);
+            var buf = new byte[256 * 1024];
+            int rd;
+            long written = 0;
+            while ((rd = await entryStream.ReadAsync(buf, ct)) > 0)
+            {
+                await outStream.WriteAsync(buf.AsMemory(0, rd), ct);
+                await outStream.FlushAsync(ct);
+                written += rd;
+
+                // Signal VLC to start playing after 10 MB extracted
+                if (!playSignaled && written >= 10 * 1024 * 1024)
+                {
+                    playSignaled = true;
+                    onPlayReady?.Invoke(tempExtract);
+                }
+
+                if (videoEntry.Size > 0)
+                {
+                    var pct = (int)(written * 100 / videoEntry.Size);
+                    onProgress?.Invoke($"Extracting... {pct}%", pct);
+                }
+            }
+
+            if (!playSignaled)
+                onPlayReady?.Invoke(tempExtract);
+        }
+        catch
+        {
+            try { File.Delete(tempExtract); } catch { }
+            throw;
+        }
+
+        File.Move(tempExtract, extractedPath, true);
+
+        // Clean up RAR volumes to save disk space
+        foreach (var lf in localFiles) try { File.Delete(lf); } catch { }
+
+        onProgress?.Invoke("Extraction complete", 100);
+        return extractedPath;
     }
 
     public void Dispose()
