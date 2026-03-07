@@ -598,7 +598,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         foreach (var dir in Directory.GetDirectories(libPath).OrderByDescending(d => Directory.GetLastWriteTime(d)))
         {
             var videos = Directory.GetFiles(dir, "*", SearchOption.AllDirectories)
-                .Where(f => IsVideoFile(f))
+                .Where(f => IsVideoFile(f) || f.EndsWith(".rar", StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
             if (videos.Count == 0) continue;
