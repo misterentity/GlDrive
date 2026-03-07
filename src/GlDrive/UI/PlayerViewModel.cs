@@ -738,7 +738,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
     private async Task PlayFromFtp(string serverId, string remotePath, string releaseName = "")
     {
-        var url = $"{_streamServer!.BaseUrl}stream?server={Uri.EscapeDataString(serverId)}&path={Uri.EscapeDataString(remotePath)}&release={Uri.EscapeDataString(releaseName)}";
+        var url = $"{_streamServer!.BaseUrl}stream?token={_streamServer.AuthToken}&server={Uri.EscapeDataString(serverId)}&path={Uri.EscapeDataString(remotePath)}&release={Uri.EscapeDataString(releaseName)}";
         Log.Information("Playing FTP stream: {Url}", url);
 
         SaveCurrentPosition();
@@ -761,7 +761,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     private async Task PlayFromRar(MountService server, string releasePath, List<FtpListItem> files)
     {
         var releaseName = Path.GetFileName(releasePath);
-        var url = $"{_streamServer!.BaseUrl}rar-stream?server={Uri.EscapeDataString(server.ServerId)}&path={Uri.EscapeDataString(releasePath)}";
+        var url = $"{_streamServer!.BaseUrl}rar-stream?token={_streamServer.AuthToken}&server={Uri.EscapeDataString(server.ServerId)}&path={Uri.EscapeDataString(releasePath)}";
         Log.Information("Playing RAR stream: {Url}", url);
 
         SaveCurrentPosition();

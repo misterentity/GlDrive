@@ -112,7 +112,7 @@ public class UpdateChecker
 
     private void LaunchUpdater(string zipPath)
     {
-        var extractDir = Path.Combine(Path.GetTempPath(), "gldrive-update-extract");
+        var extractDir = Path.Combine(Path.GetTempPath(), $"gldrive-update-{Guid.NewGuid():N}");
 
         // Clean previous extraction
         if (Directory.Exists(extractDir))

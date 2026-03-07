@@ -39,7 +39,7 @@ public class IrcClient : IDisposable
             {
                 if (cert == null) return false;
                 if (certManager != null)
-                    return certManager.ValidateCertificate(host, port, cert).GetAwaiter().GetResult();
+                    return Task.Run(() => certManager.ValidateCertificate(host, port, cert)).GetAwaiter().GetResult();
                 return false;
             });
 
