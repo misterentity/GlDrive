@@ -809,8 +809,10 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         {
             Log.Warning(ex, "RAR download failed for {Path}", releasePath);
             var msg = ex.Message;
-            if (msg.Contains("actively refused") || msg.Contains("connection"))
-                msg = "Server refused connection — try again when other downloads finish";
+            if (msg.Contains("actively refused"))
+                msg = "Server refused connection — try again in a few minutes";
+            else if (msg.Contains("No FTP connection available"))
+                msg = "All FTP connections busy — pause other downloads and retry";
             PlayerStatus = msg;
             IsBuffering = false;
         }

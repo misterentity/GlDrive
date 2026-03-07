@@ -600,57 +600,70 @@ public class MediaStreamServer : IDisposable
                 continue;
             }
 
-            onProgress?.Invoke($"Downloading volume {i + 1}/{volumes.Count}: {Path.GetFileName(vol.Name)}", totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0);
-
             var tempPath = localPath + ".partial";
 
-            // Wait for a free connection with retry (other downloads may hold all connections)
-            PooledConnection? conn = null;
-            for (int wait = 0; wait < 60 && conn == null; wait++)
+            // Retry the entire borrow+download up to 5 times for transient connection failures
+            for (int attempt = 0; ; attempt++)
             {
+                onProgress?.Invoke($"Downloading volume {i + 1}/{volumes.Count}: {Path.GetFileName(vol.Name)}", totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0);
+
+                // Borrow with retry — wait for a free connection
+                PooledConnection? conn = null;
+                for (int wait = 0; wait < 60 && conn == null; wait++)
+                {
+                    try
+                    {
+                        using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                        borrowCts.CancelAfter(TimeSpan.FromSeconds(2));
+                        conn = await server.Pool!.Borrow(borrowCts.Token);
+                    }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                    {
+                        var waitPct = totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0;
+                        onProgress?.Invoke($"Waiting for FTP connection... {wait + 1}s", waitPct);
+                    }
+                    catch (Exception) when (!ct.IsCancellationRequested)
+                    {
+                        var waitPct = totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0;
+                        onProgress?.Invoke($"Connection error, retrying... {wait + 1}s", waitPct);
+                        await Task.Delay(1000, ct);
+                    }
+                }
+                if (conn == null)
+                    throw new IOException("No FTP connection available — pause other downloads and retry");
+
                 try
                 {
-                    using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                    borrowCts.CancelAfter(TimeSpan.FromSeconds(2));
-                    conn = await server.Pool!.Borrow(borrowCts.Token);
+                    await using var _ = conn;
+                    await using var ftpStream = await conn.Client.OpenRead(vol.FullName, FtpDataType.Binary, 0, token: ct);
+                    await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None);
+                    var buf = new byte[256 * 1024];
+                    int rd;
+                    while ((rd = await ftpStream.ReadAsync(buf, ct)) > 0)
+                    {
+                        await fileStream.WriteAsync(buf.AsMemory(0, rd), ct);
+                        downloadedBytes += rd;
+                        var pct = totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0;
+                        onProgress?.Invoke($"Downloading {i + 1}/{volumes.Count} — {pct}%", pct);
+                    }
+                    ftpStream.Close();
+                    await conn.Client.GetReply(ct);
+                    break; // Success — exit retry loop
                 }
-                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) when (attempt < 4 && !ct.IsCancellationRequested)
                 {
+                    try { File.Delete(tempPath); } catch { }
                     var waitPct = totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0;
-                    onProgress?.Invoke($"Waiting for FTP connection... {wait + 1}s", waitPct);
+                    onProgress?.Invoke($"Download failed ({ex.Message}), retry {attempt + 1}/5...", waitPct);
+                    Log.Warning(ex, "Volume download attempt {Attempt} failed, retrying", attempt + 1);
+                    await Task.Delay(TimeSpan.FromSeconds(2 * (attempt + 1)), ct);
                 }
-                catch (Exception) when (!ct.IsCancellationRequested)
+                catch
                 {
-                    var waitPct = totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0;
-                    onProgress?.Invoke($"Connection error, retrying... {wait + 1}s", waitPct);
-                    await Task.Delay(1000, ct);
+                    try { File.Delete(tempPath); } catch { }
+                    throw;
                 }
-            }
-            if (conn == null)
-                throw new IOException("No FTP connection available — pause other downloads and retry");
-
-            try
-            {
-                await using var _ = conn;
-                await using var ftpStream = await conn.Client.OpenRead(vol.FullName, FtpDataType.Binary, 0, token: ct);
-                await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None);
-                var buf = new byte[256 * 1024];
-                int rd;
-                while ((rd = await ftpStream.ReadAsync(buf, ct)) > 0)
-                {
-                    await fileStream.WriteAsync(buf.AsMemory(0, rd), ct);
-                    downloadedBytes += rd;
-                    var pct = totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0;
-                    onProgress?.Invoke($"Downloading {i + 1}/{volumes.Count} — {pct}%", pct);
-                }
-                ftpStream.Close();
-                await conn.Client.GetReply(ct);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch
-            {
-                try { File.Delete(tempPath); } catch { }
-                throw;
             }
             File.Move(tempPath, localPath);
             localFiles.Add(localPath);
