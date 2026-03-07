@@ -2,6 +2,7 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using FluentFTP;
+using GlDrive.Config;
 using GlDrive.Downloads;
 using GlDrive.Ftp;
 using GlDrive.Services;
@@ -13,6 +14,7 @@ namespace GlDrive.Player;
 public class MediaStreamServer : IDisposable
 {
     private readonly ServerManager _serverManager;
+    private readonly AppConfig _config;
     private HttpListener? _listener;
     private CancellationTokenSource _cts = new();
     private int _port;
@@ -20,9 +22,15 @@ public class MediaStreamServer : IDisposable
     public int Port => _port;
     public string BaseUrl => $"http://127.0.0.1:{_port}/";
 
-    public MediaStreamServer(ServerManager serverManager)
+    /// <summary>
+    /// The library directory where player caches downloaded/extracted video files.
+    /// </summary>
+    public string LibraryPath => Path.Combine(_config.Downloads.LocalPath, "Player");
+
+    public MediaStreamServer(ServerManager serverManager, AppConfig config)
     {
         _serverManager = serverManager;
+        _config = config;
     }
 
     public void Start()
@@ -31,8 +39,9 @@ public class MediaStreamServer : IDisposable
         _listener = new HttpListener();
         _listener.Prefixes.Add($"http://127.0.0.1:{_port}/");
         _listener.Start();
+        Directory.CreateDirectory(LibraryPath);
         _ = AcceptLoop();
-        Log.Information("Media stream server started on port {Port}", _port);
+        Log.Information("Media stream server started on port {Port}, library at {Path}", _port, LibraryPath);
     }
 
     private static int FindFreePort()
@@ -87,16 +96,44 @@ public class MediaStreamServer : IDisposable
         }
     }
 
-    // ── Direct video file streaming ──
+    /// <summary>
+    /// Checks the library for an already-cached video file for the given release.
+    /// Returns the local path if found, null otherwise.
+    /// </summary>
+    public string? FindCachedVideo(string releaseName)
+    {
+        var releaseDir = Path.Combine(LibraryPath, SanitizeName(releaseName));
+        if (!Directory.Exists(releaseDir)) return null;
+
+        return Directory.GetFiles(releaseDir, "*", SearchOption.AllDirectories)
+            .Where(f => IsVideoFile(f))
+            .OrderByDescending(f => new FileInfo(f).Length)
+            .FirstOrDefault();
+    }
+
+    // ── Direct video file streaming (saves to library as it streams) ──
     private async Task HandleDirectStream(HttpListenerContext ctx)
     {
         var serverId = ctx.Request.QueryString["server"];
         var remotePath = ctx.Request.QueryString["path"];
+        var release = ctx.Request.QueryString["release"] ?? Path.GetFileName(Path.GetDirectoryName(remotePath) ?? "");
 
         if (string.IsNullOrEmpty(serverId) || string.IsNullOrEmpty(remotePath))
         {
             ctx.Response.StatusCode = 400;
             ctx.Response.Close();
+            return;
+        }
+
+        // Check library cache first
+        var fileName = Path.GetFileName(remotePath);
+        var releaseDir = Path.Combine(LibraryPath, SanitizeName(release));
+        var cachedFile = Path.Combine(releaseDir, fileName);
+
+        if (File.Exists(cachedFile))
+        {
+            Log.Information("Serving cached file: {Path}", cachedFile);
+            await ServeLocalFile(ctx, cachedFile);
             return;
         }
 
@@ -143,17 +180,51 @@ public class MediaStreamServer : IDisposable
             if (fileSize > 0) ctx.Response.ContentLength64 = fileSize;
         }
 
-        // Stream from FTP
-        await using var conn = await server.Pool.Borrow(_cts.Token);
-        if (server.Pool.UseCpsv)
-            await StreamCpsv(conn.Client, remotePath, offset, ctx.Response.OutputStream, _cts.Token);
-        else
-            await StreamStandard(conn.Client, remotePath, offset, ctx.Response.OutputStream, _cts.Token);
+        // Stream from FTP, saving to library if streaming from the start
+        Directory.CreateDirectory(releaseDir);
+        var tempFile = cachedFile + ".partial";
+        FileStream? saveStream = null;
+
+        // Only save to library when streaming from the beginning (no seek)
+        if (offset == 0)
+        {
+            try { saveStream = new FileStream(tempFile, FileMode.Create, FileAccess.Write, FileShare.None); }
+            catch (Exception ex) { Log.Warning(ex, "Could not open cache file for writing"); }
+        }
+
+        try
+        {
+            await using var conn = await server.Pool.Borrow(_cts.Token);
+            if (server.Pool.UseCpsv)
+                await StreamCpsv(conn.Client, remotePath, offset, ctx.Response.OutputStream, _cts.Token, saveStream);
+            else
+                await StreamStandard(conn.Client, remotePath, offset, ctx.Response.OutputStream, _cts.Token, saveStream);
+
+            // Rename .partial to final when complete
+            if (saveStream != null)
+            {
+                await saveStream.DisposeAsync();
+                saveStream = null;
+                try
+                {
+                    if (File.Exists(cachedFile)) File.Delete(cachedFile);
+                    File.Move(tempFile, cachedFile);
+                    Log.Information("Cached video to library: {Path}", cachedFile);
+                }
+                catch (Exception ex) { Log.Warning(ex, "Failed to finalize cache file"); }
+            }
+        }
+        finally
+        {
+            if (saveStream != null) await saveStream.DisposeAsync();
+            // Clean up partial file on failure
+            try { if (File.Exists(tempFile)) File.Delete(tempFile); } catch { }
+        }
 
         ctx.Response.Close();
     }
 
-    // ── RAR streaming: download volumes on-demand, extract video, pipe to HTTP ──
+    // ── RAR streaming: download volumes, extract video to library, pipe to HTTP ──
     private async Task HandleRarStream(HttpListenerContext ctx)
     {
         var serverId = ctx.Request.QueryString["server"];
@@ -163,6 +234,18 @@ public class MediaStreamServer : IDisposable
         {
             ctx.Response.StatusCode = 400;
             ctx.Response.Close();
+            return;
+        }
+
+        var releaseName = Path.GetFileName(releasePath);
+        var releaseDir = Path.Combine(LibraryPath, SanitizeName(releaseName));
+
+        // Check if we already have extracted video cached
+        var cachedVideo = FindCachedVideo(releaseName);
+        if (cachedVideo != null)
+        {
+            Log.Information("Serving cached RAR extraction: {Path}", cachedVideo);
+            await ServeLocalFile(ctx, cachedVideo);
             return;
         }
 
@@ -194,34 +277,32 @@ public class MediaStreamServer : IDisposable
 
         Log.Information("Found {Count} RAR volumes in {Path}", volumes.Count, releasePath);
 
-        // Create temp dir for volume cache
-        var tempDir = Path.Combine(Path.GetTempPath(), "GlDrive", "rar-cache", Guid.NewGuid().ToString("N")[..8]);
-        Directory.CreateDirectory(tempDir);
+        // Download volumes to library folder (persistent cache)
+        Directory.CreateDirectory(releaseDir);
 
         try
         {
-            // Download volumes to temp files (sequentially — .rar first, then .r00, .r01...)
             var tempFiles = new List<string>();
             foreach (var vol in volumes)
             {
-                var localPath = Path.Combine(tempDir, vol.Name);
-                Log.Information("Downloading RAR volume: {Name} ({Size} bytes)", vol.Name, vol.Size);
-
-                var data = await server.Ftp!.DownloadFile(vol.FullName, _cts.Token);
-                await File.WriteAllBytesAsync(localPath, data, _cts.Token);
+                var localPath = Path.Combine(releaseDir, vol.Name);
+                if (!File.Exists(localPath))
+                {
+                    Log.Information("Downloading RAR volume: {Name} ({Size} bytes)", vol.Name, vol.Size);
+                    var data = await server.Ftp!.DownloadFile(vol.FullName, _cts.Token);
+                    await File.WriteAllBytesAsync(localPath, data, _cts.Token);
+                }
+                else
+                {
+                    Log.Information("RAR volume already cached: {Name}", vol.Name);
+                }
                 tempFiles.Add(localPath);
-
-                // After downloading the first .rar volume, check if we can find the video entry
-                // This lets us start streaming ASAP for single-volume RARs
-                if (tempFiles.Count == 1 && volumes.Count == 1)
-                    break;
             }
 
-            // Open the archive from the first .rar file (SharpCompress auto-discovers volumes)
+            // Open the archive and find the video entry
             var firstRar = tempFiles.First(f => f.EndsWith(".rar", StringComparison.OrdinalIgnoreCase));
             using var archive = RarArchive.OpenArchive(firstRar);
 
-            // Find the largest video entry
             var videoEntry = archive.Entries
                 .Where(e => !e.IsDirectory && IsVideoFile(e.Key ?? ""))
                 .OrderByDescending(e => e.Size)
@@ -235,8 +316,9 @@ public class MediaStreamServer : IDisposable
                 return;
             }
 
-            var videoName = videoEntry.Key ?? "video";
-            Log.Information("Streaming RAR entry: {Name} ({Size} bytes)", videoName, videoEntry.Size);
+            var videoName = videoEntry.Key ?? "video.mkv";
+            var extractedPath = Path.Combine(releaseDir, Path.GetFileName(videoName));
+            Log.Information("Extracting & streaming RAR entry: {Name} ({Size} bytes)", videoName, videoEntry.Size);
 
             // Set response headers
             ctx.Response.ContentType = GetVideoContentType(videoName);
@@ -244,29 +326,107 @@ public class MediaStreamServer : IDisposable
             if (videoEntry.Size > 0)
                 ctx.Response.ContentLength64 = videoEntry.Size;
 
-            // Stream the decompressed video entry to HTTP
+            // Stream decompressed entry to HTTP AND save to library
             await using var entryStream = videoEntry.OpenEntryStream();
-            var buffer = new byte[256 * 1024];
-            int read;
-            while ((read = await entryStream.ReadAsync(buffer, _cts.Token)) > 0)
+            FileStream? saveStream = null;
+            var tempExtractPath = extractedPath + ".partial";
+            try { saveStream = new FileStream(tempExtractPath, FileMode.Create, FileAccess.Write, FileShare.None); }
+            catch (Exception ex) { Log.Warning(ex, "Could not create extraction cache file"); }
+
+            try
             {
-                await ctx.Response.OutputStream.WriteAsync(buffer.AsMemory(0, read), _cts.Token);
-                await ctx.Response.OutputStream.FlushAsync(_cts.Token);
+                var buffer = new byte[256 * 1024];
+                int read;
+                while ((read = await entryStream.ReadAsync(buffer, _cts.Token)) > 0)
+                {
+                    await ctx.Response.OutputStream.WriteAsync(buffer.AsMemory(0, read), _cts.Token);
+                    await ctx.Response.OutputStream.FlushAsync(_cts.Token);
+                    if (saveStream != null)
+                        await saveStream.WriteAsync(buffer.AsMemory(0, read), _cts.Token);
+                }
+
+                // Finalize the cached extraction
+                if (saveStream != null)
+                {
+                    await saveStream.DisposeAsync();
+                    saveStream = null;
+                    try
+                    {
+                        if (File.Exists(extractedPath)) File.Delete(extractedPath);
+                        File.Move(tempExtractPath, extractedPath);
+                        Log.Information("Cached extracted video to library: {Path}", extractedPath);
+
+                        // Delete RAR volumes now that we have the extracted video
+                        foreach (var tf in tempFiles)
+                        {
+                            try { File.Delete(tf); } catch { }
+                        }
+                    }
+                    catch (Exception ex) { Log.Warning(ex, "Failed to finalize extraction cache"); }
+                }
+            }
+            finally
+            {
+                if (saveStream != null) await saveStream.DisposeAsync();
+                try { if (File.Exists(tempExtractPath)) File.Delete(tempExtractPath); } catch { }
             }
 
             ctx.Response.Close();
             Log.Information("RAR stream completed for {Name}", videoName);
         }
-        finally
+        catch (Exception ex) when (ex is not HttpListenerException and not OperationCanceledException)
         {
-            // Clean up temp files
-            try { Directory.Delete(tempDir, true); } catch { }
+            Log.Warning(ex, "RAR stream failed for {Path}", releasePath);
+            throw;
         }
     }
 
     /// <summary>
-    /// Returns sort order for RAR volume names: .rar=0, .r00=1, .r01=2, .s00=100, etc.
+    /// Serve a local file with Range header support.
     /// </summary>
+    private static async Task ServeLocalFile(HttpListenerContext ctx, string filePath)
+    {
+        var fi = new FileInfo(filePath);
+        var fileSize = fi.Length;
+
+        long offset = 0;
+        var rangeHeader = ctx.Request.Headers["Range"];
+        if (rangeHeader != null && rangeHeader.StartsWith("bytes="))
+        {
+            var parts = rangeHeader[6..].Split('-');
+            if (long.TryParse(parts[0], out var start))
+                offset = start;
+        }
+
+        ctx.Response.ContentType = GetVideoContentType(filePath);
+        ctx.Response.Headers.Add("Accept-Ranges", "bytes");
+
+        if (offset > 0)
+        {
+            ctx.Response.StatusCode = 206;
+            ctx.Response.Headers.Add("Content-Range", $"bytes {offset}-{fileSize - 1}/{fileSize}");
+            ctx.Response.ContentLength64 = fileSize - offset;
+        }
+        else
+        {
+            ctx.Response.StatusCode = 200;
+            ctx.Response.ContentLength64 = fileSize;
+        }
+
+        await using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        if (offset > 0) fs.Seek(offset, SeekOrigin.Begin);
+
+        var buffer = new byte[256 * 1024];
+        int read;
+        while ((read = await fs.ReadAsync(buffer)) > 0)
+        {
+            await ctx.Response.OutputStream.WriteAsync(buffer.AsMemory(0, read));
+            await ctx.Response.OutputStream.FlushAsync();
+        }
+
+        ctx.Response.Close();
+    }
+
     private static int GetVolumeOrder(string fileName)
     {
         var ext = Path.GetExtension(fileName).ToLowerInvariant();
@@ -304,8 +464,14 @@ public class MediaStreamServer : IDisposable
             or ".mpg" or ".mpeg" or ".ts" or ".vob" or ".flv" or ".webm";
     }
 
+    private static string SanitizeName(string name)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        return string.Concat(name.Select(c => invalid.Contains(c) ? '_' : c));
+    }
+
     private static async Task StreamStandard(AsyncFtpClient client, string remotePath, long offset,
-        Stream output, CancellationToken ct)
+        Stream output, CancellationToken ct, FileStream? saveStream = null)
     {
         await using var ftpStream = await client.OpenRead(remotePath, FtpDataType.Binary, offset, token: ct);
 
@@ -315,6 +481,8 @@ public class MediaStreamServer : IDisposable
         {
             await output.WriteAsync(buffer.AsMemory(0, read), ct);
             await output.FlushAsync(ct);
+            if (saveStream != null)
+                await saveStream.WriteAsync(buffer.AsMemory(0, read), ct);
         }
 
         ftpStream.Close();
@@ -322,7 +490,7 @@ public class MediaStreamServer : IDisposable
     }
 
     private static async Task StreamCpsv(AsyncFtpClient client, string remotePath, long offset,
-        Stream output, CancellationToken ct)
+        Stream output, CancellationToken ct, FileStream? saveStream = null)
     {
         await client.Execute("TYPE I", ct);
         if (offset > 0)
@@ -344,6 +512,8 @@ public class MediaStreamServer : IDisposable
                 {
                     await output.WriteAsync(buffer.AsMemory(0, read), ct);
                     await output.FlushAsync(ct);
+                    if (saveStream != null)
+                        await saveStream.WriteAsync(buffer.AsMemory(0, read), ct);
                 }
 
                 ssl.Close();
