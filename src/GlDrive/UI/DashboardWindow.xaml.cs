@@ -118,6 +118,10 @@ public partial class DashboardWindow : Window
             // Fullscreen handler
             _playerVm.FullscreenRequested += TogglePlayerFullscreen;
 
+            // Auto-switch to Now Playing when user selects a card
+            _playerVm.SwitchToNowPlaying += () =>
+                Dispatcher.Invoke(() => NowPlayingMode.IsChecked = true);
+
             // Defer heavy VLC init so the tab appears instantly
             _ = Task.Run(() => _playerVm.InitVLC()).ContinueWith(_ =>
             {

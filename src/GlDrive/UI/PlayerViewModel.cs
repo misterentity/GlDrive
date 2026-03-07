@@ -84,6 +84,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
             {
                 _selectedMovie = null;
                 if (value.TmdbId > 0) _ = LoadTvSeasons(value.TmdbId, value.Title);
+                SwitchToNowPlaying?.Invoke();
             }
             OnPropertyChanged();
             OnPropertyChanged(nameof(SelectedMovie));
@@ -441,6 +442,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
                 });
             }
 
+            OnPropertyChanged(nameof(HasSearchResults));
             PlayerStatus = SearchResults.Count > 0
                 ? $"{SearchResults.Count} result(s) from TMDb"
                 : $"No results for \"{_searchText}\"";
@@ -466,6 +468,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
         IsLoading = true;
         FtpResults.Clear();
+        OnPropertyChanged(nameof(HasFtpResults));
         PlayerStatus = $"Searching FTP for \"{query}\"...";
 
         try
@@ -486,6 +489,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
             foreach (var sr in allResults)
                 foreach (var r in sr) FtpResults.Add(r);
 
+            OnPropertyChanged(nameof(HasFtpResults));
             PlayerStatus = FtpResults.Count > 0
                 ? $"{FtpResults.Count} result(s) found"
                 : $"No results for \"{query}\"";
