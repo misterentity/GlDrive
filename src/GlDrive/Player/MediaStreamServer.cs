@@ -298,9 +298,31 @@ public class MediaStreamServer : IDisposable
                 var localPath = Path.Combine(releaseDir, Path.GetFileName(vol.Name));
                 if (!File.Exists(localPath))
                 {
-                    Log.Information("Downloading RAR volume: {Name} ({Size} bytes)", vol.Name, vol.Size);
-                    var data = await server.Ftp!.DownloadFile(vol.FullName, _cts.Token);
-                    await File.WriteAllBytesAsync(localPath, data, _cts.Token);
+                    var volNum = tempFiles.Count + 1;
+                    Log.Information("Downloading RAR volume {Num}/{Total}: {Name} ({Size} bytes)",
+                        volNum, volumes.Count, vol.Name, vol.Size);
+
+                    // Stream to disk instead of loading entire volume into memory
+                    await using var conn = await server.Pool!.Borrow(_cts.Token);
+                    var tempPath = localPath + ".partial";
+                    try
+                    {
+                        await using var ftpStream = await conn.Client.OpenRead(vol.FullName, FtpDataType.Binary, 0, token: _cts.Token);
+                        await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None);
+                        var buf = new byte[256 * 1024];
+                        int rd;
+                        while ((rd = await ftpStream.ReadAsync(buf, _cts.Token)) > 0)
+                            await fileStream.WriteAsync(buf.AsMemory(0, rd), _cts.Token);
+                        ftpStream.Close();
+                        await conn.Client.GetReply(_cts.Token);
+                    }
+                    catch
+                    {
+                        try { File.Delete(tempPath); } catch { }
+                        throw;
+                    }
+                    File.Move(tempPath, localPath);
+                    Log.Information("Volume {Num}/{Total} downloaded", volNum, volumes.Count);
                 }
                 else
                 {
