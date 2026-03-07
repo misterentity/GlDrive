@@ -474,7 +474,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
         try
         {
-            var tasks = mounted.Select(async server =>
+            var tasks = mounted.Select(server => Task.Run(async () =>
             {
                 var results = await server.Search!.Search(query);
                 return results.Select(r => new PlayerSearchResultVm
@@ -484,7 +484,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
                     SizeText = FormatSize(r.Size), ServerId = server.ServerId,
                     ServerName = server.ServerName
                 });
-            });
+            }));
 
             var allResults = await Task.WhenAll(tasks);
             foreach (var sr in allResults)
@@ -698,16 +698,18 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
         try
         {
-            // Check library cache first
+            // Check library cache first (fast, local I/O)
             var cached = _streamServer.FindCachedVideo(result.ReleaseName);
             if (cached != null)
             {
+                IsLoading = false;
                 PlayerStatus = $"Playing from library: {result.ReleaseName}";
                 await PlayLocalFile(cached);
                 return;
             }
 
-            var files = await server.Search!.GetReleaseFiles(result.RemotePath);
+            // Run FTP file listing on background thread to avoid blocking UI
+            var files = await Task.Run(() => server.Search!.GetReleaseFiles(result.RemotePath));
 
             var videoFile = files
                 .Where(f => IsVideoFile(f.Name))
