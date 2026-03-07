@@ -332,14 +332,14 @@
                                 BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
                             <StackPanel Orientation="Horizontal" Margin="4,3">
                                 <RadioButton x:Name="BrowseMode" Content="Browse" IsChecked="True"
-                                             Style="{StaticResource {x:Type ToggleButton}}"
-                                             Padding="10,4" Margin="0,0,3,0" FontSize="11"/>
+                                             Style="{StaticResource ModeTabStyle}"
+                                             Padding="12,5" Margin="0,0,4,0" FontSize="11"/>
                                 <RadioButton x:Name="NowPlayingMode" Content="Now Playing"
-                                             Style="{StaticResource {x:Type ToggleButton}}"
-                                             Padding="10,4" Margin="0,0,3,0" FontSize="11"/>
+                                             Style="{StaticResource ModeTabStyle}"
+                                             Padding="12,5" Margin="0,0,4,0" FontSize="11"/>
                                 <RadioButton x:Name="LibraryMode" Content="Library"
-                                             Style="{StaticResource {x:Type ToggleButton}}"
-                                             Padding="10,4" FontSize="11"
+                                             Style="{StaticResource ModeTabStyle}"
+                                             Padding="12,5" FontSize="11"
                                              Checked="LibraryMode_Checked"/>
                             </StackPanel>
                         </Border>
@@ -524,11 +524,18 @@
                                     </StackPanel>
                                 </Border>
 
-                                <!-- No selection placeholder -->
-                                <TextBlock Text="Select a movie or TV show from Browse to see details here."
-                                           FontSize="12" Foreground="{DynamicResource ForegroundDimBrush}"
-                                           TextWrapping="Wrap" Margin="0,20,0,0" TextAlignment="Center"
-                                           Visibility="{Binding HasNoSelection, Converter={StaticResource BoolToVisibility}}"/>
+                                <!-- Empty state hint -->
+                                <Border Visibility="{Binding HasNoSelection, Converter={StaticResource BoolToVisibility}}"
+                                        Margin="0,30,0,0">
+                                    <StackPanel HorizontalAlignment="Center">
+                                        <TextBlock Text="No selection" FontSize="14" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource ForegroundDimBrush}"
+                                                   HorizontalAlignment="Center" Margin="0,0,0,4"/>
+                                        <TextBlock Text="Click a movie or TV show in Browse to see details."
+                                                   FontSize="11" Foreground="{DynamicResource ForegroundDimBrush}"
+                                                   TextWrapping="Wrap" TextAlignment="Center" MaxWidth="250"/>
+                                    </StackPanel>
+                                </Border>
 
                                 <!-- TV Episode Picker -->
                                 <Border Background="{DynamicResource SurfaceBrush}" CornerRadius="6"
