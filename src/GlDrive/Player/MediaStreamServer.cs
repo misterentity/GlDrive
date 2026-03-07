@@ -685,56 +685,12 @@ public class MediaStreamServer : IDisposable
             localFiles.Add(localPath);
         }
 
-        // Extract video from RAR
-        onProgress?.Invoke("Extracting video from RAR...", 95);
-
-        var firstRar = localFiles.First(f => f.EndsWith(".rar", StringComparison.OrdinalIgnoreCase));
-        using var archive = RarArchive.OpenArchive(firstRar);
-        var videoEntry = archive.Entries
-            .Where(e => !e.IsDirectory && IsVideoFile(e.Key ?? ""))
-            .OrderByDescending(e => e.Size)
-            .FirstOrDefault();
-
-        if (videoEntry == null) return null;
-
-        var videoName = Path.GetFileName(videoEntry.Key ?? "video.mkv");
-        var extractedPath = Path.Combine(releaseDir, videoName);
-
-        if (!File.Exists(extractedPath))
-        {
-            var tempExtract = extractedPath + ".partial";
-            try
-            {
-                await using var entryStream = videoEntry.OpenEntryStream();
-                await using var outStream = new FileStream(tempExtract, FileMode.Create, FileAccess.Write, FileShare.None);
-                var buf = new byte[256 * 1024];
-                int rd;
-                long written = 0;
-                while ((rd = await entryStream.ReadAsync(buf, ct)) > 0)
-                {
-                    await outStream.WriteAsync(buf.AsMemory(0, rd), ct);
-                    written += rd;
-                    if (videoEntry.Size > 0)
-                    {
-                        var pct = (int)(written * 100 / videoEntry.Size);
-                        onProgress?.Invoke($"Extracting... {pct}%", pct);
-                    }
-                }
-            }
-            catch
-            {
-                try { File.Delete(tempExtract); } catch { }
-                throw;
-            }
-            File.Move(tempExtract, extractedPath);
-
-            // Clean up RAR volumes
-            foreach (var lf in localFiles)
-                try { File.Delete(lf); } catch { }
-        }
+        // VLC can play directly from RAR files — no extraction needed
+        var firstRar = localFiles.FirstOrDefault(f => f.EndsWith(".rar", StringComparison.OrdinalIgnoreCase));
+        if (firstRar == null) return null;
 
         onProgress?.Invoke("Ready to play", 100);
-        return extractedPath;
+        return firstRar;
     }
 
     public void Dispose()
