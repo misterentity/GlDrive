@@ -450,11 +450,13 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         _statusTimer.Start();
 
         // PreDB auto-refresh (30s, only ticks while tab is active)
-        _preDbRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+        _preDbRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(15) };
         _preDbRefreshTimer.Tick += async (_, _) =>
         {
             if (!_isPreDbSearching && string.IsNullOrWhiteSpace(_preDbQuery))
                 await LoadLatestPreDb();
+            else
+                Log.Debug("PreDB: timer skipped (searching={Searching}, query={Query})", _isPreDbSearching, _preDbQuery);
         };
 
         RefreshNotifications();
@@ -1481,6 +1483,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         if (IsPreDbSearching) return;
         IsPreDbSearching = true;
         PreDbStatus = "Loading latest releases...";
+        Log.Debug("PreDB: fetching latest");
 
         try
         {
@@ -1535,6 +1538,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     private void PopulatePreDbItems(PreDbRelease[] releases)
     {
+        Log.Debug("PreDB: populating {Count} items", releases.Length);
         PreDbItems.Clear();
         foreach (var r in releases)
         {
