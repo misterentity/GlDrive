@@ -58,6 +58,9 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private PreDbItemVm? _selectedPreDbItem;
     private bool _isPreDbTabActive;
     private DispatcherTimer? _preDbRefreshTimer;
+    private DispatcherTimer? _preDbCountdownTimer;
+    private int _preDbRefreshProgress;
+    private DateTime _preDbNextRefresh;
 
     // Notification filter state
     private List<NotificationItemVm> _allNotifications = new();
@@ -326,14 +329,13 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     public bool IsPreDbTabActive
     {
         get => _isPreDbTabActive;
-        set
-        {
-            _isPreDbTabActive = value;
-            if (value)
-                _preDbRefreshTimer?.Start();
-            else
-                _preDbRefreshTimer?.Stop();
-        }
+        set { _isPreDbTabActive = value; OnPropertyChanged(); }
+    }
+
+    public int PreDbRefreshProgress
+    {
+        get => _preDbRefreshProgress;
+        set { _preDbRefreshProgress = value; OnPropertyChanged(); }
     }
 
     public string SearchQuery
@@ -449,15 +451,24 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         _statusTimer.Tick += (_, _) => UpdateStatusBar();
         _statusTimer.Start();
 
-        // PreDB auto-refresh (30s, only ticks while tab is active)
+        // PreDB auto-refresh — always runs, even when tab is not active
         _preDbRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(15) };
         _preDbRefreshTimer.Tick += async (_, _) =>
         {
             if (!_isPreDbSearching && string.IsNullOrWhiteSpace(_preDbQuery))
                 await LoadLatestPreDb();
-            else
-                Log.Debug("PreDB: timer skipped (searching={Searching}, query={Query})", _isPreDbSearching, _preDbQuery);
         };
+        _preDbRefreshTimer.Start();
+        _preDbNextRefresh = DateTime.Now.AddSeconds(15);
+
+        // Countdown timer (1s tick) for visual progress bar
+        _preDbCountdownTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _preDbCountdownTimer.Tick += (_, _) =>
+        {
+            var remaining = (_preDbNextRefresh - DateTime.Now).TotalSeconds;
+            PreDbRefreshProgress = remaining > 0 ? (int)(remaining * 100 / 15) : 0;
+        };
+        _preDbCountdownTimer.Start();
 
         RefreshNotifications();
         RefreshWishlist();
@@ -1482,16 +1493,15 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     {
         if (IsPreDbSearching) return;
         IsPreDbSearching = true;
-        PreDbStatus = "Loading latest releases...";
-        Log.Debug("PreDB: fetching latest");
 
         try
         {
             _preDbCts?.Cancel();
             _preDbCts = new CancellationTokenSource();
             var results = await _preDbClient.GetLatestAsync(ct: _preDbCts.Token);
-            PopulatePreDbItems(results);
-            PreDbStatus = $"{results.Length} releases";
+            Log.Debug("PreDB: got {Count} items", results.Length);
+            MergePreDbItems(results);
+            PreDbStatus = $"{PreDbItems.Count} releases (updated {DateTime.Now:HH:mm:ss})";
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -1501,6 +1511,8 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         finally
         {
             IsPreDbSearching = false;
+            _preDbNextRefresh = DateTime.Now.AddSeconds(15);
+            PreDbRefreshProgress = 100;
         }
     }
 
@@ -1536,14 +1548,42 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         PreDbStatus = "Cancelled";
     }
 
+    /// <summary>Merge new releases into the list, prepending new ones at the top.</summary>
+    private void MergePreDbItems(PreDbRelease[] releases)
+    {
+        var existingIds = new HashSet<int>(PreDbItems.Select(x => x.Id));
+        int inserted = 0;
+        foreach (var r in releases)
+        {
+            if (existingIds.Contains(r.Id)) continue;
+            PreDbItems.Insert(inserted, new PreDbItemVm
+            {
+                Id = r.Id,
+                Name = r.Release,
+                Team = r.Group,
+                Category = r.Section,
+                Size = r.SizeFormatted,
+                Files = r.Files > 0 ? r.Files.ToString() : "",
+                Time = r.PreTime.ToString("yyyy-MM-dd HH:mm"),
+                IsNuked = r.IsNuked,
+                NukeReason = r.Reason,
+                Genre = r.Genre
+            });
+            inserted++;
+        }
+        // Trim to 200 max
+        while (PreDbItems.Count > 200)
+            PreDbItems.RemoveAt(PreDbItems.Count - 1);
+    }
+
     private void PopulatePreDbItems(PreDbRelease[] releases)
     {
-        Log.Debug("PreDB: populating {Count} items", releases.Length);
         PreDbItems.Clear();
         foreach (var r in releases)
         {
             PreDbItems.Add(new PreDbItemVm
             {
+                Id = r.Id,
                 Name = r.Release,
                 Team = r.Group,
                 Category = r.Section,
@@ -1561,6 +1601,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     {
         _statusTimer?.Stop();
         _preDbRefreshTimer?.Stop();
+        _preDbCountdownTimer?.Stop();
         _searchCts?.Cancel();
         _searchCts?.Dispose();
         _searchCts = null;
@@ -1577,6 +1618,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
 public class PreDbItemVm
 {
+    public int Id { get; set; }
     public string Name { get; set; } = "";
     public string Team { get; set; } = "";
     public string Category { get; set; } = "";
