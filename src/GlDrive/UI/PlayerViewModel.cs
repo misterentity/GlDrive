@@ -271,6 +271,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     {
         _serverManager = serverManager;
         _config = config;
+        _torrentSearch = new TorrentSearchService();
 
         SearchAndPlayCommand = new RelayCommand(async () => await SearchAndPlay());
         PlayResultCommand = new RelayCommand(async () => await PlaySelectedResult());
@@ -379,7 +380,6 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
             _streamServer = new MediaStreamServer(_serverManager, _config);
             _streamServer.Start();
             _resumeStore = new PlayerResumeStore(_streamServer.LibraryPath);
-            _torrentSearch = new TorrentSearchService();
             _torrentStream = new TorrentStreamService(_streamServer.LibraryPath);
 
             _vlcInitialized = true;
