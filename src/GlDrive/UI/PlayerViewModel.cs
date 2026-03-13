@@ -26,6 +26,8 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     private LibVLC? _libVLC;
     private MediaPlayer? _mediaPlayer;
     private bool _vlcInitialized;
+    private readonly List<RendererDiscoverer> _rendererDiscoverers = new();
+    private RendererItem? _activeRenderer;
 
     private string _playerStatus = "";
     private bool _isLoading;
@@ -65,6 +67,10 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     public ObservableCollection<TorrentResultVm> TorrentResults { get; } = new();
     public ObservableCollection<TrackInfo> AudioTracks { get; } = new();
     public ObservableCollection<TrackInfo> SubtitleTracks { get; } = new();
+    public ObservableCollection<RendererItemVm> Renderers { get; } = new();
+    public bool HasRenderers => Renderers.Count > 0;
+    public bool IsCasting => _activeRenderer != null;
+    public string CastStatus => _activeRenderer != null ? $"Casting to {_activeRenderer.Name}" : "";
 
     public MediaCardVm? SelectedMovie
     {
@@ -262,6 +268,8 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     public ICommand ClearSearchCommand { get; }
     public ICommand SearchTorrentCommand { get; }
     public ICommand PlayTorrentCommand { get; }
+    public ICommand CastToDeviceCommand { get; }
+    public ICommand StopCastingCommand { get; }
 
     public bool HasSearchResults => SearchResults.Count > 0;
     public bool HasFtpResults => FtpResults.Count > 0;
@@ -288,6 +296,8 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         ClearSearchCommand = new RelayCommand(() => { SearchResults.Clear(); OnPropertyChanged(nameof(HasSearchResults)); });
         SearchTorrentCommand = new RelayCommand(async () => await SearchTorrent());
         PlayTorrentCommand = new RelayCommand(async () => await PlaySelectedTorrent());
+        CastToDeviceCommand = new RelayCommand<RendererItemVm>(CastToDevice);
+        StopCastingCommand = new RelayCommand(StopCasting);
     }
 
     public void InitVLC()
@@ -382,6 +392,8 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
             _streamServer.Start();
             _resumeStore = new PlayerResumeStore(_streamServer.LibraryPath);
             _torrentStream = new TorrentStreamService(_streamServer.LibraryPath);
+
+            StartRendererDiscovery();
 
             _vlcInitialized = true;
             OnPropertyChanged(nameof(Player));
@@ -1058,6 +1070,71 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     /// Strips punctuation/special chars from movie/TV titles for better FTP and torrent search results.
     /// "Good Luck, Have Fun, Don't Die" → "Good Luck Have Fun Dont Die"
     /// </summary>
+    // ── Renderer / Cast ──
+    private void StartRendererDiscovery()
+    {
+        if (_libVLC == null) return;
+
+        foreach (var desc in _libVLC.RendererList)
+        {
+            try
+            {
+                var discoverer = new RendererDiscoverer(_libVLC, desc.Name);
+                discoverer.ItemAdded += (_, e) =>
+                {
+                    Log.Information("Renderer found: {Name} ({Type})", e.RendererItem.Name, e.RendererItem.Type);
+                    Application.Current?.Dispatcher.BeginInvoke(() =>
+                    {
+                        if (Renderers.All(r => r.Name != e.RendererItem.Name))
+                            Renderers.Add(new RendererItemVm(e.RendererItem));
+                        OnPropertyChanged(nameof(HasRenderers));
+                    });
+                };
+                discoverer.ItemDeleted += (_, e) =>
+                {
+                    Log.Debug("Renderer lost: {Name}", e.RendererItem.Name);
+                    Application.Current?.Dispatcher.BeginInvoke(() =>
+                    {
+                        var existing = Renderers.FirstOrDefault(r => r.Name == e.RendererItem.Name);
+                        if (existing != null) Renderers.Remove(existing);
+                        OnPropertyChanged(nameof(HasRenderers));
+                    });
+                };
+                discoverer.Start();
+                _rendererDiscoverers.Add(discoverer);
+                Log.Debug("Renderer discoverer started: {Name}", desc.Name);
+            }
+            catch (Exception ex)
+            {
+                Log.Debug(ex, "Failed to start renderer discoverer: {Name}", desc.Name);
+            }
+        }
+    }
+
+    private void CastToDevice(RendererItemVm? renderer)
+    {
+        if (renderer == null || _mediaPlayer == null) return;
+
+        _activeRenderer = renderer.Item;
+        _mediaPlayer.SetRenderer(renderer.Item);
+        Log.Information("Casting to {Name}", renderer.Name);
+        PlayerStatus = $"Casting to {renderer.Name}";
+        OnPropertyChanged(nameof(IsCasting));
+        OnPropertyChanged(nameof(CastStatus));
+    }
+
+    private void StopCasting()
+    {
+        if (_mediaPlayer == null) return;
+
+        _activeRenderer = null;
+        _mediaPlayer.SetRenderer(null);
+        Log.Information("Stopped casting");
+        PlayerStatus = "Cast stopped — playing locally";
+        OnPropertyChanged(nameof(IsCasting));
+        OnPropertyChanged(nameof(CastStatus));
+    }
+
     private static string SanitizeSearchQuery(string query)
     {
         // Remove anything that isn't a letter, digit, or whitespace
@@ -1082,6 +1159,8 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     public void Dispose()
     {
         SaveCurrentPosition();
+        foreach (var d in _rendererDiscoverers)
+            try { d.Stop(); } catch { }
         _mediaPlayer?.Stop();
         _mediaPlayer?.Dispose();
         _libVLC?.Dispose();
@@ -1090,6 +1169,15 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         _torrentStream?.Dispose();
         GC.SuppressFinalize(this);
     }
+}
+
+public class RendererItemVm
+{
+    public RendererItem Item { get; }
+    public string Name => Item.Name;
+    public string Type => Item.Type;
+    public RendererItemVm(RendererItem item) => Item = item;
+    public override string ToString() => Name;
 }
 
 public class MediaCardVm
