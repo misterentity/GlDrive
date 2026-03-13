@@ -20,6 +20,8 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     private readonly AppConfig _config;
     private MediaStreamServer? _streamServer;
     private PlayerResumeStore? _resumeStore;
+    private TorrentSearchService? _torrentSearch;
+    private TorrentStreamService? _torrentStream;
     private LibVLC? _libVLC;
     private MediaPlayer? _mediaPlayer;
     private bool _vlcInitialized;
@@ -32,6 +34,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     private MediaCardVm? _selectedMovie;
     private MediaCardVm? _selectedTvShow;
     private PlayerSearchResultVm? _selectedFtpResult;
+    private TorrentResultVm? _selectedTorrentResult;
     private double _volume = 80;
     private double _position;
     private string _timeDisplay = "00:00 / 00:00";
@@ -58,6 +61,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     public ObservableCollection<MediaCardVm> SearchResults { get; } = new();
     public ObservableCollection<TmdbSeasonSummary> Seasons { get; } = new();
     public ObservableCollection<TmdbEpisode> Episodes { get; } = new();
+    public ObservableCollection<TorrentResultVm> TorrentResults { get; } = new();
     public ObservableCollection<TrackInfo> AudioTracks { get; } = new();
     public ObservableCollection<TrackInfo> SubtitleTracks { get; } = new();
 
@@ -139,6 +143,12 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     {
         get => _selectedFtpResult;
         set { _selectedFtpResult = value; OnPropertyChanged(); }
+    }
+
+    public TorrentResultVm? SelectedTorrentResult
+    {
+        get => _selectedTorrentResult;
+        set { _selectedTorrentResult = value; OnPropertyChanged(); }
     }
 
     public string SearchText
@@ -249,9 +259,12 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     public ICommand SeekForwardCommand { get; }
     public ICommand SeekBackwardCommand { get; }
     public ICommand ClearSearchCommand { get; }
+    public ICommand SearchTorrentCommand { get; }
+    public ICommand PlayTorrentCommand { get; }
 
     public bool HasSearchResults => SearchResults.Count > 0;
     public bool HasFtpResults => FtpResults.Count > 0;
+    public bool HasTorrentResults => TorrentResults.Count > 0;
     public bool HasNoSelection => !HasSelection;
 
     public PlayerViewModel(ServerManager serverManager, AppConfig config)
@@ -271,6 +284,8 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         SeekForwardCommand = new RelayCommand(() => SeekRelative(10));
         SeekBackwardCommand = new RelayCommand(() => SeekRelative(-10));
         ClearSearchCommand = new RelayCommand(() => { SearchResults.Clear(); OnPropertyChanged(nameof(HasSearchResults)); });
+        SearchTorrentCommand = new RelayCommand(async () => await SearchTorrent());
+        PlayTorrentCommand = new RelayCommand(async () => await PlaySelectedTorrent());
     }
 
     public void InitVLC()
@@ -364,6 +379,8 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
             _streamServer = new MediaStreamServer(_serverManager, _config);
             _streamServer.Start();
             _resumeStore = new PlayerResumeStore(_streamServer.LibraryPath);
+            _torrentSearch = new TorrentSearchService();
+            _torrentStream = new TorrentStreamService(_streamServer.LibraryPath);
 
             _vlcInitialized = true;
             OnPropertyChanged(nameof(Player));
@@ -676,7 +693,123 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     {
         var media = SelectedMedia;
         if (media == null) return;
-        await SearchFtpDirect(media.SearchTitle);
+
+        // Search both FTP and torrent in parallel
+        var ftpTask = SearchFtpDirect(media.SearchTitle);
+        var torrentTask = SearchTorrent(media.SearchTitle);
+        await Task.WhenAll(ftpTask, torrentTask);
+    }
+
+    // ── Torrent search ──
+    private Task SearchTorrent()
+    {
+        var media = SelectedMedia;
+        if (media == null && string.IsNullOrWhiteSpace(_searchText)) return Task.CompletedTask;
+        var query = media?.SearchTitle ?? _searchText;
+        return SearchTorrent(query);
+    }
+
+    private async Task SearchTorrent(string query)
+    {
+        if (_torrentSearch == null || string.IsNullOrWhiteSpace(query)) return;
+
+        TorrentResults.Clear();
+        OnPropertyChanged(nameof(HasTorrentResults));
+
+        try
+        {
+            var results = await _torrentSearch.SearchAsync(query);
+
+            foreach (var r in results.Take(20))
+            {
+                TorrentResults.Add(new TorrentResultVm
+                {
+                    Title = r.Title,
+                    DetailUrl = r.DetailUrl,
+                    Seeds = r.Seeds,
+                    Leeches = r.Leeches,
+                    Size = r.Size
+                });
+            }
+
+            OnPropertyChanged(nameof(HasTorrentResults));
+
+            if (TorrentResults.Count > 0)
+            {
+                SelectedTorrentResult = TorrentResults[0];
+                if (FtpResults.Count == 0)
+                    PlayerStatus = $"{TorrentResults.Count} torrent(s) found";
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Torrent search failed for \"{Query}\"", query);
+        }
+    }
+
+    private async Task PlaySelectedTorrent()
+    {
+        if (_selectedTorrentResult == null || _torrentSearch == null || _torrentStream == null || _mediaPlayer == null)
+            return;
+
+        var result = _selectedTorrentResult;
+        IsLoading = true;
+        _currentReleaseName = result.Title;
+        PlayerStatus = "Getting magnet link...";
+
+        try
+        {
+            var magnet = await _torrentSearch.GetMagnetLinkAsync(result.DetailUrl);
+            if (magnet == null)
+            {
+                PlayerStatus = "Could not get magnet link";
+                return;
+            }
+
+            IsLoading = false;
+            IsBuffering = true;
+            BufferProgress = 0;
+
+            var streamUrl = await _torrentStream.StartStreamingAsync(magnet,
+                onProgress: (msg, pct) =>
+                {
+                    Application.Current?.Dispatcher.BeginInvoke(() =>
+                    {
+                        PlayerStatus = msg;
+                        BufferProgress = pct;
+                        if (pct > 0) IsBuffering = pct < 5;
+                    });
+                });
+
+            if (streamUrl == null)
+            {
+                IsBuffering = false;
+                PlayerStatus = "Failed to start torrent stream";
+                return;
+            }
+
+            // Play via VLC
+            SaveCurrentPosition();
+            var media = new Media(_libVLC!, new Uri(streamUrl));
+            media.AddOption(":network-caching=10000");
+
+            await Task.Run(() => _mediaPlayer!.Stop());
+            _mediaPlayer!.Play(media);
+
+            PlayerStatus = $"Streaming: {result.Title}";
+        }
+        catch (OperationCanceledException)
+        {
+            PlayerStatus = "Torrent cancelled";
+            IsBuffering = false;
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to play torrent: {Title}", result.Title);
+            PlayerStatus = $"Torrent error: {ex.Message}";
+            IsBuffering = false;
+        }
+        finally { IsLoading = false; }
     }
 
     private async Task PlaySelectedResult()
@@ -923,6 +1056,8 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         _mediaPlayer?.Dispose();
         _libVLC?.Dispose();
         _streamServer?.Dispose();
+        _torrentSearch?.Dispose();
+        _torrentStream?.Dispose();
         GC.SuppressFinalize(this);
     }
 }
@@ -961,6 +1096,17 @@ public class LibraryItemVm
     public string FileName { get; set; } = "";
     public string SizeText { get; set; } = "";
     public string ResumePercent { get; set; } = "";
+}
+
+public class TorrentResultVm
+{
+    public string Title { get; set; } = "";
+    public string DetailUrl { get; set; } = "";
+    public int Seeds { get; set; }
+    public int Leeches { get; set; }
+    public string Size { get; set; } = "";
+    public string SeedsDisplay => Seeds > 0 ? Seeds.ToString() : "-";
+    public string LeechesDisplay => Leeches > 0 ? Leeches.ToString() : "-";
 }
 
 public class TrackInfo

@@ -173,6 +173,12 @@ public partial class DashboardWindow : Window
             cmd.Execute(null);
     }
 
+    private void TorrentResult_DoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (_playerVm?.PlayTorrentCommand is ICommand cmd && cmd.CanExecute(null))
+            cmd.Execute(null);
+    }
+
     // Seek bar drag completed
     private void SeekBar_DragCompleted(object sender, DragCompletedEventArgs e)
     {
