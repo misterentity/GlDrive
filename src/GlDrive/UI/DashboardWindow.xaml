@@ -735,6 +735,24 @@
 
                         <!-- Video area -->
                         <Grid Background="Black" x:Name="PlayerVideoArea" MouseLeftButtonDown="VideoArea_MouseDown">
+                            <Grid.ContextMenu>
+                                <ContextMenu x:Name="PlayerContextMenu">
+                                    <MenuItem Header="Cast to" ItemsSource="{Binding Renderers}"
+                                              Visibility="{Binding HasRenderers, Converter={StaticResource BoolToVisibility}}">
+                                        <MenuItem.ItemContainerStyle>
+                                            <Style TargetType="MenuItem">
+                                                <Setter Property="Header" Value="{Binding Name}"/>
+                                                <Setter Property="Command"
+                                                        Value="{Binding PlacementTarget.DataContext.CastToDeviceCommand, Source={x:Reference PlayerContextMenu}}"/>
+                                                <Setter Property="CommandParameter" Value="{Binding}"/>
+                                            </Style>
+                                        </MenuItem.ItemContainerStyle>
+                                    </MenuItem>
+                                    <MenuItem Header="Stop casting"
+                                              Command="{Binding StopCastingCommand}"
+                                              Visibility="{Binding IsCasting, Converter={StaticResource BoolToVisibility}}"/>
+                                </ContextMenu>
+                            </Grid.ContextMenu>
                             <vlc:VideoView x:Name="PlayerVideoView"/>
                             <!-- Buffering overlay -->
                             <Border Background="#CC000000" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
