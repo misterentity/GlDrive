@@ -525,7 +525,7 @@
                                                            LineHeight="15"
                                                            Foreground="{DynamicResource ForegroundDimBrush}"
                                                            TextTrimming="CharacterEllipsis"/>
-                                                <Button Content="&#x1F50D; Search FTP" Margin="0,8,0,0"
+                                                <Button Content="&#x1F50D; Search" Margin="0,8,0,0"
                                                         Command="{Binding SearchAndPlayCommand}"
                                                         Padding="14,6" Style="{StaticResource PrimaryButton}"
                                                         HorizontalAlignment="Left" FontSize="11"/>
@@ -555,6 +555,46 @@
                                             </DataGrid.Columns>
                                         </DataGrid>
                                         <Button Content="&#x25B6; Play Selected" Command="{Binding PlayResultCommand}"
+                                                Padding="14,5" Margin="0,6,0,0" HorizontalAlignment="Left"
+                                                Style="{StaticResource PrimaryButton}" FontSize="11"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- Torrent Results -->
+                                <Border Background="{DynamicResource SurfaceBrush}" CornerRadius="6"
+                                        Padding="10" Margin="0,6,0,0"
+                                        Visibility="{Binding HasTorrentResults, Converter={StaticResource BoolToVisibility}}">
+                                    <StackPanel>
+                                        <TextBlock Text="Torrent Results" FontWeight="SemiBold" FontSize="12"
+                                                   Foreground="{DynamicResource ForegroundBrush}" Margin="0,0,0,6"/>
+                                        <DataGrid ItemsSource="{Binding TorrentResults}"
+                                                  SelectedItem="{Binding SelectedTorrentResult}"
+                                                  AutoGenerateColumns="False" IsReadOnly="True"
+                                                  SelectionMode="Single" GridLinesVisibility="Horizontal"
+                                                  HeadersVisibility="Column" CanUserAddRows="False"
+                                                  MaxHeight="160"
+                                                  MouseDoubleClick="TorrentResult_DoubleClick">
+                                            <DataGrid.Columns>
+                                                <DataGridTextColumn Header="Name" Binding="{Binding Title}" Width="*"/>
+                                                <DataGridTextColumn Header="S" Binding="{Binding SeedsDisplay}" Width="35">
+                                                    <DataGridTextColumn.ElementStyle>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Foreground" Value="#4CAF50"/>
+                                                            <Setter Property="FontWeight" Value="SemiBold"/>
+                                                        </Style>
+                                                    </DataGridTextColumn.ElementStyle>
+                                                </DataGridTextColumn>
+                                                <DataGridTextColumn Header="L" Binding="{Binding LeechesDisplay}" Width="35">
+                                                    <DataGridTextColumn.ElementStyle>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Foreground" Value="#F44336"/>
+                                                        </Style>
+                                                    </DataGridTextColumn.ElementStyle>
+                                                </DataGridTextColumn>
+                                                <DataGridTextColumn Header="Size" Binding="{Binding Size}" Width="65"/>
+                                            </DataGrid.Columns>
+                                        </DataGrid>
+                                        <Button Content="&#x25B6; Play Torrent" Command="{Binding PlayTorrentCommand}"
                                                 Padding="14,5" Margin="0,6,0,0" HorizontalAlignment="Left"
                                                 Style="{StaticResource PrimaryButton}" FontSize="11"/>
                                     </StackPanel>
