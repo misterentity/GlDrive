@@ -48,6 +48,20 @@ public class TvMazeClient : IDisposable
         }
     }
 
+    public async Task<TvMazeScheduleEpisode[]> GetWebSchedule(DateOnly date, CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await _http.GetStringAsync($"schedule/web?date={date:yyyy-MM-dd}", ct);
+            return JsonSerializer.Deserialize<TvMazeScheduleEpisode[]>(response, JsonOptions) ?? [];
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "TVMaze web schedule failed for date: {Date}", date);
+            return [];
+        }
+    }
+
     public async Task<TvMazeShow?> GetShow(int id, CancellationToken ct = default)
     {
         try
@@ -110,7 +124,9 @@ public class TvMazeShow
     public string[]? Genres { get; set; }
     public TvMazeRating? Rating { get; set; }
     public TvMazeNetwork? Network { get; set; }
+    public TvMazeNetwork? WebChannel { get; set; }
 
+    public string NetworkName => Network?.Name ?? WebChannel?.Name ?? "";
     public int? PremieredYear => Premiered != null && DateTime.TryParse(Premiered, out var dt) ? dt.Year : null;
 }
 

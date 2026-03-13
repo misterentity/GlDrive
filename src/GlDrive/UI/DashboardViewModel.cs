@@ -831,22 +831,35 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                 using var tvMaze = new TvMazeClient();
                 var today = DateOnly.FromDateTime(DateTime.Today);
                 var episodes = new List<UpcomingTvEpisodeVm>();
+                var seenShowEps = new HashSet<string>();
 
                 for (int d = 0; d < 7; d++)
                 {
                     var date = today.AddDays(d);
-                    var schedule = await tvMaze.GetSchedule(date);
 
-                    foreach (var ep in schedule.Where(e => e.Show != null))
+                    // Fetch broadcast + streaming schedules in parallel
+                    var broadcastTask = tvMaze.GetSchedule(date);
+                    var webTask = tvMaze.GetWebSchedule(date);
+                    await Task.WhenAll(broadcastTask, webTask);
+
+                    var allEpisodes = broadcastTask.Result
+                        .Concat(webTask.Result)
+                        .Where(e => e.Show != null);
+
+                    foreach (var ep in allEpisodes)
                     {
+                        // Deduplicate by show+season+episode
+                        var key = $"{ep.Show!.Id}:S{ep.Season}E{ep.Number}";
+                        if (!seenShowEps.Add(key)) continue;
+
                         episodes.Add(new UpcomingTvEpisodeVm
                         {
-                            ShowId = ep.Show!.Id,
+                            ShowId = ep.Show.Id,
                             ShowName = ep.Show.Name,
                             ShowType = ep.Show.Type ?? "",
                             EpisodeInfo = $"S{ep.Season:D2}E{ep.Number:D2} — {ep.Name}",
                             TimeDisplay = ep.Airtime ?? "",
-                            NetworkDisplay = ep.Show.Network?.Name ?? "",
+                            NetworkDisplay = ep.Show.NetworkName,
                             DateDisplay = date.ToString("ddd M/d"),
                             AirDate = date,
                             PosterUrl = ep.Show.Image?.Medium,
@@ -933,7 +946,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                         ? $"S{ep.Season:D2}E{ep.Number:D2} — {ep.Name}"
                         : "No upcoming episodes",
                     TimeDisplay = ep?.Airtime ?? "",
-                    NetworkDisplay = result.Show.Network?.Name ?? "",
+                    NetworkDisplay = result.Show.NetworkName,
                     DateDisplay = ep?.Airdate is { } ad && DateOnly.TryParse(ad, out var d)
                         ? d.ToString("ddd M/d") : "",
                     AirDate = ep?.Airdate is { } ad2 && DateOnly.TryParse(ad2, out var d2)
