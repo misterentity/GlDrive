@@ -209,19 +209,13 @@ public static class TrayIconSetup
         logs.Click += (_, _) => vm.ViewLogsCommand.Execute(null);
         menu.Items.Add(logs);
 
-        // Update check
-        if (vm.AvailableUpdate != null)
-        {
-            var update = new MenuItem { Header = $"Update to {vm.AvailableUpdate.TagName}..." };
-            update.Click += (_, _) => vm.InstallUpdateCommand.Execute(null);
-            menu.Items.Add(update);
-        }
-        else
-        {
-            var checkUpdate = new MenuItem { Header = "Check for Updates" };
-            checkUpdate.Click += (_, _) => vm.CheckForUpdateCommand.Execute(null);
-            menu.Items.Add(checkUpdate);
-        }
+        // Update
+        var updateHeader = vm.AvailableUpdate != null
+            ? $"Update to {vm.AvailableUpdate.TagName}"
+            : "Update";
+        var update = new MenuItem { Header = updateHeader };
+        update.Click += (_, _) => vm.UpdateCommand.Execute(null);
+        menu.Items.Add(update);
 
         menu.Items.Add(new Separator());
 

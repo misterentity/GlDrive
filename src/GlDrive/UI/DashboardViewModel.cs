@@ -23,7 +23,6 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private readonly AppConfig _config;
     private readonly WishlistStore _wishlistStore;
     private readonly NotificationStore _notificationStore;
-    private readonly DownloadHistoryStore _historyStore;
     private readonly IrcViewModel _ircViewModel;
     private string _searchQuery = "";
     private string _searchStatus = "";
@@ -68,9 +67,6 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private string _notificationFilterCategory = "All";
     private string _notificationFilterServer = "All";
 
-    // History
-    private DownloadHistoryItemVm? _selectedHistoryItem;
-
     // Status bar
     private string _statusBarSpeed = "";
     private string _statusBarQueueCount = "";
@@ -91,7 +87,6 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     public ObservableCollection<SearchResultVm> SearchResults { get; } = new();
     public ObservableCollection<UpcomingTvEpisodeVm> UpcomingTvEpisodes { get; } = new();
     public ObservableCollection<UpcomingMovieVm> UpcomingMovies { get; } = new();
-    public ObservableCollection<DownloadHistoryItemVm> HistoryItems { get; } = new();
     public ObservableCollection<PreDbItemVm> PreDbItems { get; } = new();
     public ObservableCollection<string> NotificationCategories { get; } = new() { "All" };
     public ObservableCollection<string> NotificationServers { get; } = new() { "All" };
@@ -251,13 +246,6 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         set { _notificationFilterServer = value; OnPropertyChanged(); ApplyNotificationFilter(); }
     }
 
-    // History
-    public DownloadHistoryItemVm? SelectedHistoryItem
-    {
-        get => _selectedHistoryItem;
-        set { _selectedHistoryItem = value; OnPropertyChanged(); }
-    }
-
     // Status bar properties
     public string StatusBarSpeed
     {
@@ -397,7 +385,6 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     public ICommand AddUpcomingToWishlistCommand { get; }
     public ICommand MoveUpCommand { get; }
     public ICommand MoveDownCommand { get; }
-    public ICommand ClearHistoryCommand { get; }
     public ICommand OpenFolderCommand { get; }
     public ICommand ExportWishlistCommand { get; }
     public ICommand ImportWishlistCommand { get; }
@@ -412,8 +399,6 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         _serverManager = serverManager;
         _config = config;
         _notificationStore = notificationStore;
-        _historyStore = serverManager.HistoryStore;
-
         _wishlistStore = new WishlistStore();
         _wishlistStore.Load();
 
@@ -436,7 +421,6 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         AddUpcomingToWishlistCommand = new RelayCommand(async () => await AddUpcomingToWishlist());
         MoveUpCommand = new RelayCommand(MoveUpDownload);
         MoveDownCommand = new RelayCommand(MoveDownDownload);
-        ClearHistoryCommand = new RelayCommand(ClearHistory);
         OpenFolderCommand = new RelayCommand(OpenFolder);
         ExportWishlistCommand = new RelayCommand(ExportWishlist);
         ImportWishlistCommand = new RelayCommand(ImportWishlist);
@@ -473,7 +457,6 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         RefreshNotifications();
         RefreshWishlist();
         RefreshDownloads();
-        RefreshHistory();
 
         // Subscribe to download progress events from all mounted servers
         foreach (var server in _serverManager.GetMountedServers())
@@ -743,8 +726,6 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         Application.Current?.Dispatcher.Invoke(() =>
         {
             RefreshDownloads();
-            if (item.Status == DownloadStatus.Completed || item.Status == DownloadStatus.Failed)
-                RefreshHistory();
             if (item.Status != DownloadStatus.Downloading && item.Status != DownloadStatus.Extracting)
             {
                 HasActiveDownload = false;
@@ -1297,31 +1278,6 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
-    private void RefreshHistory()
-    {
-        HistoryItems.Clear();
-        foreach (var item in _historyStore.Items)
-        {
-            HistoryItems.Add(new DownloadHistoryItemVm
-            {
-                Id = item.Id,
-                ReleaseName = item.ReleaseName,
-                ServerName = item.ServerName,
-                Category = item.Category,
-                SizeText = FormatSize(item.TotalBytes),
-                FinalStatus = item.FinalStatus,
-                ErrorMessage = item.ErrorMessage,
-                CompletedAt = item.CompletedAt.ToLocalTime().ToString("g")
-            });
-        }
-    }
-
-    private void ClearHistory()
-    {
-        _historyStore.Clear();
-        HistoryItems.Clear();
-    }
-
     private void OpenFolder()
     {
         if (SelectedDownloadItem == null) return;
@@ -1727,14 +1683,3 @@ public class NotificationItemVm
     public bool MetadataLoaded { get; set; }
 }
 
-public class DownloadHistoryItemVm
-{
-    public string Id { get; set; } = "";
-    public string ReleaseName { get; set; } = "";
-    public string ServerName { get; set; } = "";
-    public string Category { get; set; } = "";
-    public string SizeText { get; set; } = "";
-    public string FinalStatus { get; set; } = "";
-    public string? ErrorMessage { get; set; }
-    public string CompletedAt { get; set; } = "";
-}
