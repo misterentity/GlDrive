@@ -26,7 +26,6 @@ public class MountService : IDisposable
     private DownloadManager? _downloadManager;
     private FtpSearchService? _searchService;
     private WishlistMatcher? _wishlistMatcher;
-    private DownloadHistoryStore? _historyStore;
     private bool _mounted;
 
     public event Action<MountState>? StateChanged;
@@ -44,13 +43,11 @@ public class MountService : IDisposable
     public FtpSearchService? Search => _searchService;
     public WishlistMatcher? Matcher => _wishlistMatcher;
 
-    public MountService(ServerConfig serverConfig, DownloadConfig downloadConfig, CertificateManager certManager,
-        DownloadHistoryStore? historyStore = null)
+    public MountService(ServerConfig serverConfig, DownloadConfig downloadConfig, CertificateManager certManager)
     {
         _serverConfig = serverConfig;
         _downloadConfig = downloadConfig;
         _certManager = certManager;
-        _historyStore = historyStore;
     }
 
     public async Task Mount(CancellationToken ct = default)
@@ -143,7 +140,7 @@ public class MountService : IDisposable
             _streamingDownloader = new StreamingDownloader(
                 _pool, _downloadConfig.StreamingBufferSizeKb, _downloadConfig.WriteBufferLimitMb,
                 effectiveSpeedLimit);
-            _downloadManager = new DownloadManager(downloadStore, _ftp, _streamingDownloader, _downloadConfig, _historyStore);
+            _downloadManager = new DownloadManager(downloadStore, _ftp, _streamingDownloader, _downloadConfig);
             _searchService = new FtpSearchService(_pool, _serverConfig.Search);
             _searchService.StartIndexer();
             _wishlistMatcher = new WishlistMatcher(wishlistStore, _downloadManager, _ftp, _downloadConfig,

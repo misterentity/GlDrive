@@ -267,34 +267,6 @@
                 </DockPanel>
             </TabItem>
 
-            <!-- History Tab -->
-            <TabItem Header="History">
-                <DockPanel Margin="12">
-                    <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
-                            CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
-                        <StackPanel Orientation="Horizontal">
-                            <Button Content="Clear History" Command="{Binding ClearHistoryCommand}"
-                                    Padding="12,6" Style="{StaticResource SecondaryButton}"/>
-                        </StackPanel>
-                    </Border>
-                    <DataGrid ItemsSource="{Binding HistoryItems}"
-                              SelectedItem="{Binding SelectedHistoryItem}"
-                              AutoGenerateColumns="False" IsReadOnly="True"
-                              SelectionMode="Single" GridLinesVisibility="Horizontal"
-                              HeadersVisibility="Column" CanUserAddRows="False">
-                        <DataGrid.Columns>
-                            <DataGridTextColumn Header="Date" Binding="{Binding CompletedAt}" Width="130"/>
-                            <DataGridTextColumn Header="Release" Binding="{Binding ReleaseName}" Width="*"/>
-                            <DataGridTextColumn Header="Server" Binding="{Binding ServerName}" Width="90"/>
-                            <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="80"/>
-                            <DataGridTextColumn Header="Size" Binding="{Binding SizeText}" Width="80"/>
-                            <DataGridTextColumn Header="Status" Binding="{Binding FinalStatus}" Width="80"/>
-                            <DataGridTextColumn Header="Error" Binding="{Binding ErrorMessage}" Width="150"/>
-                        </DataGrid.Columns>
-                    </DataGrid>
-                </DockPanel>
-            </TabItem>
-
             <!-- Search Tab -->
             <TabItem Header="Search">
                 <DockPanel Margin="12">

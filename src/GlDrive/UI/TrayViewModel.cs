@@ -159,25 +159,19 @@ public class TrayViewModel : INotifyPropertyChanged
             Application.Current?.Shutdown();
         });
 
-        CheckForUpdateCommand = new RelayCommand(async () =>
+        UpdateCommand = new RelayCommand(async () =>
         {
-            var release = await _updateChecker.CheckForUpdateAsync();
+            var release = _availableUpdate ?? await _updateChecker.CheckForUpdateAsync();
             if (release != null)
             {
                 AvailableUpdate = release;
-                ShowNotification("Update Available", $"GlDrive {release.TagName} is available");
+                ShowNotification("GlDrive", $"Downloading {release.TagName}...");
+                await _updateChecker.DownloadAndInstallAsync(release);
             }
             else
             {
-                ShowNotification("GlDrive", "You're up to date");
+                ShowNotification("GlDrive", "No update available");
             }
-        });
-
-        InstallUpdateCommand = new RelayCommand(async () =>
-        {
-            if (_availableUpdate == null) return;
-            ShowNotification("GlDrive", $"Downloading {_availableUpdate.TagName}...");
-            await _updateChecker.DownloadAndInstallAsync(_availableUpdate);
         });
 
         _updateChecker.UpdateAvailable += release =>
@@ -219,8 +213,7 @@ public class TrayViewModel : INotifyPropertyChanged
     public ICommand SettingsCommand { get; }
     public ICommand ViewLogsCommand { get; }
     public ICommand ExitCommand { get; }
-    public ICommand CheckForUpdateCommand { get; }
-    public ICommand InstallUpdateCommand { get; }
+    public ICommand UpdateCommand { get; }
 
     public GitHubRelease? AvailableUpdate
     {

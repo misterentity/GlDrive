@@ -12,7 +12,6 @@ public class DownloadManager : IDisposable
     private readonly FtpOperations _ftp;
     private readonly StreamingDownloader _downloader;
     private readonly DownloadConfig _config;
-    private readonly DownloadHistoryStore? _historyStore;
     private readonly List<DownloadItem> _pendingQueue = new();
     private readonly SemaphoreSlim _queueSignal = new(0);
     private readonly object _queueLock = new();
@@ -28,13 +27,12 @@ public class DownloadManager : IDisposable
     public DownloadStore Store => _store;
 
     public DownloadManager(DownloadStore store, FtpOperations ftp, StreamingDownloader downloader,
-        DownloadConfig config, DownloadHistoryStore? historyStore = null)
+        DownloadConfig config)
     {
         _store = store;
         _ftp = ftp;
         _downloader = downloader;
         _config = config;
-        _historyStore = historyStore;
         _concurrency = new SemaphoreSlim(config.MaxConcurrentDownloads);
     }
 
@@ -293,7 +291,7 @@ public class DownloadManager : IDisposable
                         item.ErrorMessage = "Release appears incomplete (no .nfo file found)";
                         _store.Update(item);
                         DownloadStatusChanged?.Invoke(item);
-                        AddHistoryEntry(item);
+
                         return;
                     }
                 }
@@ -314,7 +312,7 @@ public class DownloadManager : IDisposable
                             item.ErrorMessage = $"Insufficient disk space: need {FormatSize(item.TotalBytes)}, have {FormatSize(driveInfo.AvailableFreeSpace)}";
                             _store.Update(item);
                             DownloadStatusChanged?.Invoke(item);
-                            AddHistoryEntry(item);
+    
                             return;
                         }
                     }
@@ -417,7 +415,7 @@ public class DownloadManager : IDisposable
                     item.ErrorMessage = $"Extraction failed: {ex.Message}";
                     _store.Update(item);
                     DownloadStatusChanged?.Invoke(item);
-                    AddHistoryEntry(item);
+
                     return;
                 }
             }
@@ -426,7 +424,7 @@ public class DownloadManager : IDisposable
             item.CompletedAt = DateTime.UtcNow;
             _store.Update(item);
             DownloadStatusChanged?.Invoke(item);
-            AddHistoryEntry(item);
+
             Log.Information("Download completed: {Release}", item.ReleaseName);
         }
         catch (OperationCanceledException)
@@ -470,7 +468,7 @@ public class DownloadManager : IDisposable
                 item.ErrorMessage = ex.Message;
                 _store.Update(item);
                 DownloadStatusChanged?.Invoke(item);
-                AddHistoryEntry(item);
+    
             }
         }
         finally
@@ -479,24 +477,6 @@ public class DownloadManager : IDisposable
             itemCts.Dispose();
             _concurrency.Release();
         }
-    }
-
-    private void AddHistoryEntry(DownloadItem item)
-    {
-        if (_historyStore == null) return;
-        if (item.Status != DownloadStatus.Completed && item.Status != DownloadStatus.Failed) return;
-
-        _historyStore.Add(new DownloadHistoryItem
-        {
-            ReleaseName = item.ReleaseName,
-            ServerName = item.ServerName,
-            Category = item.Category,
-            TotalBytes = item.TotalBytes,
-            LocalPath = item.LocalPath,
-            FinalStatus = item.Status.ToString(),
-            ErrorMessage = item.ErrorMessage,
-            CompletedAt = DateTime.UtcNow
-        });
     }
 
     private static string FormatSize(long bytes)

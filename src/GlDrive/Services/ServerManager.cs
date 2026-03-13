@@ -11,7 +11,6 @@ public class ServerManager : IDisposable
     private readonly AppConfig _config;
     private readonly CertificateManager _certManager;
     private readonly NotificationStore _notificationStore;
-    private readonly DownloadHistoryStore _historyStore;
     private readonly Dictionary<string, MountService> _servers = new();
     private readonly Dictionary<string, IrcService> _ircServices = new();
 
@@ -20,15 +19,11 @@ public class ServerManager : IDisposable
     public event Action<string, string, IrcServiceState>? IrcStateChanged; // serverId, serverName, state
     public event Action<string, string>? BncRateLimitDetected; // serverName, message
 
-    public DownloadHistoryStore HistoryStore => _historyStore;
-
     public ServerManager(AppConfig config, CertificateManager certManager, NotificationStore notificationStore)
     {
         _config = config;
         _certManager = certManager;
         _notificationStore = notificationStore;
-        _historyStore = new DownloadHistoryStore();
-        _historyStore.Load();
     }
 
     public async Task MountServer(string serverId, CancellationToken ct = default)
@@ -46,7 +41,7 @@ public class ServerManager : IDisposable
             return;
         }
 
-        var service = new MountService(serverConfig, _config.Downloads, _certManager, _historyStore);
+        var service = new MountService(serverConfig, _config.Downloads, _certManager);
 
         service.StateChanged += state =>
             ServerStateChanged?.Invoke(serverId, serverConfig.Name, state);
