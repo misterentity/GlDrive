@@ -454,6 +454,11 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         };
         _preDbCountdownTimer.Start();
 
+        // IRC release link → search and download
+        _ircViewModel.ReleaseLinkClicked += async releaseName =>
+            await Application.Current.Dispatcher.InvokeAsync(async () =>
+                await SearchAndDownloadRelease(releaseName));
+
         RefreshNotifications();
         RefreshWishlist();
         RefreshDownloads();
@@ -692,6 +697,80 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             return;
         }
         RefreshDownloads();
+    }
+
+    private async Task SearchAndDownloadRelease(string releaseName)
+    {
+        var mounted = _serverManager.GetMountedServers()
+            .Where(s => s.Search != null && s.CurrentState == MountState.Connected)
+            .ToList();
+
+        if (mounted.Count == 0)
+        {
+            _ircViewModel.AddLocalSystem($"No connected servers to search for: {releaseName}");
+            return;
+        }
+
+        _ircViewModel.AddLocalSystem($"Searching for: {releaseName}...");
+
+        try
+        {
+            foreach (var server in mounted)
+            {
+                var results = await server.Search!.Search(releaseName, null, CancellationToken.None);
+                var match = results.FirstOrDefault(r =>
+                    r.ReleaseName.Equals(releaseName, StringComparison.OrdinalIgnoreCase));
+
+                if (match == null) continue;
+
+                if (server.Downloads == null) continue;
+
+                var parsed = SceneNameParser.Parse(match.ReleaseName);
+                var localBase = _config.Downloads.GetPathForCategory(match.Category);
+
+                string localPath;
+                if (parsed.Season != null)
+                {
+                    var seasonFolder = $"Season {parsed.Season:D2}";
+                    localPath = Path.Combine(localBase, "TV", parsed.Title, seasonFolder, match.ReleaseName);
+                }
+                else if (parsed.Year != null)
+                {
+                    localPath = Path.Combine(localBase, "Movies", $"{parsed.Title} ({parsed.Year})", match.ReleaseName);
+                }
+                else
+                {
+                    localPath = Path.Combine(localBase, match.Category, match.ReleaseName);
+                }
+
+                var item = new DownloadItem
+                {
+                    RemotePath = match.RemotePath,
+                    ReleaseName = match.ReleaseName,
+                    LocalPath = localPath,
+                    Category = match.Category,
+                    ServerId = server.ServerId,
+                    ServerName = server.ServerName
+                };
+
+                if (!server.Downloads.Enqueue(item))
+                {
+                    _ircViewModel.AddLocalSystem($"Skipped: {releaseName} (duplicate or already exists)");
+                    return;
+                }
+
+                _ircViewModel.AddLocalSystem($"Queued: {releaseName} from {server.ServerName}");
+                RefreshDownloads();
+                return;
+            }
+
+            _ircViewModel.AddLocalSystem($"Not found: {releaseName}");
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "IRC release search failed for {Release}", releaseName);
+            _ircViewModel.AddLocalSystem($"Search failed: {ex.Message}");
+        }
     }
 
     private void OnDownloadProgress(DownloadItem item, DownloadProgress progress)

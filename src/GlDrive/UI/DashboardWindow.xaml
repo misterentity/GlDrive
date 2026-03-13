@@ -902,7 +902,9 @@
                                                    FontSize="11" Margin="0,0,6,0" FontFamily="Consolas"/>
                                         <TextBlock Text="&#x1F512;" FontSize="9" Margin="0,0,3,0"
                                                    Visibility="{Binding WasEncrypted, Converter={StaticResource BoolToVisibility}}"/>
-                                        <TextBlock Text="{Binding FormattedLine}" TextWrapping="Wrap"
+                                        <TextBlock ui:ReleaseTextHelper.Message="{Binding}"
+                                                   ui:ReleaseTextHelper.ClickCommand="{Binding DataContext.Irc.ReleaseLinkClickedCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                   TextWrapping="Wrap"
                                                    Foreground="{Binding NickColor}" FontFamily="Consolas" FontSize="12.5">
                                             <TextBlock.Style>
                                                 <Style TargetType="TextBlock">
