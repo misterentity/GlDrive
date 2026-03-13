@@ -9,9 +9,10 @@ namespace GlDrive.UI;
 
 public static partial class ReleaseTextHelper
 {
-    // Scene release pattern: at least 2 dot-separated words ending with -GROUP
-    // Examples: Movie.Name.2024.1080p.BluRay.x264-GROUP, Show.S01E02.720p-GROUP
-    private static readonly Regex ReleaseRegex = MyReleaseRegex();
+    // Dot-separated releases: Movie.Name.2024.1080p.BluRay.x264-GROUP
+    private static readonly Regex DotReleaseRegex = MyDotReleaseRegex();
+    // Music releases (hyphen-separated with underscores): Artist_Name-Album-WEB-2024-GROUP
+    private static readonly Regex MusicReleaseRegex = MyMusicReleaseRegex();
 
     public static readonly DependencyProperty MessageProperty =
         DependencyProperty.RegisterAttached("Message", typeof(IrcMessageVm), typeof(ReleaseTextHelper),
@@ -44,7 +45,7 @@ public static partial class ReleaseTextHelper
             return;
         }
 
-        var matches = ReleaseRegex.Matches(text);
+        var matches = MergeMatches(DotReleaseRegex.Matches(text), MusicReleaseRegex.Matches(text));
         if (matches.Count == 0)
         {
             tb.Inlines.Add(new Run(text));
@@ -90,8 +91,41 @@ public static partial class ReleaseTextHelper
             tb.Inlines.Add(new Run(text[lastIndex..]));
     }
 
-    // Scene release: letter-starting, dot/underscore-separated tokens, ending with -GROUP (3-20 chars)
-    // Allows hyphens within name (WEB-DL, x264-hi10p) — group is always after the last hyphen
+    // Merge matches from both regexes, deduplicating overlapping spans
+    private static List<Match> MergeMatches(MatchCollection a, MatchCollection b)
+    {
+        var all = new List<Match>();
+        foreach (Match m in a) all.Add(m);
+        foreach (Match m in b) all.Add(m);
+        if (all.Count == 0) return all;
+
+        all.Sort((x, y) => x.Index.CompareTo(y.Index));
+
+        // Remove overlapping matches (keep the longer one)
+        var result = new List<Match> { all[0] };
+        for (int i = 1; i < all.Count; i++)
+        {
+            var prev = result[^1];
+            var curr = all[i];
+            if (curr.Index < prev.Index + prev.Length)
+            {
+                // Overlapping — keep the longer match
+                if (curr.Length > prev.Length)
+                    result[^1] = curr;
+            }
+            else
+            {
+                result.Add(curr);
+            }
+        }
+        return result;
+    }
+
+    // Dot-separated: Movie.Name.2024.1080p-GROUP, Show.S01E02.WEB-DL-GRP
     [GeneratedRegex(@"(?<![.\w])[A-Za-z][\w-]*(?:[._][A-Za-z0-9][\w-]*){1,}[._]?-[A-Za-z0-9]{3,20}(?![.\w-])")]
-    private static partial Regex MyReleaseRegex();
+    private static partial Regex MyDotReleaseRegex();
+
+    // Music: hyphen-separated tokens with underscores — Artist_Name-Album-WEB-2024-GRP
+    [GeneratedRegex(@"(?<![.\w])(?=[^\s]*_)[A-Za-z0-9][\w()]*(?:-[A-Za-z0-9][\w()]*){2,}-[A-Za-z0-9]{2,20}(?![.\w-])")]
+    private static partial Regex MyMusicReleaseRegex();
 }
