@@ -736,14 +736,14 @@
                         <!-- Video area -->
                         <Grid Background="Black" x:Name="PlayerVideoArea" MouseLeftButtonDown="VideoArea_MouseDown">
                             <Grid.ContextMenu>
-                                <ContextMenu x:Name="PlayerContextMenu">
+                                <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
                                     <MenuItem Header="Cast to" ItemsSource="{Binding Renderers}"
                                               Visibility="{Binding HasRenderers, Converter={StaticResource BoolToVisibility}}">
                                         <MenuItem.ItemContainerStyle>
                                             <Style TargetType="MenuItem">
                                                 <Setter Property="Header" Value="{Binding Name}"/>
                                                 <Setter Property="Command"
-                                                        Value="{Binding PlacementTarget.DataContext.CastToDeviceCommand, Source={x:Reference PlayerContextMenu}}"/>
+                                                        Value="{Binding DataContext.CastToDeviceCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
                                                 <Setter Property="CommandParameter" Value="{Binding}"/>
                                             </Style>
                                         </MenuItem.ItemContainerStyle>
