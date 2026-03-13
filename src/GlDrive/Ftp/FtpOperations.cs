@@ -79,9 +79,32 @@ public class FtpOperations
 
     public async Task UploadFile(string remotePath, Stream stream, CancellationToken ct = default)
     {
-        using var ms = new MemoryStream();
-        await stream.CopyToAsync(ms, ct);
-        await UploadFile(remotePath, ms.ToArray(), ct);
+        await using var conn = await _pool.Borrow(ct);
+        Log.Debug("STOR {Path} (stream)", remotePath);
+
+        if (_pool.UseCpsv)
+        {
+            await CpsvDataHelper.UploadFileStream(conn.Client, remotePath, stream, _pool.ControlHost, ct);
+            return;
+        }
+
+        if (!stream.CanSeek)
+        {
+            // FluentFTP needs seekable stream — buffer only if necessary
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms, ct);
+            ms.Position = 0;
+            var status = await conn.Client.UploadStream(ms, remotePath, FtpRemoteExists.Overwrite, true, null, ct);
+            if (status != FtpStatus.Success)
+                throw new IOException($"Failed to upload {remotePath}: {status}");
+        }
+        else
+        {
+            stream.Position = 0;
+            var status = await conn.Client.UploadStream(stream, remotePath, FtpRemoteExists.Overwrite, true, null, ct);
+            if (status != FtpStatus.Success)
+                throw new IOException($"Failed to upload {remotePath}: {status}");
+        }
     }
 
     public async Task DeleteFile(string remotePath, CancellationToken ct = default)

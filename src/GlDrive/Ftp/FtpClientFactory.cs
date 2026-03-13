@@ -93,7 +93,10 @@ public class FtpClientFactory
         // Self-signed cert validation via TOFU
         client.ValidateCertificate += (control, e) =>
         {
-            var result = _certManager.ValidateCertificate(conn.Host, conn.Port, e.Certificate).Result;
+            var result = Task.Run(async () =>
+                await _certManager.ValidateCertificate(conn.Host, conn.Port, e.Certificate)
+                    .ConfigureAwait(false)
+            ).GetAwaiter().GetResult();
             e.Accept = result;
         };
 
@@ -108,11 +111,12 @@ public class FtpClientFactory
     {
         private static readonly Regex IpRegex = new(@"\d+\.\d+\.\d+\.\d+", RegexOptions.Compiled);
 
+        private static readonly Regex PassRegex = new(@"(?<=^>?\s*)PASS\s+\S+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         public void Log(FtpLogEntry entry)
         {
             var msg = entry.Message;
-            if (msg.Contains("PASS", StringComparison.OrdinalIgnoreCase))
-                msg = "PASS [REDACTED]";
+            msg = PassRegex.Replace(msg, "PASS [REDACTED]");
             msg = IpRegex.Replace(msg, "*.*.*.*");
             Serilog.Log.Debug("[FTP] {Message}", msg);
         }

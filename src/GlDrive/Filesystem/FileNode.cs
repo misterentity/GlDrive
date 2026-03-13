@@ -3,7 +3,7 @@ using FluentFTP;
 
 namespace GlDrive.Filesystem;
 
-public class FileNode
+public class FileNode : IDisposable
 {
     public string RemotePath { get; }
     public bool IsDirectory { get; set; }

@@ -60,20 +60,24 @@ public class IrcMessageVm
         or IrcMessageType.Kick or IrcMessageType.Topic or IrcMessageType.Mode or IrcMessageType.System;
 }
 
-public class IrcViewModel : INotifyPropertyChanged
+public class IrcViewModel : INotifyPropertyChanged, IDisposable
 {
     private readonly ServerManager _serverManager;
     private readonly AppConfig _config;
+    private readonly Action<string, string, IrcServiceState> _ircStateHandler;
     private IrcChannelVm? _selectedChannel;
     private string _inputText = "";
     private string _topicText = "";
     private string _statusText = "Not connected";
     private bool _isConnected;
+    private bool _disposed;
 
     // Per-channel message buffers: key = "serverId:target"
     private readonly Dictionary<string, List<IrcMessageVm>> _messageBuffers = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<string>> _nickBuffers = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _subscribedServices = new();
+    // Track subscribed handlers for cleanup
+    private readonly Dictionary<string, (Action<string, IrcMessageItem> msg, Action<string> names, Action<string, string> topic, Action<IrcServiceState> state)> _serviceHandlers = new();
     private const int MaxMessages = 500;
 
     // Nick colors (deterministic)
@@ -208,7 +212,7 @@ public class IrcViewModel : INotifyPropertyChanged
             SubscribeToIrcService(ircService);
 
         // Subscribe when new IRC services start
-        _serverManager.IrcStateChanged += (serverId, serverName, state) =>
+        _ircStateHandler = (serverId, serverName, state) =>
         {
             Application.Current?.Dispatcher.Invoke(() =>
             {
@@ -219,6 +223,7 @@ public class IrcViewModel : INotifyPropertyChanged
                 UpdateStatus();
             });
         };
+        _serverManager.IrcStateChanged += _ircStateHandler;
 
         UpdateStatus();
     }
@@ -226,17 +231,21 @@ public class IrcViewModel : INotifyPropertyChanged
     private void SubscribeToIrcService(IrcService irc)
     {
         if (!_subscribedServices.Add(irc.ServerId)) return;
-        irc.MessageReceived += (target, item) =>
+
+        Action<string, IrcMessageItem> msgHandler = (target, item) =>
             Application.Current?.Dispatcher.Invoke(() => OnIrcMessage(irc.ServerId, irc.ServerName, target, item));
-
-        irc.NamesUpdated += channel =>
+        Action<string> namesHandler = channel =>
             Application.Current?.Dispatcher.Invoke(() => OnNamesUpdated(irc.ServerId, channel, irc));
-
-        irc.TopicChanged += (channel, topic) =>
+        Action<string, string> topicHandler = (channel, topic) =>
             Application.Current?.Dispatcher.Invoke(() => OnTopicChanged(irc.ServerId, channel, topic));
-
-        irc.StateChanged += state =>
+        Action<IrcServiceState> stateHandler = state =>
             Application.Current?.Dispatcher.Invoke(UpdateStatus);
+
+        irc.MessageReceived += msgHandler;
+        irc.NamesUpdated += namesHandler;
+        irc.TopicChanged += topicHandler;
+        irc.StateChanged += stateHandler;
+        _serviceHandlers[irc.ServerId] = (msgHandler, namesHandler, topicHandler, stateHandler);
 
         // Hydrate sidebar with existing channels if IRC already connected
         // (Dashboard opened after IRC was up)
@@ -568,6 +577,26 @@ public class IrcViewModel : INotifyPropertyChanged
         if (string.IsNullOrEmpty(nick)) return Brushes.Gray;
         var hash = nick.Aggregate(0, (h, c) => h * 31 + c);
         return NickColors[Math.Abs(hash) % NickColors.Length];
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _serverManager.IrcStateChanged -= _ircStateHandler;
+        foreach (var (serverId, handlers) in _serviceHandlers)
+        {
+            var irc = _serverManager.GetIrcService(serverId);
+            if (irc != null)
+            {
+                irc.MessageReceived -= handlers.msg;
+                irc.NamesUpdated -= handlers.names;
+                irc.TopicChanged -= handlers.topic;
+                irc.StateChanged -= handlers.state;
+            }
+        }
+        _serviceHandlers.Clear();
+        _subscribedServices.Clear();
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
