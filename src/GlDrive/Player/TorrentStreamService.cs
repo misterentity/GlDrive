@@ -47,7 +47,7 @@ public class TorrentStreamService : IDisposable
             {
                 { "ipv4", new IPEndPoint(IPAddress.Any, listenPort) }
             },
-            HttpStreamingPrefix = $"http://127.0.0.1:{httpPort}",
+            HttpStreamingPrefix = $"http://127.0.0.1:{httpPort}/",
         }.ToSettings();
 
         _engine = new ClientEngine(settings);
