@@ -431,8 +431,10 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         if (string.IsNullOrWhiteSpace(_searchText)) return;
         if (string.IsNullOrEmpty(_config.Downloads.TmdbApiKey))
         {
-            // No TMDB key — search FTP directly
-            await SearchFtpDirect(_searchText);
+            // No TMDB key — search FTP and torrent directly
+            var ftpTask = SearchFtpDirect(_searchText);
+            var torrentTask = SearchTorrent(_searchText);
+            await Task.WhenAll(ftpTask, torrentTask);
             return;
         }
 
@@ -509,8 +511,8 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
             OnPropertyChanged(nameof(HasFtpResults));
             PlayerStatus = FtpResults.Count > 0
-                ? $"{FtpResults.Count} result(s) found"
-                : $"No results for \"{query}\"";
+                ? $"{FtpResults.Count} FTP result(s) found"
+                : "Searching torrents...";
 
             if (FtpResults.Count > 0) SelectedFtpResult = FtpResults[0];
         }
@@ -737,8 +739,14 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
             if (TorrentResults.Count > 0)
             {
                 SelectedTorrentResult = TorrentResults[0];
-                if (FtpResults.Count == 0)
-                    PlayerStatus = $"{TorrentResults.Count} torrent(s) found";
+                var parts = new List<string>();
+                if (FtpResults.Count > 0) parts.Add($"{FtpResults.Count} FTP");
+                parts.Add($"{TorrentResults.Count} torrent");
+                PlayerStatus = string.Join(" + ", parts) + " result(s)";
+            }
+            else if (FtpResults.Count == 0)
+            {
+                PlayerStatus = $"No results for \"{query}\"";
             }
         }
         catch (Exception ex)
