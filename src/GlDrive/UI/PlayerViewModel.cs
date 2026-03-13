@@ -1075,40 +1075,80 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     {
         if (_libVLC == null) return;
 
-        foreach (var desc in _libVLC.RendererList)
+        var rendererList = _libVLC.RendererList;
+        Log.Information("Renderer discoverers available: {Count}", rendererList.Length);
+        foreach (var desc in rendererList)
+            Log.Information("  Renderer module: {Name} ({LongName})", desc.Name, desc.LongName);
+
+        if (rendererList.Length == 0)
+        {
+            // No renderer modules — try known names directly
+            var fallbackNames = new[] { "microdns_renderer", "mdns_renderer" };
+            foreach (var name in fallbackNames)
+            {
+                try
+                {
+                    var discoverer = new RendererDiscoverer(_libVLC, name);
+                    discoverer.ItemAdded += OnRendererAdded;
+                    discoverer.ItemDeleted += OnRendererDeleted;
+                    if (discoverer.Start())
+                    {
+                        _rendererDiscoverers.Add(discoverer);
+                        Log.Information("Renderer discoverer started (fallback): {Name}", name);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Debug(ex, "Fallback renderer discoverer failed: {Name}", name);
+                }
+            }
+            return;
+        }
+
+        foreach (var desc in rendererList)
         {
             try
             {
                 var discoverer = new RendererDiscoverer(_libVLC, desc.Name);
-                discoverer.ItemAdded += (_, e) =>
+                discoverer.ItemAdded += OnRendererAdded;
+                discoverer.ItemDeleted += OnRendererDeleted;
+                if (discoverer.Start())
                 {
-                    Log.Information("Renderer found: {Name} ({Type})", e.RendererItem.Name, e.RendererItem.Type);
-                    Application.Current?.Dispatcher.BeginInvoke(() =>
-                    {
-                        if (Renderers.All(r => r.Name != e.RendererItem.Name))
-                            Renderers.Add(new RendererItemVm(e.RendererItem));
-                        OnPropertyChanged(nameof(HasRenderers));
-                    });
-                };
-                discoverer.ItemDeleted += (_, e) =>
+                    _rendererDiscoverers.Add(discoverer);
+                    Log.Information("Renderer discoverer started: {Name}", desc.Name);
+                }
+                else
                 {
-                    Log.Debug("Renderer lost: {Name}", e.RendererItem.Name);
-                    Application.Current?.Dispatcher.BeginInvoke(() =>
-                    {
-                        var existing = Renderers.FirstOrDefault(r => r.Name == e.RendererItem.Name);
-                        if (existing != null) Renderers.Remove(existing);
-                        OnPropertyChanged(nameof(HasRenderers));
-                    });
-                };
-                discoverer.Start();
-                _rendererDiscoverers.Add(discoverer);
-                Log.Debug("Renderer discoverer started: {Name}", desc.Name);
+                    Log.Warning("Renderer discoverer failed to start: {Name}", desc.Name);
+                }
             }
             catch (Exception ex)
             {
                 Log.Debug(ex, "Failed to start renderer discoverer: {Name}", desc.Name);
             }
         }
+    }
+
+    private void OnRendererAdded(object? sender, RendererDiscovererItemAddedEventArgs e)
+    {
+        Log.Information("Renderer found: {Name} ({Type})", e.RendererItem.Name, e.RendererItem.Type);
+        Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            if (Renderers.All(r => r.Name != e.RendererItem.Name))
+                Renderers.Add(new RendererItemVm(e.RendererItem));
+            OnPropertyChanged(nameof(HasRenderers));
+        });
+    }
+
+    private void OnRendererDeleted(object? sender, RendererDiscovererItemDeletedEventArgs e)
+    {
+        Log.Debug("Renderer lost: {Name}", e.RendererItem.Name);
+        Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            var existing = Renderers.FirstOrDefault(r => r.Name == e.RendererItem.Name);
+            if (existing != null) Renderers.Remove(existing);
+            OnPropertyChanged(nameof(HasRenderers));
+        });
     }
 
     private void CastToDevice(RendererItemVm? renderer)
