@@ -3,7 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using MonoTorrent;
 using MonoTorrent.Client;
-using MonoTorrent.Connections;
+using MonoTorrent.Streaming;
 using Serilog;
 
 namespace GlDrive.Player;
@@ -13,11 +13,7 @@ public class TorrentStreamService : IDisposable
     private readonly string _downloadPath;
     private readonly ClientEngine _engine;
     private TorrentManager? _activeManager;
-    private Stream? _activeStream;
-    private HttpListener? _httpListener;
-    private int _httpPort;
-    private string _httpAuthToken = "";
-    private CancellationTokenSource? _serveCts;
+    private IHttpStream? _activeHttpStream;
     private bool _disposed;
 
     public TorrentStreamService(string downloadPath)
@@ -25,20 +21,41 @@ public class TorrentStreamService : IDisposable
         _downloadPath = downloadPath;
         Directory.CreateDirectory(_downloadPath);
 
+        var cacheDir = Path.Combine(_downloadPath, ".torrent-cache");
+        Directory.CreateDirectory(cacheDir);
+
+        var httpPort = FindFreePort();
+        var dhtPort = FindFreePort();
+        var listenPort = FindFreePort();
+
+        Log.Information("TorrentStreamService: HTTP={HttpPort}, DHT={DhtPort}, Listen={ListenPort}",
+            httpPort, dhtPort, listenPort);
+
         var settings = new EngineSettingsBuilder
         {
-            CacheDirectory = Path.Combine(_downloadPath, ".torrent-cache"),
-            MaximumConnections = 60,
-            MaximumHalfOpenConnections = 8,
-            MaximumUploadRate = 50 * 1024, // 50 KB/s upload limit
+            CacheDirectory = cacheDir,
+            MaximumConnections = 100,
+            MaximumHalfOpenConnections = 16,
+            MaximumUploadRate = 100 * 1024, // 100 KB/s upload
+            AllowLocalPeerDiscovery = true,
+            AllowPortForwarding = true,
+            AutoSaveLoadDhtCache = true,
+            AutoSaveLoadFastResume = true,
+            AutoSaveLoadMagnetLinkMetadata = true,
+            DhtEndPoint = new IPEndPoint(IPAddress.Any, dhtPort),
+            ListenEndPoints = new Dictionary<string, IPEndPoint>
+            {
+                { "ipv4", new IPEndPoint(IPAddress.Any, listenPort) }
+            },
+            HttpStreamingPrefix = $"http://127.0.0.1:{httpPort}",
         }.ToSettings();
 
         _engine = new ClientEngine(settings);
     }
 
     /// <summary>
-    /// Starts streaming a torrent from a magnet link. Uses MonoTorrent's streaming API
-    /// to download pieces sequentially. Returns an HTTP URL that VLC can play from.
+    /// Starts streaming a torrent from a magnet link. Uses MonoTorrent's built-in HTTP streaming.
+    /// Returns an HTTP URL that VLC can play directly.
     /// </summary>
     public async Task<string?> StartStreamingAsync(
         string magnetLink,
@@ -64,7 +81,8 @@ public class TorrentStreamService : IDisposable
         var saveDir = Path.Combine(_downloadPath, "Torrents");
         Directory.CreateDirectory(saveDir);
 
-        onProgress?.Invoke("Fetching torrent metadata...", 0);
+        onProgress?.Invoke("Connecting to DHT and peers...", 0);
+        Log.Information("Starting torrent stream");
 
         var manager = await _engine.AddStreamingAsync(magnet, saveDir);
         _activeManager = manager;
@@ -74,33 +92,46 @@ public class TorrentStreamService : IDisposable
             await manager.StartAsync();
             onProgress?.Invoke("Connecting to peers...", 0);
 
-            // Wait for metadata
-            var metadataTimeout = TimeSpan.FromSeconds(90);
+            // Wait for metadata with progress updates
+            var metadataTimeout = TimeSpan.FromSeconds(120);
             var sw = System.Diagnostics.Stopwatch.StartNew();
             while (!manager.HasMetadata)
             {
                 ct.ThrowIfCancellationRequested();
                 if (sw.Elapsed > metadataTimeout)
                 {
-                    onProgress?.Invoke("Timeout waiting for metadata from peers", 0);
-                    Log.Warning("Torrent metadata timeout");
+                    var peers = manager.Peers.Seeds + manager.Peers.Leechs;
+                    Log.Warning("Torrent metadata timeout after {Elapsed}s — {Peers} peers, {Available} available",
+                        sw.Elapsed.TotalSeconds, peers, manager.Peers.Available);
+                    onProgress?.Invoke("Timeout waiting for metadata — try a torrent with more seeds", 0);
                     return null;
                 }
                 await Task.Delay(500, ct);
-                var peers = manager.Peers.Seeds + manager.Peers.Leechs;
-                onProgress?.Invoke($"Fetching metadata... ({peers} peers)", 0);
+                var p = manager.Peers;
+                onProgress?.Invoke(
+                    $"Fetching metadata... ({p.Seeds}S/{p.Leechs}L, {p.Available} available)",
+                    0);
+
+                // Log every 10 seconds
+                if ((int)sw.Elapsed.TotalSeconds % 10 == 0 && sw.Elapsed.TotalSeconds > 1)
+                    Log.Debug("Metadata wait: {Elapsed}s, Seeds={Seeds}, Leechs={Leechs}, Available={Available}",
+                        (int)sw.Elapsed.TotalSeconds, p.Seeds, p.Leechs, p.Available);
             }
+
+            Log.Information("Torrent metadata received in {Elapsed}s — {Files} files",
+                sw.Elapsed.TotalSeconds, manager.Files.Count);
 
             // Find the largest video file
             var videoFile = FindVideoFile(manager);
             if (videoFile == null)
             {
                 onProgress?.Invoke("No video file found in torrent", 0);
-                Log.Warning("No video file in torrent");
+                Log.Warning("No video file in torrent — files: {Files}",
+                    string.Join(", ", manager.Files.Select(f => f.Path)));
                 return null;
             }
 
-            Log.Information("Torrent video: {Name} ({Size} bytes)", videoFile.Path, videoFile.Length);
+            Log.Information("Torrent video: {Name} ({Size:F1} MB)", videoFile.Path, videoFile.Length / (1024.0 * 1024));
 
             // Set priority: DoNotDownload for non-video files
             foreach (var file in manager.Files)
@@ -111,130 +142,23 @@ public class TorrentStreamService : IDisposable
 
             onProgress?.Invoke($"Buffering: {Path.GetFileName(videoFile.Path)}...", 0);
 
-            // Create a seekable stream via MonoTorrent's streaming API
-            // This prebuffers the first and last pieces automatically
-            var stream = await manager.StreamProvider!.CreateStreamAsync(videoFile, prebuffer: true, ct);
-            _activeStream = stream;
+            // Use MonoTorrent's built-in HTTP streaming — handles Range, seeking, buffering
+            var httpStream = await manager.StreamProvider!.CreateHttpStreamAsync(videoFile, prebuffer: true, ct);
+            _activeHttpStream = httpStream;
 
-            // Start a local HTTP server to serve the stream to VLC
-            var httpUrl = StartHttpServer(stream, videoFile.Length, GetContentType(videoFile.Path));
+            var streamUrl = httpStream.FullUri.ToString();
+            Log.Information("Torrent HTTP stream ready at {Url}", streamUrl);
 
             // Monitor progress in background
             _ = MonitorProgress(manager, videoFile, onProgress, ct);
 
             onProgress?.Invoke("Ready to play", 5);
-            Log.Information("Torrent streaming at {Url}", httpUrl);
-
-            return httpUrl;
+            return streamUrl;
         }
         catch
         {
             await StopAsync();
             throw;
-        }
-    }
-
-    private string StartHttpServer(Stream torrentStream, long fileLength, string contentType)
-    {
-        _serveCts?.Cancel();
-        _serveCts?.Dispose();
-        try { _httpListener?.Stop(); } catch { }
-
-        _httpPort = FindFreePort();
-        _httpAuthToken = Guid.NewGuid().ToString("N");
-        _httpListener = new HttpListener();
-        _httpListener.Prefixes.Add($"http://127.0.0.1:{_httpPort}/");
-        _httpListener.Start();
-        _serveCts = new CancellationTokenSource();
-
-        var cts = _serveCts;
-        _ = Task.Run(async () =>
-        {
-            while (!cts.IsCancellationRequested)
-            {
-                try
-                {
-                    var ctx = await _httpListener.GetContextAsync();
-                    _ = Task.Run(() => HandleHttpRequest(ctx, torrentStream, fileLength, contentType));
-                }
-                catch (ObjectDisposedException) { break; }
-                catch (HttpListenerException) { break; }
-                catch (Exception ex) { Log.Debug(ex, "Torrent HTTP server error"); }
-            }
-        });
-
-        return $"http://127.0.0.1:{_httpPort}/stream?token={_httpAuthToken}";
-    }
-
-    private async Task HandleHttpRequest(HttpListenerContext ctx, Stream torrentStream,
-        long fileLength, string contentType)
-    {
-        try
-        {
-            if (ctx.Request.QueryString["token"] != _httpAuthToken)
-            {
-                ctx.Response.StatusCode = 403;
-                ctx.Response.Close();
-                return;
-            }
-
-            long offset = 0;
-            var rangeHeader = ctx.Request.Headers["Range"];
-            if (rangeHeader != null && rangeHeader.StartsWith("bytes="))
-            {
-                var parts = rangeHeader[6..].Split('-');
-                if (long.TryParse(parts[0], out var start))
-                    offset = start;
-            }
-
-            ctx.Response.ContentType = contentType;
-            ctx.Response.Headers.Add("Accept-Ranges", "bytes");
-
-            if (offset > 0 && fileLength > 0)
-            {
-                ctx.Response.StatusCode = 206;
-                ctx.Response.Headers.Add("Content-Range", $"bytes {offset}-{fileLength - 1}/{fileLength}");
-                ctx.Response.ContentLength64 = fileLength - offset;
-            }
-            else
-            {
-                ctx.Response.StatusCode = 200;
-                if (fileLength > 0) ctx.Response.ContentLength64 = fileLength;
-            }
-
-            // The MonoTorrent stream is seekable
-            lock (torrentStream)
-            {
-                torrentStream.Seek(offset, SeekOrigin.Begin);
-            }
-
-            var buffer = new byte[256 * 1024];
-            long totalSent = 0;
-            var toSend = fileLength > 0 ? fileLength - offset : long.MaxValue;
-
-            while (totalSent < toSend)
-            {
-                int read;
-                var toRead = (int)Math.Min(buffer.Length, toSend - totalSent);
-                lock (torrentStream)
-                {
-                    read = torrentStream.Read(buffer, 0, toRead);
-                }
-                if (read <= 0) break;
-
-                await ctx.Response.OutputStream.WriteAsync(buffer.AsMemory(0, read));
-                await ctx.Response.OutputStream.FlushAsync();
-                totalSent += read;
-            }
-
-            ctx.Response.Close();
-        }
-        catch (HttpListenerException) { }
-        catch (IOException) { }
-        catch (Exception ex)
-        {
-            Log.Debug(ex, "Torrent HTTP request error");
-            try { ctx.Response.StatusCode = 500; ctx.Response.Close(); } catch { }
         }
     }
 
@@ -283,17 +207,10 @@ public class TorrentStreamService : IDisposable
 
     public async Task StopAsync()
     {
-        _serveCts?.Cancel();
-        _serveCts?.Dispose();
-        _serveCts = null;
-
-        try { _httpListener?.Stop(); } catch { }
-        _httpListener = null;
-
-        if (_activeStream != null)
+        if (_activeHttpStream != null)
         {
-            try { _activeStream.Dispose(); } catch { }
-            _activeStream = null;
+            try { _activeHttpStream.Dispose(); } catch { }
+            _activeHttpStream = null;
         }
 
         if (_activeManager != null)
@@ -318,34 +235,12 @@ public class TorrentStreamService : IDisposable
         return ((IPEndPoint)socket.LocalEndPoint!).Port;
     }
 
-    private static string GetContentType(string path)
-    {
-        var ext = Path.GetExtension(path).ToLowerInvariant();
-        return ext switch
-        {
-            ".mkv" => "video/x-matroska",
-            ".avi" => "video/x-msvideo",
-            ".mp4" or ".m4v" => "video/mp4",
-            ".wmv" => "video/x-ms-wmv",
-            ".mov" => "video/quicktime",
-            ".mpg" or ".mpeg" => "video/mpeg",
-            ".ts" => "video/mp2t",
-            ".flv" => "video/x-flv",
-            ".webm" => "video/webm",
-            _ => "application/octet-stream"
-        };
-    }
-
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
 
-        _serveCts?.Cancel();
-        _serveCts?.Dispose();
-        try { _httpListener?.Stop(); } catch { }
-
-        try { _activeStream?.Dispose(); } catch { }
+        try { _activeHttpStream?.Dispose(); } catch { }
 
         try
         {
