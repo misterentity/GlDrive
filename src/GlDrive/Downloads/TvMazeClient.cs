@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Serilog;
 
 namespace GlDrive.Downloads;
@@ -48,12 +49,46 @@ public class TvMazeClient : IDisposable
         }
     }
 
+    // Major English-language streaming services by TvMaze webChannel ID
+    private static readonly HashSet<int> StreamingChannelIds = [
+        1,    // Netflix
+        2,    // Hulu
+        3,    // Prime Video
+        107,  // Paramount+
+        287,  // Disney+
+        310,  // Apple TV+
+        329,  // HBO Max
+        347,  // Peacock
+    ];
+
     public async Task<TvMazeScheduleEpisode[]> GetWebSchedule(DateOnly date, CancellationToken ct = default)
     {
         try
         {
             var response = await _http.GetStringAsync($"schedule/web?date={date:yyyy-MM-dd}", ct);
-            return JsonSerializer.Deserialize<TvMazeScheduleEpisode[]>(response, JsonOptions) ?? [];
+            var episodes = JsonSerializer.Deserialize<TvMazeWebScheduleEpisode[]>(response, JsonOptions) ?? [];
+
+            // Convert to standard episodes, filtering to major English streaming services
+            return episodes
+                .Where(e => e.Embedded?.Show != null &&
+                            e.Embedded.Show.WebChannel != null &&
+                            StreamingChannelIds.Contains(e.Embedded.Show.WebChannel.Id))
+                .Select(e =>
+                {
+                    var ep = new TvMazeScheduleEpisode
+                    {
+                        Id = e.Id,
+                        Name = e.Name,
+                        Season = e.Season,
+                        Number = e.Number,
+                        Airdate = e.Airdate,
+                        Airtime = e.Airtime,
+                        Runtime = e.Runtime,
+                        Show = e.Embedded!.Show
+                    };
+                    return ep;
+                })
+                .ToArray();
         }
         catch (Exception ex)
         {
@@ -150,6 +185,26 @@ public class TvMazeScheduleEpisode
     public string? Airdate { get; set; }
     public string? Airtime { get; set; }
     public int? Runtime { get; set; }
+    public TvMazeShow? Show { get; set; }
+}
+
+// Web schedule episodes have the show inside _embedded instead of a direct property
+public class TvMazeWebScheduleEpisode
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = "";
+    public int Season { get; set; }
+    public int Number { get; set; }
+    public string? Airdate { get; set; }
+    public string? Airtime { get; set; }
+    public int? Runtime { get; set; }
+
+    [JsonPropertyName("_embedded")]
+    public TvMazeWebEmbedded? Embedded { get; set; }
+}
+
+public class TvMazeWebEmbedded
+{
     public TvMazeShow? Show { get; set; }
 }
 
