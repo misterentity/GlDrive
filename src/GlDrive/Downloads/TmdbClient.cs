@@ -51,7 +51,7 @@ public class TmdbClient : IDisposable
         try
         {
             var baseUrl = $"3/discover/movie?api_key={_apiKey}" +
-                          $"&with_release_type=2|3" +
+                          $"&with_release_type=2|3|4" +
                           $"&release_date.gte={from:yyyy-MM-dd}" +
                           $"&release_date.lte={to:yyyy-MM-dd}" +
                           "&sort_by=popularity.desc&region=US";
