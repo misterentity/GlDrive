@@ -257,6 +257,15 @@ public partial class DashboardWindow : Window
         }
     }
 
+    private void CastButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button btn && btn.ContextMenu != null)
+        {
+            btn.ContextMenu.PlacementTarget = btn;
+            btn.ContextMenu.IsOpen = true;
+        }
+    }
+
     // Double-click video area → fullscreen
     private void VideoArea_MouseDown(object sender, MouseButtonEventArgs e)
     {
