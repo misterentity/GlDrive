@@ -884,8 +884,8 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             if (loadMovies && HasTmdbKey)
             {
                 using var tmdb = new TmdbClient(_config.Downloads.TmdbApiKey);
-                var from = DateOnly.FromDateTime(DateTime.Today.AddDays(-7));
-                var to = DateOnly.FromDateTime(DateTime.Today.AddDays(14));
+                var from = DateOnly.FromDateTime(DateTime.Today);
+                var to = DateOnly.FromDateTime(DateTime.Today.AddDays(30));
                 var movies = await tmdb.GetUpcomingReleases(from, to);
 
                 UpcomingMovies.Clear();
