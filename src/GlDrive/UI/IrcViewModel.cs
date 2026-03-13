@@ -138,7 +138,9 @@ public class IrcViewModel : INotifyPropertyChanged
     public ICommand DisconnectCommand { get; }
     public ICommand PrivateMessageNickCommand { get; }
     public ICommand KeyExchangeNickCommand { get; }
+    public ICommand ReleaseLinkClickedCommand { get; }
 
+    public event Action<string>? ReleaseLinkClicked;
     public event Action? ScrollToBottom;
     public event Action? FocusInput;
 
@@ -194,6 +196,11 @@ public class IrcViewModel : INotifyPropertyChanged
             var irc = _serverManager.GetIrcService(_selectedChannel.ServerId);
             if (irc != null)
                 await irc.InitiateKeyExchange(cleanNick);
+        });
+        ReleaseLinkClickedCommand = new RelayCommand<string>(releaseName =>
+        {
+            if (!string.IsNullOrEmpty(releaseName))
+                ReleaseLinkClicked?.Invoke(releaseName);
         });
 
         // Subscribe to existing IRC services
@@ -543,7 +550,7 @@ public class IrcViewModel : INotifyPropertyChanged
         _tabIndex = 0;
     }
 
-    private void AddLocalSystem(string text)
+    public void AddLocalSystem(string text)
     {
         var vm = new IrcMessageVm
         {
