@@ -21,7 +21,7 @@ public class TrayViewModel : INotifyPropertyChanged
     private string _statusText = "No servers";
     private DashboardWindow? _dashboardWindow;
     private GitHubRelease? _availableUpdate;
-    private readonly HashSet<string> _subscribedServers = new();
+    private readonly Dictionary<string, (Action<DownloadItem, DownloadProgress> progress, Action<DownloadItem> status)> _subscribedDownloadHandlers = new();
     private double _lastDownloadSpeed;
     private int _activeDownloadCount;
     private DateTime _lastSpeedUpdate;
@@ -41,7 +41,8 @@ public class TrayViewModel : INotifyPropertyChanged
                 OnPropertyChanged(nameof(StatusText));
 
                 // Wire up wishlist matcher and download notifications for newly connected servers
-                if (state == MountState.Connected && _subscribedServers.Add(serverId))
+                // Re-subscribe on each connect since unmount creates new MountService instances
+                if (state == MountState.Connected)
                 {
                     var server = _serverManager.GetServer(serverId);
                     if (server?.Matcher != null)
@@ -52,10 +53,16 @@ public class TrayViewModel : INotifyPropertyChanged
                     }
                     if (server?.Downloads != null)
                     {
-                        server.Downloads.DownloadProgressChanged += (downloadItem, progress) =>
+                        // Remove old handlers if server was previously mounted
+                        if (_subscribedDownloadHandlers.TryGetValue(serverId, out var old))
+                        {
+                            server.Downloads.DownloadProgressChanged -= old.progress;
+                            server.Downloads.DownloadStatusChanged -= old.status;
+                        }
+
+                        Action<DownloadItem, DownloadProgress> progressHandler = (downloadItem, progress) =>
                         {
                             _lastDownloadSpeed = progress.BytesPerSecond;
-                            // Throttle UI updates to once per second
                             var now = DateTime.UtcNow;
                             if ((now - _lastSpeedUpdate).TotalSeconds < 1) return;
                             _lastSpeedUpdate = now;
@@ -65,9 +72,8 @@ public class TrayViewModel : INotifyPropertyChanged
                                 OnPropertyChanged(nameof(StatusText));
                             });
                         };
-                        server.Downloads.DownloadStatusChanged += downloadItem =>
+                        Action<DownloadItem> statusHandler = downloadItem =>
                         {
-                            // Track active download count for status text
                             _activeDownloadCount = server.Downloads.Store.Items
                                 .Count(i => i.Status == DownloadStatus.Downloading);
                             if (downloadItem.Status == DownloadStatus.Completed)
@@ -82,6 +88,9 @@ public class TrayViewModel : INotifyPropertyChanged
                                     ShowNotification("Download Failed",
                                         $"{downloadItem.ReleaseName}: {downloadItem.ErrorMessage ?? "Unknown error"}"));
                         };
+                        server.Downloads.DownloadProgressChanged += progressHandler;
+                        server.Downloads.DownloadStatusChanged += statusHandler;
+                        _subscribedDownloadHandlers[serverId] = (progressHandler, statusHandler);
                     }
                 }
 

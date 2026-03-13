@@ -28,7 +28,7 @@ public record GitHubRelease(
     }
 }
 
-public class UpdateChecker
+public class UpdateChecker : IDisposable
 {
     private const string RepoApiUrl = "https://api.github.com/repos/misterentity/GlDrive/releases/latest";
     private static readonly TimeSpan CheckInterval = TimeSpan.FromHours(24);
@@ -286,5 +286,12 @@ public class UpdateChecker
         _periodicCts?.Cancel();
         _periodicCts?.Dispose();
         _periodicCts = null;
+    }
+
+    public void Dispose()
+    {
+        StopPeriodicCheck();
+        _http.Dispose();
+        GC.SuppressFinalize(this);
     }
 }

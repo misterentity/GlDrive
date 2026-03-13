@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.AccessControl;
@@ -315,11 +316,18 @@ public class GlDriveFileSystem : FileSystemBase
 
             stream.Position = (long)offset;
             var toRead = (int)Math.Min(length, stream.Length - (long)offset);
-            var buf = new byte[toRead];
-            var read = stream.Read(buf, 0, toRead);
-            Marshal.Copy(buf, 0, buffer, read);
-            bytesTransferred = (uint)read;
-            return STATUS_SUCCESS;
+            var buf = ArrayPool<byte>.Shared.Rent(toRead);
+            try
+            {
+                var read = stream.Read(buf, 0, toRead);
+                Marshal.Copy(buf, 0, buffer, read);
+                bytesTransferred = (uint)read;
+                return STATUS_SUCCESS;
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buf);
+            }
         }
         catch (Exception ex)
         {
@@ -368,9 +376,16 @@ public class GlDriveFileSystem : FileSystemBase
                 writeStream.SetLength(pos + length);
 
             writeStream.Position = pos;
-            var buf = new byte[length];
-            Marshal.Copy(buffer, buf, 0, (int)length);
-            writeStream.Write(buf, 0, (int)length);
+            var buf = ArrayPool<byte>.Shared.Rent((int)length);
+            try
+            {
+                Marshal.Copy(buffer, buf, 0, (int)length);
+                writeStream.Write(buf, 0, (int)length);
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buf);
+            }
 
             bytesTransferred = length;
             node.IsDirty = true;

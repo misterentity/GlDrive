@@ -159,6 +159,11 @@ public class NewReleaseMonitor
             _snapshot[category] = currentNames;
         }
 
+        // Prune categories that no longer exist on the server
+        var staleCategories = _snapshot.Keys.Except(categoryDirs).ToList();
+        foreach (var stale in staleCategories)
+            _snapshot.Remove(stale);
+
         if (!_seeded)
         {
             _seeded = true;

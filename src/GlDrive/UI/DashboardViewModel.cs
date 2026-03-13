@@ -29,6 +29,8 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private bool _isSearching;
     private CancellationTokenSource? _searchCts;
     private readonly HashSet<string> _subscribedServers = new();
+    private readonly Action<string, string, MountState> _serverStateHandler;
+    private readonly Action<string, string, string, string, string> _newReleaseHandler;
     private WishlistItemVm? _selectedWishlistItem;
     private DownloadItemVm? _selectedDownloadItem;
     private SearchResultVm? _selectedSearchResult;
@@ -468,7 +470,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             SubscribeToServer(server);
 
         // Also subscribe when new servers come online
-        _serverManager.ServerStateChanged += (serverId, _, state) =>
+        _serverStateHandler = (serverId, _, state) =>
         {
             if (state == MountState.Connected)
             {
@@ -480,9 +482,10 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                 }
             }
         };
+        _serverManager.ServerStateChanged += _serverStateHandler;
 
         // Live notifications — add to collection when new releases arrive
-        _serverManager.NewReleaseDetected += (serverId, serverName, category, release, remotePath) =>
+        _newReleaseHandler = (serverId, serverName, category, release, remotePath) =>
         {
             Application.Current?.Dispatcher.Invoke(() =>
             {
@@ -496,16 +499,20 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                     TimeDisplay = DateTime.Now.ToString("g")
                 };
                 _allNotifications.Insert(0, vm);
+                if (_allNotifications.Count > 5000)
+                    _allNotifications.RemoveRange(5000, _allNotifications.Count - 5000);
                 UpdateNotificationFilterOptions();
                 ApplyNotificationFilter();
             });
         };
+        _serverManager.NewReleaseDetected += _newReleaseHandler;
     }
 
     private void SubscribeToServer(MountService server)
     {
         if (server.Downloads == null) return;
-        if (!_subscribedServers.Add(server.ServerId)) return;
+        // Always re-subscribe since unmount creates new MountService/DownloadManager instances
+        _subscribedServers.Add(server.ServerId);
         server.Downloads.DownloadProgressChanged += OnDownloadProgress;
         server.Downloads.DownloadStatusChanged += OnDownloadStatusChanged;
     }
@@ -1657,6 +1664,9 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         _preDbCts?.Dispose();
         _preDbCts = null;
         _preDbClient.Dispose();
+        _serverManager.ServerStateChanged -= _serverStateHandler;
+        _serverManager.NewReleaseDetected -= _newReleaseHandler;
+        _ircViewModel.Dispose();
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

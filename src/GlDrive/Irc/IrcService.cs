@@ -96,15 +96,23 @@ public class IrcService : IDisposable
                 // Wait until disconnected
                 var tcs = new TaskCompletionSource();
                 using var reg = ct.Register(() => tcs.TrySetCanceled());
+                Action<string>? disconnectHandler = null;
                 if (_client != null)
                 {
-                    _client.Disconnected += _ => tcs.TrySetResult();
+                    disconnectHandler = _ => tcs.TrySetResult();
+                    _client.Disconnected += disconnectHandler;
                     // If ReadLoop already fired Disconnected before we attached, unblock now
                     if (!_client.IsConnected)
                         tcs.TrySetResult();
                 }
 
-                await tcs.Task;
+                try { await tcs.Task; }
+                finally
+                {
+                    // Remove handler to prevent accumulation across reconnects
+                    if (_client != null && disconnectHandler != null)
+                        _client.Disconnected -= disconnectHandler;
+                }
 
                 // Reset delay on successful connection that lasted a while
                 delay = _serverConfig.Pool.ReconnectInitialDelaySeconds;

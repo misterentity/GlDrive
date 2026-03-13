@@ -55,9 +55,8 @@ public class ConnectionMonitor
     public void Stop()
     {
         _cts?.Cancel();
-        // Fire-and-forget — don't block the calling thread
-        _cts?.Dispose();
-        _cts = null;
+        // Don't dispose CTS here — MonitorLoop may still be running
+        // It will be disposed in StopAsync or on next Start()
     }
 
     private async Task MonitorLoop(CancellationToken ct)

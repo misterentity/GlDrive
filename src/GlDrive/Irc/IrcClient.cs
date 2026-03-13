@@ -39,7 +39,10 @@ public class IrcClient : IDisposable
             {
                 if (cert == null) return false;
                 if (certManager != null)
-                    return Task.Run(() => certManager.ValidateCertificate(host, port, cert)).GetAwaiter().GetResult();
+                    return Task.Run(async () =>
+                        await certManager.ValidateCertificate(host, port, cert)
+                            .ConfigureAwait(false)
+                    ).GetAwaiter().GetResult();
                 return false;
             });
 
@@ -147,6 +150,8 @@ public class IrcClient : IDisposable
     {
         IsConnected = false;
         _cts?.Cancel();
+        _cts?.Dispose();
+        _cts = null;
         _reader?.Dispose();
         _writer?.Dispose();
         _stream?.Dispose();

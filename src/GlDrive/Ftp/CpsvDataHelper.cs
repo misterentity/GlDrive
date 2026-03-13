@@ -20,7 +20,8 @@ namespace GlDrive.Ftp;
 /// </summary>
 public static class CpsvDataHelper
 {
-    private static readonly Regex PasvRegex = new(@"\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)\)");
+    private static readonly Regex PasvRegex = new(@"\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)\)", RegexOptions.Compiled);
+    private static readonly Regex UnixListRegex = new(@"^([dlcbps-])[rwxsStT-]{9}\s+\d+\s+\S+\s+\S+\s+(\d+)\s+(\w{3}\s+\d+\s+[\d:]+)\s+(.+)$", RegexOptions.Compiled);
 
     private static readonly Lazy<X509Certificate2> SelfSignedCert = new(() =>
     {
@@ -299,8 +300,7 @@ public static class CpsvDataHelper
         // drwxr-xr-x  2 user group  4096 Jan 15 10:30 dirname
         // -rw-r--r--  1 user group 12345 Feb 20  2024 filename
         // lrwxrwxrwx  1 user group     8 Mar  1 12:00 link -> target
-        var regex = new Regex(@"^([dlcbps-])[rwxsStT-]{9}\s+\d+\s+\S+\s+\S+\s+(\d+)\s+(\w{3}\s+\d+\s+[\d:]+)\s+(.+)$");
-        var match = regex.Match(line);
+        var match = UnixListRegex.Match(line);
         if (!match.Success)
             return null;
 
