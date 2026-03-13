@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Input;
 using FluentFTP;
@@ -480,6 +481,8 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
     private async Task SearchFtpDirect(string query)
     {
+        query = SanitizeSearchQuery(query);
+
         var mounted = _serverManager.GetMountedServers()
             .Where(s => s.Search != null && s.CurrentState == MountState.Connected)
             .ToList();
@@ -713,6 +716,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
     private async Task SearchTorrent(string query)
     {
+        query = SanitizeSearchQuery(query);
         if (_torrentSearch == null || string.IsNullOrWhiteSpace(query)) return;
 
         TorrentResults.Clear();
@@ -1048,6 +1052,19 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         var ext = Path.GetExtension(fileName).ToLowerInvariant();
         return ext is ".mkv" or ".avi" or ".mp4" or ".m4v" or ".wmv" or ".mov"
             or ".mpg" or ".mpeg" or ".ts" or ".vob" or ".flv" or ".webm";
+    }
+
+    /// <summary>
+    /// Strips punctuation/special chars from movie/TV titles for better FTP and torrent search results.
+    /// "Good Luck, Have Fun, Don't Die" → "Good Luck Have Fun Dont Die"
+    /// </summary>
+    private static string SanitizeSearchQuery(string query)
+    {
+        // Remove anything that isn't a letter, digit, or whitespace
+        var sanitized = Regex.Replace(query, @"[^\w\s]", " ");
+        // Collapse multiple spaces
+        sanitized = Regex.Replace(sanitized, @"\s{2,}", " ");
+        return sanitized.Trim();
     }
 
     private static string FormatSize(long bytes)
