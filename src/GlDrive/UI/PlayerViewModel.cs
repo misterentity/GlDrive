@@ -757,8 +757,13 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
     private async Task PlaySelectedTorrent()
     {
-        if (_selectedTorrentResult == null || _torrentSearch == null || _torrentStream == null || _mediaPlayer == null)
+        if (_selectedTorrentResult == null || _torrentSearch == null)
             return;
+        if (_mediaPlayer == null || _torrentStream == null)
+        {
+            PlayerStatus = "Video player not initialized — check VLC installation";
+            return;
+        }
 
         var result = _selectedTorrentResult;
         IsLoading = true;

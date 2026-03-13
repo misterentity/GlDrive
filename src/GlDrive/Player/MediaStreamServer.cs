@@ -26,8 +26,10 @@ public class MediaStreamServer : IDisposable
 
     /// <summary>
     /// The library directory where player caches downloaded/extracted video files.
+    /// Uses %AppData%\GlDrive\Player to avoid depending on the download path (which may be on a mounted FTP drive).
     /// </summary>
-    public string LibraryPath => Path.Combine(_config.Downloads.LocalPath, "Player");
+    public string LibraryPath { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GlDrive", "Player");
 
     public MediaStreamServer(ServerManager serverManager, AppConfig config)
     {
