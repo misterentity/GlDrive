@@ -1019,17 +1019,25 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     private void TogglePlayPause()
     {
         if (_mediaPlayer == null) return;
-        if (_mediaPlayer.IsPlaying)
-            _mediaPlayer.Pause();
+        var mp = _mediaPlayer;
+        if (mp.IsPlaying)
+            Task.Run(() => mp.Pause());
         else
-            _mediaPlayer.Play();
+            Task.Run(() => mp.Play());
     }
 
     private void StopPlayback()
     {
         if (_mediaPlayer == null) return;
         SaveCurrentPosition();
-        Task.Run(() => _mediaPlayer.Stop());
+        var mp = _mediaPlayer;
+        IsPlaying = false;
+        Task.Run(async () =>
+        {
+            mp.Stop();
+            if (_torrentStream != null)
+                await _torrentStream.StopAsync();
+        });
     }
 
     public void SeekTo(double percent)
