@@ -826,10 +826,20 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
             var media = new Media(_libVLC!, new Uri(streamUrl));
             media.AddOption(":network-caching=10000");
 
-            await Task.Run(() => _mediaPlayer!.Stop());
+            await Task.Run(() =>
+            {
+                _mediaPlayer!.Stop();
+                Thread.Sleep(200);
+            });
+
+            if (_activeRenderer != null)
+                _mediaPlayer!.SetRenderer(_activeRenderer);
+
             _mediaPlayer!.Play(media);
 
-            PlayerStatus = $"Streaming: {result.Title}";
+            PlayerStatus = IsCasting
+                ? $"Casting: {result.Title}"
+                : $"Streaming: {result.Title}";
         }
         catch (OperationCanceledException)
         {
@@ -923,10 +933,20 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         IsBuffering = true;
         PlayerStatus = "Connecting to stream...";
 
-        await Task.Run(() => _mediaPlayer!.Stop());
+        await Task.Run(() =>
+        {
+            _mediaPlayer!.Stop();
+            Thread.Sleep(200);
+        });
+
+        if (_activeRenderer != null)
+            _mediaPlayer!.SetRenderer(_activeRenderer);
+
         _mediaPlayer!.Play(media);
 
-        PlayerStatus = $"Buffering: {Path.GetFileName(remotePath)}...";
+        PlayerStatus = IsCasting
+            ? $"Casting: {Path.GetFileName(remotePath)}..."
+            : $"Buffering: {Path.GetFileName(remotePath)}...";
     }
 
     private async Task PlayFromRar(MountService server, string releasePath, List<FtpListItem> files)
@@ -1007,12 +1027,24 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         // Derive release name from parent directory
         _currentReleaseName = Path.GetFileName(Path.GetDirectoryName(localPath) ?? "");
 
-        var media = new Media(_libVLC!, new Uri($"file:///{localPath.Replace('\\', '/')}"));
+        // Stop current playback completely before starting new media
+        await Task.Run(() =>
+        {
+            _mediaPlayer!.Stop();
+            // Small delay to let VLC fully release resources
+            Thread.Sleep(200);
+        });
 
-        await Task.Run(() => _mediaPlayer!.Stop());
+        // Re-apply renderer if casting (Stop clears it)
+        if (_activeRenderer != null)
+            _mediaPlayer!.SetRenderer(_activeRenderer);
+
+        var media = new Media(_libVLC!, new Uri($"file:///{localPath.Replace('\\', '/')}"));
         _mediaPlayer!.Play(media);
 
-        PlayerStatus = $"Playing: {Path.GetFileName(localPath)} (from library)";
+        PlayerStatus = IsCasting
+            ? $"Casting: {Path.GetFileName(localPath)}"
+            : $"Playing: {Path.GetFileName(localPath)} (from library)";
     }
 
     // ── Playback controls ──
