@@ -69,8 +69,12 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     public ObservableCollection<TrackInfo> SubtitleTracks { get; } = new();
     public ObservableCollection<RendererItemVm> Renderers { get; } = new();
     public bool HasRenderers => Renderers.Count > 0;
+    public bool HasNoRenderers => Renderers.Count == 0;
     public bool IsCasting => _activeRenderer != null;
     public string CastStatus => _activeRenderer != null ? $"Casting to {_activeRenderer.Name}" : "";
+    public string CastButtonTooltip => _activeRenderer != null
+        ? $"Casting to {_activeRenderer.Name}"
+        : HasRenderers ? "Cast to device" : "Cast (scanning for devices...)";
 
     public MediaCardVm? SelectedMovie
     {
@@ -1080,51 +1084,31 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         foreach (var desc in rendererList)
             Log.Information("  Renderer module: {Name} ({LongName})", desc.Name, desc.LongName);
 
-        if (rendererList.Length == 0)
-        {
-            // No renderer modules — try known names directly
-            var fallbackNames = new[] { "microdns_renderer", "mdns_renderer" };
-            foreach (var name in fallbackNames)
-            {
-                try
-                {
-                    var discoverer = new RendererDiscoverer(_libVLC, name);
-                    discoverer.ItemAdded += OnRendererAdded;
-                    discoverer.ItemDeleted += OnRendererDeleted;
-                    if (discoverer.Start())
-                    {
-                        _rendererDiscoverers.Add(discoverer);
-                        Log.Information("Renderer discoverer started (fallback): {Name}", name);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log.Debug(ex, "Fallback renderer discoverer failed: {Name}", name);
-                }
-            }
-            return;
-        }
+        // If the official list is empty, try known module names as fallback
+        var modulesToTry = rendererList.Length > 0
+            ? rendererList.Select(d => d.Name).ToArray()
+            : new[] { "microdns_renderer", "mdns_renderer", "sap" };
 
-        foreach (var desc in rendererList)
+        foreach (var name in modulesToTry)
         {
             try
             {
-                var discoverer = new RendererDiscoverer(_libVLC, desc.Name);
+                var discoverer = new RendererDiscoverer(_libVLC, name);
                 discoverer.ItemAdded += OnRendererAdded;
                 discoverer.ItemDeleted += OnRendererDeleted;
                 if (discoverer.Start())
                 {
                     _rendererDiscoverers.Add(discoverer);
-                    Log.Information("Renderer discoverer started: {Name}", desc.Name);
+                    Log.Information("Renderer discoverer started: {Name}", name);
                 }
                 else
                 {
-                    Log.Warning("Renderer discoverer failed to start: {Name}", desc.Name);
+                    Log.Warning("Renderer discoverer failed to start: {Name}", name);
                 }
             }
             catch (Exception ex)
             {
-                Log.Debug(ex, "Failed to start renderer discoverer: {Name}", desc.Name);
+                Log.Debug(ex, "Failed to start renderer discoverer: {Name}", name);
             }
         }
     }
@@ -1137,6 +1121,8 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
             if (Renderers.All(r => r.Name != e.RendererItem.Name))
                 Renderers.Add(new RendererItemVm(e.RendererItem));
             OnPropertyChanged(nameof(HasRenderers));
+            OnPropertyChanged(nameof(HasNoRenderers));
+            OnPropertyChanged(nameof(CastButtonTooltip));
         });
     }
 
@@ -1148,6 +1134,8 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
             var existing = Renderers.FirstOrDefault(r => r.Name == e.RendererItem.Name);
             if (existing != null) Renderers.Remove(existing);
             OnPropertyChanged(nameof(HasRenderers));
+            OnPropertyChanged(nameof(HasNoRenderers));
+            OnPropertyChanged(nameof(CastButtonTooltip));
         });
     }
 

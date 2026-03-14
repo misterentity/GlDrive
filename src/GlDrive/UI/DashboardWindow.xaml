@@ -728,30 +728,33 @@
                                         <Button x:Name="CastButton" Content="&#x1F4E1;&#xFE0E;" FontSize="12"
                                                 Padding="4,2" Margin="0,0,6,0" VerticalAlignment="Center"
                                                 Style="{StaticResource SecondaryButton}"
-                                                ToolTip="{Binding CastStatus, TargetNullValue='Cast to device'}"
-                                                Visibility="{Binding HasRenderers, Converter={StaticResource BoolToVisibility}}"
                                                 Click="CastButton_Click">
+                                            <Button.ToolTip>
+                                                <MultiBinding StringFormat="{}{0}">
+                                                    <Binding Path="CastButtonTooltip"/>
+                                                </MultiBinding>
+                                            </Button.ToolTip>
                                             <Button.ContextMenu>
-                                                <ContextMenu ItemsSource="{Binding Renderers}"
-                                                             DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
-                                                    <ContextMenu.ItemContainerStyle>
-                                                        <Style TargetType="MenuItem">
+                                                <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                                                    <ContextMenu.Resources>
+                                                        <Style x:Key="RendererItem" TargetType="MenuItem">
                                                             <Setter Property="Header" Value="{Binding Name}"/>
                                                             <Setter Property="Command"
                                                                     Value="{Binding DataContext.CastToDeviceCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
                                                             <Setter Property="CommandParameter" Value="{Binding}"/>
                                                         </Style>
-                                                    </ContextMenu.ItemContainerStyle>
+                                                    </ContextMenu.Resources>
+                                                    <MenuItem Header="Cast to" ItemsSource="{Binding Renderers}"
+                                                              ItemContainerStyle="{StaticResource RendererItem}"
+                                                              Visibility="{Binding HasRenderers, Converter={StaticResource BoolToVisibility}}"/>
+                                                    <MenuItem Header="No devices found" IsEnabled="False"
+                                                              Visibility="{Binding HasNoRenderers, Converter={StaticResource BoolToVisibility}}"/>
+                                                    <Separator Visibility="{Binding IsCasting, Converter={StaticResource BoolToVisibility}}"/>
+                                                    <MenuItem Header="Stop casting" Command="{Binding StopCastingCommand}"
+                                                              Visibility="{Binding IsCasting, Converter={StaticResource BoolToVisibility}}"/>
                                                 </ContextMenu>
                                             </Button.ContextMenu>
                                         </Button>
-                                        <!-- Stop cast button -->
-                                        <Button Content="&#x274C;&#xFE0E;" FontSize="9"
-                                                Command="{Binding StopCastingCommand}"
-                                                Padding="4,2" Margin="0,0,6,0" VerticalAlignment="Center"
-                                                Style="{StaticResource SecondaryButton}"
-                                                ToolTip="Stop casting"
-                                                Visibility="{Binding IsCasting, Converter={StaticResource BoolToVisibility}}"/>
                                         <TextBlock Text="&#x1F50A;" VerticalAlignment="Center" Margin="0,0,3,0" FontSize="10"/>
                                         <Slider Value="{Binding Volume}" Minimum="0" Maximum="100" Width="70" MinWidth="50"
                                                 VerticalAlignment="Center"/>
