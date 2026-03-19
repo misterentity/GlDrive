@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http;
-using System.Text.RegularExpressions;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Serilog;
 
 namespace GlDrive.Player;
@@ -15,239 +16,287 @@ public record TorrentSearchResult(
 
 public class TorrentSearchService : IDisposable
 {
-    private static readonly Regex SeedLeechRegex = new(
-        @"<td\s+class=""coll-2 seeds"">(\d+)</td>\s*<td\s+class=""coll-3 leeches"">(\d+)</td>",
-        RegexOptions.Compiled | RegexOptions.Singleline);
-
-    private static readonly Regex MagnetRegex = new(
-        @"href=""(magnet:\?[^""]+)""",
-        RegexOptions.Compiled);
-
     private readonly HttpClient _http;
-    private string _baseUrl = "";
-    private bool _initialized;
 
-    // Try multiple domains — some may be blocked in certain regions
-    private static readonly string[] Domains =
-    [
-        "https://www.1377x.to",
-        "https://1377x.to",
-        "https://www.1337x.to",
-        "https://1337x.to"
-    ];
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
+    // apibay state
+    private static readonly string[] ApiBayHosts = ["https://apibay.org"];
+    private string _apibayHost = "";
+    private bool _apibayChecked;
+
+    // SolidTorrents state
+    private const string SolidTorrentsApi = "https://solidtorrents.to/api/v1/search";
+    private bool _solidChecked;
+    private bool _solidAvailable;
 
     public TorrentSearchService()
     {
-        var cookies = new CookieContainer();
         var handler = new HttpClientHandler
         {
             AllowAutoRedirect = true,
-            CookieContainer = cookies,
-            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate | DecompressionMethods.Brotli,
-            UseCookies = true
+            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate | DecompressionMethods.Brotli
         };
         _http = new HttpClient(handler);
         _http.DefaultRequestHeaders.Add("User-Agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
-        _http.DefaultRequestHeaders.Add("Accept",
-            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
-        _http.DefaultRequestHeaders.Add("Accept-Language", "en-US,en;q=0.9");
-        _http.DefaultRequestHeaders.Add("Accept-Encoding", "gzip, deflate, br");
-        _http.DefaultRequestHeaders.Add("Sec-Ch-Ua", "\"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"");
-        _http.DefaultRequestHeaders.Add("Sec-Ch-Ua-Mobile", "?0");
-        _http.DefaultRequestHeaders.Add("Sec-Ch-Ua-Platform", "\"Windows\"");
-        _http.DefaultRequestHeaders.Add("Sec-Fetch-Dest", "document");
-        _http.DefaultRequestHeaders.Add("Sec-Fetch-Mode", "navigate");
-        _http.DefaultRequestHeaders.Add("Sec-Fetch-Site", "none");
-        _http.DefaultRequestHeaders.Add("Sec-Fetch-User", "?1");
-        _http.DefaultRequestHeaders.Add("Upgrade-Insecure-Requests", "1");
-        _http.DefaultRequestHeaders.Add("Cache-Control", "max-age=0");
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36");
         _http.Timeout = TimeSpan.FromSeconds(15);
-    }
-
-    /// <summary>
-    /// Finds a working domain by hitting the homepage. Stores cookies for future requests.
-    /// </summary>
-    private async Task InitializeAsync(CancellationToken ct)
-    {
-        if (_initialized && !string.IsNullOrEmpty(_baseUrl)) return;
-
-        foreach (var domain in Domains)
-        {
-            try
-            {
-                Log.Debug("Trying torrent site domain: {Domain}", domain);
-                var response = await _http.GetAsync($"{domain}/", ct);
-
-                if (response.IsSuccessStatusCode)
-                {
-                    _baseUrl = domain;
-                    _initialized = true;
-                    Log.Information("Torrent search using domain: {Domain}", domain);
-                    return;
-                }
-
-                Log.Debug("Domain {Domain} returned {Status}", domain, response.StatusCode);
-            }
-            catch (Exception ex)
-            {
-                Log.Debug(ex, "Domain {Domain} failed", domain);
-            }
-        }
-
-        Log.Warning("No torrent site domain accessible");
     }
 
     public async Task<List<TorrentSearchResult>> SearchAsync(string query, CancellationToken ct = default)
     {
-        var results = new List<TorrentSearchResult>();
+        // Search both sources in parallel, merge and deduplicate
+        var apibayTask = SearchApiBay(query, ct);
+        var solidTask = SearchSolidTorrents(query, ct);
 
-        try
+        await Task.WhenAll(apibayTask, solidTask);
+
+        var combined = new List<TorrentSearchResult>();
+        combined.AddRange(apibayTask.Result);
+        combined.AddRange(solidTask.Result);
+
+        if (combined.Count == 0)
         {
-            await InitializeAsync(ct);
-            if (string.IsNullOrEmpty(_baseUrl))
-            {
-                Log.Warning("Torrent search skipped — no accessible domain");
-                return results;
-            }
-
-            var url = $"{_baseUrl}/search/{Uri.EscapeDataString(query)}/1/";
-            Log.Debug("Torrent search: {Url}", url);
-
-            // Set referer to look like we navigated from the homepage
-            using var request = new HttpRequestMessage(HttpMethod.Get, url);
-            request.Headers.Referrer = new Uri($"{_baseUrl}/");
-
-            using var response = await _http.SendAsync(request, ct);
-            if (!response.IsSuccessStatusCode)
-            {
-                Log.Warning("Torrent search returned {Status} from {Url}", response.StatusCode, url);
-
-                // If we get blocked, reset and try another domain next time
-                if (response.StatusCode == HttpStatusCode.Forbidden ||
-                    response.StatusCode == HttpStatusCode.ServiceUnavailable)
-                {
-                    _initialized = false;
-                    _baseUrl = "";
-                }
-                return results;
-            }
-
-            var html = await response.Content.ReadAsStringAsync(ct);
-
-            // Debug: log the first 500 chars to see what we got
-            Log.Debug("Torrent search response length: {Len}, starts with: {Start}",
-                html.Length, html[..Math.Min(200, html.Length)]);
-
-            // Parse the search results table
-            var tableMatch = Regex.Match(html, @"<table[^>]*class=""table-list[^""]*""[^>]*>(.*?)</table>",
-                RegexOptions.Singleline);
-            if (!tableMatch.Success)
-            {
-                // Try tbody directly — some pages structure differently
-                tableMatch = Regex.Match(html, @"<tbody>(.*?)</tbody>", RegexOptions.Singleline);
-            }
-
-            if (!tableMatch.Success)
-            {
-                Log.Debug("No results table found in torrent search response ({Len} bytes)", html.Length);
-                return results;
-            }
-
-            var tableHtml = tableMatch.Groups[1].Value;
-
-            // Parse each row
-            var rowMatches = Regex.Matches(tableHtml, @"<tr[^>]*>(.*?)</tr>", RegexOptions.Singleline);
-            foreach (Match row in rowMatches)
-            {
-                var rowHtml = row.Groups[1].Value;
-
-                // Extract title and detail URL — the second <a> in the name column has the title
-                // Structure: <td class="coll-1 name"><a href="/sub/..." class="icon">...</a><a href="/torrent/...">Title</a></td>
-                var linkMatch = Regex.Match(rowHtml,
-                    @"<a\s+href=""(/torrent/[^""]+)""[^>]*>\s*(.*?)\s*</a>",
-                    RegexOptions.Singleline);
-                if (!linkMatch.Success) continue;
-
-                var detailUrl = linkMatch.Groups[1].Value;
-                // Strip any inner HTML tags from the title
-                var rawTitle = linkMatch.Groups[2].Value;
-                var title = Regex.Replace(rawTitle, @"<[^>]+>", "").Trim();
-                title = WebUtility.HtmlDecode(title);
-
-                if (string.IsNullOrEmpty(title)) continue;
-
-                // Seeds and leeches
-                var slMatch = SeedLeechRegex.Match(rowHtml);
-                var seeds = slMatch.Success && int.TryParse(slMatch.Groups[1].Value, out var s) ? s : 0;
-                var leeches = slMatch.Success && int.TryParse(slMatch.Groups[2].Value, out var l) ? l : 0;
-
-                // Size — text content of the size column, before any <span>
-                var sizeMatch = Regex.Match(rowHtml,
-                    @"<td\s+class=""coll-4[^""]*""[^>]*>\s*([^<]+)",
-                    RegexOptions.Singleline);
-                var size = sizeMatch.Success
-                    ? WebUtility.HtmlDecode(sizeMatch.Groups[1].Value).Trim()
-                    : "";
-
-                results.Add(new TorrentSearchResult(title, detailUrl, seeds, leeches, size, ""));
-            }
-
-            Log.Information("Torrent search for \"{Query}\" returned {Count} results", query, results.Count);
+            Log.Debug("No torrent results from any source for \"{Query}\"", query);
+            return combined;
         }
-        catch (TaskCanceledException) { }
-        catch (Exception ex)
+
+        // Deduplicate by info_hash (embedded in the magnet link)
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var deduped = new List<TorrentSearchResult>();
+        foreach (var r in combined.OrderByDescending(r => r.Seeds))
         {
-            Log.Warning(ex, "Torrent search failed for \"{Query}\"", query);
+            var hash = ExtractInfoHash(r.DetailUrl);
+            if (hash != null && !seen.Add(hash)) continue;
+            deduped.Add(r);
         }
+
+        var results = deduped.Take(30).ToList();
+        Log.Information("Torrent search for \"{Query}\": {Count} results ({ApiBay} apibay + {Solid} solid, {Dupes} dupes removed)",
+            query, results.Count, apibayTask.Result.Count, solidTask.Result.Count,
+            combined.Count - deduped.Count);
 
         return results;
     }
 
-    public async Task<string?> GetMagnetLinkAsync(string detailPath, CancellationToken ct = default)
+    // ── apibay.org (TPB API) ──
+
+    private async Task<List<TorrentSearchResult>> SearchApiBay(string query, CancellationToken ct)
     {
+        var results = new List<TorrentSearchResult>();
         try
         {
-            if (string.IsNullOrEmpty(_baseUrl))
-                await InitializeAsync(ct);
-            if (string.IsNullOrEmpty(_baseUrl))
-                return null;
+            if (!_apibayChecked)
+            {
+                _apibayChecked = true;
+                foreach (var host in ApiBayHosts)
+                {
+                    try
+                    {
+                        var probe = await _http.GetAsync($"{host}/q.php?q=test&cat=0", ct);
+                        if (probe.IsSuccessStatusCode)
+                        {
+                            _apibayHost = host;
+                            Log.Information("apibay available: {Host}", host);
+                            break;
+                        }
+                    }
+                    catch (Exception ex) { Log.Debug(ex, "apibay probe failed for {Host}", host); }
+                }
+            }
 
-            var url = $"{_baseUrl}{detailPath}";
-            Log.Debug("Fetching magnet link from {Url}", url);
+            if (string.IsNullOrEmpty(_apibayHost)) return results;
 
-            using var request = new HttpRequestMessage(HttpMethod.Get, url);
-            request.Headers.Referrer = new Uri($"{_baseUrl}/");
-
-            using var response = await _http.SendAsync(request, ct);
+            var url = $"{_apibayHost}/q.php?q={Uri.EscapeDataString(query)}&cat=0";
+            using var response = await _http.GetAsync(url, ct);
             if (!response.IsSuccessStatusCode)
             {
-                Log.Warning("Magnet page returned {Status}", response.StatusCode);
-                return null;
+                if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.ServiceUnavailable)
+                {
+                    _apibayHost = "";
+                    _apibayChecked = false;
+                }
+                return results;
             }
 
-            var html = await response.Content.ReadAsStringAsync(ct);
-            var match = MagnetRegex.Match(html);
-            if (match.Success)
+            var json = await response.Content.ReadAsStringAsync(ct);
+            var items = JsonSerializer.Deserialize<List<ApiBayResult>>(json, JsonOptions);
+            if (items == null || items.Count == 0) return results;
+            if (items.Count == 1 && items[0].Id == "0") return results;
+
+            foreach (var item in items.Where(i => i.Seeders > 0).OrderByDescending(i => i.Seeders).Take(30))
             {
-                var magnet = WebUtility.HtmlDecode(match.Groups[1].Value);
-                Log.Debug("Found magnet link ({Len} chars)", magnet.Length);
-                return magnet;
+                results.Add(new TorrentSearchResult(
+                    WebUtility.HtmlDecode(item.Name),
+                    BuildMagnetLink(item.InfoHash, item.Name),
+                    item.Seeders,
+                    item.Leechers,
+                    FormatBytes(long.TryParse(item.Size, out var b) ? b : 0),
+                    item.Username));
             }
-
-            Log.Warning("No magnet link found on {Url}", url);
         }
         catch (TaskCanceledException) { }
-        catch (Exception ex)
+        catch (Exception ex) { Log.Warning(ex, "apibay search failed"); }
+        return results;
+    }
+
+    // ── SolidTorrents ──
+
+    private async Task<List<TorrentSearchResult>> SearchSolidTorrents(string query, CancellationToken ct)
+    {
+        var results = new List<TorrentSearchResult>();
+        try
         {
-            Log.Warning(ex, "Failed to get magnet link from {Path}", detailPath);
+            if (!_solidChecked)
+            {
+                _solidChecked = true;
+                try
+                {
+                    var probe = await _http.GetAsync($"{SolidTorrentsApi}?q=test&sort=seeders", ct);
+                    _solidAvailable = probe.IsSuccessStatusCode;
+                    if (_solidAvailable) Log.Information("SolidTorrents API available");
+                }
+                catch (Exception ex)
+                {
+                    Log.Debug(ex, "SolidTorrents probe failed");
+                    _solidAvailable = false;
+                }
+            }
+
+            if (!_solidAvailable) return results;
+
+            var url = $"{SolidTorrentsApi}?q={Uri.EscapeDataString(query)}&category=video&sort=seeders";
+            using var response = await _http.GetAsync(url, ct);
+            if (!response.IsSuccessStatusCode)
+            {
+                if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.ServiceUnavailable)
+                {
+                    _solidAvailable = false;
+                    _solidChecked = false;
+                }
+                return results;
+            }
+
+            var json = await response.Content.ReadAsStringAsync(ct);
+            var data = JsonSerializer.Deserialize<SolidResponse>(json, JsonOptions);
+            if (data?.Results == null || data.Results.Count == 0) return results;
+
+            foreach (var item in data.Results.Where(i => i.Seeders > 0).Take(30))
+            {
+                results.Add(new TorrentSearchResult(
+                    WebUtility.HtmlDecode(item.Title),
+                    BuildMagnetLink(item.InfoHash, item.Title),
+                    item.Seeders,
+                    item.Leechers,
+                    FormatBytes(item.Size),
+                    ""));
+            }
         }
-        return null;
+        catch (TaskCanceledException) { }
+        catch (Exception ex) { Log.Warning(ex, "SolidTorrents search failed"); }
+        return results;
+    }
+
+    /// <summary>
+    /// Returns the magnet link. With API backends, the magnet is stored directly in DetailUrl.
+    /// </summary>
+    public Task<string?> GetMagnetLinkAsync(string detailPath, CancellationToken ct = default)
+    {
+        if (!string.IsNullOrEmpty(detailPath) && detailPath.StartsWith("magnet:"))
+            return Task.FromResult<string?>(detailPath);
+
+        return Task.FromResult<string?>(null);
+    }
+
+    private static string? ExtractInfoHash(string magnetUrl)
+    {
+        if (string.IsNullOrEmpty(magnetUrl)) return null;
+        var idx = magnetUrl.IndexOf("btih:", StringComparison.OrdinalIgnoreCase);
+        if (idx < 0) return null;
+        var start = idx + 5;
+        var end = magnetUrl.IndexOf('&', start);
+        return end > start ? magnetUrl[start..end] : magnetUrl[start..];
+    }
+
+    private static string BuildMagnetLink(string infoHash, string name)
+    {
+        var encodedName = Uri.EscapeDataString(name);
+        return $"magnet:?xt=urn:btih:{infoHash}&dn={encodedName}" +
+               "&tr=udp://tracker.opentrackr.org:1337/announce" +
+               "&tr=udp://open.stealth.si:80/announce" +
+               "&tr=udp://tracker.torrent.eu.org:451/announce" +
+               "&tr=udp://tracker.bittor.pw:1337/announce" +
+               "&tr=udp://tracker.openbittorrent.com:6969/announce";
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes <= 0) return "";
+        if (bytes >= 1L << 30) return $"{bytes / (double)(1L << 30):F1} GB";
+        if (bytes >= 1L << 20) return $"{bytes / (double)(1L << 20):F1} MB";
+        if (bytes >= 1L << 10) return $"{bytes / (double)(1L << 10):F0} KB";
+        return $"{bytes} B";
     }
 
     public void Dispose()
     {
         _http.Dispose();
         GC.SuppressFinalize(this);
+    }
+
+    // ── DTOs ──
+
+    private class ApiBayResult
+    {
+        [JsonPropertyName("id")]
+        public string Id { get; set; } = "";
+
+        [JsonPropertyName("name")]
+        public string Name { get; set; } = "";
+
+        [JsonPropertyName("info_hash")]
+        public string InfoHash { get; set; } = "";
+
+        [JsonPropertyName("seeders")]
+        public int Seeders { get; set; }
+
+        [JsonPropertyName("leechers")]
+        public int Leechers { get; set; }
+
+        [JsonPropertyName("size")]
+        public string Size { get; set; } = "0";
+
+        [JsonPropertyName("username")]
+        public string Username { get; set; } = "";
+
+        [JsonPropertyName("category")]
+        public string Category { get; set; } = "";
+    }
+
+    private class SolidResponse
+    {
+        [JsonPropertyName("results")]
+        public List<SolidResult> Results { get; set; } = [];
+    }
+
+    private class SolidResult
+    {
+        [JsonPropertyName("title")]
+        public string Title { get; set; } = "";
+
+        [JsonPropertyName("infohash")]
+        public string InfoHash { get; set; } = "";
+
+        [JsonPropertyName("seeders")]
+        public int Seeders { get; set; }
+
+        [JsonPropertyName("leechers")]
+        public int Leechers { get; set; }
+
+        [JsonPropertyName("size")]
+        public long Size { get; set; }
     }
 }
