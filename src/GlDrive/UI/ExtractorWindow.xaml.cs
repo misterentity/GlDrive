@@ -549,22 +549,79 @@ public partial class ExtractorWindow : Window
             var dir = Path.GetDirectoryName(archivePath);
             if (dir == null) return;
 
-            File.Delete(archivePath);
-
-            // Also delete volume files (.r00, .r01, .s00, .partNN.rar, etc.)
             var baseName = Path.GetFileNameWithoutExtension(archivePath);
-            // Strip .partNN for modern naming
+            // Strip .partNN for modern multi-part naming
             var pm = Regex.Match(baseName, @"^(.+)\.part\d+$", RegexOptions.IgnoreCase);
-            var searchBase = pm.Success ? pm.Groups[1].Value : baseName;
-            foreach (var file in Directory.GetFiles(dir, $"{searchBase}.*"))
+            var setBase = pm.Success ? pm.Groups[1].Value : baseName;
+
+            // Collect all files belonging to this archive set, then delete them all.
+            // Enumerate the full directory instead of using glob patterns which can
+            // fail on network drives or match incorrectly with 8.3 short names.
+            var toDelete = new List<string>();
+
+            try
             {
-                var ext = Path.GetExtension(file);
-                if (VolumeExtRegex.IsMatch(ext) ||
-                    ext.Equals(".sfv", StringComparison.OrdinalIgnoreCase) ||
-                    RarVolumeFileRegex.IsMatch(Path.GetFileName(file)))
+                foreach (var file in Directory.EnumerateFiles(dir))
                 {
-                    try { File.Delete(file); }
-                    catch (Exception ex) { Log.Warning(ex, "Failed to delete {File}", file); }
+                    var fn = Path.GetFileName(file);
+
+                    // Must start with the set base name
+                    if (!fn.StartsWith(setBase, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    var ext = Path.GetExtension(fn);
+
+                    // The main .rar file
+                    if (file.Equals(archivePath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        toDelete.Add(file);
+                        continue;
+                    }
+
+                    // Old-style volumes: baseName.r00, .r01, .s00, .s01, etc.
+                    if (VolumeExtRegex.IsMatch(ext))
+                    {
+                        toDelete.Add(file);
+                        continue;
+                    }
+
+                    // SFV files
+                    if (ext.Equals(".sfv", StringComparison.OrdinalIgnoreCase))
+                    {
+                        toDelete.Add(file);
+                        continue;
+                    }
+
+                    // Modern multi-part: setBase.part02.rar, .part03.rar, etc.
+                    if (fn.EndsWith(".rar", StringComparison.OrdinalIgnoreCase) &&
+                        Regex.IsMatch(fn, @"\.part\d+\.rar$", RegexOptions.IgnoreCase))
+                    {
+                        toDelete.Add(file);
+                        continue;
+                    }
+
+                    // Split archives: .001, .002, etc (numeric 3+ digit extensions)
+                    if (Regex.IsMatch(ext, @"^\.\d{3,}$"))
+                    {
+                        toDelete.Add(file);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Error enumerating files for cleanup in {Dir}", dir);
+            }
+
+            Log.Information("Deleting {Count} archive files for set {Base}", toDelete.Count, setBase);
+            foreach (var file in toDelete)
+            {
+                try
+                {
+                    File.Delete(file);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "Failed to delete {File}", file);
                 }
             }
         }
