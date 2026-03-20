@@ -270,6 +270,25 @@
                 <TextBox x:Name="SpreadAffilsBox" Margin="0,0,0,12"
                          ToolTip="Groups affiliated with this site — their releases won't be spread here"/>
 
+                <TextBlock Text="Site Skiplist:" Margin="0,0,0,4" FontWeight="SemiBold"/>
+                <DataGrid x:Name="SiteSkiplistGrid"
+                          AutoGenerateColumns="False" CanUserAddRows="False"
+                          SelectionMode="Single" GridLinesVisibility="Horizontal"
+                          HeadersVisibility="Column" Height="120" Margin="0,0,0,8">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Pattern" Binding="{Binding Pattern}" Width="*"/>
+                        <DataGridCheckBoxColumn Header="Regex" Binding="{Binding IsRegex}" Width="55"/>
+                        <DataGridTextColumn Header="Action" Binding="{Binding Action}" Width="70"/>
+                        <DataGridCheckBoxColumn Header="Dirs" Binding="{Binding MatchDirectories}" Width="45"/>
+                        <DataGridCheckBoxColumn Header="Files" Binding="{Binding MatchFiles}" Width="50"/>
+                        <DataGridTextColumn Header="Section" Binding="{Binding Section}" Width="70"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                    <Button Content="Add Rule" Click="AddSiteSkiplistRule_Click" Padding="12,4" Margin="0,0,6,0"/>
+                    <Button Content="Remove" Click="RemoveSiteSkiplistRule_Click" Padding="12,4"/>
+                </StackPanel>
+
                 <Separator Margin="0,4,0,12"/>
 
                 <Button Content="Test Connection" Click="TestConnection_Click"

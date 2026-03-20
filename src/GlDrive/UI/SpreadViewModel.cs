@@ -14,6 +14,7 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
     private readonly ServerManager _serverManager;
     private readonly AppConfig _config;
     private readonly DispatcherTimer _refreshTimer;
+    private Action? _openSettingsAction;
     private string _selectedSection = "";
     private string _spreadReleaseName = "";
     private SpreadJobVm? _selectedSpreadJob;
@@ -48,6 +49,10 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
 
     public ICommand StartRaceCommand { get; }
     public ICommand StopJobCommand { get; }
+    public ICommand OpenSettingsCommand { get; }
+
+    public bool HasSections => SpreadSections.Count > 0;
+    public bool NeedSetup => SpreadSections.Count == 0;
 
     public SpreadViewModel(ServerManager serverManager, AppConfig config)
     {
@@ -56,6 +61,7 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
 
         StartRaceCommand = new RelayCommand(StartRace);
         StopJobCommand = new RelayCommand(StopJob);
+        OpenSettingsCommand = new RelayCommand(() => _openSettingsAction?.Invoke());
 
         // Build union of all server sections
         RefreshSections();
@@ -64,7 +70,7 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         _refreshTimer.Tick += (_, _) => RefreshFromManager();
     }
 
-    private void RefreshSections()
+    public void RefreshSections()
     {
         SpreadSections.Clear();
         var sections = new HashSet<string>();
@@ -78,6 +84,9 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
 
         if (SpreadSections.Count > 0 && string.IsNullOrEmpty(SelectedSection))
             SelectedSection = SpreadSections[0];
+
+        OnPropertyChanged(nameof(HasSections));
+        OnPropertyChanged(nameof(NeedSetup));
     }
 
     private void StartRace()
@@ -171,6 +180,7 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
+    public void SetOpenSettingsAction(Action action) => _openSettingsAction = action;
     public void Activate() => _refreshTimer.Start();
     public void Deactivate() => _refreshTimer.Stop();
 
