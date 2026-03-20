@@ -219,6 +219,16 @@ public static class TrayIconSetup
         };
         menu.Items.Add(installer);
 
+        // Extract Archives
+        var extractor = new MenuItem { Header = "Extract Archives..." };
+        extractor.Click += (_, _) =>
+        {
+            var win = Application.Current.Windows.OfType<ExtractorWindow>().FirstOrDefault();
+            if (win != null) { win.Activate(); }
+            else { new ExtractorWindow().Show(); }
+        };
+        menu.Items.Add(extractor);
+
         // Update
         var updateHeader = vm.AvailableUpdate != null
             ? $"Update to {vm.AvailableUpdate.TagName}"
