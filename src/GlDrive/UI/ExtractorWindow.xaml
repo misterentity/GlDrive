@@ -107,10 +107,25 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
-                <!-- Row 1: Output folder -->
+                <!-- Row 0: Watch folders -->
                 <DockPanel Grid.Row="0" Grid.ColumnSpan="2" Margin="0,0,0,6">
+                    <TextBlock Text="Watch:" Style="{StaticResource SmallLabel}" Width="55"/>
+                    <ToggleButton x:Name="WatchToggle" DockPanel.Dock="Right" Content="Off" Click="WatchToggle_Click"
+                                  Padding="10,2" Margin="6,0,0,0" FontSize="11" Width="50"/>
+                    <Button DockPanel.Dock="Right" Content="+" Click="AddWatchFolder_Click" Padding="8,2" Margin="6,0,0,0"
+                            Style="{StaticResource SecondaryButton}" FontSize="11" ToolTip="Add watch folder"/>
+                    <TextBox x:Name="WatchFoldersText" FontSize="11" Padding="4,3" IsReadOnly="True"
+                             Background="{DynamicResource SurfaceBrush}"
+                             Foreground="{DynamicResource ForegroundDimBrush}"
+                             BorderBrush="{DynamicResource BorderBrush}"
+                             ToolTip="Folders being monitored for new archives (click + to add)"/>
+                </DockPanel>
+
+                <!-- Row 1: Output folder -->
+                <DockPanel Grid.Row="1" Grid.ColumnSpan="2" Margin="0,0,0,6">
                     <TextBlock Text="Output:" Style="{StaticResource SmallLabel}" Width="55"/>
                     <Button DockPanel.Dock="Right" Content="..." Click="BrowseOutput_Click" Padding="8,2" Margin="6,0,0,0"
                             Style="{StaticResource SecondaryButton}" FontSize="11"/>
@@ -128,7 +143,7 @@
                 </DockPanel>
 
                 <!-- Row 2: Options -->
-                <WrapPanel Grid.Row="1" Grid.Column="0" VerticalAlignment="Center">
+                <WrapPanel Grid.Row="2" Grid.Column="0" VerticalAlignment="Center">
                     <CheckBox x:Name="ChkDeleteAfter" Content="Delete after extract" Margin="0,0,14,0"
                               Foreground="{DynamicResource ForegroundBrush}" FontSize="11"/>
                     <CheckBox x:Name="ChkRecursive" Content="Scan subfolders" Margin="0,0,14,0"
@@ -147,7 +162,7 @@
                 </WrapPanel>
 
                 <!-- Password -->
-                <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal">
+                <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal">
                     <TextBlock Text="Password:" Style="{StaticResource SmallLabel}" Margin="0,0,4,0"/>
                     <PasswordBox x:Name="ArchivePassword" Width="120" FontSize="11" Padding="4,3"
                                  Background="{DynamicResource SurfaceBrush}"
