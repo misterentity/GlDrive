@@ -16,6 +16,7 @@ public partial class DashboardWindow : Window
     private bool _preDbLoaded;
     private bool _spreadLoaded;
     private bool _browseLoaded;
+    private bool _worldMonitorLoaded;
     private bool _playerLoaded;
     private Point _dragStartPoint;
     private PlayerViewModel? _playerVm;
@@ -143,11 +144,23 @@ public partial class DashboardWindow : Window
             SpreadTab.DataContext = _spreadVm;
         }
 
+        // Activate/deactivate spread timer only when tab is visible
+        if (header == "Spread")
+            _spreadVm?.Activate();
+        else
+            _spreadVm?.Deactivate();
+
         if (header == "Browse" && !_browseLoaded)
         {
             _browseLoaded = true;
             _browseVm = new BrowseViewModel(_serverManager, _config);
             BrowseTab.DataContext = _browseVm;
+        }
+
+        if (header == "World Monitor" && !_worldMonitorLoaded)
+        {
+            _worldMonitorLoaded = true;
+            _ = WorldMonitorHost.InitializeAsync("https://www.worldmonitor.app/");
         }
     }
 
