@@ -153,6 +153,34 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         }
 
         RefreshScoreboard();
+        RefreshFileTransfers();
+    }
+
+    private void RefreshFileTransfers()
+    {
+        SpreadFileTransfers.Clear();
+
+        if (SelectedSpreadJob == null) return;
+
+        var spread = _serverManager.Spread;
+        if (spread == null) return;
+
+        var job = spread.ActiveJobs.FirstOrDefault(j => j.Id == SelectedSpreadJob.Id);
+        if (job == null) return;
+
+        foreach (var t in job.ActiveTransferList)
+        {
+            SpreadFileTransfers.Add(new SpreadFileVm
+            {
+                FileName = t.FileName,
+                Size = t.FileSize,
+                Source = t.SourceName,
+                Dest = t.DestName,
+                SpeedBps = t.SpeedBps,
+                ProgressPercent = t.ProgressPercent,
+                Status = "Transferring"
+            });
+        }
     }
 
     private void RefreshScoreboard()
