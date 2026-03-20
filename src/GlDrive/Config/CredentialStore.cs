@@ -130,4 +130,38 @@ public static class CredentialStore
             Log.Warning(ex, "Failed to delete IRC credential");
         }
     }
+
+    // SSH credentials for glftpd installer
+
+    private static string GetSshTargetName(string host, int port, string username) =>
+        $"GlDrive:ssh:{host}:{port}:{username}";
+
+    public static string? GetSshPassword(string host, int port, string username)
+    {
+        var target = GetSshTargetName(host, port, username);
+        try
+        {
+            var cred = CredentialManager.ReadCredential(target);
+            return cred?.Password;
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to read SSH credential");
+            return null;
+        }
+    }
+
+    public static void SaveSshPassword(string host, int port, string username, string password)
+    {
+        var target = GetSshTargetName(host, port, username);
+        try
+        {
+            CredentialManager.WriteCredential(target, username, password, CredentialPersistence.LocalMachine);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Failed to save SSH credential");
+            throw;
+        }
+    }
 }

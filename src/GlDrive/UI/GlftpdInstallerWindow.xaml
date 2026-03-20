@@ -1,0 +1,315 @@
+<Window x:Class="GlDrive.UI.GlftpdInstallerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="glFTPd Remote Installer" Width="920" Height="720"
+        MinWidth="800" MinHeight="600"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource BackgroundBrush}"
+        Foreground="{DynamicResource ForegroundBrush}"
+        Closed="Window_Closed">
+
+    <Window.Resources>
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Foreground" Value="{DynamicResource ForegroundDimBrush}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,0,8,0"/>
+            <Setter Property="Width" Value="130"/>
+        </Style>
+        <Style x:Key="FieldBox" TargetType="TextBox">
+            <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+        <Style x:Key="FieldPassword" TargetType="PasswordBox">
+            <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+        <Style x:Key="SectionHeader" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+            <Setter Property="Margin" Value="0,14,0,6"/>
+        </Style>
+        <Style x:Key="ScriptCheck" TargetType="CheckBox">
+            <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
+            <Setter Property="Margin" Value="0,2"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TabControl Grid.Row="0" Margin="10,10,10,0"
+                    Background="Transparent" BorderThickness="0"
+                    x:Name="MainTabs">
+
+            <!-- ═══ CONNECTION TAB ═══ -->
+            <TabItem Header="Connection">
+                <Border Background="{DynamicResource SurfaceBrush}" CornerRadius="6" Padding="20" Margin="0,8,0,0">
+                    <StackPanel MaxWidth="500">
+                        <TextBlock Text="SSH Connection" Style="{StaticResource SectionHeader}" Margin="0,0,0,12"/>
+
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="130"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0" Text="Host" Style="{StaticResource FieldLabel}"/>
+                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="SshHost" Style="{StaticResource FieldBox}" Margin="0,3"/>
+
+                            <TextBlock Grid.Row="1" Text="Port" Style="{StaticResource FieldLabel}"/>
+                            <TextBox Grid.Row="1" Grid.Column="1" x:Name="SshPort" Text="22" Style="{StaticResource FieldBox}" Margin="0,3" MaxWidth="80" HorizontalAlignment="Left"/>
+
+                            <TextBlock Grid.Row="2" Text="Username" Style="{StaticResource FieldLabel}"/>
+                            <TextBox Grid.Row="2" Grid.Column="1" x:Name="SshUsername" Style="{StaticResource FieldBox}" Margin="0,3"/>
+
+                            <TextBlock Grid.Row="3" Text="Password" Style="{StaticResource FieldLabel}"/>
+                            <PasswordBox Grid.Row="3" Grid.Column="1" x:Name="SshPassword" Style="{StaticResource FieldPassword}" Margin="0,3"/>
+
+                            <TextBlock Grid.Row="4" Text="Key File" Style="{StaticResource FieldLabel}"/>
+                            <DockPanel Grid.Row="4" Grid.Column="1" Margin="0,3">
+                                <Button DockPanel.Dock="Right" Content="..." Click="BrowseKeyFile_Click" Padding="8,4" Margin="6,0,0,0"
+                                        Style="{StaticResource SecondaryButton}"/>
+                                <TextBox x:Name="SshKeyFile" Style="{StaticResource FieldBox}"/>
+                            </DockPanel>
+                        </Grid>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                            <Button Content="Connect" Click="Connect_Click" Padding="20,6" Margin="0,0,8,0"
+                                    Style="{StaticResource PrimaryButton}"/>
+                            <Button Content="Disconnect" Click="Disconnect_Click" Padding="20,6"
+                                    Style="{StaticResource SecondaryButton}"/>
+                        </StackPanel>
+
+                        <TextBlock x:Name="ConnectionStatus" Text="Disconnected" Margin="0,12,0,0"
+                                   FontSize="12" Foreground="{DynamicResource ForegroundDimBrush}"/>
+                    </StackPanel>
+                </Border>
+            </TabItem>
+
+            <!-- ═══ CONFIGURATION TAB ═══ -->
+            <TabItem Header="Configuration">
+                <Border Background="{DynamicResource SurfaceBrush}" CornerRadius="6" Margin="0,8,0,0">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="20">
+                        <StackPanel MaxWidth="600">
+
+                            <!-- Server Config -->
+                            <TextBlock Text="Server Config" Style="{StaticResource SectionHeader}"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="130"/><ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition/><RowDefinition/><RowDefinition/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Text="Site Name" Style="{StaticResource FieldLabel}"/>
+                                <TextBox Grid.Row="0" Grid.Column="1" x:Name="Sitename" Style="{StaticResource FieldBox}" Margin="0,3"/>
+                                <TextBlock Grid.Row="1" Text="FTP Port" Style="{StaticResource FieldLabel}"/>
+                                <TextBox Grid.Row="1" Grid.Column="1" x:Name="FtpPort" Text="2010" Style="{StaticResource FieldBox}" Margin="0,3" MaxWidth="80" HorizontalAlignment="Left"/>
+                                <TextBlock Grid.Row="2" Text="Device" Style="{StaticResource FieldLabel}"/>
+                                <TextBox Grid.Row="2" Grid.Column="1" x:Name="Device" Text="/dev/sda1" Style="{StaticResource FieldBox}" Margin="0,3"/>
+                            </Grid>
+
+                            <!-- Router Config -->
+                            <TextBlock Text="Router Config" Style="{StaticResource SectionHeader}"/>
+                            <CheckBox x:Name="BehindRouter" Content="Behind Router" Style="{StaticResource ScriptCheck}" Margin="0,0,0,4"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="130"/><ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Text="Passive Address" Style="{StaticResource FieldLabel}"/>
+                                <TextBox Grid.Row="0" Grid.Column="1" x:Name="PasvAddr" Style="{StaticResource FieldBox}" Margin="0,3"/>
+                                <TextBlock Grid.Row="1" Text="Passive Ports" Style="{StaticResource FieldLabel}"/>
+                                <TextBox Grid.Row="1" Grid.Column="1" x:Name="PasvPorts" Text="6000-7000" Style="{StaticResource FieldBox}" Margin="0,3" MaxWidth="120" HorizontalAlignment="Left"/>
+                            </Grid>
+
+                            <!-- Channel Config -->
+                            <TextBlock Text="Channel Config" Style="{StaticResource SectionHeader}"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="130"/><ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Text="Channels" Style="{StaticResource FieldLabel}"/>
+                                <TextBox Grid.Row="0" Grid.Column="1" x:Name="ChannelNr" Text="2" Style="{StaticResource FieldBox}" Margin="0,3" MaxWidth="50" HorizontalAlignment="Left"/>
+                                <TextBlock Grid.Row="1" Text="Chan 1" Style="{StaticResource FieldLabel}"/>
+                                <TextBox Grid.Row="1" Grid.Column="1" x:Name="ChanName1" Text="#main n nopass" Style="{StaticResource FieldBox}" Margin="0,3"/>
+                                <TextBlock Grid.Row="2" Text="Chan 1 Pass" Style="{StaticResource FieldLabel}"/>
+                                <PasswordBox Grid.Row="2" Grid.Column="1" x:Name="ChanPass1" Style="{StaticResource FieldPassword}" Margin="0,3"/>
+                                <TextBlock Grid.Row="3" Text="Chan 2" Style="{StaticResource FieldLabel}"/>
+                                <TextBox Grid.Row="3" Grid.Column="1" x:Name="ChanName2" Text="#flood y testing" Style="{StaticResource FieldBox}" Margin="0,3"/>
+                                <TextBlock Grid.Row="4" Text="Chan 2 Pass" Style="{StaticResource FieldLabel}"/>
+                                <PasswordBox Grid.Row="4" Grid.Column="1" x:Name="ChanPass2" Style="{StaticResource FieldPassword}" Margin="0,3"/>
+                                <TextBlock Grid.Row="5" Text="Announce" Style="{StaticResource FieldLabel}"/>
+                                <TextBox Grid.Row="5" Grid.Column="1" x:Name="AnnounceChannels" Text="#main #flood" Style="{StaticResource FieldBox}" Margin="0,3"/>
+                                <TextBlock Grid.Row="6" Text="Ops Channel" Style="{StaticResource FieldLabel}"/>
+                                <TextBox Grid.Row="6" Grid.Column="1" x:Name="ChannelOps" Text="#main" Style="{StaticResource FieldBox}" Margin="0,3"/>
+                            </Grid>
+
+                            <!-- IRC Config -->
+                            <TextBlock Text="IRC Config" Style="{StaticResource SectionHeader}"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="130"/><ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Text="Bot Owner Nick" Style="{StaticResource FieldLabel}"/>
+                                <TextBox Grid.Row="0" Grid.Column="1" x:Name="IrcNickname" Text="l337" Style="{StaticResource FieldBox}" Margin="0,3"/>
+                                <TextBlock Grid.Row="1" Text="IRC Server" Style="{StaticResource FieldLabel}"/>
+                                <TextBox Grid.Row="1" Grid.Column="1" x:Name="IrcServer" Text="irc.example.com" Style="{StaticResource FieldBox}" Margin="0,3"/>
+                                <TextBlock Grid.Row="2" Text="IRC Port" Style="{StaticResource FieldLabel}"/>
+                                <TextBox Grid.Row="2" Grid.Column="1" x:Name="IrcPort" Text="6667" Style="{StaticResource FieldBox}" Margin="0,3" MaxWidth="80" HorizontalAlignment="Left"/>
+                                <TextBlock Grid.Row="3" Text="IRC Password" Style="{StaticResource FieldLabel}"/>
+                                <PasswordBox Grid.Row="3" Grid.Column="1" x:Name="IrcPass" Style="{StaticResource FieldPassword}" Margin="0,3"/>
+                                <TextBlock Grid.Row="4" Text="IRC SSL (0/1)" Style="{StaticResource FieldLabel}"/>
+                                <TextBox Grid.Row="4" Grid.Column="1" x:Name="IrcSsl" Text="0" Style="{StaticResource FieldBox}" Margin="0,3" MaxWidth="50" HorizontalAlignment="Left"/>
+                                <TextBlock Grid.Row="5" Text="IRC Ident" Style="{StaticResource FieldLabel}"/>
+                                <TextBox Grid.Row="5" Grid.Column="1" x:Name="IrcIdent" Text="glftpd" Style="{StaticResource FieldBox}" Margin="0,3"/>
+                                <TextBlock Grid.Row="6" Text="IRC Realname" Style="{StaticResource FieldLabel}"/>
+                                <TextBox Grid.Row="6" Grid.Column="1" x:Name="IrcRealname" Text="glFTPd Site Bot" Style="{StaticResource FieldBox}" Margin="0,3"/>
+                            </Grid>
+
+                            <!-- Section Config -->
+                            <TextBlock Text="Section Config" Style="{StaticResource SectionHeader}"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                <TextBlock Text="Sections (1-22):" Style="{StaticResource FieldLabel}" Width="Auto" Margin="0,0,8,0"/>
+                                <TextBox x:Name="SectionCount" Text="3" Style="{StaticResource FieldBox}" Width="50"
+                                         TextChanged="SectionCount_Changed"/>
+                            </StackPanel>
+                            <StackPanel x:Name="SectionsPanel"/>
+
+                            <!-- Optional Scripts -->
+                            <TextBlock Text="Optional Scripts" Style="{StaticResource SectionHeader}"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                <Button Content="Select All" Click="SelectAllScripts_Click" Padding="12,4" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}" FontSize="11"/>
+                                <Button Content="Deselect All" Click="DeselectAllScripts_Click" Padding="12,4" Style="{StaticResource SecondaryButton}" FontSize="11"/>
+                            </StackPanel>
+                            <WrapPanel>
+                                <CheckBox x:Name="ChkEur0presystem" Content="Eur0-pre-system" Style="{StaticResource ScriptCheck}" Width="170"/>
+                                <CheckBox x:Name="ChkSlvprebw" Content="Slv-PreBW" Style="{StaticResource ScriptCheck}" Width="170"/>
+                                <CheckBox x:Name="ChkIrcadmin" Content="Tur-Ircadmin" Style="{StaticResource ScriptCheck}" Width="170"/>
+                                <CheckBox x:Name="ChkRequest" Content="Tur-Request" Style="{StaticResource ScriptCheck}" Width="170"/>
+                                <CheckBox x:Name="ChkTrial" Content="Tur-Trial" Style="{StaticResource ScriptCheck}" Width="170"/>
+                                <CheckBox x:Name="ChkVacation" Content="Tur-Vacation" Style="{StaticResource ScriptCheck}" Width="170"/>
+                                <CheckBox x:Name="ChkWhereami" Content="Whereami" Style="{StaticResource ScriptCheck}" Width="170"/>
+                                <CheckBox x:Name="ChkPrecheck" Content="Precheck" Style="{StaticResource ScriptCheck}" Width="170"/>
+                                <CheckBox x:Name="ChkAutonuke" Content="Tur-Autonuke" Style="{StaticResource ScriptCheck}" Width="170"/>
+                                <CheckBox x:Name="ChkPsxcimdb" Content="PSXC-IMDB" Style="{StaticResource ScriptCheck}" Width="170"/>
+                                <CheckBox x:Name="ChkAddip" Content="Tur-Addip" Style="{StaticResource ScriptCheck}" Width="170"/>
+                                <CheckBox x:Name="ChkTop" Content="Top" Style="{StaticResource ScriptCheck}" Width="170"/>
+                                <CheckBox x:Name="ChkIrcnick" Content="Ircnick" Style="{StaticResource ScriptCheck}" Width="170"/>
+                                <CheckBox x:Name="ChkArchiver" Content="Tur-Archiver" Style="{StaticResource ScriptCheck}" Width="170"/>
+                                <CheckBox x:Name="ChkSectionTraffic" Content="Section-Traffic" Style="{StaticResource ScriptCheck}" Width="170"/>
+                                <CheckBox x:Name="ChkBotnuke" Content="Botnuke" Style="{StaticResource ScriptCheck}" Width="170"/>
+                            </WrapPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                <TextBlock Text="PSXC-IMDB Chan" Style="{StaticResource FieldLabel}" Width="Auto" Margin="0,0,8,0"/>
+                                <TextBox x:Name="PsxcImdbChan" Text="#main" Style="{StaticResource FieldBox}" Width="140"/>
+                            </StackPanel>
+
+                            <!-- Admin Account -->
+                            <TextBlock Text="Admin Account" Style="{StaticResource SectionHeader}"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="130"/><ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Text="Username" Style="{StaticResource FieldLabel}"/>
+                                <TextBox Grid.Row="0" Grid.Column="1" x:Name="AdminUsername" Text="admin" Style="{StaticResource FieldBox}" Margin="0,3"/>
+                                <TextBlock Grid.Row="1" Text="Password" Style="{StaticResource FieldLabel}"/>
+                                <PasswordBox Grid.Row="1" Grid.Column="1" x:Name="AdminPassword" Style="{StaticResource FieldPassword}" Margin="0,3"/>
+                                <TextBlock Grid.Row="2" Text="IP Mask" Style="{StaticResource FieldLabel}"/>
+                                <TextBox Grid.Row="2" Grid.Column="1" x:Name="AdminIp" Text="*@192.168.1.*" Style="{StaticResource FieldBox}" Margin="0,3"/>
+                            </Grid>
+
+                            <!-- Actions -->
+                            <StackPanel Orientation="Horizontal" Margin="0,20,0,10">
+                                <Button x:Name="InstallButton" Content="Start Installation" Click="Install_Click" Padding="20,8" Margin="0,0,10,0"
+                                        Style="{StaticResource PrimaryButton}" FontSize="13"/>
+                                <Button Content="Save Profile" Click="SaveProfile_Click" Padding="14,6" Margin="0,0,6,0"
+                                        Style="{StaticResource SecondaryButton}"/>
+                                <Button Content="Load Profile" Click="LoadProfile_Click" Padding="14,6"
+                                        Style="{StaticResource SecondaryButton}"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Border>
+            </TabItem>
+
+            <!-- ═══ LOG TAB ═══ -->
+            <TabItem Header="Install Log" x:Name="LogTab">
+                <Border Background="{DynamicResource SurfaceBrush}" CornerRadius="6" Padding="12" Margin="0,8,0,0">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- Toolbar -->
+                        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+                            <Button Content="Clear" Click="ClearLog_Click" Padding="12,4" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}" FontSize="11"/>
+                            <Button Content="Export Log" Click="ExportLog_Click" Padding="12,4" Style="{StaticResource SecondaryButton}" FontSize="11"/>
+                        </StackPanel>
+
+                        <!-- Progress -->
+                        <Grid Grid.Row="1" Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" x:Name="ProgressLabel" Text="READY" FontWeight="SemiBold" FontSize="12"
+                                       Foreground="{DynamicResource AccentBrush}" Margin="0,0,12,0" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" x:Name="StepLabel" FontSize="11" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,12,0"/>
+                            <ProgressBar Grid.Column="2" x:Name="ProgressBar" Height="16" Minimum="0" Maximum="100"
+                                         Background="{DynamicResource BackgroundBrush}" Foreground="{DynamicResource AccentBrush}"/>
+                            <TextBlock Grid.Column="3" x:Name="ElapsedLabel" FontSize="11" FontFamily="Consolas"
+                                       Foreground="{DynamicResource AccentBrush}" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                        </Grid>
+
+                        <!-- Log output -->
+                        <TextBox Grid.Row="2" x:Name="LogOutput"
+                                 IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
+                                 VerticalScrollBarVisibility="Auto"
+                                 FontFamily="Consolas" FontSize="11"
+                                 Background="{DynamicResource BackgroundBrush}"
+                                 Foreground="{DynamicResource ForegroundBrush}"
+                                 BorderThickness="1" BorderBrush="{DynamicResource BorderBrush}"/>
+                    </Grid>
+                </Border>
+            </TabItem>
+        </TabControl>
+
+        <!-- Status bar -->
+        <Border Grid.Row="1" Background="{DynamicResource SurfaceBrush}" Padding="10,6">
+            <TextBlock x:Name="StatusBar" Text="Disconnected" FontSize="11"
+                       Foreground="{DynamicResource ForegroundDimBrush}"/>
+        </Border>
+    </Grid>
+</Window>
