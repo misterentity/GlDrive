@@ -4,7 +4,6 @@ using System.Runtime.CompilerServices;
 using System.Windows.Input;
 using FluentFTP;
 using GlDrive.Config;
-using GlDrive.Ftp;
 using GlDrive.Services;
 using GlDrive.Spread;
 using Serilog;
@@ -20,15 +19,28 @@ public class BrowseViewModel : INotifyPropertyChanged, IDisposable
     private string _rightServer = "";
     private string _rightPath = "/";
     private bool _isBusy;
+    private bool _initializing = true;
+    private CancellationTokenSource? _leftCts;
+    private CancellationTokenSource? _rightCts;
 
     public ObservableCollection<BrowseItemVm> LeftItems { get; } = new();
     public ObservableCollection<BrowseItemVm> RightItems { get; } = new();
     public ObservableCollection<string> ServerList { get; } = new();
 
+    // Selected items for FXP (bound from DataGrid)
+    public BrowseItemVm? SelectedLeftItem { get; set; }
+    public BrowseItemVm? SelectedRightItem { get; set; }
+
     public string LeftServer
     {
         get => _leftServer;
-        set { _leftServer = value; OnPropertyChanged(); _ = LoadLeft(); }
+        set
+        {
+            if (_leftServer == value) return;
+            _leftServer = value;
+            OnPropertyChanged();
+            if (!_initializing) _ = LoadLeftAsync();
+        }
     }
 
     public string LeftPath
@@ -40,7 +52,13 @@ public class BrowseViewModel : INotifyPropertyChanged, IDisposable
     public string RightServer
     {
         get => _rightServer;
-        set { _rightServer = value; OnPropertyChanged(); _ = LoadRight(); }
+        set
+        {
+            if (_rightServer == value) return;
+            _rightServer = value;
+            OnPropertyChanged();
+            if (!_initializing) _ = LoadRightAsync();
+        }
     }
 
     public string RightPath
@@ -67,28 +85,34 @@ public class BrowseViewModel : INotifyPropertyChanged, IDisposable
         _serverManager = serverManager;
         _config = config;
 
-        LeftGoCommand = new RelayCommand(async () => await LoadLeft());
-        RightGoCommand = new RelayCommand(async () => await LoadRight());
+        LeftGoCommand = new RelayCommand(async () => await LoadLeftAsync());
+        RightGoCommand = new RelayCommand(async () => await LoadRightAsync());
         FxpRightCommand = new RelayCommand(async () => await FxpToRight());
         FxpLeftCommand = new RelayCommand(async () => await FxpToLeft());
         LeftDoubleClickCommand = new RelayCommand<BrowseItemVm>(async item => await NavigateLeft(item));
         RightDoubleClickCommand = new RelayCommand<BrowseItemVm>(async item => await NavigateRight(item));
 
-        RefreshServerList();
-    }
-
-    private void RefreshServerList()
-    {
-        ServerList.Clear();
+        // Populate server list without triggering loads
         foreach (var server in _serverManager.GetMountedServers())
             ServerList.Add(server.ServerName);
 
         if (ServerList.Count > 0)
         {
-            LeftServer = ServerList[0];
-            if (ServerList.Count > 1) RightServer = ServerList[1];
-            else RightServer = ServerList[0];
+            _leftServer = ServerList[0];
+            _rightServer = ServerList.Count > 1 ? ServerList[1] : ServerList[0];
+            OnPropertyChanged(nameof(LeftServer));
+            OnPropertyChanged(nameof(RightServer));
         }
+
+        _initializing = false;
+
+        // Fire both initial loads in parallel
+        _ = LoadBothAsync();
+    }
+
+    private async Task LoadBothAsync()
+    {
+        await Task.WhenAll(LoadLeftAsync(), LoadRightAsync());
     }
 
     private MountService? FindServer(string name)
@@ -96,23 +120,41 @@ public class BrowseViewModel : INotifyPropertyChanged, IDisposable
         return _serverManager.GetMountedServers().FirstOrDefault(s => s.ServerName == name);
     }
 
-    private async Task LoadPane(string serverName, string path,
-        ObservableCollection<BrowseItemVm> items)
+    private CancellationTokenSource SwapCts(bool isLeft)
     {
+        if (isLeft)
+        {
+            _leftCts?.Cancel();
+            _leftCts = new CancellationTokenSource();
+            return _leftCts;
+        }
+        _rightCts?.Cancel();
+        _rightCts = new CancellationTokenSource();
+        return _rightCts;
+    }
+
+    private async Task LoadPaneAsync(string serverName, string path,
+        ObservableCollection<BrowseItemVm> items, bool isLeft)
+    {
+        var newCts = SwapCts(isLeft);
+        var ct = newCts.Token;
+
         var server = FindServer(serverName);
         if (server?.Ftp == null) return;
 
         IsBusy = true;
         try
         {
-            var listing = await server.Ftp.ListDirectory(path);
+            // Do the FTP listing off the UI thread
+            var listing = await Task.Run(() => server.Ftp.ListDirectory(path, ct), ct);
+            ct.ThrowIfCancellationRequested();
 
-            items.Clear();
+            // Build the full list in memory first, then swap into the collection in one batch
+            var newItems = new List<BrowseItemVm>();
 
-            // Add parent entry
             if (path != "/")
             {
-                items.Add(new BrowseItemVm
+                newItems.Add(new BrowseItemVm
                 {
                     Name = "..",
                     IsDirectory = true,
@@ -120,9 +162,11 @@ public class BrowseViewModel : INotifyPropertyChanged, IDisposable
                 });
             }
 
-            foreach (var item in listing.OrderByDescending(i => i.Type == FtpObjectType.Directory).ThenBy(i => i.Name))
+            foreach (var item in listing
+                .OrderByDescending(i => i.Type == FtpObjectType.Directory)
+                .ThenBy(i => i.Name))
             {
-                items.Add(new BrowseItemVm
+                newItems.Add(new BrowseItemVm
                 {
                     Name = item.Name,
                     Size = item.Size,
@@ -131,59 +175,69 @@ public class BrowseViewModel : INotifyPropertyChanged, IDisposable
                     FullPath = item.FullName
                 });
             }
+
+            ct.ThrowIfCancellationRequested();
+
+            // Single UI update: clear + bulk add
+            items.Clear();
+            foreach (var vm in newItems)
+                items.Add(vm);
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex)
         {
             Log.Warning(ex, "Browse failed: {Server} {Path}", serverName, path);
         }
         finally
         {
-            IsBusy = false;
+            // Only clear busy if this is still the latest request
+            if ((isLeft ? _leftCts : _rightCts) == newCts)
+                IsBusy = false;
         }
     }
 
-    private async Task LoadLeft()
+    private Task LoadLeftAsync()
     {
-        if (string.IsNullOrEmpty(LeftServer)) return;
-        await LoadPane(LeftServer, LeftPath, LeftItems);
+        if (string.IsNullOrEmpty(LeftServer)) return Task.CompletedTask;
+        return LoadPaneAsync(LeftServer, LeftPath, LeftItems, isLeft: true);
     }
 
-    private async Task LoadRight()
+    private Task LoadRightAsync()
     {
-        if (string.IsNullOrEmpty(RightServer)) return;
-        await LoadPane(RightServer, RightPath, RightItems);
+        if (string.IsNullOrEmpty(RightServer)) return Task.CompletedTask;
+        return LoadPaneAsync(RightServer, RightPath, RightItems, isLeft: false);
     }
 
     private async Task NavigateLeft(BrowseItemVm? item)
     {
         if (item == null || !item.IsDirectory) return;
         LeftPath = item.FullPath;
-        await LoadLeft();
+        await LoadLeftAsync();
     }
 
     private async Task NavigateRight(BrowseItemVm? item)
     {
         if (item == null || !item.IsDirectory) return;
         RightPath = item.FullPath;
-        await LoadRight();
+        await LoadRightAsync();
     }
 
     private async Task FxpToRight()
     {
-        var selected = LeftItems.Where(i => i.Name != "..").ToList();
-        await DoFxp(LeftServer, RightServer, selected, RightPath);
-        await LoadRight();
+        if (SelectedLeftItem == null || SelectedLeftItem.Name == "..") return;
+        await DoFxp(LeftServer, RightServer, SelectedLeftItem, RightPath);
+        await LoadRightAsync();
     }
 
     private async Task FxpToLeft()
     {
-        var selected = RightItems.Where(i => i.Name != "..").ToList();
-        await DoFxp(RightServer, LeftServer, selected, LeftPath);
-        await LoadLeft();
+        if (SelectedRightItem == null || SelectedRightItem.Name == "..") return;
+        await DoFxp(RightServer, LeftServer, SelectedRightItem, LeftPath);
+        await LoadLeftAsync();
     }
 
     private async Task DoFxp(string srcName, string dstName,
-        IReadOnlyList<BrowseItemVm> items, string dstPath)
+        BrowseItemVm item, string dstPath)
     {
         var spread = _serverManager.Spread;
         if (spread == null) return;
@@ -195,13 +249,10 @@ public class BrowseViewModel : INotifyPropertyChanged, IDisposable
         IsBusy = true;
         try
         {
-            foreach (var item in items)
-            {
-                if (item.IsDirectory) continue; // TODO: recursive FXP
-                var destFile = dstPath.TrimEnd('/') + "/" + item.Name;
-                await spread.StartFxp(srcServer.ServerId, item.FullPath,
-                    dstServer.ServerId, destFile, CancellationToken.None);
-            }
+            if (item.IsDirectory) return;
+            var destFile = dstPath.TrimEnd('/') + "/" + item.Name;
+            await Task.Run(() => spread.StartFxp(srcServer.ServerId, item.FullPath,
+                dstServer.ServerId, destFile, CancellationToken.None));
         }
         catch (Exception ex)
         {
@@ -226,6 +277,10 @@ public class BrowseViewModel : INotifyPropertyChanged, IDisposable
 
     public void Dispose()
     {
+        _leftCts?.Cancel();
+        _rightCts?.Cancel();
+        _leftCts?.Dispose();
+        _rightCts?.Dispose();
         GC.SuppressFinalize(this);
     }
 }

@@ -1058,7 +1058,33 @@
 
             <!-- Spread Tab -->
             <TabItem Header="Spread" x:Name="SpreadTab">
-                <DockPanel Margin="12">
+                <Grid Margin="12">
+                    <!-- Setup Guide (shown when no sections configured) -->
+                    <Border Visibility="{Binding NeedSetup, Converter={StaticResource BoolToVisibility}}"
+                            Background="{DynamicResource SurfaceBrush}" CornerRadius="8"
+                            Padding="30" VerticalAlignment="Center" HorizontalAlignment="Center"
+                            MaxWidth="600">
+                        <StackPanel>
+                            <TextBlock Text="Spread / FXP Setup" FontSize="20" FontWeight="Bold"
+                                       Foreground="{DynamicResource ForegroundBrush}" Margin="0,0,0,16"/>
+                            <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" FontSize="13" Margin="0,0,0,12"
+                                       Text="The Spread engine lets you race and FXP releases between your connected servers. To get started:"/>
+                            <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" FontSize="13" Margin="12,0,0,4"
+                                       Text="1. Open Settings and edit each server you want to use for spreading."/>
+                            <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" FontSize="13" Margin="12,0,0,4"
+                                       Text="2. In the Spread / FXP section, add your sections (e.g. MP3=/site/mp3, 0DAY=/site/0day)."/>
+                            <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" FontSize="13" Margin="12,0,0,4"
+                                       Text="3. Set priority, upload/download slot limits, and optionally add skiplist rules."/>
+                            <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" FontSize="13" Margin="12,0,0,4"
+                                       Text="4. In the global Spread settings tab, configure pool size and timeouts."/>
+                            <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" FontSize="13" Margin="12,0,0,16"
+                                       Text="5. Once at least 2 servers share a section, you can start races from this tab."/>
+                            <Button Content="Open Settings" Command="{Binding OpenSettingsCommand}"
+                                    Padding="16,8" HorizontalAlignment="Left" Style="{StaticResource PrimaryButton}"/>
+                        </StackPanel>
+                    </Border>
+                    <!-- Main spread UI (shown when sections exist) -->
+                    <DockPanel Visibility="{Binding HasSections, Converter={StaticResource BoolToVisibility}}">
                     <!-- Toolbar -->
                     <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
                             CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
@@ -1072,7 +1098,9 @@
                                       Width="120" Margin="0,0,6,0" ToolTip="Section"/>
                             <TextBox Text="{Binding SpreadReleaseName, UpdateSourceTrigger=PropertyChanged}"
                                      Width="280" VerticalContentAlignment="Center"
-                                     ToolTip="Release name"/>
+                                     ToolTip="Release name" Margin="0,0,6,0"/>
+                            <Button Content="Settings" Command="{Binding OpenSettingsCommand}"
+                                    Padding="12,6" Style="{StaticResource SecondaryButton}"/>
                         </StackPanel>
                     </Border>
                     <!-- Scoreboard (bottom) -->
@@ -1129,6 +1157,7 @@
                         </DataGrid>
                     </Grid>
                 </DockPanel>
+                </Grid>
             </TabItem>
 
             <!-- Browse Tab -->
@@ -1152,9 +1181,13 @@
                                         Padding="12,4" Style="{StaticResource SecondaryButton}"/>
                             </StackPanel>
                             <DataGrid ItemsSource="{Binding LeftItems}"
+                                      SelectedItem="{Binding SelectedLeftItem}"
                                       AutoGenerateColumns="False" IsReadOnly="True"
-                                      SelectionMode="Extended" GridLinesVisibility="Horizontal"
-                                      HeadersVisibility="Column" CanUserAddRows="False">
+                                      SelectionMode="Single" GridLinesVisibility="Horizontal"
+                                      HeadersVisibility="Column" CanUserAddRows="False"
+                                      VirtualizingPanel.IsVirtualizing="True"
+                                      VirtualizingPanel.VirtualizationMode="Recycling"
+                                      EnableRowVirtualization="True">
                                 <DataGrid.InputBindings>
                                     <MouseBinding Gesture="LeftDoubleClick"
                                                   Command="{Binding LeftDoubleClickCommand}"
@@ -1186,9 +1219,13 @@
                                         Padding="12,4" Style="{StaticResource SecondaryButton}"/>
                             </StackPanel>
                             <DataGrid ItemsSource="{Binding RightItems}"
+                                      SelectedItem="{Binding SelectedRightItem}"
                                       AutoGenerateColumns="False" IsReadOnly="True"
-                                      SelectionMode="Extended" GridLinesVisibility="Horizontal"
-                                      HeadersVisibility="Column" CanUserAddRows="False">
+                                      SelectionMode="Single" GridLinesVisibility="Horizontal"
+                                      HeadersVisibility="Column" CanUserAddRows="False"
+                                      VirtualizingPanel.IsVirtualizing="True"
+                                      VirtualizingPanel.VirtualizationMode="Recycling"
+                                      EnableRowVirtualization="True">
                                 <DataGrid.InputBindings>
                                     <MouseBinding Gesture="LeftDoubleClick"
                                                   Command="{Binding RightDoubleClickCommand}"

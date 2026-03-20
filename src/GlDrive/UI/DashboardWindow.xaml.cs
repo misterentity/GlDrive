@@ -141,6 +141,12 @@ public partial class DashboardWindow : Window
         {
             _spreadLoaded = true;
             _spreadVm = new SpreadViewModel(_serverManager, _config);
+            _spreadVm.SetOpenSettingsAction(() =>
+            {
+                var window = new SettingsWindow(_config, _serverManager) { Owner = this };
+                window.ShowDialog();
+                _spreadVm?.RefreshSections();
+            });
             SpreadTab.DataContext = _spreadVm;
         }
 

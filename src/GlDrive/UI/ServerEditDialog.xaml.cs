@@ -5,6 +5,7 @@ using FluentFTP;
 using FluentFTP.GnuTLS;
 using FluentFTP.GnuTLS.Enums;
 using FluentFTP.Proxy.AsyncProxy;
+using System.Collections.ObjectModel;
 using GlDrive.Config;
 using GlDrive.Ftp;
 using Serilog;
@@ -15,6 +16,7 @@ namespace GlDrive.UI;
 public partial class ServerEditDialog : Window
 {
     private readonly ServerConfig _serverConfig;
+    private readonly ObservableCollection<SkiplistRule> _siteSkiplist = new();
     private string _password = "";
 
     public ServerConfig Result => _serverConfig;
@@ -24,6 +26,8 @@ public partial class ServerEditDialog : Window
         InitializeComponent();
 
         _serverConfig = existing ?? new ServerConfig();
+
+        SiteSkiplistGrid.ItemsSource = _siteSkiplist;
 
         // Populate drive letter combo
         var used = DriveInfo.GetDrives().Select(d => d.Name[0]).ToHashSet();
@@ -133,6 +137,9 @@ public partial class ServerEditDialog : Window
             SpreadMaxDownBox.Text = existing.SpreadSite.MaxDownloadSlots.ToString();
             SpreadDownloadOnlyBox.IsChecked = existing.SpreadSite.DownloadOnly;
             SpreadAffilsBox.Text = string.Join(", ", existing.SpreadSite.Affils);
+
+            foreach (var rule in existing.SpreadSite.Skiplist)
+                _siteSkiplist.Add(rule);
 
             // Load stored password hint
             var storedPw = CredentialStore.GetPassword(existing.Connection.Host, existing.Connection.Port, existing.Connection.Username);
@@ -337,6 +344,7 @@ public partial class ServerEditDialog : Window
         _serverConfig.SpreadSite.Affils = (SpreadAffilsBox.Text ?? "")
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(s => s.Length > 0).ToList();
+        _serverConfig.SpreadSite.Skiplist = _siteSkiplist.ToList();
 
         // Save IRC password
         if (!string.IsNullOrEmpty(IrcPasswordBox.Password) && !string.IsNullOrEmpty(_serverConfig.Irc.Host)
@@ -470,6 +478,17 @@ public partial class ServerEditDialog : Window
             DiscoverResultText.Text = $"Discovery failed: {ex.Message}";
             Log.Warning(ex, "Path discovery failed");
         }
+    }
+
+    private void AddSiteSkiplistRule_Click(object sender, RoutedEventArgs e)
+    {
+        _siteSkiplist.Add(new SkiplistRule());
+    }
+
+    private void RemoveSiteSkiplistRule_Click(object sender, RoutedEventArgs e)
+    {
+        if (SiteSkiplistGrid.SelectedItem is SkiplistRule rule)
+            _siteSkiplist.Remove(rule);
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e)
