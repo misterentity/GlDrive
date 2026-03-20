@@ -63,6 +63,9 @@
                         <StackPanel Orientation="Horizontal">
                             <Button Content="Download" Command="{Binding DownloadNotificationCommand}"
                                     Padding="12,6" Margin="0,0,6,0" Style="{StaticResource PrimaryButton}"/>
+                            <Button Content="Race" Command="{Binding RaceNotificationCommand}"
+                                    Padding="12,6" Margin="0,0,6,0" Style="{StaticResource PrimaryButton}"
+                                    ToolTip="Start FXP race for selected release across all configured servers"/>
                             <Button Content="Clear All" Command="{Binding ClearNotificationsCommand}"
                                     Padding="12,6" Margin="0,0,12,0" Style="{StaticResource SecondaryButton}"/>
                             <TextBox Text="{Binding NotificationFilterText, UpdateSourceTrigger=PropertyChanged}"

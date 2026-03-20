@@ -12,6 +12,7 @@ using System.Windows.Threading;
 using GlDrive.Config;
 using GlDrive.Downloads;
 using GlDrive.Services;
+using GlDrive.Spread;
 using Microsoft.Win32;
 using Serilog;
 
@@ -383,6 +384,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     public ICommand RefreshMetadataCommand { get; }
     public ICommand ClearNotificationsCommand { get; }
     public ICommand DownloadNotificationCommand { get; }
+    public ICommand RaceNotificationCommand { get; }
     public ICommand LoadUpcomingCommand { get; }
     public ICommand AddUpcomingToWishlistCommand { get; }
     public ICommand MoveUpCommand { get; }
@@ -415,6 +417,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         ClearCompletedCommand = new RelayCommand(ClearCompleted);
         ClearNotificationsCommand = new RelayCommand(ClearNotifications);
         DownloadNotificationCommand = new RelayCommand(DownloadNotification);
+        RaceNotificationCommand = new RelayCommand(RaceNotification);
         SearchCommand = new RelayCommand(async () => await PerformSearch());
         CancelSearchCommand = new RelayCommand(CancelSearch);
         DownloadSearchResultCommand = new RelayCommand(DownloadSearchResult);
@@ -1310,6 +1313,41 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             return;
         }
         RefreshDownloads();
+    }
+
+    private void RaceNotification()
+    {
+        if (SelectedNotificationItem == null) return;
+
+        var n = SelectedNotificationItem;
+        var spread = _serverManager.Spread;
+        if (spread == null) return;
+
+        // Determine section from category
+        var section = n.Category;
+
+        // Find all servers with this section configured
+        var serverIds = _config.Servers
+            .Where(s => s.Enabled && s.SpreadSite.Sections.ContainsKey(section))
+            .Select(s => s.Id)
+            .Where(id => spread.GetConnectedServerIds().Contains(id))
+            .ToList();
+
+        if (serverIds.Count < 2)
+        {
+            SearchStatus = $"Cannot race: need 2+ servers with section \"{section}\" configured";
+            return;
+        }
+
+        try
+        {
+            spread.StartRace(section, n.ReleaseName, serverIds, Spread.SpreadMode.Race);
+            SearchStatus = $"Race started: {n.ReleaseName} across {serverIds.Count} servers";
+        }
+        catch (Exception ex)
+        {
+            SearchStatus = $"Race failed: {ex.Message}";
+        }
     }
 
     private void ClearNotifications()

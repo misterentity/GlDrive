@@ -250,6 +250,14 @@ public class BrowseViewModel : INotifyPropertyChanged, IDisposable
         try
         {
             if (item.IsDirectory) return;
+
+            // Ensure dest directory exists before FXP
+            if (dstServer.Pool != null)
+            {
+                await using var conn = await dstServer.Pool.Borrow(CancellationToken.None);
+                await conn.Client.Execute($"MKD {dstPath}", CancellationToken.None);
+            }
+
             var destFile = dstPath.TrimEnd('/') + "/" + item.Name;
             await Task.Run(() => spread.StartFxp(srcServer.ServerId, item.FullPath,
                 dstServer.ServerId, destFile, CancellationToken.None));

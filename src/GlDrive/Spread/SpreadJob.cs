@@ -37,9 +37,13 @@ public class SpreadJob : IDisposable
     private readonly Dictionary<string, SpreadFileInfo> _fileInfos = new();
     private readonly Dictionary<string, SiteProgress> _siteProgress = new();
     private int _expectedFileCount;
+    private (string serverId, string path)? _pendingSfv;
 
     // Transfer failure tracking: "file|src|dst" -> failure count
     private readonly Dictionary<string, int> _failureCounts = new();
+
+    // Active transfer tracking for UI
+    private readonly Dictionary<string, ActiveTransferInfo> _activeTransfers = new();
 
     public string Id { get; } = Guid.NewGuid().ToString("N")[..8];
     public string ReleaseName { get; }
@@ -48,6 +52,10 @@ public class SpreadJob : IDisposable
     public SpreadJobState State { get; private set; } = SpreadJobState.Running;
     public DateTime StartedAt { get; } = DateTime.UtcNow;
     public IReadOnlyDictionary<string, SiteProgress> Sites => _siteProgress;
+    public IReadOnlyList<ActiveTransferInfo> ActiveTransferList
+    {
+        get { lock (_lock) return _activeTransfers.Values.ToList(); }
+    }
 
     public event Action<SpreadJob>? ProgressChanged;
     public event Action<SpreadJob>? Completed;
@@ -115,6 +123,13 @@ public class SpreadJob : IDisposable
             {
                 // 1. Scan all sites for files
                 await ScanSites(sitePaths, token);
+
+                // Parse SFV if discovered during scan
+                if (_pendingSfv is { } sfv && _expectedFileCount == 0)
+                {
+                    _pendingSfv = null;
+                    await ParseSfvForCount(sfv.serverId, sfv.path);
+                }
 
                 // 2. Find transfers to execute
                 var transfer = FindBestTransfer(sitePaths, scorer);
@@ -225,9 +240,9 @@ public class SpreadJob : IDisposable
                     };
                 }
 
-                // Parse SFV to get expected file count
+                // Parse SFV to get expected file count (queued, not fire-and-forget)
                 if (item.Name.EndsWith(".sfv", StringComparison.OrdinalIgnoreCase) && _expectedFileCount == 0)
-                    _ = ParseSfvForCount(serverId, item.FullName);
+                    _pendingSfv = (serverId, item.FullName);
             }
 
             // Update site progress
@@ -307,6 +322,14 @@ public class SpreadJob : IDisposable
                         var dstConfig = _serverConfigs[dstId];
                         if (dstConfig.SpreadSite.DownloadOnly) continue;
 
+                        // Check affiliation — don't spread affil group releases to this site
+                        if (dstConfig.SpreadSite.Affils.Count > 0)
+                        {
+                            var isAffil = dstConfig.SpreadSite.Affils.Any(g =>
+                                ReleaseName.Contains(g, StringComparison.OrdinalIgnoreCase));
+                            if (isAffil) continue;
+                        }
+
                         // Check slot limits
                         var dstProgress = _siteProgress[dstId];
                         if (dstProgress.ActiveTransfers >= dstConfig.SpreadSite.MaxUploadSlots) continue;
@@ -381,21 +404,36 @@ public class SpreadJob : IDisposable
 
             var transfer = new FxpTransfer();
             var startTime = DateTime.UtcNow;
+            var transferKey = $"{file.Name}|{srcId}->{dstId}";
+
+            var info = new ActiveTransferInfo
+            {
+                FileName = file.Name,
+                FileSize = file.Size,
+                SourceName = _serverConfigs[srcId].Name,
+                DestName = _serverConfigs[dstId].Name
+            };
+
+            lock (_lock) _activeTransfers[transferKey] = info;
 
             transfer.BytesTransferred += bytes =>
             {
+                var elapsed = (DateTime.UtcNow - startTime).TotalSeconds;
                 lock (_lock)
                 {
                     _siteProgress[dstId].BytesTransferred += bytes;
-                    var elapsed = (DateTime.UtcNow - startTime).TotalSeconds;
                     if (elapsed > 0)
                         _siteProgress[dstId].SpeedBps = bytes / elapsed;
+                    info.BytesTransferred = bytes;
+                    info.SpeedBps = elapsed > 0 ? bytes / elapsed : 0;
                 }
                 ProgressChanged?.Invoke(this);
             };
 
             var ok = await transfer.ExecuteAsync(srcConn, dstConn, srcPath, dstPath, mode,
                 _spreadConfig.TransferTimeoutSeconds, ct);
+
+            lock (_lock) _activeTransfers.Remove(transferKey);
 
             if (ok)
             {
@@ -419,6 +457,8 @@ public class SpreadJob : IDisposable
                     _failureCounts.TryGetValue(failKey, out var count);
                     _failureCounts[failKey] = count + 1;
                 }
+                Log.Warning("FXP failed: {File} ({Src} -> {Dst}): {Error}", file.Name,
+                    _serverConfigs[srcId].Name, _serverConfigs[dstId].Name, transfer.ErrorMessage);
             }
         }
         catch (Exception ex)
@@ -476,4 +516,15 @@ public class SpreadJob : IDisposable
         _cts.Dispose();
         GC.SuppressFinalize(this);
     }
+}
+
+public class ActiveTransferInfo
+{
+    public string FileName { get; set; } = "";
+    public long FileSize { get; set; }
+    public string SourceName { get; set; } = "";
+    public string DestName { get; set; } = "";
+    public long BytesTransferred { get; set; }
+    public double SpeedBps { get; set; }
+    public double ProgressPercent => FileSize > 0 ? BytesTransferred * 100.0 / FileSize : 0;
 }
