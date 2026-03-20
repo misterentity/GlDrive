@@ -105,19 +105,7 @@ public partial class ExtractorWindow : Window
         {
             if (Directory.Exists(path))
             {
-                var option = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
-                try
-                {
-                    foreach (var file in Directory.EnumerateFiles(path, "*.*", option))
-                    {
-                        if (IsArchiveFile(file) && existing.Add(file))
-                            Archives.Add(CreateItem(file));
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log.Warning(ex, "Error scanning folder {Path}", path);
-                }
+                ScanDirectory(path, recursive, existing);
             }
             else if (File.Exists(path) && IsArchiveFile(path) && existing.Add(path))
             {
@@ -125,6 +113,66 @@ public partial class ExtractorWindow : Window
             }
         }
         UpdateStatus();
+    }
+
+    /// <summary>
+    /// Manually recurse directories so a single permission error doesn't kill the whole scan.
+    /// Directory.EnumerateFiles with AllDirectories throws on the first inaccessible dir.
+    /// </summary>
+    private void ScanDirectory(string dir, bool recursive, HashSet<string> existing)
+    {
+        // Scan files in this directory
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(dir))
+            {
+                if (IsArchiveFile(file) && existing.Add(file))
+                    Archives.Add(CreateItem(file));
+            }
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            Log.Debug(ex, "Access denied scanning files in {Dir}", dir);
+        }
+        catch (IOException ex)
+        {
+            Log.Debug(ex, "I/O error scanning files in {Dir}", dir);
+        }
+
+        if (!recursive) return;
+
+        // Recurse into subdirectories one at a time
+        IEnumerable<string> subdirs;
+        try
+        {
+            subdirs = Directory.EnumerateDirectories(dir);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            Log.Debug(ex, "Access denied listing subdirs of {Dir}", dir);
+            return;
+        }
+        catch (IOException ex)
+        {
+            Log.Debug(ex, "I/O error listing subdirs of {Dir}", dir);
+            return;
+        }
+
+        foreach (var subdir in subdirs)
+        {
+            try
+            {
+                ScanDirectory(subdir, true, existing);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                Log.Debug(ex, "Access denied entering {Dir}", subdir);
+            }
+            catch (IOException ex)
+            {
+                Log.Debug(ex, "I/O error entering {Dir}", subdir);
+            }
+        }
     }
 
     private static bool IsArchiveFile(string path)
