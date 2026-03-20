@@ -1073,15 +1073,19 @@
                             <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" FontSize="13" Margin="0,0,0,12"
                                        Text="The Spread engine lets you race and FXP releases between your connected servers. To get started:"/>
                             <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" FontSize="13" Margin="12,0,0,4"
-                                       Text="1. Open Settings and edit each server you want to use for spreading."/>
+                                       Text="1. Go to Settings > Servers tab and click Edit on each server you want to use."/>
                             <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" FontSize="13" Margin="12,0,0,4"
-                                       Text="2. In the Spread / FXP section, add your sections (e.g. MP3=/site/mp3, 0DAY=/site/0day)."/>
+                                       Text="2. Scroll to the 'Spread / FXP' section at the bottom of the server edit dialog."/>
                             <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" FontSize="13" Margin="12,0,0,4"
-                                       Text="3. Set priority, upload/download slot limits, and optionally add skiplist rules."/>
+                                       Text="3. Add sections as Name=Path (e.g. MP3=/site/mp3, 0DAY=/site/0day), one per line."/>
                             <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" FontSize="13" Margin="12,0,0,4"
-                                       Text="4. In the global Spread settings tab, configure pool size and timeouts."/>
+                                       Text="4. Set the priority (Normal/High/VeryHigh), max upload/download slots, and optionally skiplist rules."/>
+                            <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" FontSize="13" Margin="12,0,0,4"
+                                       Text="5. Repeat for each server. At least 2 servers must share the same section name to race."/>
+                            <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" FontSize="13" Margin="12,0,0,4"
+                                       Text="6. (Optional) In Settings > Spread tab, adjust pool size, timeouts, and global skiplist rules."/>
                             <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" FontSize="13" Margin="12,0,0,16"
-                                       Text="5. Once at least 2 servers share a section, you can start races from this tab."/>
+                                       Text="7. Come back here, pick a section, type a release name, and click New Race."/>
                             <Button Content="Open Settings" Command="{Binding OpenSettingsCommand}"
                                     Padding="16,8" HorizontalAlignment="Left" Style="{StaticResource PrimaryButton}"/>
                         </StackPanel>
