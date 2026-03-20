@@ -60,9 +60,8 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         // Build union of all server sections
         RefreshSections();
 
-        _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+        _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _refreshTimer.Tick += (_, _) => RefreshFromManager();
-        _refreshTimer.Start();
     }
 
     private void RefreshSections()
@@ -171,6 +170,9 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
             });
         }
     }
+
+    public void Activate() => _refreshTimer.Start();
+    public void Deactivate() => _refreshTimer.Stop();
 
     public event PropertyChangedEventHandler? PropertyChanged;
     protected void OnPropertyChanged([CallerMemberName] string? name = null) =>
