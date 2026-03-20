@@ -19,6 +19,13 @@ public partial class ExtractorWindow : Window
     private CancellationTokenSource? _cts;
     private bool _extracting;
 
+    // Watch folder monitoring
+    private readonly List<FileSystemWatcher> _watchers = new();
+    private readonly List<string> _watchFolders = new();
+    private bool _watchEnabled;
+    private readonly HashSet<string> _watchProcessed = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _watchLock = new();
+
     private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".rar", ".zip", ".7z", ".tar", ".gz", ".tgz", ".bz2", ".tbz2",
@@ -567,6 +574,227 @@ public partial class ExtractorWindow : Window
         }
     }
 
+    // ── Watch Folders ──
+
+    private void AddWatchFolder_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFolderDialog { Title = "Select folder to watch for archives" };
+        if (dlg.ShowDialog() != true) return;
+
+        var folder = dlg.FolderName;
+        if (_watchFolders.Contains(folder, StringComparer.OrdinalIgnoreCase)) return;
+
+        _watchFolders.Add(folder);
+        WatchFoldersText.Text = string.Join("; ", _watchFolders);
+
+        if (_watchEnabled)
+            StartWatcherFor(folder);
+    }
+
+    private void WatchToggle_Click(object sender, RoutedEventArgs e)
+    {
+        if (_watchEnabled)
+        {
+            StopAllWatchers();
+            _watchEnabled = false;
+            WatchToggle.Content = "Off";
+            WatchToggle.IsChecked = false;
+        }
+        else
+        {
+            if (_watchFolders.Count == 0)
+            {
+                MessageBox.Show("Add at least one folder to watch first.", "Watch",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                WatchToggle.IsChecked = false;
+                return;
+            }
+
+            _watchEnabled = true;
+            WatchToggle.Content = "On";
+            WatchToggle.IsChecked = true;
+
+            // Scan existing archives in watch folders
+            foreach (var folder in _watchFolders)
+            {
+                ScanAndAutoExtract(folder);
+                StartWatcherFor(folder);
+            }
+        }
+    }
+
+    private void StartWatcherFor(string folder)
+    {
+        try
+        {
+            var watcher = new FileSystemWatcher(folder)
+            {
+                IncludeSubdirectories = ChkRecursive.IsChecked == true,
+                NotifyFilter = NotifyFilters.FileName | NotifyFilters.Size | NotifyFilters.LastWrite,
+                EnableRaisingEvents = true,
+                InternalBufferSize = 64 * 1024
+            };
+
+            watcher.Created += OnWatchedFileCreated;
+            watcher.Renamed += OnWatchedFileRenamed;
+            watcher.Error += (_, args) => Log.Warning(args.GetException(), "FileSystemWatcher error on {Dir}", folder);
+
+            _watchers.Add(watcher);
+            Log.Information("Watching folder: {Dir}", folder);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to start watcher for {Dir}", folder);
+        }
+    }
+
+    private void StopAllWatchers()
+    {
+        foreach (var w in _watchers)
+        {
+            w.EnableRaisingEvents = false;
+            w.Dispose();
+        }
+        _watchers.Clear();
+    }
+
+    private void OnWatchedFileCreated(object sender, FileSystemEventArgs e) =>
+        HandleWatchedFile(e.FullPath);
+
+    private void OnWatchedFileRenamed(object sender, RenamedEventArgs e) =>
+        HandleWatchedFile(e.FullPath);
+
+    private async void HandleWatchedFile(string path)
+    {
+        if (!IsArchiveFile(path)) return;
+
+        lock (_watchLock)
+        {
+            if (!_watchProcessed.Add(path)) return;
+        }
+
+        // Wait for the file to finish being written (e.g. download completing)
+        await WaitForFileReady(path);
+
+        if (!File.Exists(path)) return;
+
+        Dispatcher.Invoke(() =>
+        {
+            var existing = Archives.Any(a => a.FilePath.Equals(path, StringComparison.OrdinalIgnoreCase));
+            if (existing) return;
+
+            var item = CreateItem(path);
+            Archives.Add(item);
+            UpdateStatus();
+
+            // Auto-extract immediately
+            _ = AutoExtractItem(item);
+        });
+    }
+
+    private void ScanAndAutoExtract(string folder)
+    {
+        var existing = new HashSet<string>(Archives.Select(a => a.FilePath), StringComparer.OrdinalIgnoreCase);
+        var found = new List<ArchiveItem>();
+
+        ScanDirectory(folder, ChkRecursive.IsChecked == true, existing);
+
+        // Auto-extract any newly added queued items
+        foreach (var item in Archives.Where(a => a.Status == "Queued").ToList())
+        {
+            _ = AutoExtractItem(item);
+        }
+    }
+
+    private async Task AutoExtractItem(ArchiveItem item)
+    {
+        if (item.Status != "Queued") return;
+
+        item.Status = "Extracting";
+        item.Progress = 0;
+
+        var outputDir = GetOutputDir(item);
+        var password = "";
+        var overwriteIdx = 0;
+        var deleteAfter = false;
+
+        Dispatcher.Invoke(() =>
+        {
+            password = ArchivePassword.Password;
+            overwriteIdx = OverwriteMode.SelectedIndex;
+            deleteAfter = ChkDeleteAfter.IsChecked == true;
+        });
+
+        try
+        {
+            await Task.Run(() => ExtractArchive(item, outputDir, password, overwriteIdx, CancellationToken.None));
+            item.Status = "Done";
+            item.Progress = 100;
+
+            if (deleteAfter)
+                DeleteSourceFiles(item.FilePath);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Auto-extract failed: {File}", item.FileName);
+            item.Status = "Error";
+            item.ErrorMessage = ex.Message;
+        }
+
+        Dispatcher.Invoke(UpdateStatus);
+    }
+
+    /// <summary>
+    /// Wait until a file is no longer being written to. Checks every 2 seconds for up to 5 minutes.
+    /// Essential for network drives where files appear before the transfer completes.
+    /// </summary>
+    private static async Task WaitForFileReady(string path, int maxWaitMs = 300_000)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        long lastSize = -1;
+        int stableCount = 0;
+
+        while (sw.ElapsedMilliseconds < maxWaitMs)
+        {
+            await Task.Delay(2000);
+
+            try
+            {
+                if (!File.Exists(path)) return;
+
+                var info = new FileInfo(path);
+                var currentSize = info.Length;
+
+                if (currentSize == lastSize && currentSize > 0)
+                {
+                    stableCount++;
+                    if (stableCount >= 2)
+                    {
+                        // Size stable for 4+ seconds, try opening exclusively to confirm
+                        try
+                        {
+                            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
+                            return; // File is ready
+                        }
+                        catch (IOException)
+                        {
+                            stableCount = 0; // Still locked, keep waiting
+                        }
+                    }
+                }
+                else
+                {
+                    stableCount = 0;
+                }
+                lastSize = currentSize;
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+
+        Log.Warning("Timeout waiting for file to be ready: {Path}", path);
+    }
+
     // ── Helpers ──
 
     private static string FormatSize(long bytes)
@@ -575,6 +803,12 @@ public partial class ExtractorWindow : Window
         if (bytes >= 1L << 20) return $"{bytes / (double)(1L << 20):F1} MB";
         if (bytes >= 1L << 10) return $"{bytes / (double)(1L << 10):F0} KB";
         return $"{bytes} B";
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        StopAllWatchers();
+        base.OnClosed(e);
     }
 }
 
