@@ -209,6 +209,16 @@ public static class TrayIconSetup
         logs.Click += (_, _) => vm.ViewLogsCommand.Execute(null);
         menu.Items.Add(logs);
 
+        // Install glftpd
+        var installer = new MenuItem { Header = "Install glftpd..." };
+        installer.Click += (_, _) =>
+        {
+            var win = Application.Current.Windows.OfType<GlftpdInstallerWindow>().FirstOrDefault();
+            if (win != null) { win.Activate(); }
+            else { new GlftpdInstallerWindow().Show(); }
+        };
+        menu.Items.Add(installer);
+
         // Update
         var updateHeader = vm.AvailableUpdate != null
             ? $"Update to {vm.AvailableUpdate.TagName}"
