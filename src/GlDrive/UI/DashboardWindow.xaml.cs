@@ -14,12 +14,13 @@ public partial class DashboardWindow : Window
     private readonly ServerManager _serverManager;
     private bool _upcomingLoaded;
     private bool _preDbLoaded;
-    private bool _worldMonitorLoaded;
-    private bool _discordLoaded;
-    private bool _streemsLoaded;
+    private bool _spreadLoaded;
+    private bool _browseLoaded;
     private bool _playerLoaded;
     private Point _dragStartPoint;
     private PlayerViewModel? _playerVm;
+    private SpreadViewModel? _spreadVm;
+    private BrowseViewModel? _browseVm;
     private Window? _fullscreenWindow;
 
     public DashboardWindow(ServerManager serverManager, AppConfig config, NotificationStore notificationStore)
@@ -33,6 +34,8 @@ public partial class DashboardWindow : Window
         {
             vm.Dispose();
             _playerVm?.Dispose();
+            _spreadVm?.Dispose();
+            _browseVm?.Dispose();
         };
 
         // Auto-scroll IRC messages
@@ -133,22 +136,18 @@ public partial class DashboardWindow : Window
             }, TaskScheduler.Default);
         }
 
-        if (header == "World Monitor" && !_worldMonitorLoaded)
+        if (header == "Spread" && !_spreadLoaded)
         {
-            _worldMonitorLoaded = true;
-            _ = WorldMonitorHost.InitializeAsync("https://www.worldmonitor.app/");
+            _spreadLoaded = true;
+            _spreadVm = new SpreadViewModel(_serverManager, _config);
+            SpreadTab.DataContext = _spreadVm;
         }
 
-        if (header == "Discord" && !_discordLoaded)
+        if (header == "Browse" && !_browseLoaded)
         {
-            _discordLoaded = true;
-            _ = DiscordHost.InitializeAsync("https://discord.com/app");
-        }
-
-        if (header == "Streems" && !_streemsLoaded)
-        {
-            _streemsLoaded = true;
-            _ = StreemsHost.InitializeAsync("https://streems.redactor.site/");
+            _browseLoaded = true;
+            _browseVm = new BrowseViewModel(_serverManager, _config);
+            BrowseTab.DataContext = _browseVm;
         }
     }
 

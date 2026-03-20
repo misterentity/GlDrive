@@ -118,6 +118,22 @@ public partial class ServerEditDialog : Window
                     IrcPasswordBox.Password = ircPw;
             }
 
+            // Spread
+            SpreadSectionsBox.Text = string.Join("\n", existing.SpreadSite.Sections.Select(kv => $"{kv.Key}={kv.Value}"));
+            SpreadPriorityBox.SelectedIndex = existing.SpreadSite.Priority switch
+            {
+                SitePriority.VeryLow => 0,
+                SitePriority.Low => 1,
+                SitePriority.Normal => 2,
+                SitePriority.High => 3,
+                SitePriority.VeryHigh => 4,
+                _ => 2
+            };
+            SpreadMaxUpBox.Text = existing.SpreadSite.MaxUploadSlots.ToString();
+            SpreadMaxDownBox.Text = existing.SpreadSite.MaxDownloadSlots.ToString();
+            SpreadDownloadOnlyBox.IsChecked = existing.SpreadSite.DownloadOnly;
+            SpreadAffilsBox.Text = string.Join(", ", existing.SpreadSite.Affils);
+
             // Load stored password hint
             var storedPw = CredentialStore.GetPassword(existing.Connection.Host, existing.Connection.Port, existing.Connection.Username);
             if (!string.IsNullOrEmpty(storedPw))
@@ -298,6 +314,29 @@ public partial class ServerEditDialog : Window
                     AutoJoin = autoJoin
                 };
             }).ToList();
+
+        // Spread
+        _serverConfig.SpreadSite.Sections = (SpreadSectionsBox.Text ?? "")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(l => l.Contains('='))
+            .ToDictionary(
+                l => l[..l.IndexOf('=')].Trim(),
+                l => l[(l.IndexOf('=') + 1)..].Trim());
+        _serverConfig.SpreadSite.Priority = SpreadPriorityBox.SelectedIndex switch
+        {
+            0 => SitePriority.VeryLow,
+            1 => SitePriority.Low,
+            2 => SitePriority.Normal,
+            3 => SitePriority.High,
+            4 => SitePriority.VeryHigh,
+            _ => SitePriority.Normal
+        };
+        _serverConfig.SpreadSite.MaxUploadSlots = int.TryParse(SpreadMaxUpBox.Text, out var mu) ? Math.Clamp(mu, 1, 10) : 3;
+        _serverConfig.SpreadSite.MaxDownloadSlots = int.TryParse(SpreadMaxDownBox.Text, out var md2) ? Math.Clamp(md2, 1, 10) : 3;
+        _serverConfig.SpreadSite.DownloadOnly = SpreadDownloadOnlyBox.IsChecked == true;
+        _serverConfig.SpreadSite.Affils = (SpreadAffilsBox.Text ?? "")
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(s => s.Length > 0).ToList();
 
         // Save IRC password
         if (!string.IsNullOrEmpty(IrcPasswordBox.Password) && !string.IsNullOrEmpty(_serverConfig.Irc.Host)

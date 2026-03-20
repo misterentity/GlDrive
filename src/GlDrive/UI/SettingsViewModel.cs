@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using GlDrive.Config;
@@ -29,6 +30,9 @@ public class SettingsViewModel : INotifyPropertyChanged
     private bool _verifySfv;
     private bool _playSoundOnComplete;
     private string _theme;
+    private string _spreadPoolSize;
+    private string _spreadTransferTimeout;
+    private string _spreadHardTimeout;
 
     public SettingsViewModel(AppConfig config)
     {
@@ -54,6 +58,11 @@ public class SettingsViewModel : INotifyPropertyChanged
         _verifySfv = config.Downloads.VerifySfv;
         _playSoundOnComplete = config.Downloads.PlaySoundOnComplete;
         _theme = config.Downloads.Theme;
+        _spreadPoolSize = config.Spread.SpreadPoolSize.ToString();
+        _spreadTransferTimeout = config.Spread.TransferTimeoutSeconds.ToString();
+        _spreadHardTimeout = config.Spread.HardTimeoutSeconds.ToString();
+
+        GlobalSkiplist = new ObservableCollection<SkiplistRule>(config.Spread.GlobalSkiplist);
     }
 
     public string LogLevel { get => _logLevel; set { _logLevel = value; OnPropertyChanged(); } }
@@ -78,6 +87,10 @@ public class SettingsViewModel : INotifyPropertyChanged
     public bool VerifySfv { get => _verifySfv; set { _verifySfv = value; OnPropertyChanged(); } }
     public bool PlaySoundOnComplete { get => _playSoundOnComplete; set { _playSoundOnComplete = value; OnPropertyChanged(); } }
     public string Theme { get => _theme; set { _theme = value; OnPropertyChanged(); } }
+    public string SpreadPoolSize { get => _spreadPoolSize; set { _spreadPoolSize = value; OnPropertyChanged(); } }
+    public string SpreadTransferTimeout { get => _spreadTransferTimeout; set { _spreadTransferTimeout = value; OnPropertyChanged(); } }
+    public string SpreadHardTimeout { get => _spreadHardTimeout; set { _spreadHardTimeout = value; OnPropertyChanged(); } }
+    public ObservableCollection<SkiplistRule> GlobalSkiplist { get; set; } = new();
 
     public string[] LogLevels { get; } = ["Verbose", "Debug", "Information", "Warning", "Error"];
     public string[] QualityOptions { get; } = ["Any", "SD", "720p", "1080p", "2160p"];
@@ -106,6 +119,11 @@ public class SettingsViewModel : INotifyPropertyChanged
         config.Downloads.VerifySfv = VerifySfv;
         config.Downloads.PlaySoundOnComplete = PlaySoundOnComplete;
         config.Downloads.Theme = Theme;
+
+        config.Spread.SpreadPoolSize = int.TryParse(SpreadPoolSize, out var sps) ? Math.Clamp(sps, 1, 10) : 2;
+        config.Spread.TransferTimeoutSeconds = int.TryParse(SpreadTransferTimeout, out var stt) ? Math.Clamp(stt, 10, 600) : 60;
+        config.Spread.HardTimeoutSeconds = int.TryParse(SpreadHardTimeout, out var sht) ? Math.Clamp(sht, 60, 7200) : 1200;
+        config.Spread.GlobalSkiplist = GlobalSkiplist.ToList();
     }
 
     public void RefreshCertsInfo()

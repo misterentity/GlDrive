@@ -37,6 +37,7 @@ public class MountService : IDisposable
     public string DriveLetter => _serverConfig.Mount.DriveLetter;
     public MountState CurrentState { get; private set; } = MountState.Unmounted;
     public FtpConnectionPool? Pool => _pool;
+    public FtpClientFactory? Factory => _factory;
     public FtpOperations? Ftp => _ftp;
     public DirectoryCache? Cache => _cache;
     public DownloadManager? Downloads => _downloadManager;

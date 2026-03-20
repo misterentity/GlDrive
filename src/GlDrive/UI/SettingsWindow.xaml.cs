@@ -33,6 +33,9 @@ public partial class SettingsWindow : Window
         foreach (var kvp in config.Downloads.CategoryPaths)
             _categoryPaths.Add(new CategoryPathItem { Category = kvp.Key, Path = kvp.Value });
         CategoryPathGrid.ItemsSource = _categoryPaths;
+
+        // Global skiplist
+        GlobalSkiplistGrid.ItemsSource = _vm.GlobalSkiplist;
     }
 
     private void RefreshServerList()
@@ -145,6 +148,17 @@ public partial class SettingsWindow : Window
     {
         if (CategoryPathGrid.SelectedItem is CategoryPathItem selected)
             _categoryPaths.Remove(selected);
+    }
+
+    private void AddGlobalSkiplistRule_Click(object sender, RoutedEventArgs e)
+    {
+        _vm.GlobalSkiplist.Add(new SkiplistRule());
+    }
+
+    private void RemoveGlobalSkiplistRule_Click(object sender, RoutedEventArgs e)
+    {
+        if (GlobalSkiplistGrid.SelectedItem is SkiplistRule rule)
+            _vm.GlobalSkiplist.Remove(rule);
     }
 
     private void Save_Click(object sender, RoutedEventArgs e)
