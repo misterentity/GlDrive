@@ -143,6 +143,45 @@
                 </ScrollViewer>
             </TabItem>
 
+            <!-- Spread Tab -->
+            <TabItem Header="Spread">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="12">
+                        <TextBlock Text="Spread Pool Size (per server):" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding SpreadPoolSize, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+                        <TextBlock Text="Transfer Timeout (seconds):" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding SpreadTransferTimeout, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+                        <TextBlock Text="Hard Timeout (seconds, max race duration):" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding SpreadHardTimeout, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,12"/>
+
+                        <Separator Margin="0,0,0,12"/>
+                        <TextBlock Text="Global Skiplist" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                        <DataGrid x:Name="GlobalSkiplistGrid"
+                                  AutoGenerateColumns="False" CanUserAddRows="False"
+                                  SelectionMode="Single" GridLinesVisibility="Horizontal"
+                                  HeadersVisibility="Column" Height="150" Margin="0,0,0,8">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Pattern" Binding="{Binding Pattern}" Width="*"/>
+                                <DataGridCheckBoxColumn Header="Regex" Binding="{Binding IsRegex}" Width="55"/>
+                                <DataGridComboBoxColumn Header="Action" Width="80"
+                                    SelectedItemBinding="{Binding Action}"/>
+                                <DataGridCheckBoxColumn Header="Dirs" Binding="{Binding MatchDirectories}" Width="45"/>
+                                <DataGridCheckBoxColumn Header="Files" Binding="{Binding MatchFiles}" Width="50"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="Add Rule" Click="AddGlobalSkiplistRule_Click" Padding="12,4" Margin="0,0,6,0"
+                                    Style="{StaticResource SecondaryButton}"/>
+                            <Button Content="Remove" Click="RemoveGlobalSkiplistRule_Click" Padding="12,4"
+                                    Style="{StaticResource SecondaryButton}"/>
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
             <!-- Diagnostics Tab -->
             <TabItem Header="Diagnostics">
                 <StackPanel Margin="12">

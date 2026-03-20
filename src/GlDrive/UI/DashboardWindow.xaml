@@ -1056,19 +1056,153 @@
                 </DockPanel>
             </TabItem>
 
-            <!-- World Monitor Tab -->
-            <TabItem Header="World Monitor">
-                <ui:WebViewHost x:Name="WorldMonitorHost"/>
+            <!-- Spread Tab -->
+            <TabItem Header="Spread" x:Name="SpreadTab">
+                <DockPanel Margin="12">
+                    <!-- Toolbar -->
+                    <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
+                            CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="New Race" Command="{Binding StartRaceCommand}"
+                                    Padding="12,6" Margin="0,0,6,0" Style="{StaticResource PrimaryButton}"/>
+                            <Button Content="Stop" Command="{Binding StopJobCommand}"
+                                    Padding="12,6" Margin="0,0,12,0" Style="{StaticResource SecondaryButton}"/>
+                            <ComboBox ItemsSource="{Binding SpreadSections}"
+                                      SelectedItem="{Binding SelectedSection}"
+                                      Width="120" Margin="0,0,6,0" ToolTip="Section"/>
+                            <TextBox Text="{Binding SpreadReleaseName, UpdateSourceTrigger=PropertyChanged}"
+                                     Width="280" VerticalContentAlignment="Center"
+                                     ToolTip="Release name"/>
+                        </StackPanel>
+                    </Border>
+                    <!-- Scoreboard (bottom) -->
+                    <Border DockPanel.Dock="Bottom" Height="200"
+                            Background="{DynamicResource SurfaceBrush}"
+                            BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                            CornerRadius="6" Margin="0,10,0,0" Padding="0">
+                        <DataGrid ItemsSource="{Binding SpreadScoreboard}"
+                                  AutoGenerateColumns="False" IsReadOnly="True"
+                                  SelectionMode="Single" GridLinesVisibility="Horizontal"
+                                  HeadersVisibility="Column" CanUserAddRows="False">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Site" Binding="{Binding SiteName}" Width="140"/>
+                                <DataGridTextColumn Header="Files" Binding="{Binding FilesOwned}" Width="60"/>
+                                <DataGridTextColumn Header="Total" Binding="{Binding FilesTotal}" Width="60"/>
+                                <DataGridTextColumn Header="Owned %" Binding="{Binding OwnedPercent, StringFormat=F1}" Width="80"/>
+                                <DataGridTextColumn Header="Speed" Binding="{Binding SpeedFormatted}" Width="100"/>
+                                <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="*"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Border>
+                    <!-- Center: Job List (left) + File Transfers (right) -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="280"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <!-- Job List -->
+                        <DataGrid Grid.Column="0" ItemsSource="{Binding SpreadJobs}"
+                                  SelectedItem="{Binding SelectedSpreadJob}"
+                                  AutoGenerateColumns="False" IsReadOnly="True"
+                                  SelectionMode="Single" GridLinesVisibility="Horizontal"
+                                  HeadersVisibility="Column" CanUserAddRows="False"
+                                  Margin="0,0,10,0">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Release" Binding="{Binding Release}" Width="*"/>
+                                <DataGridTextColumn Header="%" Binding="{Binding ProgressPercent, StringFormat=F0}" Width="40"/>
+                                <DataGridTextColumn Header="State" Binding="{Binding Status}" Width="70"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <!-- File Transfers -->
+                        <DataGrid Grid.Column="1" ItemsSource="{Binding SpreadFileTransfers}"
+                                  AutoGenerateColumns="False" IsReadOnly="True"
+                                  SelectionMode="Single" GridLinesVisibility="Horizontal"
+                                  HeadersVisibility="Column" CanUserAddRows="False">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="File" Binding="{Binding FileName}" Width="*"/>
+                                <DataGridTextColumn Header="Size" Binding="{Binding SizeFormatted}" Width="80"/>
+                                <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="100"/>
+                                <DataGridTextColumn Header="Dest" Binding="{Binding Dest}" Width="100"/>
+                                <DataGridTextColumn Header="Speed" Binding="{Binding SpeedFormatted}" Width="90"/>
+                                <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="80"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Grid>
+                </DockPanel>
             </TabItem>
 
-            <!-- Discord Tab -->
-            <TabItem Header="Discord">
-                <ui:WebViewHost x:Name="DiscordHost"/>
-            </TabItem>
-
-            <!-- Streems Tab -->
-            <TabItem Header="Streems">
-                <ui:WebViewHost x:Name="StreemsHost"/>
+            <!-- Browse Tab -->
+            <TabItem Header="Browse" x:Name="BrowseTab">
+                <DockPanel Margin="12">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <!-- Left Pane -->
+                        <DockPanel Grid.Column="0" Margin="0,0,6,0">
+                            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+                                <ComboBox ItemsSource="{Binding ServerList}"
+                                          SelectedItem="{Binding LeftServer}"
+                                          Width="140" Margin="0,0,6,0"/>
+                                <TextBox Text="{Binding LeftPath, UpdateSourceTrigger=PropertyChanged}"
+                                         Width="200" VerticalContentAlignment="Center" Margin="0,0,6,0"/>
+                                <Button Content="Go" Command="{Binding LeftGoCommand}"
+                                        Padding="12,4" Style="{StaticResource SecondaryButton}"/>
+                            </StackPanel>
+                            <DataGrid ItemsSource="{Binding LeftItems}"
+                                      AutoGenerateColumns="False" IsReadOnly="True"
+                                      SelectionMode="Extended" GridLinesVisibility="Horizontal"
+                                      HeadersVisibility="Column" CanUserAddRows="False">
+                                <DataGrid.InputBindings>
+                                    <MouseBinding Gesture="LeftDoubleClick"
+                                                  Command="{Binding LeftDoubleClickCommand}"
+                                                  CommandParameter="{Binding SelectedItem, RelativeSource={RelativeSource AncestorType=DataGrid}}"/>
+                                </DataGrid.InputBindings>
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*"/>
+                                    <DataGridTextColumn Header="Size" Binding="{Binding SizeFormatted}" Width="80"/>
+                                    <DataGridTextColumn Header="Modified" Binding="{Binding ModifiedFormatted}" Width="120"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </DockPanel>
+                        <!-- Center Buttons -->
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="6">
+                            <Button Content="FXP &#x2192;" Command="{Binding FxpRightCommand}"
+                                    Padding="12,8" Margin="0,0,0,6" Style="{StaticResource PrimaryButton}"/>
+                            <Button Content="&#x2190; FXP" Command="{Binding FxpLeftCommand}"
+                                    Padding="12,8" Style="{StaticResource PrimaryButton}"/>
+                        </StackPanel>
+                        <!-- Right Pane -->
+                        <DockPanel Grid.Column="2" Margin="6,0,0,0">
+                            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+                                <ComboBox ItemsSource="{Binding ServerList}"
+                                          SelectedItem="{Binding RightServer}"
+                                          Width="140" Margin="0,0,6,0"/>
+                                <TextBox Text="{Binding RightPath, UpdateSourceTrigger=PropertyChanged}"
+                                         Width="200" VerticalContentAlignment="Center" Margin="0,0,6,0"/>
+                                <Button Content="Go" Command="{Binding RightGoCommand}"
+                                        Padding="12,4" Style="{StaticResource SecondaryButton}"/>
+                            </StackPanel>
+                            <DataGrid ItemsSource="{Binding RightItems}"
+                                      AutoGenerateColumns="False" IsReadOnly="True"
+                                      SelectionMode="Extended" GridLinesVisibility="Horizontal"
+                                      HeadersVisibility="Column" CanUserAddRows="False">
+                                <DataGrid.InputBindings>
+                                    <MouseBinding Gesture="LeftDoubleClick"
+                                                  Command="{Binding RightDoubleClickCommand}"
+                                                  CommandParameter="{Binding SelectedItem, RelativeSource={RelativeSource AncestorType=DataGrid}}"/>
+                                </DataGrid.InputBindings>
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*"/>
+                                    <DataGridTextColumn Header="Size" Binding="{Binding SizeFormatted}" Width="80"/>
+                                    <DataGridTextColumn Header="Modified" Binding="{Binding ModifiedFormatted}" Width="120"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </DockPanel>
+                    </Grid>
+                </DockPanel>
             </TabItem>
         </TabControl>
 

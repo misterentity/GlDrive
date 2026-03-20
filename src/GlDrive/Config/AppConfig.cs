@@ -5,6 +5,7 @@ public class AppConfig
     public List<ServerConfig> Servers { get; set; } = [];
     public LoggingConfig Logging { get; set; } = new();
     public DownloadConfig Downloads { get; set; } = new();
+    public SpreadConfig Spread { get; set; } = new();
 }
 
 public class ServerConfig
@@ -20,6 +21,7 @@ public class ServerConfig
     public NotificationConfig Notifications { get; set; } = new();
     public SearchConfig Search { get; set; } = new();
     public IrcConfig Irc { get; set; } = new();
+    public SiteSpreadConfig SpreadSite { get; set; } = new();
     public int SpeedLimitKbps { get; set; }
 }
 

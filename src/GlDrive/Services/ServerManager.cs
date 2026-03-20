@@ -1,6 +1,7 @@
 using GlDrive.Config;
 using GlDrive.Downloads;
 using GlDrive.Irc;
+using GlDrive.Spread;
 using GlDrive.Tls;
 using Serilog;
 
@@ -13,6 +14,9 @@ public class ServerManager : IDisposable
     private readonly NotificationStore _notificationStore;
     private readonly Dictionary<string, MountService> _servers = new();
     private readonly Dictionary<string, IrcService> _ircServices = new();
+    private SpreadManager? _spreadManager;
+
+    public SpreadManager? Spread => _spreadManager;
 
     public event Action<string, string, MountState>? ServerStateChanged; // serverId, serverName, state
     public event Action<string, string, string, string, string>? NewReleaseDetected; // serverId, serverName, category, release, remotePath
@@ -24,6 +28,7 @@ public class ServerManager : IDisposable
         _config = config;
         _certManager = certManager;
         _notificationStore = notificationStore;
+        _spreadManager = new SpreadManager(config);
     }
 
     public async Task MountServer(string serverId, CancellationToken ct = default)
@@ -66,6 +71,19 @@ public class ServerManager : IDisposable
 
         await service.Mount(ct);
 
+        // Initialize spread pool for FXP
+        if (_spreadManager != null && service.Factory != null)
+        {
+            try
+            {
+                await _spreadManager.InitializePool(serverId, service.Factory, ct);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to init spread pool for {Server}", serverConfig.Name);
+            }
+        }
+
         // Start IRC service if configured
         if (serverConfig.Irc.Enabled && !string.IsNullOrEmpty(serverConfig.Irc.Host))
         {
@@ -84,6 +102,9 @@ public class ServerManager : IDisposable
     {
         await StopIrcService(serverId);
 
+        if (_spreadManager != null)
+            await _spreadManager.DisposePool(serverId);
+
         if (!_servers.TryGetValue(serverId, out var service))
             return;
 
@@ -95,6 +116,7 @@ public class ServerManager : IDisposable
     public void UnmountServer(string serverId)
     {
         StopIrcService(serverId).GetAwaiter().GetResult();
+        _spreadManager?.DisposePool(serverId).GetAwaiter().GetResult();
 
         if (!_servers.TryGetValue(serverId, out var service))
             return;
@@ -183,6 +205,9 @@ public class ServerManager : IDisposable
 
     public void Dispose()
     {
+        _spreadManager?.Dispose();
+        _spreadManager = null;
+
         foreach (var irc in _ircServices.Values)
         {
             try { irc.StopAsync().GetAwaiter().GetResult(); } catch { }

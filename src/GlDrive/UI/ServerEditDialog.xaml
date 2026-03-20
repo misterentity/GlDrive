@@ -237,6 +237,41 @@
 
                 <Separator Margin="0,4,0,12"/>
 
+                <!-- Spread/FXP Settings -->
+                <TextBlock Text="Spread / FXP" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                <TextBlock Text="Sections (Name=Path, one per line):" Margin="0,0,0,2"/>
+                <TextBox x:Name="SpreadSectionsBox" AcceptsReturn="True" TextWrapping="Wrap"
+                         Height="80" VerticalScrollBarVisibility="Auto" Margin="0,0,0,8"
+                         ToolTip="e.g. MP3=/site/mp3&#x0a;0DAY=/site/0day"/>
+                <TextBlock Text="Priority:" Margin="0,0,0,4"/>
+                <ComboBox x:Name="SpreadPriorityBox" Width="120" HorizontalAlignment="Left" Margin="0,0,0,8">
+                    <ComboBoxItem Content="Very Low"/>
+                    <ComboBoxItem Content="Low"/>
+                    <ComboBoxItem Content="Normal"/>
+                    <ComboBoxItem Content="High"/>
+                    <ComboBoxItem Content="Very High"/>
+                </ComboBox>
+                <Grid Margin="0,0,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                        <TextBlock Text="Max Upload Slots:" Margin="0,0,0,2"/>
+                        <TextBox x:Name="SpreadMaxUpBox" Text="3" Width="60" HorizontalAlignment="Left"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Text="Max Download Slots:" Margin="0,0,0,2"/>
+                        <TextBox x:Name="SpreadMaxDownBox" Text="3" Width="60" HorizontalAlignment="Left"/>
+                    </StackPanel>
+                </Grid>
+                <CheckBox x:Name="SpreadDownloadOnlyBox" Content="Download only (don't upload to this site)" Margin="0,0,0,8"/>
+                <TextBlock Text="Affiliations (comma-separated groups):" Margin="0,0,0,2"/>
+                <TextBox x:Name="SpreadAffilsBox" Margin="0,0,0,12"
+                         ToolTip="Groups affiliated with this site — their releases won't be spread here"/>
+
+                <Separator Margin="0,4,0,12"/>
+
                 <Button Content="Test Connection" Click="TestConnection_Click"
                         HorizontalAlignment="Left" Padding="16,6"/>
                 <TextBlock x:Name="TestResultText" Margin="0,8,0,0" TextWrapping="Wrap"/>
