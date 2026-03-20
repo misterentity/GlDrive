@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using Microsoft.Win32;
@@ -25,17 +26,14 @@ public partial class ExtractorWindow : Window
         ".tar.gz", ".tar.bz2", ".tar.xz", ".tar.lz",
     };
 
-    // Volume extensions to skip (they're handled by the first volume)
-    private static readonly HashSet<string> VolumeExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".r00", ".r01", ".r02", ".r03", ".r04", ".r05", ".r06", ".r07", ".r08", ".r09",
-        ".r10", ".r11", ".r12", ".r13", ".r14", ".r15", ".r16", ".r17", ".r18", ".r19",
-        ".r20", ".r21", ".r22", ".r23", ".r24", ".r25", ".r26", ".r27", ".r28", ".r29",
-        ".r30", ".r31", ".r32", ".r33", ".r34", ".r35", ".r36", ".r37", ".r38", ".r39",
-        ".r40", ".r41", ".r42", ".r43", ".r44", ".r45", ".r46", ".r47", ".r48", ".r49",
-        ".s00", ".s01", ".s02", ".s03", ".s04", ".s05",
-        ".001", ".002", ".003", ".004", ".005", ".006", ".007", ".008", ".009",
-    };
+    // Old-style volume extensions (.r00-.r99, .s00-.s99) and split archives (.001-.999)
+    private static readonly Regex VolumeExtRegex = new(@"^\.[rs]\d{2,3}$|^\.\d{3}$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    // Modern RAR multi-part: name.part02.rar, name.part003.rar (part01 is the first volume, keep it)
+    private static readonly Regex RarPartNonFirstRegex = new(@"\.part(?!0*1\.rar)(\d+)\.rar$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    // Match any volume file belonging to a RAR set (for size calculation)
+    private static readonly Regex RarVolumeFileRegex = new(@"\.[rs]\d{2,3}$|\.part\d+\.rar$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     public ExtractorWindow()
     {
@@ -179,10 +177,16 @@ public partial class ExtractorWindow : Window
     {
         var ext = Path.GetExtension(path);
         if (string.IsNullOrEmpty(ext)) return false;
-        if (VolumeExtensions.Contains(ext)) return false;
 
-        // Check for compound extensions like .tar.gz
+        // Skip old-style volume files (.r00, .s01, .001, etc.)
+        if (VolumeExtRegex.IsMatch(ext)) return false;
+
+        // Skip modern multi-part RAR volumes that aren't the first part
+        // e.g. name.part02.rar, name.part03.rar (but keep name.part01.rar and plain .rar)
         var name = Path.GetFileName(path);
+        if (RarPartNonFirstRegex.IsMatch(name)) return false;
+
+        // Check compound extensions like .tar.gz
         foreach (var compound in new[] { ".tar.gz", ".tar.bz2", ".tar.xz", ".tar.lz" })
         {
             if (name.EndsWith(compound, StringComparison.OrdinalIgnoreCase))
@@ -203,13 +207,59 @@ public partial class ExtractorWindow : Window
         else if (name.EndsWith(".tar.bz2", StringComparison.OrdinalIgnoreCase)) ext = "TBZ2";
         else if (name.EndsWith(".tar.xz", StringComparison.OrdinalIgnoreCase)) ext = "TXZ";
 
+        // Calculate total size across all volumes for RAR sets
+        var totalSize = info.Exists ? info.Length : 0L;
+        var volumeCount = 1;
+        if (ext == "RAR" && info.Directory != null)
+        {
+            try
+            {
+                var baseName = Path.GetFileNameWithoutExtension(path);
+
+                // Strip .partNN for modern multi-part naming
+                var partMatch = Regex.Match(baseName, @"^(.+)\.part\d+$", RegexOptions.IgnoreCase);
+                var setBase = partMatch.Success ? partMatch.Groups[1].Value : baseName;
+
+                foreach (var file in info.Directory.EnumerateFiles())
+                {
+                    if (file.FullName.Equals(path, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    var fn = file.Name;
+
+                    // Old-style: baseName.r00, baseName.r01, baseName.s00, ...
+                    if (fn.StartsWith(baseName, StringComparison.OrdinalIgnoreCase) &&
+                        VolumeExtRegex.IsMatch(Path.GetExtension(fn)))
+                    {
+                        totalSize += file.Length;
+                        volumeCount++;
+                    }
+                    // Modern multi-part: setBase.partNN.rar
+                    else if (partMatch.Success &&
+                             fn.StartsWith(setBase, StringComparison.OrdinalIgnoreCase) &&
+                             RarVolumeFileRegex.IsMatch(fn) &&
+                             fn.EndsWith(".rar", StringComparison.OrdinalIgnoreCase))
+                    {
+                        totalSize += file.Length;
+                        volumeCount++;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Debug(ex, "Failed to enumerate volume files for {Path}", path);
+            }
+        }
+
+        var typeLabel = volumeCount > 1 ? $"RAR×{volumeCount}" : ext;
+
         return new ArchiveItem
         {
             FilePath = path,
             FileName = Path.GetFileName(path),
-            ArchiveType = ext,
-            Size = info.Exists ? info.Length : 0,
-            SizeText = FormatSize(info.Exists ? info.Length : 0),
+            ArchiveType = typeLabel,
+            Size = totalSize,
+            SizeText = FormatSize(totalSize),
             Status = "Queued",
         };
     }
@@ -494,13 +544,17 @@ public partial class ExtractorWindow : Window
 
             File.Delete(archivePath);
 
-            // Also delete volume files (.r00, .r01, .s00, etc.)
+            // Also delete volume files (.r00, .r01, .s00, .partNN.rar, etc.)
             var baseName = Path.GetFileNameWithoutExtension(archivePath);
-            foreach (var file in Directory.GetFiles(dir, $"{baseName}.*"))
+            // Strip .partNN for modern naming
+            var pm = Regex.Match(baseName, @"^(.+)\.part\d+$", RegexOptions.IgnoreCase);
+            var searchBase = pm.Success ? pm.Groups[1].Value : baseName;
+            foreach (var file in Directory.GetFiles(dir, $"{searchBase}.*"))
             {
                 var ext = Path.GetExtension(file);
-                if (VolumeExtensions.Contains(ext) ||
-                    ext.Equals(".sfv", StringComparison.OrdinalIgnoreCase))
+                if (VolumeExtRegex.IsMatch(ext) ||
+                    ext.Equals(".sfv", StringComparison.OrdinalIgnoreCase) ||
+                    RarVolumeFileRegex.IsMatch(Path.GetFileName(file)))
                 {
                     try { File.Delete(file); }
                     catch (Exception ex) { Log.Warning(ex, "Failed to delete {File}", file); }
