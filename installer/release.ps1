@@ -66,7 +66,12 @@ $ChecksumFile = Join-Path $OutputDir "checksums.sha256"
 Write-Host "`n=== Generating checksums ===" -ForegroundColor Cyan
 $checksumLines = @()
 foreach ($a in $assets) {
-    $hash = (Get-FileHash -Path $a -Algorithm SHA256).Hash.ToLower()
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    $stream = [System.IO.File]::OpenRead($a)
+    $hashBytes = $sha256.ComputeHash($stream)
+    $stream.Close()
+    $sha256.Dispose()
+    $hash = [BitConverter]::ToString($hashBytes).Replace('-','').ToLower()
     $name = Split-Path -Leaf $a
     $checksumLines += "$hash *$name"
     Write-Host "  $hash  $name"
