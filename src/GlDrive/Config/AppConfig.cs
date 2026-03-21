@@ -122,6 +122,11 @@ public class DownloadConfig
     public string QualityDefault { get; set; } = "1080p";
     public string OmdbApiKey { get; set; } = "";
     public string TmdbApiKey { get; set; } = "";
+
+    /// <summary>Resolve OMDB key: Credential Manager first, then config fallback.</summary>
+    public string ResolveOmdbKey() => CredentialStore.GetApiKey("omdb") ?? OmdbApiKey;
+    /// <summary>Resolve TMDB key: Credential Manager first, then config fallback.</summary>
+    public string ResolveTmdbKey() => CredentialStore.GetApiKey("tmdb") ?? TmdbApiKey;
     public bool AutoDownloadWishlist { get; set; } = true;
     public bool AutoExtract { get; set; } = true;
     public bool DeleteArchivesAfterExtract { get; set; } = true;

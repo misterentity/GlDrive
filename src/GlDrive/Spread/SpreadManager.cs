@@ -88,6 +88,10 @@ public class SpreadManager : IDisposable
         if (pools.Count < 2)
             throw new InvalidOperationException("Need at least 2 connected servers to start a race");
 
+        // Sanitize release name to prevent FTP command injection
+        releaseName = SanitizeFtpPath(releaseName);
+        section = SanitizeFtpPath(section);
+
         var job = new SpreadJob(section, releaseName, mode, _config.Spread,
             pools, configs, _speedTracker, _skiplist);
 
@@ -123,6 +127,9 @@ public class SpreadManager : IDisposable
     public async Task StartFxp(string srcServerId, string srcPath,
         string dstServerId, string dstPath, CancellationToken ct)
     {
+        srcPath = SanitizeFtpPath(srcPath);
+        dstPath = SanitizeFtpPath(dstPath);
+
         FtpConnectionPool srcPool, dstPool;
         lock (_lock)
         {
@@ -168,10 +175,14 @@ public class SpreadManager : IDisposable
         {
             foreach (var pool in pools)
             {
-                try { await pool.DisposeAsync(); } catch { }
+                try { await pool.DisposeAsync(); }
+                catch (Exception ex) { Log.Debug(ex, "Spread pool dispose error"); }
             }
         });
 
         GC.SuppressFinalize(this);
     }
+
+    private static string SanitizeFtpPath(string path) =>
+        path.Replace("\r", "").Replace("\n", "").Replace("\0", "");
 }

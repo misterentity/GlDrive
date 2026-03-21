@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using GlDrive.Config;
 using GlDrive.Tls;
+using static GlDrive.Config.CredentialStore;
 
 namespace GlDrive.UI;
 
@@ -43,8 +44,9 @@ public class SettingsViewModel : INotifyPropertyChanged
         _streamingBufferSize = config.Downloads.StreamingBufferSizeKb.ToString();
         _writeBufferLimit = config.Downloads.WriteBufferLimitMb.ToString();
         _qualityDefault = config.Downloads.QualityDefault;
-        _omdbApiKey = config.Downloads.OmdbApiKey;
-        _tmdbApiKey = config.Downloads.TmdbApiKey;
+        // Prefer Credential Manager, fall back to config (migration)
+        _omdbApiKey = CredentialStore.GetApiKey("omdb") ?? config.Downloads.OmdbApiKey;
+        _tmdbApiKey = CredentialStore.GetApiKey("tmdb") ?? config.Downloads.TmdbApiKey;
         _autoDownloadWishlist = config.Downloads.AutoDownloadWishlist;
         _autoExtract = config.Downloads.AutoExtract;
         _deleteArchivesAfterExtract = config.Downloads.DeleteArchivesAfterExtract;
@@ -104,8 +106,11 @@ public class SettingsViewModel : INotifyPropertyChanged
         config.Downloads.StreamingBufferSizeKb = int.TryParse(StreamingBufferSize, out var sbs) ? Math.Clamp(sbs, 64, 4096) : 256;
         config.Downloads.WriteBufferLimitMb = int.TryParse(WriteBufferLimit, out var wbl) ? Math.Clamp(wbl, 0, 512) : 0;
         config.Downloads.QualityDefault = QualityDefault;
-        config.Downloads.OmdbApiKey = OmdbApiKey;
-        config.Downloads.TmdbApiKey = TmdbApiKey;
+        // Store API keys in Credential Manager, clear from plaintext config
+        SaveApiKey("omdb", OmdbApiKey);
+        SaveApiKey("tmdb", TmdbApiKey);
+        config.Downloads.OmdbApiKey = "";
+        config.Downloads.TmdbApiKey = "";
         config.Downloads.AutoDownloadWishlist = AutoDownloadWishlist;
         config.Downloads.AutoExtract = AutoExtract;
         config.Downloads.DeleteArchivesAfterExtract = DeleteArchivesAfterExtract;

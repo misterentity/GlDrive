@@ -61,6 +61,20 @@ if (Test-Path $ZipFile) {
     exit 1
 }
 
+# --- Generate SHA-256 checksums ---
+$ChecksumFile = Join-Path $OutputDir "checksums.sha256"
+Write-Host "`n=== Generating checksums ===" -ForegroundColor Cyan
+$checksumLines = @()
+foreach ($a in $assets) {
+    $hash = (Get-FileHash -Path $a -Algorithm SHA256).Hash.ToLower()
+    $name = Split-Path -Leaf $a
+    $checksumLines += "$hash *$name"
+    Write-Host "  $hash  $name"
+}
+$checksumLines | Set-Content -Path $ChecksumFile -Encoding UTF8
+$assets += $ChecksumFile
+Write-Host "Checksums: $ChecksumFile" -ForegroundColor Green
+
 # --- Create GitHub release ---
 Write-Host "`n=== Creating GitHub release $Tag ===" -ForegroundColor Cyan
 

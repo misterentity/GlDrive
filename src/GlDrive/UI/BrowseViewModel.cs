@@ -22,6 +22,7 @@ public class BrowseViewModel : INotifyPropertyChanged, IDisposable
     private bool _initializing = true;
     private CancellationTokenSource? _leftCts;
     private CancellationTokenSource? _rightCts;
+    private CancellationTokenSource? _fxpCts;
 
     public ObservableCollection<BrowseItemVm> LeftItems { get; } = new();
     public ObservableCollection<BrowseItemVm> RightItems { get; } = new();
@@ -246,6 +247,10 @@ public class BrowseViewModel : INotifyPropertyChanged, IDisposable
         var dstServer = FindServer(dstName);
         if (srcServer == null || dstServer == null) return;
 
+        _fxpCts?.Cancel();
+        _fxpCts = new CancellationTokenSource();
+        var ct = _fxpCts.Token;
+
         IsBusy = true;
         try
         {
@@ -254,13 +259,13 @@ public class BrowseViewModel : INotifyPropertyChanged, IDisposable
             // Ensure dest directory exists before FXP
             if (dstServer.Pool != null)
             {
-                await using var conn = await dstServer.Pool.Borrow(CancellationToken.None);
-                await conn.Client.Execute($"MKD {dstPath}", CancellationToken.None);
+                await using var conn = await dstServer.Pool.Borrow(ct);
+                await conn.Client.Execute($"MKD {dstPath}", ct);
             }
 
             var destFile = dstPath.TrimEnd('/') + "/" + item.Name;
             await Task.Run(() => spread.StartFxp(srcServer.ServerId, item.FullPath,
-                dstServer.ServerId, destFile, CancellationToken.None));
+                dstServer.ServerId, destFile, ct));
         }
         catch (Exception ex)
         {
@@ -287,8 +292,10 @@ public class BrowseViewModel : INotifyPropertyChanged, IDisposable
     {
         _leftCts?.Cancel();
         _rightCts?.Cancel();
+        _fxpCts?.Cancel();
         _leftCts?.Dispose();
         _rightCts?.Dispose();
+        _fxpCts?.Dispose();
         GC.SuppressFinalize(this);
     }
 }
