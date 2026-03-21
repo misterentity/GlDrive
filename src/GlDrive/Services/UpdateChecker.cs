@@ -99,14 +99,17 @@ public class UpdateChecker : IDisposable
         var tempZip = Path.Combine(Path.GetTempPath(), $"GlDrive-{release.TagName}.zip");
         Log.Information("Downloading update: {Url} → {Path}", asset.BrowserDownloadUrl, tempZip);
 
-        using var response = await _http.GetAsync(asset.BrowserDownloadUrl);
+        // Stream download to disk to avoid buffering 150MB+ in memory
+        using var response = await _http.GetAsync(asset.BrowserDownloadUrl, HttpCompletionOption.ResponseHeadersRead);
         response.EnsureSuccessStatusCode();
 
-        await using var fs = File.Create(tempZip);
-        await response.Content.CopyToAsync(fs);
-        fs.Close();
+        await using (var fs = File.Create(tempZip))
+        {
+            await response.Content.CopyToAsync(fs);
+        }
 
-        Log.Information("Download complete, launching updater");
+        Log.Information("Download complete ({Size} MB), launching updater",
+            new FileInfo(tempZip).Length / (1024.0 * 1024));
         LaunchUpdater(tempZip);
     }
 
