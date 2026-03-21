@@ -164,8 +164,20 @@ public class TrayViewModel : INotifyPropertyChanged
         ExitCommand = new RelayCommand(() =>
         {
             _updateChecker.StopPeriodicCheck();
-            _serverManager.UnmountAll();
+
+            // Unmount with a hard timeout — don't let hung FTP connections prevent exit
+            var unmountTask = Task.Run(async () =>
+            {
+                try { await _serverManager.UnmountAllAsync(); } catch { }
+            });
+
+            if (!unmountTask.Wait(TimeSpan.FromSeconds(5)))
+                Log.Warning("Unmount timed out after 5s — forcing exit");
+
             Application.Current?.Shutdown();
+
+            // Ensure process actually exits even if WPF shutdown hangs
+            Task.Delay(3000).ContinueWith(_ => Environment.Exit(0));
         });
 
         UpdateCommand = new RelayCommand(async () =>
