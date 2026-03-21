@@ -6,6 +6,7 @@ using System.Windows.Threading;
 using GlDrive.Config;
 using GlDrive.Services;
 using GlDrive.Spread;
+using Serilog;
 
 namespace GlDrive.UI;
 
@@ -18,6 +19,7 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
     private string _selectedSection = "";
     private string _spreadReleaseName = "";
     private SpreadJobVm? _selectedSpreadJob;
+    private bool _isRefreshing;
 
     public ObservableCollection<SpreadJobVm> SpreadJobs { get; } = new();
     public ObservableCollection<SpreadFileVm> SpreadFileTransfers { get; } = new();
@@ -43,7 +45,6 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         {
             _selectedSpreadJob = value;
             OnPropertyChanged();
-            RefreshScoreboard();
         }
     }
 
@@ -63,11 +64,10 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         StopJobCommand = new RelayCommand(StopJob);
         OpenSettingsCommand = new RelayCommand(() => _openSettingsAction?.Invoke());
 
-        // Build union of all server sections
         RefreshSections();
 
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-        _refreshTimer.Tick += (_, _) => RefreshFromManager();
+        _refreshTimer.Tick += (_, _) => SafeRefresh();
     }
 
     public void RefreshSections()
@@ -97,7 +97,6 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         var spread = _serverManager.Spread;
         if (spread == null) return;
 
-        // Find all servers with this section configured
         var serverIds = _config.Servers
             .Where(s => s.Enabled && s.SpreadSite.Sections.ContainsKey(SelectedSection))
             .Select(s => s.Id)
@@ -115,21 +114,40 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         _serverManager.Spread?.StopJob(SelectedSpreadJob.Id);
     }
 
+    private void SafeRefresh()
+    {
+        if (_isRefreshing) return;
+        _isRefreshing = true;
+        try
+        {
+            RefreshFromManager();
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Spread refresh error");
+        }
+        finally
+        {
+            _isRefreshing = false;
+        }
+    }
+
     private void RefreshFromManager()
     {
         var spread = _serverManager.Spread;
         if (spread == null) return;
 
         var jobs = spread.ActiveJobs;
-
-        // Update job list
-        var existingIds = SpreadJobs.Select(j => j.Id).ToHashSet();
         var currentIds = jobs.Select(j => j.Id).ToHashSet();
 
-        // Remove completed/gone jobs
-        foreach (var vm in SpreadJobs.Where(j => !currentIds.Contains(j.Id)).ToList())
-            SpreadJobs.Remove(vm);
+        // Remove gone jobs
+        for (int i = SpreadJobs.Count - 1; i >= 0; i--)
+        {
+            if (!currentIds.Contains(SpreadJobs[i].Id))
+                SpreadJobs.RemoveAt(i);
+        }
 
+        // Update or add jobs — update in-place to avoid collection churn
         foreach (var job in jobs)
         {
             var vm = SpreadJobs.FirstOrDefault(j => j.Id == job.Id);
@@ -143,68 +161,121 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
             vm.Section = job.Section;
             vm.State = job.State;
 
-            var totalFiles = job.Sites.Values.Max(s => s.FilesTotal);
-            var avgOwned = totalFiles > 0
-                ? job.Sites.Values.Where(s => !_config.Servers.First(sc => sc.Id == s.ServerId).SpreadSite.DownloadOnly)
-                    .Average(s => s.FilesOwned * 100.0 / totalFiles)
-                : 0;
+            var sites = job.Sites.Values.ToList();
+            var totalFiles = sites.Count > 0 ? sites.Max(s => s.FilesTotal) : 0;
+
+            double avgOwned = 0;
+            if (totalFiles > 0)
+            {
+                var nonDownloadOnly = sites.Where(s =>
+                {
+                    var cfg = _config.Servers.FirstOrDefault(sc => sc.Id == s.ServerId);
+                    return cfg != null && !cfg.SpreadSite.DownloadOnly;
+                }).ToList();
+
+                if (nonDownloadOnly.Count > 0)
+                    avgOwned = nonDownloadOnly.Average(s => s.FilesOwned * 100.0 / totalFiles);
+            }
+
             vm.ProgressPercent = avgOwned;
             vm.Status = job.State.ToString();
         }
 
-        RefreshScoreboard();
-        RefreshFileTransfers();
-    }
-
-    private void RefreshFileTransfers()
-    {
-        SpreadFileTransfers.Clear();
-
-        if (SelectedSpreadJob == null) return;
-
-        var spread = _serverManager.Spread;
-        if (spread == null) return;
-
-        var job = spread.ActiveJobs.FirstOrDefault(j => j.Id == SelectedSpreadJob.Id);
-        if (job == null) return;
-
-        foreach (var t in job.ActiveTransferList)
+        // Update scoreboard and transfers only if a job is selected
+        var selectedId = SelectedSpreadJob?.Id;
+        if (selectedId == null)
         {
-            SpreadFileTransfers.Add(new SpreadFileVm
-            {
-                FileName = t.FileName,
-                Size = t.FileSize,
-                Source = t.SourceName,
-                Dest = t.DestName,
-                SpeedBps = t.SpeedBps,
-                ProgressPercent = t.ProgressPercent,
-                Status = "Transferring"
-            });
+            if (SpreadScoreboard.Count > 0) SpreadScoreboard.Clear();
+            if (SpreadFileTransfers.Count > 0) SpreadFileTransfers.Clear();
+            return;
         }
-    }
 
-    private void RefreshScoreboard()
-    {
-        SpreadScoreboard.Clear();
-
-        if (SelectedSpreadJob == null) return;
-
-        var spread = _serverManager.Spread;
-        if (spread == null) return;
-
-        var job = spread.ActiveJobs.FirstOrDefault(j => j.Id == SelectedSpreadJob.Id);
-        if (job == null) return;
-
-        foreach (var (_, site) in job.Sites)
+        var selectedJob = jobs.FirstOrDefault(j => j.Id == selectedId);
+        if (selectedJob == null)
         {
-            SpreadScoreboard.Add(new SpreadScoreVm
+            if (SpreadScoreboard.Count > 0) SpreadScoreboard.Clear();
+            if (SpreadFileTransfers.Count > 0) SpreadFileTransfers.Clear();
+            return;
+        }
+
+        // Update scoreboard in-place
+        var siteList = selectedJob.Sites.Values.ToList();
+        // Resize to match
+        while (SpreadScoreboard.Count > siteList.Count)
+            SpreadScoreboard.RemoveAt(SpreadScoreboard.Count - 1);
+
+        for (int i = 0; i < siteList.Count; i++)
+        {
+            var site = siteList[i];
+            if (i < SpreadScoreboard.Count)
             {
-                SiteName = site.ServerName,
-                FilesOwned = site.FilesOwned,
-                FilesTotal = site.FilesTotal,
-                SpeedBps = site.SpeedBps,
-                Status = site.IsComplete ? "Complete" : site.ActiveTransfers > 0 ? $"Transferring ({site.ActiveTransfers})" : "Waiting"
-            });
+                var existing = SpreadScoreboard[i];
+                existing.SiteName = site.ServerName;
+                existing.FilesOwned = site.FilesOwned;
+                existing.FilesTotal = site.FilesTotal;
+                existing.SpeedBps = site.SpeedBps;
+                existing.Status = site.IsComplete ? "Complete"
+                    : site.ActiveTransfers > 0 ? $"Transferring ({site.ActiveTransfers})"
+                    : "Waiting";
+            }
+            else
+            {
+                SpreadScoreboard.Add(new SpreadScoreVm
+                {
+                    SiteName = site.ServerName,
+                    FilesOwned = site.FilesOwned,
+                    FilesTotal = site.FilesTotal,
+                    SpeedBps = site.SpeedBps,
+                    Status = site.IsComplete ? "Complete"
+                        : site.ActiveTransfers > 0 ? $"Transferring ({site.ActiveTransfers})"
+                        : "Waiting"
+                });
+            }
+        }
+
+        // Update file transfers — these change rapidly so replace if different
+        var transfers = selectedJob.ActiveTransferList;
+        // Quick check: if same count and same filenames, update in-place
+        bool canUpdateInPlace = SpreadFileTransfers.Count == transfers.Count;
+        if (canUpdateInPlace)
+        {
+            for (int i = 0; i < transfers.Count; i++)
+            {
+                if (SpreadFileTransfers[i].FileName != transfers[i].FileName ||
+                    SpreadFileTransfers[i].Source != transfers[i].SourceName)
+                {
+                    canUpdateInPlace = false;
+                    break;
+                }
+            }
+        }
+
+        if (canUpdateInPlace)
+        {
+            for (int i = 0; i < transfers.Count; i++)
+            {
+                var t = transfers[i];
+                var vm = SpreadFileTransfers[i];
+                vm.SpeedBps = t.SpeedBps;
+                vm.ProgressPercent = t.ProgressPercent;
+            }
+        }
+        else
+        {
+            SpreadFileTransfers.Clear();
+            foreach (var t in transfers)
+            {
+                SpreadFileTransfers.Add(new SpreadFileVm
+                {
+                    FileName = t.FileName,
+                    Size = t.FileSize,
+                    Source = t.SourceName,
+                    Dest = t.DestName,
+                    SpeedBps = t.SpeedBps,
+                    ProgressPercent = t.ProgressPercent,
+                    Status = "Transferring"
+                });
+            }
         }
     }
 
