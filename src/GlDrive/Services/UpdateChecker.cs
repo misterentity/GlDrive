@@ -42,6 +42,11 @@ public class UpdateChecker : IDisposable
         Assembly.GetExecutingAssembly().GetName().Version ?? new Version(0, 0, 0);
 
     public event Action<GitHubRelease>? UpdateAvailable;
+
+    /// <summary>
+    /// Fired when the app should shut down immediately so the updater can replace files.
+    /// The updater has already been launched and is waiting for this PID to exit.
+    /// </summary>
     public event Action? RestartRequested;
 
     public UpdateChecker(string? installPath = null)
@@ -64,7 +69,6 @@ public class UpdateChecker : IDisposable
                 return null;
             }
 
-            // Compare major.minor.build (ignore revision)
             var current = new Version(CurrentVersion.Major, CurrentVersion.Minor, CurrentVersion.Build);
             var remote = release.ParsedVersion;
             var remoteNormalized = new Version(remote.Major, remote.Minor, Math.Max(remote.Build, 0));
@@ -109,7 +113,7 @@ public class UpdateChecker : IDisposable
             await response.Content.CopyToAsync(fs);
         }
 
-        Log.Information("Download complete ({Size} MB), verifying integrity...",
+        Log.Information("Download complete ({Size:F1} MB), verifying integrity...",
             new FileInfo(tempZip).Length / (1024.0 * 1024));
 
         // Verify SHA-256 hash against checksums.sha256 asset
@@ -120,7 +124,7 @@ public class UpdateChecker : IDisposable
             return;
         }
 
-        Log.Information("Integrity verified, launching updater");
+        Log.Information("Integrity verified, preparing updater");
         LaunchUpdater(tempZip);
     }
 
@@ -131,8 +135,7 @@ public class UpdateChecker : IDisposable
 
         if (checksumAsset == null)
         {
-            Log.Warning("No checksums.sha256 asset found in release — skipping verification");
-            // Allow update if no checksum asset exists (backwards compat with older releases)
+            Log.Warning("No checksums.sha256 asset found — skipping verification");
             return true;
         }
 
@@ -150,7 +153,7 @@ public class UpdateChecker : IDisposable
 
             if (string.IsNullOrEmpty(expectedHash))
             {
-                Log.Warning("No matching hash found in checksums.sha256 for {File}", zipName);
+                Log.Warning("No matching hash for {File} in checksums.sha256", zipName);
                 return false;
             }
 
@@ -169,7 +172,7 @@ public class UpdateChecker : IDisposable
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "Failed to verify download hash — allowing update");
+            Log.Warning(ex, "Hash verification failed — allowing update");
             return true;
         }
     }
@@ -178,14 +181,13 @@ public class UpdateChecker : IDisposable
     {
         var extractDir = Path.Combine(Path.GetTempPath(), $"gldrive-update-{Guid.NewGuid():N}");
 
-        // Clean previous extraction
         if (Directory.Exists(extractDir))
             Directory.Delete(extractDir, true);
 
         Log.Information("Extracting update to {Path}", extractDir);
         ZipFile.ExtractToDirectory(zipPath, extractDir);
 
-        // Detect nested folder — if zip has single subfolder containing GlDrive.exe, use that
+        // Detect nested folder
         var entries = Directory.GetDirectories(extractDir);
         if (entries.Length == 1 && File.Exists(Path.Combine(entries[0], "GlDrive.exe")))
         {
@@ -199,24 +201,32 @@ public class UpdateChecker : IDisposable
             return;
         }
 
-        // Clean up the downloaded zip
-        try { File.Delete(zipPath); } catch { /* best effort */ }
+        try { File.Delete(zipPath); } catch { }
 
         var pid = Environment.ProcessId;
         var exePath = Path.Combine(extractDir, "GlDrive.exe");
         var installDir = _installPath.TrimEnd(Path.DirectorySeparatorChar);
 
-        Log.Information("Launching elevated updater: --apply-update {Pid} \"{ExtractDir}\" \"{InstallDir}\"",
+        Log.Information("Launching updater: --apply-update {Pid} \"{ExtractDir}\" \"{InstallDir}\"",
             pid, extractDir, installDir);
 
-        Process.Start(new ProcessStartInfo
+        try
         {
-            FileName = exePath,
-            Arguments = $"--apply-update {pid} \"{extractDir}\" \"{installDir}\"",
-            Verb = "runas",
-            UseShellExecute = true
-        });
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = exePath,
+                Arguments = $"--apply-update {pid} \"{extractDir}\" \"{installDir}\"",
+                Verb = "runas",
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Failed to launch updater (UAC cancelled?)");
+            return;
+        }
 
+        // Signal the app to shut down NOW — updater is waiting for us to exit
         RestartRequested?.Invoke();
     }
 
@@ -226,49 +236,57 @@ public class UpdateChecker : IDisposable
         void LogUpdate(string msg)
         {
             var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {msg}";
-            try { File.AppendAllText(logPath, line + Environment.NewLine); } catch { /* best effort */ }
+            try { File.AppendAllText(logPath, line + Environment.NewLine); } catch { }
         }
 
         try
         {
             LogUpdate($"ApplyUpdate started — pid={pid}, extractDir={extractDir}, installDir={installDir}");
 
-            // Wait for the original process to exit
+            // Wait for the original process to exit (up to 60s)
             try
             {
                 var proc = Process.GetProcessById(pid);
                 LogUpdate($"Waiting for PID {pid} to exit...");
-                proc.WaitForExit(30_000);
+                if (!proc.WaitForExit(60_000))
+                {
+                    LogUpdate($"PID {pid} did not exit in 60s — killing it");
+                    try { proc.Kill(); proc.WaitForExit(5000); } catch { }
+                }
             }
             catch (ArgumentException)
             {
-                // Process already exited
                 LogUpdate($"PID {pid} already exited");
             }
 
-            // Small grace period for file handles to release
-            Thread.Sleep(1000);
+            // Grace period for file handles
+            Thread.Sleep(2000);
 
-            // Rename existing files to .old (Windows allows renaming in-use files)
+            // Rename existing files to .old
             LogUpdate("Renaming existing files to .old");
+            var renamed = 0;
+            var failed = 0;
             foreach (var file in Directory.EnumerateFiles(installDir, "*", SearchOption.AllDirectories))
             {
-                // Skip files already named .old
                 if (file.EndsWith(".old", StringComparison.OrdinalIgnoreCase))
                     continue;
 
                 try
                 {
                     File.Move(file, file + ".old", overwrite: true);
+                    renamed++;
                 }
                 catch (Exception ex)
                 {
-                    LogUpdate($"  Warning: could not rename {file}: {ex.Message}");
+                    failed++;
+                    LogUpdate($"  Warning: could not rename {Path.GetFileName(file)}: {ex.Message}");
                 }
             }
+            LogUpdate($"Renamed {renamed} files, {failed} failed");
 
-            // Copy new files from extract dir to install dir
-            LogUpdate("Copying new files");
+            // Copy new files
+            LogUpdate("Copying new files from extract dir");
+            var copied = 0;
             foreach (var sourceFile in Directory.EnumerateFiles(extractDir, "*", SearchOption.AllDirectories))
             {
                 var relativePath = Path.GetRelativePath(extractDir, sourceFile);
@@ -279,19 +297,29 @@ public class UpdateChecker : IDisposable
                     Directory.CreateDirectory(destDir);
 
                 File.Copy(sourceFile, destFile, overwrite: true);
+                copied++;
             }
+            LogUpdate($"Copied {copied} files");
 
-            // Clean up extract dir
+            // Clean up
             LogUpdate("Cleaning up extract directory");
-            try { Directory.Delete(extractDir, true); } catch { /* best effort */ }
-
-            // If extractDir was a nested subfolder, also try to clean the parent temp extract dir
-            var parentExtract = Path.Combine(Path.GetTempPath(), "gldrive-update-extract");
-            if (Directory.Exists(parentExtract))
-                try { Directory.Delete(parentExtract, true); } catch { /* best effort */ }
+            try { Directory.Delete(extractDir, true); } catch { }
+            // Also clean parent if nested
+            var parent = Directory.GetParent(extractDir);
+            if (parent != null && parent.FullName.StartsWith(Path.GetTempPath()) &&
+                parent.Name.StartsWith("gldrive-update-"))
+            {
+                try { parent.Delete(true); } catch { }
+            }
 
             // Launch the updated app
             var newExe = Path.Combine(installDir, "GlDrive.exe");
+            if (!File.Exists(newExe))
+            {
+                LogUpdate($"ERROR: {newExe} not found after copy!");
+                return;
+            }
+
             LogUpdate($"Update complete, launching {newExe}");
             Process.Start(new ProcessStartInfo
             {
@@ -312,16 +340,16 @@ public class UpdateChecker : IDisposable
         try
         {
             var baseDir = AppContext.BaseDirectory;
+            var deleted = 0;
             foreach (var file in Directory.EnumerateFiles(baseDir, "*.old", SearchOption.AllDirectories))
             {
-                try { File.Delete(file); }
-                catch { /* best effort — file may still be locked */ }
+                try { File.Delete(file); deleted++; }
+                catch { }
             }
+            if (deleted > 0)
+                Log.Information("Cleaned up {Count} .old update files", deleted);
         }
-        catch
-        {
-            // Non-critical, swallow
-        }
+        catch { }
     }
 
     public void StartPeriodicCheck(CancellationToken cancellationToken = default)
@@ -331,7 +359,6 @@ public class UpdateChecker : IDisposable
 
         _ = Task.Run(async () =>
         {
-            // Initial delay — let the app finish starting up
             await Task.Delay(TimeSpan.FromSeconds(30), token);
 
             while (!token.IsCancellationRequested)
