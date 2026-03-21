@@ -195,7 +195,12 @@ public class TrayViewModel : INotifyPropertyChanged
 
         _updateChecker.RestartRequested += () =>
         {
-            Application.Current?.Dispatcher.Invoke(() => ExitCommand.Execute(null));
+            // Updater is running and waiting for our PID to exit — shut down fast
+            Application.Current?.Dispatcher.Invoke(() =>
+            {
+                try { _serverManager.UnmountAll(); } catch { }
+                Environment.Exit(0);
+            });
         };
 
         _serverManager.BncRateLimitDetected += (serverName, message) =>
