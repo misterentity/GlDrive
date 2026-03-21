@@ -2,9 +2,11 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
+using GlDrive.Config;
 using Microsoft.Win32;
 using Serilog;
 using SharpCompress.Archives;
@@ -42,12 +44,16 @@ public partial class ExtractorWindow : Window
     // Match any volume file belonging to a RAR set (for size calculation)
     private static readonly Regex RarVolumeFileRegex = new(@"\.[rs]\d{2,3}$|\.part\d+\.rar$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    private static readonly string WatchFoldersPath =
+        Path.Combine(ConfigManager.AppDataPath, "watch-folders.json");
+
     public ExtractorWindow()
     {
         InitializeComponent();
         ArchiveGrid.ItemsSource = Archives;
         Archives.CollectionChanged += (_, _) => UpdateDropHint();
         UpdateDropHint();
+        LoadWatchFolders();
     }
 
     private void UpdateDropHint() =>
@@ -643,9 +649,44 @@ public partial class ExtractorWindow : Window
 
         _watchFolders.Add(folder);
         WatchFoldersText.Text = string.Join("; ", _watchFolders);
+        SaveWatchFolders();
 
         if (_watchEnabled)
             StartWatcherFor(folder);
+    }
+
+    private void LoadWatchFolders()
+    {
+        try
+        {
+            if (!File.Exists(WatchFoldersPath)) return;
+            var json = File.ReadAllText(WatchFoldersPath);
+            var folders = JsonSerializer.Deserialize<List<string>>(json);
+            if (folders == null) return;
+
+            foreach (var f in folders.Where(f => !string.IsNullOrWhiteSpace(f) && Directory.Exists(f)))
+                _watchFolders.Add(f);
+
+            if (_watchFolders.Count > 0)
+                WatchFoldersText.Text = string.Join("; ", _watchFolders);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to load watch folders");
+        }
+    }
+
+    private void SaveWatchFolders()
+    {
+        try
+        {
+            var json = JsonSerializer.Serialize(_watchFolders);
+            File.WriteAllText(WatchFoldersPath, json);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to save watch folders");
+        }
     }
 
     private void WatchToggle_Click(object sender, RoutedEventArgs e)
