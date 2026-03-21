@@ -37,6 +37,7 @@ public class UpdateChecker : IDisposable
     private readonly HttpClient _http;
     private readonly string _installPath;
     private CancellationTokenSource? _periodicCts;
+    private string? _lastNotifiedTag;
 
     public static Version CurrentVersion { get; } =
         Assembly.GetExecutingAssembly().GetName().Version ?? new Version(0, 0, 0);
@@ -69,17 +70,30 @@ public class UpdateChecker : IDisposable
                 return null;
             }
 
-            var current = new Version(CurrentVersion.Major, CurrentVersion.Minor, CurrentVersion.Build);
+            var currentMajor = CurrentVersion.Major;
+            var currentMinor = CurrentVersion.Minor;
+            var currentBuild = Math.Max(CurrentVersion.Build, 0);
             var remote = release.ParsedVersion;
-            var remoteNormalized = new Version(remote.Major, remote.Minor, Math.Max(remote.Build, 0));
+            var remoteMajor = remote.Major;
+            var remoteMinor = remote.Minor;
+            var remoteBuild = Math.Max(remote.Build, 0);
 
-            if (remoteNormalized > current)
+            Log.Debug("Version check: running={Major}.{Minor}.{Build}, latest={RMajor}.{RMinor}.{RBuild}",
+                currentMajor, currentMinor, currentBuild, remoteMajor, remoteMinor, remoteBuild);
+
+            // Compare component by component to avoid Version class quirks
+            bool isNewer = remoteMajor > currentMajor
+                || (remoteMajor == currentMajor && remoteMinor > currentMinor)
+                || (remoteMajor == currentMajor && remoteMinor == currentMinor && remoteBuild > currentBuild);
+
+            if (isNewer)
             {
-                Log.Information("Update available: {Current} → {Remote}", current, remoteNormalized);
+                Log.Information("Update available: {Current}.{CMin}.{CBuild} → {RMaj}.{RMin}.{RBuild}",
+                    currentMajor, currentMinor, currentBuild, remoteMajor, remoteMinor, remoteBuild);
                 return release;
             }
 
-            Log.Debug("Up to date: {Current} (latest: {Remote})", current, remoteNormalized);
+            Log.Debug("Up to date: {Major}.{Minor}.{Build}", currentMajor, currentMinor, currentBuild);
             return null;
         }
         catch (Exception ex)
@@ -364,8 +378,11 @@ public class UpdateChecker : IDisposable
             while (!token.IsCancellationRequested)
             {
                 var release = await CheckForUpdateAsync();
-                if (release != null)
+                if (release != null && release.TagName != _lastNotifiedTag)
+                {
+                    _lastNotifiedTag = release.TagName;
                     UpdateAvailable?.Invoke(release);
+                }
 
                 await Task.Delay(CheckInterval, token);
             }
