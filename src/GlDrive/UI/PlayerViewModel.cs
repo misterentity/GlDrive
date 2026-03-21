@@ -446,7 +446,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     private async Task SearchTmdb()
     {
         if (string.IsNullOrWhiteSpace(_searchText)) return;
-        if (string.IsNullOrEmpty(_config.Downloads.TmdbApiKey))
+        if (string.IsNullOrEmpty(_config.Downloads.ResolveTmdbKey()))
         {
             // No TMDB key — search FTP and torrent directly
             var ftpTask = SearchFtpDirect(_searchText);
@@ -461,7 +461,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
         try
         {
-            using var tmdb = new TmdbClient(_config.Downloads.TmdbApiKey);
+            using var tmdb = new TmdbClient(_config.Downloads.ResolveTmdbKey());
             var results = await tmdb.SearchMulti(_searchText);
 
             foreach (var r in results.Take(20))
@@ -542,7 +542,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     // ── TV episode picker ──
     private async Task LoadTvSeasons(int tvId, string tvName)
     {
-        if (string.IsNullOrEmpty(_config.Downloads.TmdbApiKey)) return;
+        if (string.IsNullOrEmpty(_config.Downloads.ResolveTmdbKey())) return;
 
         _selectedTvId = tvId;
         _selectedTvName = tvName;
@@ -551,7 +551,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
         try
         {
-            using var tmdb = new TmdbClient(_config.Downloads.TmdbApiKey);
+            using var tmdb = new TmdbClient(_config.Downloads.ResolveTmdbKey());
             var detail = await tmdb.GetTvDetail(tvId);
             if (detail?.Seasons == null) return;
 
@@ -568,12 +568,12 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
     private async Task LoadEpisodes(int tvId, int seasonNumber)
     {
-        if (string.IsNullOrEmpty(_config.Downloads.TmdbApiKey)) return;
+        if (string.IsNullOrEmpty(_config.Downloads.ResolveTmdbKey())) return;
 
         Episodes.Clear();
         try
         {
-            using var tmdb = new TmdbClient(_config.Downloads.TmdbApiKey);
+            using var tmdb = new TmdbClient(_config.Downloads.ResolveTmdbKey());
             var season = await tmdb.GetTvSeason(tvId, seasonNumber);
             if (season?.Episodes == null) return;
 
@@ -660,7 +660,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     // ── Trending ──
     public async Task LoadTrending()
     {
-        if (string.IsNullOrEmpty(_config.Downloads.TmdbApiKey))
+        if (string.IsNullOrEmpty(_config.Downloads.ResolveTmdbKey()))
         {
             PlayerStatus = "Configure TMDb API key in Settings \u2192 Downloads to see trending content";
             return;
@@ -671,7 +671,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
         try
         {
-            using var tmdb = new TmdbClient(_config.Downloads.TmdbApiKey);
+            using var tmdb = new TmdbClient(_config.Downloads.ResolveTmdbKey());
 
             var movies = await tmdb.GetTrendingMovies();
             TrendingMovies.Clear();

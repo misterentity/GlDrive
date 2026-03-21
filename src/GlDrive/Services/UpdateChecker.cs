@@ -4,6 +4,7 @@ using System.IO.Compression;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text.Json.Serialization;
 using Serilog;
 
@@ -108,9 +109,69 @@ public class UpdateChecker : IDisposable
             await response.Content.CopyToAsync(fs);
         }
 
-        Log.Information("Download complete ({Size} MB), launching updater",
+        Log.Information("Download complete ({Size} MB), verifying integrity...",
             new FileInfo(tempZip).Length / (1024.0 * 1024));
+
+        // Verify SHA-256 hash against checksums.sha256 asset
+        if (!await VerifyDownloadHash(tempZip, release))
+        {
+            Log.Error("Update integrity check failed — hash mismatch or no checksum available");
+            try { File.Delete(tempZip); } catch { }
+            return;
+        }
+
+        Log.Information("Integrity verified, launching updater");
         LaunchUpdater(tempZip);
+    }
+
+    private async Task<bool> VerifyDownloadHash(string zipPath, GitHubRelease release)
+    {
+        var checksumAsset = release.Assets.FirstOrDefault(a =>
+            a.Name.Equals("checksums.sha256", StringComparison.OrdinalIgnoreCase));
+
+        if (checksumAsset == null)
+        {
+            Log.Warning("No checksums.sha256 asset found in release — skipping verification");
+            // Allow update if no checksum asset exists (backwards compat with older releases)
+            return true;
+        }
+
+        try
+        {
+            var checksumText = await _http.GetStringAsync(checksumAsset.BrowserDownloadUrl);
+            var zipName = Path.GetFileName(zipPath);
+            var expectedHash = checksumText.Split('\n')
+                .Select(l => l.Trim())
+                .Where(l => !string.IsNullOrEmpty(l))
+                .Select(l => l.Split(' ', 2, StringSplitOptions.TrimEntries))
+                .Where(p => p.Length == 2 && p[1].TrimStart('*').Equals(zipName, StringComparison.OrdinalIgnoreCase))
+                .Select(p => p[0])
+                .FirstOrDefault();
+
+            if (string.IsNullOrEmpty(expectedHash))
+            {
+                Log.Warning("No matching hash found in checksums.sha256 for {File}", zipName);
+                return false;
+            }
+
+            await using var fs = File.OpenRead(zipPath);
+            var actualHash = Convert.ToHexStringLower(await SHA256.HashDataAsync(fs));
+
+            if (actualHash.Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
+            {
+                Log.Information("SHA-256 verified: {Hash}", actualHash[..16] + "...");
+                return true;
+            }
+
+            Log.Error("SHA-256 mismatch! Expected={Expected}, Actual={Actual}",
+                expectedHash[..16] + "...", actualHash[..16] + "...");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to verify download hash — allowing update");
+            return true;
+        }
     }
 
     private void LaunchUpdater(string zipPath)

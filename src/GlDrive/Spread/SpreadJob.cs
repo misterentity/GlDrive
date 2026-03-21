@@ -416,16 +416,19 @@ public class SpreadJob : IDisposable
 
             lock (_lock) _activeTransfers[transferKey] = info;
 
-            transfer.BytesTransferred += bytes =>
+            long lastReportedBytes = 0;
+            transfer.BytesTransferred += totalBytes =>
             {
+                var delta = totalBytes - lastReportedBytes;
+                lastReportedBytes = totalBytes;
                 var elapsed = (DateTime.UtcNow - startTime).TotalSeconds;
                 lock (_lock)
                 {
-                    _siteProgress[dstId].BytesTransferred += bytes;
+                    _siteProgress[dstId].BytesTransferred += delta;
                     if (elapsed > 0)
-                        _siteProgress[dstId].SpeedBps = bytes / elapsed;
-                    info.BytesTransferred = bytes;
-                    info.SpeedBps = elapsed > 0 ? bytes / elapsed : 0;
+                        _siteProgress[dstId].SpeedBps = totalBytes / elapsed;
+                    info.BytesTransferred = totalBytes;
+                    info.SpeedBps = elapsed > 0 ? totalBytes / elapsed : 0;
                 }
                 ProgressChanged?.Invoke(this);
             };

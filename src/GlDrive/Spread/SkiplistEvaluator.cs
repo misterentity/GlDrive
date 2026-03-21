@@ -5,12 +5,13 @@ namespace GlDrive.Spread;
 
 public class SkiplistEvaluator
 {
+    private static readonly TimeSpan MatchTimeout = TimeSpan.FromMilliseconds(100);
+
     public SkiplistAction Evaluate(string fileName, bool isDir, bool inRace,
         string serverId, string? section,
         IReadOnlyList<SkiplistRule> siteRules,
         IReadOnlyList<SkiplistRule> globalRules)
     {
-        // Site rules first, then global. First match wins.
         var result = EvaluateRules(fileName, isDir, inRace, section, siteRules);
         if (result.HasValue) return result.Value;
 
@@ -40,22 +41,30 @@ public class SkiplistEvaluator
     {
         if (string.IsNullOrEmpty(pattern)) return false;
 
-        if (isRegex)
+        try
         {
-            try
+            if (isRegex)
             {
-                return Regex.IsMatch(fileName, pattern, RegexOptions.IgnoreCase);
+                return Regex.IsMatch(fileName, pattern,
+                    RegexOptions.IgnoreCase | RegexOptions.NonBacktracking,
+                    MatchTimeout);
             }
-            catch
-            {
-                return false;
-            }
-        }
 
-        // Glob-style matching: * matches anything, ? matches single char
-        var regexPattern = "^" + Regex.Escape(pattern)
-            .Replace("\\*", ".*")
-            .Replace("\\?", ".") + "$";
-        return Regex.IsMatch(fileName, regexPattern, RegexOptions.IgnoreCase);
+            // Glob-style: * matches anything, ? matches single char
+            var regexPattern = "^" + Regex.Escape(pattern)
+                .Replace("\\*", ".*")
+                .Replace("\\?", ".") + "$";
+            return Regex.IsMatch(fileName, regexPattern,
+                RegexOptions.IgnoreCase | RegexOptions.NonBacktracking,
+                MatchTimeout);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }

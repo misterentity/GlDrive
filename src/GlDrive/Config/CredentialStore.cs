@@ -164,4 +164,29 @@ public static class CredentialStore
             throw;
         }
     }
+
+    // API keys stored securely in Credential Manager
+
+    public static string? GetApiKey(string service)
+    {
+        try
+        {
+            var cred = CredentialManager.ReadCredential($"GlDrive:api:{service}");
+            return cred?.Password;
+        }
+        catch { return null; }
+    }
+
+    public static void SaveApiKey(string service, string key)
+    {
+        if (string.IsNullOrEmpty(key)) return;
+        try
+        {
+            CredentialManager.WriteCredential($"GlDrive:api:{service}", service, key, CredentialPersistence.LocalMachine);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to save API key for {Service}", service);
+        }
+    }
 }

@@ -227,8 +227,8 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     }
 
     public string[] QualityOptions { get; } = ["Any", "SD", "720p", "1080p", "2160p"];
-    public bool HasTmdbKey => !string.IsNullOrEmpty(_config.Downloads.TmdbApiKey);
-    public bool HasNoTmdbKey => string.IsNullOrEmpty(_config.Downloads.TmdbApiKey);
+    public bool HasTmdbKey => !string.IsNullOrEmpty(_config.Downloads.ResolveTmdbKey());
+    public bool HasNoTmdbKey => string.IsNullOrEmpty(_config.Downloads.ResolveTmdbKey());
 
     // Notification filter properties
     public string NotificationFilterText
@@ -522,7 +522,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     private void AddMedia(MediaType type)
     {
-        var dialog = new MetadataSearchDialog(type, _config.Downloads.OmdbApiKey)
+        var dialog = new MetadataSearchDialog(type, _config.Downloads.ResolveOmdbKey())
         {
             Owner = Application.Current.Windows.OfType<DashboardWindow>().FirstOrDefault()
         };
@@ -893,7 +893,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
             if (loadMovies && HasTmdbKey)
             {
-                using var tmdb = new TmdbClient(_config.Downloads.TmdbApiKey);
+                using var tmdb = new TmdbClient(_config.Downloads.ResolveTmdbKey());
                 var from = DateOnly.FromDateTime(DateTime.Today);
                 var to = DateOnly.FromDateTime(DateTime.Today.AddDays(30));
                 var movies = await tmdb.GetUpcomingReleases(from, to);
@@ -1043,7 +1043,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             // Fetch detail for ImdbId if we don't have it
             if (string.IsNullOrEmpty(movie.ImdbId) && HasTmdbKey)
             {
-                using var tmdb = new TmdbClient(_config.Downloads.TmdbApiKey);
+                using var tmdb = new TmdbClient(_config.Downloads.ResolveTmdbKey());
                 var detail = await tmdb.GetMovieDetail(movie.TmdbId);
                 if (detail != null)
                 {
@@ -1092,7 +1092,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private async Task RefreshAllMetadata()
     {
         using var tvMaze = new TvMazeClient();
-        using var omdb = new OmdbClient(_config.Downloads.OmdbApiKey);
+        using var omdb = new OmdbClient(_config.Downloads.ResolveOmdbKey());
         var updated = 0;
 
         foreach (var item in _wishlistStore.Items.ToList())
@@ -1230,7 +1230,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             }
             else
             {
-                var omdbKey = _config.Downloads.OmdbApiKey;
+                var omdbKey = _config.Downloads.ResolveOmdbKey();
                 if (!string.IsNullOrEmpty(omdbKey))
                 {
                     using var omdb = new OmdbClient(omdbKey);

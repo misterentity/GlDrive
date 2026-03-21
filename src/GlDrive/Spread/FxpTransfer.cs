@@ -195,10 +195,9 @@ public class FxpTransfer
 
             SetState(TransferState.Transferring);
 
-            // Pump data
+            // Pump data with hard timeout via CancellationToken
             var buf = new byte[256 * 1024];
             long totalRelayed = 0;
-            var lastProgress = DateTime.UtcNow;
 
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec > 0 ? timeoutSec * 20 : 24000));
@@ -210,14 +209,10 @@ public class FxpTransfer
                 totalRelayed += rd;
                 TotalBytes = totalRelayed;
                 BytesTransferred?.Invoke(totalRelayed);
-                lastProgress = DateTime.UtcNow;
-
-                // Check for stall
-                if ((DateTime.UtcNow - lastProgress).TotalSeconds > timeoutSec)
-                    throw new TimeoutException("Relay transfer stalled");
             }
 
-            await dstSsl.FlushAsync(ct);
+            // Flush with non-cancellable token to ensure all data reaches dest
+            await dstSsl.FlushAsync(CancellationToken.None);
 
             // Close data connections
             srcSsl.Close();
