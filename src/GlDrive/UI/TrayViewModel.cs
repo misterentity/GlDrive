@@ -175,7 +175,8 @@ public class TrayViewModel : INotifyPropertyChanged
             {
                 AvailableUpdate = release;
                 ShowNotification("GlDrive", $"Downloading {release.TagName}...");
-                await _updateChecker.DownloadAndInstallAsync(release);
+                // Run download + extract off the UI thread to prevent lockup
+                await Task.Run(() => _updateChecker.DownloadAndInstallAsync(release));
             }
             else
             {
