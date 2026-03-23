@@ -239,7 +239,11 @@
 
                 <!-- Spread/FXP Settings -->
                 <TextBlock Text="Spread / FXP" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                <TextBlock Text="Sections (Name=Path, one per line):" Margin="0,0,0,2"/>
+                <DockPanel Margin="0,0,0,2">
+                    <Button DockPanel.Dock="Right" Content="Auto-Detect" Click="AutoDetectSections_Click"
+                            Padding="8,2" Margin="6,0,0,0" VerticalAlignment="Bottom"/>
+                    <TextBlock Text="Sections (Name=Path, one per line):" VerticalAlignment="Bottom"/>
+                </DockPanel>
                 <TextBox x:Name="SpreadSectionsBox" AcceptsReturn="True" TextWrapping="Wrap"
                          Height="80" VerticalScrollBarVisibility="Auto" Margin="0,0,0,8"
                          ToolTip="e.g. MP3=/site/mp3&#x0a;0DAY=/site/0day"/>

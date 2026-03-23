@@ -28,9 +28,11 @@ public class BrowseViewModel : INotifyPropertyChanged, IDisposable
     public ObservableCollection<BrowseItemVm> RightItems { get; } = new();
     public ObservableCollection<string> ServerList { get; } = new();
 
-    // Selected items for FXP (bound from DataGrid)
+    // Selected items for FXP (bound from DataGrid — supports multi-select via code-behind)
     public BrowseItemVm? SelectedLeftItem { get; set; }
     public BrowseItemVm? SelectedRightItem { get; set; }
+    public List<BrowseItemVm> SelectedLeftItems { get; set; } = new();
+    public List<BrowseItemVm> SelectedRightItems { get; set; } = new();
 
     public string LeftServer
     {
@@ -225,20 +227,26 @@ public class BrowseViewModel : INotifyPropertyChanged, IDisposable
 
     private async Task FxpToRight()
     {
-        if (SelectedLeftItem == null || SelectedLeftItem.Name == "..") return;
-        await DoFxp(LeftServer, RightServer, SelectedLeftItem, RightPath);
+        var items = SelectedLeftItems.Where(i => i.Name != "..").ToList();
+        if (items.Count == 0 && SelectedLeftItem != null && SelectedLeftItem.Name != "..")
+            items.Add(SelectedLeftItem);
+        if (items.Count == 0) return;
+        await DoFxpMulti(LeftServer, RightServer, items, RightPath);
         await LoadRightAsync();
     }
 
     private async Task FxpToLeft()
     {
-        if (SelectedRightItem == null || SelectedRightItem.Name == "..") return;
-        await DoFxp(RightServer, LeftServer, SelectedRightItem, LeftPath);
+        var items = SelectedRightItems.Where(i => i.Name != "..").ToList();
+        if (items.Count == 0 && SelectedRightItem != null && SelectedRightItem.Name != "..")
+            items.Add(SelectedRightItem);
+        if (items.Count == 0) return;
+        await DoFxpMulti(RightServer, LeftServer, items, LeftPath);
         await LoadLeftAsync();
     }
 
-    private async Task DoFxp(string srcName, string dstName,
-        BrowseItemVm item, string dstPath)
+    private async Task DoFxpMulti(string srcName, string dstName,
+        List<BrowseItemVm> items, string dstPath)
     {
         var spread = _serverManager.Spread;
         if (spread == null) return;
@@ -254,19 +262,32 @@ public class BrowseViewModel : INotifyPropertyChanged, IDisposable
         IsBusy = true;
         try
         {
-            if (item.IsDirectory) return;
-
-            // Ensure dest directory exists before FXP
-            if (dstServer.Pool != null)
+            foreach (var item in items)
             {
-                await using var conn = await dstServer.Pool.Borrow(ct);
-                await conn.Client.Execute($"MKD {dstPath}", ct);
-            }
+                if (item.IsDirectory)
+                {
+                    // Recursive directory FXP
+                    var destDir = dstPath.TrimEnd('/') + "/" + item.Name;
+                    await Task.Run(() => spread.StartFxpDirectory(
+                        srcServer.ServerId, item.FullPath,
+                        dstServer.ServerId, destDir, ct));
+                }
+                else
+                {
+                    // Single file FXP
+                    if (dstServer.Pool != null)
+                    {
+                        await using var conn = await dstServer.Pool.Borrow(ct);
+                        await conn.Client.Execute($"MKD {dstPath}", ct);
+                    }
 
-            var destFile = dstPath.TrimEnd('/') + "/" + item.Name;
-            await Task.Run(() => spread.StartFxp(srcServer.ServerId, item.FullPath,
-                dstServer.ServerId, destFile, ct));
+                    var destFile = dstPath.TrimEnd('/') + "/" + item.Name;
+                    await Task.Run(() => spread.StartFxp(srcServer.ServerId, item.FullPath,
+                        dstServer.ServerId, destFile, ct));
+                }
+            }
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex)
         {
             Log.Warning(ex, "FXP failed");

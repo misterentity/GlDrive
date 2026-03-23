@@ -50,6 +50,7 @@ public class SpreadJob : IDisposable
     private DateTime _lastScanTime = DateTime.MinValue;
     private Task? _backgroundScan;
     private const double ScanIntervalSeconds = 5.0;
+    private bool _isNuked;
 
     // Pre-computed affil checks (computed once per job)
     private readonly Dictionary<string, bool> _affilCache = new();
@@ -140,6 +141,13 @@ public class SpreadJob : IDisposable
                     }
                 }
 
+                // Check for nuked release
+                if (_isNuked)
+                {
+                    SetFailed("Release is NUKED — aborting race");
+                    return;
+                }
+
                 // 2. Parse SFV if discovered (non-blocking — fire and forget)
                 if (_pendingSfv is { } sfv && _expectedFileCount == 0)
                 {
@@ -224,29 +232,23 @@ public class SpreadJob : IDisposable
 
     private async Task ScanSites(Dictionary<string, string> sitePaths, CancellationToken ct)
     {
-        // Scan all sites in parallel, collect results
-        var results = new List<(string serverId, FtpListItem[] items)>();
+        // Scan all sites in parallel with recursive directory enumeration
+        var results = new List<(string serverId, List<SpreadFileInfo> files)>();
         var scanLock = new Lock();
 
         var tasks = sitePaths.Select(async kvp =>
         {
-            var (serverId, path) = kvp;
+            var (serverId, basePath) = kvp;
             try
             {
                 if (!_pools.TryGetValue(serverId, out var pool)) return;
-                await using var conn = await pool.Borrow(ct);
-
-                FtpListItem[] items;
-                if (pool.UseCpsv)
-                    items = await CpsvDataHelper.ListDirectory(conn.Client, path, pool.ControlHost, ct);
-                else
-                    items = await conn.Client.GetListing(path, FtpListOption.AllFiles, ct);
-
-                lock (scanLock) results.Add((serverId, items));
+                var files = new List<SpreadFileInfo>();
+                await ScanDirectoryRecursive(pool, basePath, basePath, files, 0, ct);
+                lock (scanLock) results.Add((serverId, files));
             }
             catch (Exception ex)
             {
-                Log.Debug(ex, "Spread scan failed for {Server} at {Path}", serverId, path);
+                Log.Debug(ex, "Spread scan failed for {Server} at {Path}", serverId, basePath);
             }
         });
 
@@ -255,45 +257,96 @@ public class SpreadJob : IDisposable
         // Process all results under lock once
         lock (_ownershipLock)
         {
-            foreach (var (serverId, items) in results)
-                ProcessListing(serverId, items);
+            foreach (var (serverId, files) in results)
+                ProcessFiles(serverId, files);
         }
     }
 
-    private void ProcessListing(string serverId, FtpListItem[] items)
+    private async Task ScanDirectoryRecursive(FtpConnectionPool pool, string basePath,
+        string currentPath, List<SpreadFileInfo> files, int depth, CancellationToken ct)
+    {
+        if (depth > 3) return; // Max recursion depth
+
+        await using var conn = await pool.Borrow(ct);
+
+        FtpListItem[] items;
+        if (pool.UseCpsv)
+            items = await CpsvDataHelper.ListDirectory(conn.Client, currentPath, pool.ControlHost, ct);
+        else
+            items = await conn.Client.GetListing(currentPath, FtpListOption.AllFiles, ct);
+
+        foreach (var item in items)
+        {
+            if (item.Type == FtpObjectType.Directory)
+            {
+                // Check for nuke markers
+                foreach (var marker in _spreadConfig.NukeMarkers)
+                {
+                    if (item.Name.Contains(marker, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _isNuked = true;
+                        return;
+                    }
+                }
+
+                // Recurse into subdirectories (Sample/, Subs/, CD1/, etc.)
+                await ScanDirectoryRecursive(pool, basePath, item.FullName, files, depth + 1, ct);
+            }
+            else if (item.Type == FtpObjectType.File)
+            {
+                // Check for nuke marker files
+                foreach (var marker in _spreadConfig.NukeMarkers)
+                {
+                    if (item.Name.Contains(marker, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _isNuked = true;
+                        return;
+                    }
+                }
+
+                // Store relative path from release root for subdir support
+                var relativePath = item.FullName;
+                if (relativePath.StartsWith(basePath))
+                    relativePath = relativePath[basePath.Length..].TrimStart('/');
+                else
+                    relativePath = item.Name;
+
+                files.Add(new SpreadFileInfo
+                {
+                    Name = relativePath, // e.g. "CD1/track01.mp3" or "file.rar"
+                    FullPath = item.FullName,
+                    Size = item.Size
+                });
+            }
+        }
+    }
+
+    private void ProcessFiles(string serverId, List<SpreadFileInfo> files)
     {
         // Called inside _ownershipLock
         var serverConfig = _serverConfigs[serverId];
         var siteRules = serverConfig.SpreadSite.Skiplist;
         var globalRules = _spreadConfig.GlobalSkiplist;
 
-        foreach (var item in items)
+        foreach (var file in files)
         {
-            if (item.Type != FtpObjectType.File) continue;
-
-            var action = _skiplist.Evaluate(item.Name, false, true,
+            var fileName = Path.GetFileName(file.Name);
+            var action = _skiplist.Evaluate(fileName, false, true,
                 serverId, Section, siteRules, globalRules);
             if (action == SkiplistAction.Deny) continue;
 
-            if (!_fileOwnership.TryGetValue(item.Name, out var owners))
+            if (!_fileOwnership.TryGetValue(file.Name, out var owners))
             {
                 owners = new HashSet<string>();
-                _fileOwnership[item.Name] = owners;
+                _fileOwnership[file.Name] = owners;
             }
             owners.Add(serverId);
 
-            if (!_fileInfos.ContainsKey(item.Name))
-            {
-                _fileInfos[item.Name] = new SpreadFileInfo
-                {
-                    Name = item.Name,
-                    FullPath = item.FullName,
-                    Size = item.Size
-                };
-            }
+            if (!_fileInfos.ContainsKey(file.Name))
+                _fileInfos[file.Name] = file;
 
-            if (item.Name.EndsWith(".sfv", StringComparison.OrdinalIgnoreCase) && _expectedFileCount == 0)
-                _pendingSfv = (serverId, item.FullName);
+            if (fileName.EndsWith(".sfv", StringComparison.OrdinalIgnoreCase) && _expectedFileCount == 0)
+                _pendingSfv = (serverId, file.FullPath);
         }
 
         // Update site progress
@@ -457,8 +510,8 @@ public class SpreadJob : IDisposable
             srcConn = await srcTask;
             dstConn = await dstTask;
 
-            // Ensure dest directory exists
-            await dstConn.Client.Execute($"MKD {dstBasePath}", ct);
+            // Ensure dest directory tree exists (handles subdirs like CD1/, Sample/)
+            await EnsureDirectoryExists(dstConn.Client, dstBasePath, file.Name, ct);
 
             var dstPath = dstBasePath.TrimEnd('/') + "/" + file.Name;
             var srcPath = file.FullPath;
@@ -565,6 +618,25 @@ public class SpreadJob : IDisposable
                 if (owned < _fileInfos.Count) return false;
             }
             return true;
+        }
+    }
+
+    private static async Task EnsureDirectoryExists(FluentFTP.AsyncFtpClient client,
+        string basePath, string relativePath, CancellationToken ct)
+    {
+        // MKD the base release directory
+        await client.Execute($"MKD {basePath}", ct);
+
+        // If file is in a subdirectory (e.g. "CD1/file.rar"), create nested dirs
+        var dirPart = Path.GetDirectoryName(relativePath)?.Replace('\\', '/');
+        if (string.IsNullOrEmpty(dirPart)) return;
+
+        var parts = dirPart.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var current = basePath.TrimEnd('/');
+        foreach (var part in parts)
+        {
+            current += "/" + part;
+            await client.Execute($"MKD {current}", ct);
         }
     }
 

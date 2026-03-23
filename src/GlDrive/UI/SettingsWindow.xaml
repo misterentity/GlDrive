@@ -155,7 +155,14 @@
                                  Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
                         <TextBlock Text="Hard Timeout (seconds, max race duration):" Margin="0,0,0,4"/>
                         <TextBox Text="{Binding SpreadHardTimeout, UpdateSourceTrigger=PropertyChanged}"
-                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,12"/>
+                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+                        <TextBlock Text="Max Concurrent Races:" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding SpreadMaxConcurrent, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+                        <CheckBox Content="Auto-race when new releases are detected"
+                                  IsChecked="{Binding SpreadAutoRace}" Margin="0,0,0,4"/>
+                        <CheckBox Content="Show tray notification on race completion"
+                                  IsChecked="{Binding SpreadNotifyComplete}" Margin="0,0,0,12"/>
 
                         <Separator Margin="0,0,0,12"/>
                         <TextBlock Text="Global Skiplist" FontWeight="SemiBold" Margin="0,0,0,8"/>
