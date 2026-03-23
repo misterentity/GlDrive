@@ -195,23 +195,29 @@ public class FxpTransfer
 
             SetState(TransferState.Transferring);
 
-            // Pump data with hard timeout via CancellationToken
-            var buf = new byte[256 * 1024];
+            // Double-buffered relay: read next chunk while writing current
+            var buf1 = new byte[256 * 1024];
+            var buf2 = new byte[256 * 1024];
             long totalRelayed = 0;
 
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec > 0 ? timeoutSec * 20 : 24000));
 
-            int rd;
-            while ((rd = await srcSsl.ReadAsync(buf, timeoutCts.Token)) > 0)
+            var rd = await srcSsl.ReadAsync(buf1, timeoutCts.Token);
+            while (rd > 0)
             {
-                await dstSsl.WriteAsync(buf.AsMemory(0, rd), timeoutCts.Token);
+                // Start next read into buf2 while writing buf1
+                var nextRead = srcSsl.ReadAsync(buf2, timeoutCts.Token);
+                await dstSsl.WriteAsync(buf1.AsMemory(0, rd), timeoutCts.Token);
                 totalRelayed += rd;
                 TotalBytes = totalRelayed;
                 BytesTransferred?.Invoke(totalRelayed);
+
+                rd = await nextRead;
+                // Swap buffers
+                (buf1, buf2) = (buf2, buf1);
             }
 
-            // Flush with non-cancellable token to ensure all data reaches dest
             await dstSsl.FlushAsync(CancellationToken.None);
 
             // Close data connections

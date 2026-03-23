@@ -1,5 +1,4 @@
 using System.IO;
-using System.Text.RegularExpressions;
 using FluentFTP;
 using GlDrive.Config;
 using GlDrive.Ftp;
@@ -30,20 +29,30 @@ public class SpreadJob : IDisposable
     private readonly SpeedTracker _speedTracker;
     private readonly SkiplistEvaluator _skiplist;
     private readonly CancellationTokenSource _cts = new();
-    private readonly Lock _lock = new();
 
-    // File tracking: fileName -> set of serverIds that have it
+    // Split locks by concern to reduce contention
+    private readonly Lock _ownershipLock = new();   // _fileOwnership, _fileInfos, _expectedFileCount
+    private readonly Lock _progressLock = new();    // _siteProgress, _activeTransfers
+    private readonly Lock _failureLock = new();     // _failureCounts
+
+    // File tracking
     private readonly Dictionary<string, HashSet<string>> _fileOwnership = new();
     private readonly Dictionary<string, SpreadFileInfo> _fileInfos = new();
     private readonly Dictionary<string, SiteProgress> _siteProgress = new();
     private int _expectedFileCount;
     private (string serverId, string path)? _pendingSfv;
 
-    // Transfer failure tracking: "file|src|dst" -> failure count
+    // Transfer tracking
     private readonly Dictionary<string, int> _failureCounts = new();
-
-    // Active transfer tracking for UI
     private readonly Dictionary<string, ActiveTransferInfo> _activeTransfers = new();
+
+    // Scan debouncing
+    private DateTime _lastScanTime = DateTime.MinValue;
+    private Task? _backgroundScan;
+    private const double ScanIntervalSeconds = 5.0;
+
+    // Pre-computed affil checks (computed once per job)
+    private readonly Dictionary<string, bool> _affilCache = new();
 
     public string Id { get; } = Guid.NewGuid().ToString("N")[..8];
     public string ReleaseName { get; }
@@ -54,7 +63,7 @@ public class SpreadJob : IDisposable
     public IReadOnlyDictionary<string, SiteProgress> Sites => _siteProgress;
     public IReadOnlyList<ActiveTransferInfo> ActiveTransferList
     {
-        get { lock (_lock) return _activeTransfers.Values.ToList(); }
+        get { lock (_progressLock) return _activeTransfers.Values.ToList(); }
     }
 
     public event Action<SpreadJob>? ProgressChanged;
@@ -84,6 +93,11 @@ public class SpreadJob : IDisposable
                 ServerId = serverId,
                 ServerName = config.Name
             };
+
+            // Pre-compute affil check once
+            _affilCache[serverId] = config.SpreadSite.Affils.Count > 0 &&
+                config.SpreadSite.Affils.Any(g =>
+                    releaseName.Contains(g, StringComparison.OrdinalIgnoreCase));
         }
     }
 
@@ -93,15 +107,11 @@ public class SpreadJob : IDisposable
 
         try
         {
-            // Resolve section paths
             var sitePaths = new Dictionary<string, string>();
             foreach (var (serverId, config) in _serverConfigs)
             {
                 if (config.SpreadSite.Sections.TryGetValue(Section, out var sectionPath))
-                {
-                    var releasePath = sectionPath.TrimEnd('/') + "/" + ReleaseName;
-                    sitePaths[serverId] = releasePath;
-                }
+                    sitePaths[serverId] = sectionPath.TrimEnd('/') + "/" + ReleaseName;
             }
 
             if (sitePaths.Count < 2)
@@ -110,33 +120,38 @@ public class SpreadJob : IDisposable
                 return;
             }
 
-            // Hard timeout
             using var hardTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             hardTimeout.CancelAfter(TimeSpan.FromSeconds(_spreadConfig.HardTimeoutSeconds));
             var token = hardTimeout.Token;
 
             var lastActivity = DateTime.UtcNow;
             var scorer = new SpreadScorer(_speedTracker);
+            var consecutiveEmpty = 0;
 
-            // Main spread loop
             while (!token.IsCancellationRequested && State == SpreadJobState.Running)
             {
-                // 1. Scan all sites for files
-                await ScanSites(sitePaths, token);
+                // 1. Background scan with debounce — don't block the scoring loop
+                if (_backgroundScan == null || _backgroundScan.IsCompleted)
+                {
+                    if ((DateTime.UtcNow - _lastScanTime).TotalSeconds >= ScanIntervalSeconds)
+                    {
+                        _lastScanTime = DateTime.UtcNow;
+                        _backgroundScan = ScanSites(sitePaths, token);
+                    }
+                }
 
-                // Parse SFV if discovered during scan
+                // 2. Parse SFV if discovered (non-blocking — fire and forget)
                 if (_pendingSfv is { } sfv && _expectedFileCount == 0)
                 {
                     _pendingSfv = null;
-                    await ParseSfvForCount(sfv.serverId, sfv.path);
+                    _ = ParseSfvForCount(sfv.serverId, sfv.path);
                 }
 
-                // 2. Find transfers to execute
+                // 3. Find best transfer — pre-compute speed map outside lock
                 var transfer = FindBestTransfer(sitePaths, scorer);
 
                 if (transfer == null)
                 {
-                    // Check completion
                     if (IsJobComplete())
                     {
                         State = SpreadJobState.Completed;
@@ -144,26 +159,35 @@ public class SpreadJob : IDisposable
                         return;
                     }
 
-                    // No viable transfers — check for stall
-                    var activeCount = _siteProgress.Values.Sum(s => s.ActiveTransfers);
+                    int activeCount;
+                    lock (_progressLock)
+                        activeCount = _siteProgress.Values.Sum(s => s.ActiveTransfers);
+
                     if (activeCount == 0 && (DateTime.UtcNow - lastActivity).TotalSeconds > 60)
                     {
                         SetFailed("No activity for 60 seconds, no viable transfers");
                         return;
                     }
 
-                    await Task.Delay(2000, token);
+                    // Adaptive backoff when idle
+                    consecutiveEmpty++;
+                    var delay = Math.Min(consecutiveEmpty * 1000, 5000);
+                    await Task.Delay(delay, token);
                     continue;
                 }
 
                 lastActivity = DateTime.UtcNow;
+                consecutiveEmpty = 0;
 
-                // 3. Execute the transfer
+                // 4. Claim slots atomically before starting transfer
                 var (file, srcId, dstId) = transfer.Value;
-                _ = ExecuteTransfer(file, srcId, dstId, sitePaths[dstId], token);
+                if (TryClaimSlots(srcId, dstId))
+                {
+                    _ = ExecuteTransfer(file, srcId, dstId, sitePaths[dstId], token);
+                }
 
-                // Brief pause to let scoring settle
-                await Task.Delay(100, token);
+                // Brief pause between scheduling — enough time for next score round
+                await Task.Delay(500, token);
             }
 
             if (State == SpreadJobState.Running)
@@ -180,8 +204,30 @@ public class SpreadJob : IDisposable
         }
     }
 
+    private bool TryClaimSlots(string srcId, string dstId)
+    {
+        lock (_progressLock)
+        {
+            var srcProgress = _siteProgress[srcId];
+            var dstProgress = _siteProgress[dstId];
+            var srcConfig = _serverConfigs[srcId];
+            var dstConfig = _serverConfigs[dstId];
+
+            if (srcProgress.ActiveTransfers >= srcConfig.SpreadSite.MaxDownloadSlots) return false;
+            if (dstProgress.ActiveTransfers >= dstConfig.SpreadSite.MaxUploadSlots) return false;
+
+            srcProgress.ActiveTransfers++;
+            dstProgress.ActiveTransfers++;
+            return true;
+        }
+    }
+
     private async Task ScanSites(Dictionary<string, string> sitePaths, CancellationToken ct)
     {
+        // Scan all sites in parallel, collect results
+        var results = new List<(string serverId, FtpListItem[] items)>();
+        var scanLock = new Lock();
+
         var tasks = sitePaths.Select(async kvp =>
         {
             var (serverId, path) = kvp;
@@ -196,7 +242,7 @@ public class SpreadJob : IDisposable
                 else
                     items = await conn.Client.GetListing(path, FtpListOption.AllFiles, ct);
 
-                ProcessListing(serverId, items, path);
+                lock (scanLock) results.Add((serverId, items));
             }
             catch (Exception ex)
             {
@@ -205,47 +251,54 @@ public class SpreadJob : IDisposable
         });
 
         await Task.WhenAll(tasks);
+
+        // Process all results under lock once
+        lock (_ownershipLock)
+        {
+            foreach (var (serverId, items) in results)
+                ProcessListing(serverId, items);
+        }
     }
 
-    private void ProcessListing(string serverId, FtpListItem[] items, string basePath)
+    private void ProcessListing(string serverId, FtpListItem[] items)
     {
+        // Called inside _ownershipLock
         var serverConfig = _serverConfigs[serverId];
         var siteRules = serverConfig.SpreadSite.Skiplist;
         var globalRules = _spreadConfig.GlobalSkiplist;
 
-        lock (_lock)
+        foreach (var item in items)
         {
-            foreach (var item in items)
+            if (item.Type != FtpObjectType.File) continue;
+
+            var action = _skiplist.Evaluate(item.Name, false, true,
+                serverId, Section, siteRules, globalRules);
+            if (action == SkiplistAction.Deny) continue;
+
+            if (!_fileOwnership.TryGetValue(item.Name, out var owners))
             {
-                if (item.Type != FtpObjectType.File) continue;
+                owners = new HashSet<string>();
+                _fileOwnership[item.Name] = owners;
+            }
+            owners.Add(serverId);
 
-                var action = _skiplist.Evaluate(item.Name, false, true,
-                    serverId, Section, siteRules, globalRules);
-                if (action == SkiplistAction.Deny) continue;
-
-                if (!_fileOwnership.TryGetValue(item.Name, out var owners))
+            if (!_fileInfos.ContainsKey(item.Name))
+            {
+                _fileInfos[item.Name] = new SpreadFileInfo
                 {
-                    owners = new HashSet<string>();
-                    _fileOwnership[item.Name] = owners;
-                }
-                owners.Add(serverId);
-
-                if (!_fileInfos.ContainsKey(item.Name))
-                {
-                    _fileInfos[item.Name] = new SpreadFileInfo
-                    {
-                        Name = item.Name,
-                        FullPath = item.FullName,
-                        Size = item.Size
-                    };
-                }
-
-                // Parse SFV to get expected file count (queued, not fire-and-forget)
-                if (item.Name.EndsWith(".sfv", StringComparison.OrdinalIgnoreCase) && _expectedFileCount == 0)
-                    _pendingSfv = (serverId, item.FullName);
+                    Name = item.Name,
+                    FullPath = item.FullName,
+                    Size = item.Size
+                };
             }
 
-            // Update site progress
+            if (item.Name.EndsWith(".sfv", StringComparison.OrdinalIgnoreCase) && _expectedFileCount == 0)
+                _pendingSfv = (serverId, item.FullName);
+        }
+
+        // Update site progress
+        lock (_progressLock)
+        {
             if (_siteProgress.TryGetValue(serverId, out var progress))
             {
                 progress.FilesOwned = _fileOwnership.Count(kv => kv.Value.Contains(serverId));
@@ -276,15 +329,17 @@ public class SpreadJob : IDisposable
             }
 
             var content = System.Text.Encoding.UTF8.GetString(data);
-            var lines = content.Split('\n')
-                .Select(l => l.Trim())
-                .Where(l => !string.IsNullOrEmpty(l) && !l.StartsWith(';'))
-                .ToList();
-
-            lock (_lock)
+            var lineCount = 0;
+            foreach (var line in content.Split('\n'))
             {
-                // SFV has "filename checksum" lines — count = expected file count + 1 (the SFV itself)
-                _expectedFileCount = lines.Count + 1; // +1 for the SFV file
+                var trimmed = line.TrimEnd('\r').TrimStart();
+                if (!string.IsNullOrEmpty(trimmed) && !trimmed.StartsWith(';'))
+                    lineCount++;
+            }
+
+            lock (_ownershipLock)
+            {
+                _expectedFileCount = lineCount + 1; // +1 for the SFV itself
             }
         }
         catch (Exception ex)
@@ -297,16 +352,30 @@ public class SpreadJob : IDisposable
         Dictionary<string, string> sitePaths, SpreadScorer scorer)
     {
         var elapsed = DateTime.UtcNow - StartedAt;
-        var candidates = new List<(SpreadFileInfo file, string srcId, string dstId, int score)>();
 
-        lock (_lock)
+        // Pre-compute speed map OUTSIDE lock
+        var maxSpeed = 1.0;
+        foreach (var src in _pools.Keys)
         {
-            var maxFileSize = _fileInfos.Values.Max(f => f.Size);
-            var allSpeeds = _pools.Keys
-                .SelectMany(src => _pools.Keys.Where(dst => dst != src)
-                    .Select(dst => _speedTracker.GetAverageSpeed(src, dst)))
-                .Where(s => s > 0);
-            var maxSpeed = allSpeeds.Any() ? allSpeeds.Max() : 1.0;
+            foreach (var dst in _pools.Keys)
+            {
+                if (src == dst) continue;
+                var speed = _speedTracker.GetAverageSpeed(src, dst);
+                if (speed > maxSpeed) maxSpeed = speed;
+            }
+        }
+
+        SpreadFileInfo? bestFile = null;
+        string? bestSrc = null, bestDst = null;
+        int bestScore = -1;
+
+        lock (_ownershipLock)
+        {
+            if (_fileInfos.Count == 0) return null;
+
+            var maxFileSize = 1L;
+            foreach (var fi in _fileInfos.Values)
+                if (fi.Size > maxFileSize) maxFileSize = fi.Size;
 
             foreach (var (fileName, owners) in _fileOwnership)
             {
@@ -317,33 +386,30 @@ public class SpreadJob : IDisposable
                     foreach (var (dstId, _) in sitePaths)
                     {
                         if (srcId == dstId) continue;
-                        if (owners.Contains(dstId)) continue; // dest already has it
+                        if (owners.Contains(dstId)) continue;
 
                         var dstConfig = _serverConfigs[dstId];
                         if (dstConfig.SpreadSite.DownloadOnly) continue;
+                        if (_affilCache.GetValueOrDefault(dstId)) continue;
 
-                        // Check affiliation — don't spread affil group releases to this site
-                        if (dstConfig.SpreadSite.Affils.Count > 0)
+                        // Check slots under progress lock
+                        bool slotsAvailable;
+                        lock (_progressLock)
                         {
-                            var isAffil = dstConfig.SpreadSite.Affils.Any(g =>
-                                ReleaseName.Contains(g, StringComparison.OrdinalIgnoreCase));
-                            if (isAffil) continue;
+                            var dstProgress = _siteProgress[dstId];
+                            var srcProgress = _siteProgress[srcId];
+                            slotsAvailable =
+                                dstProgress.ActiveTransfers < dstConfig.SpreadSite.MaxUploadSlots &&
+                                srcProgress.ActiveTransfers < _serverConfigs[srcId].SpreadSite.MaxDownloadSlots;
                         }
-
-                        // Check slot limits
-                        var dstProgress = _siteProgress[dstId];
-                        if (dstProgress.ActiveTransfers >= dstConfig.SpreadSite.MaxUploadSlots) continue;
-
-                        var srcProgress = _siteProgress[srcId];
-                        if (srcProgress.ActiveTransfers >= _serverConfigs[srcId].SpreadSite.MaxDownloadSlots) continue;
+                        if (!slotsAvailable) continue;
 
                         // Check failure backoff
-                        var failKey = $"{fileName}|{srcId}|{dstId}";
-                        if (_failureCounts.TryGetValue(failKey, out var fails) && fails >= 2)
+                        lock (_failureLock)
                         {
-                            var delayMs = fails >= 3 ? 10000 : 3000;
-                            // Skip if we'd be retrying too soon (simplified check)
-                            if (fails >= 5) continue;
+                            var failKey = $"{fileName}|{srcId}|{dstId}";
+                            if (_failureCounts.TryGetValue(failKey, out var fails) && fails >= 5)
+                                continue;
                         }
 
                         var ownedPercent = _pools.Count > 0
@@ -354,24 +420,21 @@ public class SpreadJob : IDisposable
                             dstConfig.SpreadSite.Priority, ownedPercent,
                             maxFileSize, maxSpeed, elapsed, Mode);
 
-                        candidates.Add((fileInfo, srcId, dstId, score));
+                        // Track best inline — no list allocation
+                        if (score > bestScore || (score == bestScore && Random.Shared.Next(2) == 0))
+                        {
+                            bestScore = score;
+                            bestFile = fileInfo;
+                            bestSrc = srcId;
+                            bestDst = dstId;
+                        }
                     }
                 }
             }
         }
 
-        if (candidates.Count == 0) return null;
-
-        // Sort by score descending, random tiebreaker
-        var rng = Random.Shared;
-        candidates.Sort((a, b) =>
-        {
-            var cmp = b.score.CompareTo(a.score);
-            return cmp != 0 ? cmp : rng.Next(-1, 2);
-        });
-
-        var best = candidates[0];
-        return (best.file, best.srcId, best.dstId);
+        if (bestFile == null || bestSrc == null || bestDst == null) return null;
+        return (bestFile, bestSrc, bestDst);
     }
 
     private async Task ExecuteTransfer(SpreadFileInfo file, string srcId, string dstId,
@@ -381,23 +444,21 @@ public class SpreadJob : IDisposable
         var dstPool = _pools[dstId];
         var mode = FxpModeDetector.Detect(srcPool, dstPool);
 
-        lock (_lock)
-        {
-            _siteProgress[srcId].ActiveTransfers++;
-            _siteProgress[dstId].ActiveTransfers++;
-        }
+        // Slots already claimed by TryClaimSlots
 
         PooledConnection? srcConn = null;
         PooledConnection? dstConn = null;
 
         try
         {
-            srcConn = await srcPool.Borrow(ct);
-            dstConn = await dstPool.Borrow(ct);
+            // Borrow both connections in parallel
+            var srcTask = srcPool.Borrow(ct);
+            var dstTask = dstPool.Borrow(ct);
+            srcConn = await srcTask;
+            dstConn = await dstTask;
 
             // Ensure dest directory exists
-            var dstDirReply = await dstConn.Client.Execute($"MKD {dstBasePath}", ct);
-            // Ignore error — directory may already exist
+            await dstConn.Client.Execute($"MKD {dstBasePath}", ct);
 
             var dstPath = dstBasePath.TrimEnd('/') + "/" + file.Name;
             var srcPath = file.FullPath;
@@ -414,7 +475,7 @@ public class SpreadJob : IDisposable
                 DestName = _serverConfigs[dstId].Name
             };
 
-            lock (_lock) _activeTransfers[transferKey] = info;
+            lock (_progressLock) _activeTransfers[transferKey] = info;
 
             long lastReportedBytes = 0;
             transfer.BytesTransferred += totalBytes =>
@@ -422,7 +483,8 @@ public class SpreadJob : IDisposable
                 var delta = totalBytes - lastReportedBytes;
                 lastReportedBytes = totalBytes;
                 var elapsed = (DateTime.UtcNow - startTime).TotalSeconds;
-                lock (_lock)
+
+                lock (_progressLock)
                 {
                     _siteProgress[dstId].BytesTransferred += delta;
                     if (elapsed > 0)
@@ -430,20 +492,26 @@ public class SpreadJob : IDisposable
                     info.BytesTransferred = totalBytes;
                     info.SpeedBps = elapsed > 0 ? totalBytes / elapsed : 0;
                 }
+                // Fire event outside lock
                 ProgressChanged?.Invoke(this);
             };
+
+            // Pipeline TYPE I commands in parallel
+            await Task.WhenAll(
+                srcConn.Client.Execute("TYPE I", ct),
+                dstConn.Client.Execute("TYPE I", ct));
 
             var ok = await transfer.ExecuteAsync(srcConn, dstConn, srcPath, dstPath, mode,
                 _spreadConfig.TransferTimeoutSeconds, ct);
 
-            lock (_lock) _activeTransfers.Remove(transferKey);
+            lock (_progressLock) _activeTransfers.Remove(transferKey);
 
             if (ok)
             {
                 var duration = DateTime.UtcNow - startTime;
                 _speedTracker.RecordTransfer(srcId, dstId, file.Size, duration);
 
-                lock (_lock)
+                lock (_ownershipLock)
                 {
                     if (_fileOwnership.TryGetValue(file.Name, out var owners))
                         owners.Add(dstId);
@@ -454,9 +522,9 @@ public class SpreadJob : IDisposable
             }
             else
             {
-                var failKey = $"{file.Name}|{srcId}|{dstId}";
-                lock (_lock)
+                lock (_failureLock)
                 {
+                    var failKey = $"{file.Name}|{srcId}|{dstId}";
                     _failureCounts.TryGetValue(failKey, out var count);
                     _failureCounts[failKey] = count + 1;
                 }
@@ -473,7 +541,7 @@ public class SpreadJob : IDisposable
             if (srcConn != null) await srcConn.DisposeAsync();
             if (dstConn != null) await dstConn.DisposeAsync();
 
-            lock (_lock)
+            lock (_progressLock)
             {
                 _siteProgress[srcId].ActiveTransfers--;
                 _siteProgress[dstId].ActiveTransfers--;
@@ -485,15 +553,16 @@ public class SpreadJob : IDisposable
 
     private bool IsJobComplete()
     {
-        lock (_lock)
+        lock (_ownershipLock)
         {
             if (_fileInfos.Count == 0) return false;
             if (_expectedFileCount > 0 && _fileInfos.Count < _expectedFileCount) return false;
 
-            foreach (var (serverId, progress) in _siteProgress)
+            foreach (var (serverId, _) in _siteProgress)
             {
                 if (_serverConfigs[serverId].SpreadSite.DownloadOnly) continue;
-                if (progress.FilesOwned < _fileInfos.Count) return false;
+                var owned = _fileOwnership.Count(kv => kv.Value.Contains(serverId));
+                if (owned < _fileInfos.Count) return false;
             }
             return true;
         }
