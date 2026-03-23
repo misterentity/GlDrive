@@ -8,7 +8,13 @@ namespace GlDrive.Downloads;
 
 public static partial class ArchiveExtractor
 {
+    // Old-style volumes: .r00-.r99, .s00-.s99 (2 digits)
+    // Extended volumes: .r000-.r999, .s000-.s999 (3 digits)
+    // Split archives: .001-.999
     private static readonly Regex VolumeExtRegex = MyVolumeExtRegex();
+
+    // Modern RAR multi-part: name.part02.rar, name.part003.rar
+    private static readonly Regex PartNRegex = PartVolumeRegex();
 
     public static async Task<bool> ExtractIfNeeded(string dirPath, CancellationToken ct)
     {
@@ -79,13 +85,16 @@ public static partial class ArchiveExtractor
         var dir = new DirectoryInfo(dirPath);
         if (!dir.Exists) return;
 
-        foreach (var file in dir.GetFiles())
+        var deleted = 0;
+        // Scan all files including subdirectories
+        foreach (var file in dir.GetFiles("*", SearchOption.AllDirectories))
         {
             if (IsArchiveFile(file.Name))
             {
                 try
                 {
                     file.Delete();
+                    deleted++;
                 }
                 catch (Exception ex)
                 {
@@ -93,6 +102,9 @@ public static partial class ArchiveExtractor
                 }
             }
         }
+
+        if (deleted > 0)
+            Log.Information("Deleted {Count} archive files from {Dir}", deleted, dir.Name);
     }
 
     public static bool IsArchiveFile(string fileName)
@@ -100,15 +112,41 @@ public static partial class ArchiveExtractor
         var ext = Path.GetExtension(fileName);
         if (string.IsNullOrEmpty(ext)) return false;
 
-        // .rar, .sfv
-        if (ext.Equals(".rar", StringComparison.OrdinalIgnoreCase) ||
-            ext.Equals(".sfv", StringComparison.OrdinalIgnoreCase))
+        // .rar (includes .part01.rar, .part02.rar since extension is still .rar)
+        if (ext.Equals(".rar", StringComparison.OrdinalIgnoreCase))
             return true;
 
-        // .r00-.r99, .s00-.s99
-        return VolumeExtRegex.IsMatch(ext);
+        // .sfv (checksum file, part of the archive set)
+        if (ext.Equals(".sfv", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // .nfo (info file, part of scene release)
+        // NOT deleted — users want to keep these
+
+        // .zip, .7z, .tar, .gz, .bz2, .xz, .lz, .lzma, .iso, .cab
+        if (ext.Equals(".zip", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".7z", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".tar", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".gz", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".bz2", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".xz", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".iso", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".cab", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // Old-style RAR volumes: .r00-.r99, .r000-.r999, .s00-.s99, .s000-.s999
+        // Split archives: .001-.999
+        if (VolumeExtRegex.IsMatch(ext))
+            return true;
+
+        return false;
     }
 
-    [GeneratedRegex(@"^\.[rs]\d{2}$", RegexOptions.IgnoreCase)]
+    // Matches .r00-.r999, .s00-.s999, .001-.999
+    [GeneratedRegex(@"^\.[rs]\d{2,3}$|^\.\d{3}$", RegexOptions.IgnoreCase)]
     private static partial Regex MyVolumeExtRegex();
+
+    // Matches .partNN.rar pattern (for reference, not used in IsArchiveFile since .rar catches it)
+    [GeneratedRegex(@"\.part\d+\.rar$", RegexOptions.IgnoreCase)]
+    private static partial Regex PartVolumeRegex();
 }
