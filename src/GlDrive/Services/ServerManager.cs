@@ -65,6 +65,9 @@ public class ServerManager : IDisposable
                 RemotePath = remotePath
             });
             NewReleaseDetected?.Invoke(serverId, serverConfig.Name, category, release, remotePath);
+
+            // Auto-race if enabled
+            _spreadManager?.TryAutoRace(category, release);
         };
 
         _servers[serverId] = service;

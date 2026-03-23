@@ -34,6 +34,9 @@ public class SettingsViewModel : INotifyPropertyChanged
     private string _spreadPoolSize;
     private string _spreadTransferTimeout;
     private string _spreadHardTimeout;
+    private string _spreadMaxConcurrent;
+    private bool _spreadAutoRace;
+    private bool _spreadNotifyComplete;
 
     public SettingsViewModel(AppConfig config)
     {
@@ -63,6 +66,9 @@ public class SettingsViewModel : INotifyPropertyChanged
         _spreadPoolSize = config.Spread.SpreadPoolSize.ToString();
         _spreadTransferTimeout = config.Spread.TransferTimeoutSeconds.ToString();
         _spreadHardTimeout = config.Spread.HardTimeoutSeconds.ToString();
+        _spreadMaxConcurrent = config.Spread.MaxConcurrentRaces.ToString();
+        _spreadAutoRace = config.Spread.AutoRaceOnNotification;
+        _spreadNotifyComplete = config.Spread.NotifyOnRaceComplete;
 
         GlobalSkiplist = new ObservableCollection<SkiplistRule>(config.Spread.GlobalSkiplist);
     }
@@ -92,6 +98,9 @@ public class SettingsViewModel : INotifyPropertyChanged
     public string SpreadPoolSize { get => _spreadPoolSize; set { _spreadPoolSize = value; OnPropertyChanged(); } }
     public string SpreadTransferTimeout { get => _spreadTransferTimeout; set { _spreadTransferTimeout = value; OnPropertyChanged(); } }
     public string SpreadHardTimeout { get => _spreadHardTimeout; set { _spreadHardTimeout = value; OnPropertyChanged(); } }
+    public string SpreadMaxConcurrent { get => _spreadMaxConcurrent; set { _spreadMaxConcurrent = value; OnPropertyChanged(); } }
+    public bool SpreadAutoRace { get => _spreadAutoRace; set { _spreadAutoRace = value; OnPropertyChanged(); } }
+    public bool SpreadNotifyComplete { get => _spreadNotifyComplete; set { _spreadNotifyComplete = value; OnPropertyChanged(); } }
     public ObservableCollection<SkiplistRule> GlobalSkiplist { get; set; } = new();
 
     public string[] LogLevels { get; } = ["Verbose", "Debug", "Information", "Warning", "Error"];
@@ -128,6 +137,9 @@ public class SettingsViewModel : INotifyPropertyChanged
         config.Spread.SpreadPoolSize = int.TryParse(SpreadPoolSize, out var sps) ? Math.Clamp(sps, 1, 10) : 2;
         config.Spread.TransferTimeoutSeconds = int.TryParse(SpreadTransferTimeout, out var stt) ? Math.Clamp(stt, 10, 600) : 60;
         config.Spread.HardTimeoutSeconds = int.TryParse(SpreadHardTimeout, out var sht) ? Math.Clamp(sht, 60, 7200) : 1200;
+        config.Spread.MaxConcurrentRaces = int.TryParse(SpreadMaxConcurrent, out var smc) ? Math.Clamp(smc, 1, 10) : 3;
+        config.Spread.AutoRaceOnNotification = SpreadAutoRace;
+        config.Spread.NotifyOnRaceComplete = SpreadNotifyComplete;
         config.Spread.GlobalSkiplist = GlobalSkiplist.ToList();
     }
 

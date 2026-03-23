@@ -11,8 +11,10 @@ public class SpreadManager : IDisposable
     private readonly Dictionary<string, FtpConnectionPool> _spreadPools = new();
     private readonly Dictionary<string, FtpClientFactory> _factories = new();
     private readonly List<SpreadJob> _activeJobs = new();
+    private readonly Queue<PendingRace> _raceQueue = new();
     private readonly SpeedTracker _speedTracker = new();
     private readonly SkiplistEvaluator _skiplist = new();
+    private readonly RaceHistoryStore _history = new();
     private readonly Lock _lock = new();
     private bool _disposed;
 
@@ -21,6 +23,8 @@ public class SpreadManager : IDisposable
         get { lock (_lock) return _activeJobs.ToList(); }
     }
 
+    public RaceHistoryStore History => _history;
+
     public event Action<SpreadJob>? JobStarted;
     public event Action<SpreadJob>? JobCompleted;
     public event Action<SpreadJob>? JobProgressChanged;
@@ -28,6 +32,7 @@ public class SpreadManager : IDisposable
     public SpreadManager(AppConfig config)
     {
         _config = config;
+        _history.Load();
     }
 
     public async Task InitializePool(string serverId, FtpClientFactory factory, CancellationToken ct)
@@ -71,6 +76,31 @@ public class SpreadManager : IDisposable
     public SpreadJob StartRace(string section, string releaseName,
         IReadOnlyList<string> serverIds, SpreadMode mode)
     {
+        // Sanitize inputs
+        releaseName = SanitizeFtpPath(releaseName);
+        section = SanitizeFtpPath(section);
+
+        // Check concurrent race limit
+        int activeCount;
+        lock (_lock) activeCount = _activeJobs.Count;
+
+        if (activeCount >= _config.Spread.MaxConcurrentRaces)
+        {
+            // Queue for later
+            lock (_lock)
+            {
+                _raceQueue.Enqueue(new PendingRace(section, releaseName, serverIds.ToList(), mode));
+            }
+            Log.Information("Race queued (max concurrent {Max}): {Release}", _config.Spread.MaxConcurrentRaces, releaseName);
+            return StartRaceInternal(section, releaseName, serverIds, mode); // still start it, just track
+        }
+
+        return StartRaceInternal(section, releaseName, serverIds, mode);
+    }
+
+    private SpreadJob StartRaceInternal(string section, string releaseName,
+        IReadOnlyList<string> serverIds, SpreadMode mode)
+    {
         Dictionary<string, FtpConnectionPool> pools;
         Dictionary<string, ServerConfig> configs;
 
@@ -88,10 +118,6 @@ public class SpreadManager : IDisposable
         if (pools.Count < 2)
             throw new InvalidOperationException("Need at least 2 connected servers to start a race");
 
-        // Sanitize release name to prevent FTP command injection
-        releaseName = SanitizeFtpPath(releaseName);
-        section = SanitizeFtpPath(section);
-
         var job = new SpreadJob(section, releaseName, mode, _config.Spread,
             pools, configs, _speedTracker, _skiplist);
 
@@ -99,12 +125,16 @@ public class SpreadManager : IDisposable
         job.Completed += j =>
         {
             lock (_lock) _activeJobs.Remove(j);
+            RecordHistory(j);
             JobCompleted?.Invoke(j);
+            DequeueNextRace();
         };
         job.Error += (j, msg) =>
         {
             lock (_lock) _activeJobs.Remove(j);
+            RecordHistory(j);
             Log.Warning("Spread job error: {Release} — {Error}", j.ReleaseName, msg);
+            DequeueNextRace();
         };
 
         lock (_lock) _activeJobs.Add(job);
@@ -112,6 +142,88 @@ public class SpreadManager : IDisposable
 
         _ = Task.Run(job.RunAsync);
         return job;
+    }
+
+    private void RecordHistory(SpreadJob job)
+    {
+        try
+        {
+            var totalBytes = job.Sites.Values.Sum(s => s.BytesTransferred);
+            var totalFiles = job.Sites.Values.Max(s => s.FilesOwned);
+            var siteNames = string.Join(", ", job.Sites.Values.Select(s => s.ServerName));
+
+            _history.Add(new RaceHistoryItem
+            {
+                Id = job.Id,
+                ReleaseName = job.ReleaseName,
+                Section = job.Section,
+                Mode = job.Mode,
+                Result = job.State,
+                StartedAt = job.StartedAt,
+                CompletedAt = DateTime.UtcNow,
+                SiteCount = job.Sites.Count,
+                FilesTransferred = totalFiles,
+                BytesTransferred = totalBytes,
+                SiteNames = siteNames
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Failed to record race history");
+        }
+    }
+
+    private void DequeueNextRace()
+    {
+        PendingRace? next;
+        lock (_lock)
+        {
+            if (_raceQueue.Count == 0 || _activeJobs.Count >= _config.Spread.MaxConcurrentRaces)
+                return;
+            next = _raceQueue.Dequeue();
+        }
+
+        try
+        {
+            StartRaceInternal(next.Section, next.ReleaseName, next.ServerIds, next.Mode);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to start queued race: {Release}", next.ReleaseName);
+        }
+    }
+
+    /// <summary>
+    /// Called by ServerManager when a new release is detected.
+    /// Starts a race if auto-race is enabled and section matches.
+    /// </summary>
+    public void TryAutoRace(string category, string releaseName)
+    {
+        if (!_config.Spread.AutoRaceOnNotification) return;
+
+        var section = category;
+        var serverIds = _config.Servers
+            .Where(s => s.Enabled && s.SpreadSite.Sections.ContainsKey(section))
+            .Select(s => s.Id)
+            .Where(id => GetConnectedServerIds().Contains(id))
+            .ToList();
+
+        if (serverIds.Count < 2)
+        {
+            Log.Debug("Auto-race skipped for {Release}: fewer than 2 servers with section {Section}", releaseName, section);
+            return;
+        }
+
+        try
+        {
+            StartRace(section, releaseName, serverIds, SpreadMode.Race);
+            Log.Information("Auto-race started: {Release} [{Section}] across {Count} servers",
+                releaseName, section, serverIds.Count);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Auto-race failed for {Release}", releaseName);
+        }
     }
 
     public void StopJob(string jobId)
@@ -151,6 +263,90 @@ public class SpreadManager : IDisposable
             throw new IOException($"FXP transfer failed: {transfer.ErrorMessage}");
     }
 
+    /// <summary>
+    /// FXP an entire directory recursively between two servers.
+    /// </summary>
+    public async Task StartFxpDirectory(string srcServerId, string srcPath,
+        string dstServerId, string dstPath, CancellationToken ct)
+    {
+        srcPath = SanitizeFtpPath(srcPath);
+        dstPath = SanitizeFtpPath(dstPath);
+
+        FtpConnectionPool srcPool, dstPool;
+        lock (_lock)
+        {
+            if (!_spreadPools.TryGetValue(srcServerId, out srcPool!))
+                throw new InvalidOperationException($"No spread pool for source server {srcServerId}");
+            if (!_spreadPools.TryGetValue(dstServerId, out dstPool!))
+                throw new InvalidOperationException($"No spread pool for dest server {dstServerId}");
+        }
+
+        // List source directory recursively
+        var files = new List<(string relativePath, string fullPath)>();
+        await EnumerateDirectoryRecursive(srcPool, srcPath, srcPath, files, 0, ct);
+
+        // Create dest base directory
+        await using var mkdConn = await dstPool.Borrow(ct);
+        await mkdConn.Client.Execute($"MKD {dstPath}", ct);
+
+        var mode = FxpModeDetector.Detect(srcPool, dstPool);
+
+        foreach (var (relativePath, fullPath) in files)
+        {
+            var destFile = dstPath.TrimEnd('/') + "/" + relativePath;
+
+            // Create parent dirs
+            var dirPart = Path.GetDirectoryName(relativePath)?.Replace('\\', '/');
+            if (!string.IsNullOrEmpty(dirPart))
+            {
+                await using var dirConn = await dstPool.Borrow(ct);
+                var current = dstPath.TrimEnd('/');
+                foreach (var part in dirPart.Split('/', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    current += "/" + part;
+                    await dirConn.Client.Execute($"MKD {current}", ct);
+                }
+            }
+
+            await using var srcConn = await srcPool.Borrow(ct);
+            await using var dstConn = await dstPool.Borrow(ct);
+
+            var transfer = new FxpTransfer();
+            await transfer.ExecuteAsync(srcConn, dstConn, fullPath, destFile, mode,
+                _config.Spread.TransferTimeoutSeconds, ct);
+        }
+    }
+
+    private static async Task EnumerateDirectoryRecursive(FtpConnectionPool pool,
+        string basePath, string currentPath, List<(string relative, string full)> files,
+        int depth, CancellationToken ct)
+    {
+        if (depth > 5) return;
+
+        await using var conn = await pool.Borrow(ct);
+
+        FluentFTP.FtpListItem[] items;
+        if (pool.UseCpsv)
+            items = await CpsvDataHelper.ListDirectory(conn.Client, currentPath, pool.ControlHost, ct);
+        else
+            items = await conn.Client.GetListing(currentPath, FluentFTP.FtpListOption.AllFiles, ct);
+
+        foreach (var item in items)
+        {
+            if (item.Type == FluentFTP.FtpObjectType.Directory)
+            {
+                await EnumerateDirectoryRecursive(pool, basePath, item.FullName, files, depth + 1, ct);
+            }
+            else if (item.Type == FluentFTP.FtpObjectType.File)
+            {
+                var relative = item.FullName;
+                if (relative.StartsWith(basePath))
+                    relative = relative[basePath.Length..].TrimStart('/');
+                files.Add((relative, item.FullName));
+            }
+        }
+    }
+
     public IReadOnlyList<string> GetConnectedServerIds()
     {
         lock (_lock) return _spreadPools.Keys.ToList();
@@ -166,9 +362,9 @@ public class SpreadManager : IDisposable
             foreach (var job in _activeJobs)
                 job.Stop();
             _activeJobs.Clear();
+            _raceQueue.Clear();
         }
 
-        // Dispose pools fire-and-forget
         var pools = _spreadPools.Values.ToList();
         _spreadPools.Clear();
         _ = Task.Run(async () =>
@@ -185,4 +381,6 @@ public class SpreadManager : IDisposable
 
     private static string SanitizeFtpPath(string path) =>
         path.Replace("\r", "").Replace("\n", "").Replace("\0", "");
+
+    private record PendingRace(string Section, string ReleaseName, List<string> ServerIds, SpreadMode Mode);
 }

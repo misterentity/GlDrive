@@ -480,6 +480,31 @@ public partial class ServerEditDialog : Window
         }
     }
 
+    private async void AutoDetectSections_Click(object sender, RoutedEventArgs e)
+    {
+        // Reuse the search paths if already discovered, otherwise scan root
+        var searchPaths = (SearchPathsBox.Text ?? "/")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(s => s.Length > 0).ToList();
+
+        if (searchPaths.Count == 0) searchPaths = ["/"];
+
+        var sections = new Dictionary<string, string>();
+        foreach (var path in searchPaths)
+        {
+            var name = path.Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? path;
+            // Capitalize first letter for section name
+            if (name.Length > 0)
+                name = char.ToUpper(name[0]) + name[1..];
+            sections[name.ToUpper()] = path;
+        }
+
+        if (sections.Count > 0)
+        {
+            SpreadSectionsBox.Text = string.Join("\n", sections.Select(kv => $"{kv.Key}={kv.Value}"));
+        }
+    }
+
     private void AddSiteSkiplistRule_Click(object sender, RoutedEventArgs e)
     {
         _siteSkiplist.Add(new SkiplistRule());

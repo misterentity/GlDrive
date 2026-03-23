@@ -1091,7 +1091,12 @@
                         </StackPanel>
                     </Border>
                     <!-- Main spread UI (shown when sections exist) -->
-                    <DockPanel Visibility="{Binding HasSections, Converter={StaticResource BoolToVisibility}}">
+                    <DockPanel Visibility="{Binding HasSections, Converter={StaticResource BoolToVisibility}}"
+                               Focusable="True">
+                    <DockPanel.InputBindings>
+                        <KeyBinding Key="Escape" Command="{Binding StopJobCommand}"/>
+                        <KeyBinding Gesture="Ctrl+R" Command="{Binding StartRaceCommand}"/>
+                    </DockPanel.InputBindings>
                     <!-- Toolbar -->
                     <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
                             CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
@@ -1190,7 +1195,7 @@
                             <DataGrid ItemsSource="{Binding LeftItems}"
                                       SelectedItem="{Binding SelectedLeftItem}"
                                       AutoGenerateColumns="False" IsReadOnly="True"
-                                      SelectionMode="Single" GridLinesVisibility="Horizontal"
+                                      SelectionMode="Extended" GridLinesVisibility="Horizontal"
                                       HeadersVisibility="Column" CanUserAddRows="False"
                                       VirtualizingPanel.IsVirtualizing="True"
                                       VirtualizingPanel.VirtualizationMode="Recycling"
@@ -1228,7 +1233,7 @@
                             <DataGrid ItemsSource="{Binding RightItems}"
                                       SelectedItem="{Binding SelectedRightItem}"
                                       AutoGenerateColumns="False" IsReadOnly="True"
-                                      SelectionMode="Single" GridLinesVisibility="Horizontal"
+                                      SelectionMode="Extended" GridLinesVisibility="Horizontal"
                                       HeadersVisibility="Column" CanUserAddRows="False"
                                       VirtualizingPanel.IsVirtualizing="True"
                                       VirtualizingPanel.VirtualizationMode="Recycling"

@@ -5,6 +5,10 @@ public class SpreadConfig
     public int SpreadPoolSize { get; set; } = 2;
     public int TransferTimeoutSeconds { get; set; } = 60;
     public int HardTimeoutSeconds { get; set; } = 1200;
+    public int MaxConcurrentRaces { get; set; } = 3;
+    public bool AutoRaceOnNotification { get; set; }
+    public bool NotifyOnRaceComplete { get; set; } = true;
+    public List<string> NukeMarkers { get; set; } = [".nuke", "NUKED-"];
     public List<SkiplistRule> GlobalSkiplist { get; set; } = [];
 }
 

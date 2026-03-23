@@ -199,6 +199,20 @@ public class TrayViewModel : INotifyPropertyChanged
             }
         });
 
+        // Race completion notifications
+        if (_serverManager.Spread != null)
+        {
+            _serverManager.Spread.JobCompleted += job =>
+            {
+                if (_config.Spread.NotifyOnRaceComplete)
+                {
+                    Application.Current?.Dispatcher.Invoke(() =>
+                        ShowNotification("Race Complete",
+                            $"{job.ReleaseName} [{job.Section}] — {job.Sites.Count} sites"));
+                }
+            };
+        }
+
         _updateChecker.UpdateAvailable += release =>
         {
             Application.Current?.Dispatcher.Invoke(() =>
