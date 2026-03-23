@@ -42,6 +42,25 @@ Built with WinFsp, FluentFTP, GnuTLS, and .NET 10.
 - **Slash commands** — /join /part /msg /me /topic /notice /key /keyx /quit /help and raw IRC passthrough
 - **Per-server IRC** — each server has its own IRC connection, channels, and FiSH key store
 
+### Spread / FXP (cbftp-style Race Engine)
+- **FXP transfers** — site-to-site file transfers between any two connected servers
+- **Four FXP modes** — PASV-PASV, CPSV-PASV, PASV-CPSV, and Relay (CPSV-CPSV pipes through local memory with double-buffered I/O)
+- **Race engine** — spread releases across multiple servers with intelligent file selection scoring based on SFV priority, file size, route speed, site priority, and ownership percentage
+- **Recursive directory support** — handles releases with subdirectories (Sample/, Subs/, CD1/CD2/) up to 3 levels deep
+- **Auto-race** — optionally starts races automatically when new releases are detected via /recent polling
+- **Race queue** — configurable max concurrent races with automatic queuing and dequeue
+- **Scoring algorithm** — cbftp-style 0-65535 scoring: SFV files prioritized first, then NFO after 15s, weighted by file size, average route speed, site priority, and ownership distribution
+- **Per-server config** — sections mapping (e.g. MP3=/site/mp3), priority levels, upload/download slot limits, download-only mode, affiliated groups
+- **Skiplist** — cascading allow/deny rules at site and global level with glob/regex patterns, section scope, and file/directory filtering
+- **Nuke detection** — configurable markers (`.nuke`, `NUKED-`) abort races immediately
+- **Speed tracking** — rolling 10-sample average per site pair for scoring
+- **Dedicated connection pool** — separate FXP pool per server prevents spread from starving filesystem/downloads
+- **Race history** — completed races persisted to JSON with release, sites, bytes, duration, and result
+- **Dual-pane file browser** — Browse tab with left/right server panes, double-click navigation, multi-file selection, and recursive directory FXP
+- **Tray notifications** — balloon notification on race completion
+- **Keyboard shortcuts** — Ctrl+R to start race, Escape to stop
+- **Section auto-detection** — derives section names from existing search paths
+
 ### Search
 - **Cross-server search** — search all connected servers in parallel from the Dashboard with server-tagged results
 - **Per-category parallel search** — searches all categories within each server concurrently, throttled by the connection pool
@@ -51,8 +70,8 @@ Built with WinFsp, FluentFTP, GnuTLS, and .NET 10.
 - **System tray** — per-server status and controls (connect/disconnect, open drive, refresh cache)
 - **Setup wizard** — 5-step first-run wizard walks through server configuration
 - **Auto-connect** — optionally connect each server on Windows startup
-- **Auto-update** — checks GitHub releases daily and offers in-app update with UAC elevation
-- **Embedded web views** — Discord and Streems web clients in Dashboard tabs
+- **Auto-update** — checks GitHub releases daily, SHA-256 integrity verification, in-app update with UAC elevation
+- **Embedded web views** — World Monitor web client in Dashboard tab
 
 ### Security
 - **TOFU certificate pinning** — trust-on-first-use with SHA-256 fingerprint storage
@@ -159,6 +178,8 @@ All settings are stored locally on your machine:
 | App config | `%AppData%\GlDrive\appsettings.json` |
 | Downloads (per server) | `%AppData%\GlDrive\downloads-{serverId}.json` |
 | Download history | `%AppData%\GlDrive\download-history.json` |
+| Race history | `%AppData%\GlDrive\race-history.json` |
+| Watch folders | `%AppData%\GlDrive\watch-folders.json` |
 | Wishlist | `%AppData%\GlDrive\wishlist.json` |
 | Trusted certs | `%AppData%\GlDrive\trusted_certs.json` |
 | FiSH keys (per server) | `%AppData%\GlDrive\fish-keys-{serverId}.json` (DPAPI encrypted) |
@@ -172,6 +193,8 @@ All settings are stored locally on your machine:
 | Delete | Downloads tab | Cancel selected download |
 | R | Downloads tab | Retry failed download |
 | Enter | Notifications/Search tab | Download selected release |
+| Ctrl+R | Spread tab | Start new race |
+| Escape | Spread tab | Stop selected race |
 | Tab | IRC input | Cycle nick completion |
 
 ## Architecture
@@ -200,10 +223,16 @@ App.xaml.cs (startup)
   |           +-- FishCipher (Blowfish ECB/CBC via BouncyCastle)
   |           +-- FishKeyStore (DPAPI-encrypted, per-server)
   |           +-- Dh1080 (key exchange)
+  |     +-- SpreadManager (FXP race engine)
+  |           +-- per server: dedicated FtpConnectionPool (spread pool)
+  |           +-- SpreadJob (race orchestrator per active race)
+  |           +-- SpeedTracker (rolling avg per site pair)
+  |           +-- SkiplistEvaluator (cached regex, cascading rules)
+  |           +-- RaceHistoryStore (persisted race log)
   +-- WishlistStore (global)
   +-- DownloadHistoryStore (global)
-  +-- UpdateChecker (periodic GitHub release polling)
-  +-- DashboardWindow (search / downloads / wishlist / IRC / notifications)
+  +-- UpdateChecker (periodic GitHub release polling, SHA-256 verified)
+  +-- DashboardWindow (search / downloads / wishlist / IRC / spread / browse / notifications)
   +-- TrayIcon (H.NotifyIcon, dynamic per-server menu)
 ```
 
@@ -278,7 +307,7 @@ glftpd behind a BNC requires CPSV instead of PASV for data connections. FluentFT
 
 ### Auto-update
 
-GlDrive checks for new releases on GitHub every 24 hours. When an update is available, a notification is shown. The update downloads the release ZIP, extracts it to a temp directory, and launches the new binary with UAC elevation to overwrite the install directory. The old process exits, old files are renamed to `.old`, new files are copied in, and the updated app is launched.
+GlDrive checks for new releases on GitHub every 24 hours. When an update is available, a notification is shown. The update downloads the release ZIP, verifies its SHA-256 hash against a `checksums.sha256` asset published with each release, extracts it to a temp directory, and launches the new binary with UAC elevation to overwrite the install directory. The old process exits, old files are renamed to `.old`, new files are copied in, and the updated app is launched.
 
 ## Security
 
@@ -307,6 +336,7 @@ GlDrive checks for new releases on GitHub every 24 hours. When an update is avai
 | Passwords | Windows Credential Manager | OS-level DPAPI encryption |
 | Proxy passwords | Windows Credential Manager | OS-level DPAPI encryption |
 | IRC passwords | Windows Credential Manager | OS-level DPAPI encryption |
+| API keys (OMDB/TMDB) | Windows Credential Manager | OS-level DPAPI encryption |
 | FiSH encryption keys | `fish-keys-{serverId}.json` | DPAPI encryption (CurrentUser) |
 | Server configs (host/port/username) | `appsettings.json` | User-profile ACLs |
 | Certificate fingerprints | `trusted_certs.json` | User-profile ACLs, atomic writes |
