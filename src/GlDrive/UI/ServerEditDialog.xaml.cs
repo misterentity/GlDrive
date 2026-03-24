@@ -138,6 +138,11 @@ public partial class ServerEditDialog : Window
             SpreadDownloadOnlyBox.IsChecked = existing.SpreadSite.DownloadOnly;
             SpreadAffilsBox.Text = string.Join(", ", existing.SpreadSite.Affils);
 
+            // IRC announce rules
+            IrcAnnounceRulesBox.Text = string.Join("\n", existing.Irc.AnnounceRules
+                .Where(r => r.Enabled)
+                .Select(r => string.IsNullOrEmpty(r.Channel) ? r.Pattern : $"{r.Channel} {r.Pattern}"));
+
             foreach (var rule in existing.SpreadSite.Skiplist)
                 _siteSkiplist.Add(rule);
 
@@ -345,6 +350,34 @@ public partial class ServerEditDialog : Window
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(s => s.Length > 0).ToList();
         _serverConfig.SpreadSite.Skiplist = _siteSkiplist.ToList();
+
+        // IRC announce rules
+        _serverConfig.Irc.AnnounceRules = (IrcAnnounceRulesBox.Text ?? "")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(l => l.Length > 0)
+            .Select(line =>
+            {
+                // Format: "#channel pattern" or just "pattern"
+                string channel = "", pattern;
+                if (line.StartsWith('#'))
+                {
+                    var spaceIdx = line.IndexOf(' ');
+                    if (spaceIdx > 0)
+                    {
+                        channel = line[..spaceIdx];
+                        pattern = line[(spaceIdx + 1)..].Trim();
+                    }
+                    else
+                    {
+                        pattern = line;
+                    }
+                }
+                else
+                {
+                    pattern = line;
+                }
+                return new IrcAnnounceRule { Enabled = true, Channel = channel, Pattern = pattern, AutoRace = true };
+            }).ToList();
 
         // Save IRC password
         if (!string.IsNullOrEmpty(IrcPasswordBox.Password) && !string.IsNullOrEmpty(_serverConfig.Irc.Host)
@@ -633,6 +666,30 @@ public partial class ServerEditDialog : Window
     {
         if (SiteSkiplistGrid.SelectedItem is SkiplistRule rule)
             _siteSkiplist.Remove(rule);
+    }
+
+    private void AddCommonAnnouncePatterns_Click(object sender, RoutedEventArgs e)
+    {
+        var patterns = new[]
+        {
+            "#announce (?<section>\\w+) :: (?<release>\\S+)",
+            "#pre \\[(?<section>[^\\]]+)\\]\\s*(?<release>\\S+)",
+            "#announce NEW in (?<section>\\w+):\\s*(?<release>\\S+)",
+        };
+
+        var existing = (IrcAnnounceRulesBox.Text ?? "").Trim();
+        var lines = new List<string>();
+        if (!string.IsNullOrEmpty(existing))
+            lines.AddRange(existing.Split('\n'));
+
+        var existingSet = lines.Select(l => l.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in patterns)
+        {
+            if (!existingSet.Contains(p))
+                lines.Add(p);
+        }
+
+        IrcAnnounceRulesBox.Text = string.Join("\n", lines.Where(l => !string.IsNullOrWhiteSpace(l)));
     }
 
     private void AddDefaultSkiplistRules_Click(object sender, RoutedEventArgs e)
