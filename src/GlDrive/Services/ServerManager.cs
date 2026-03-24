@@ -14,6 +14,7 @@ public class ServerManager : IDisposable
     private readonly NotificationStore _notificationStore;
     private readonly Dictionary<string, MountService> _servers = new();
     private readonly Dictionary<string, IrcService> _ircServices = new();
+    private readonly Dictionary<string, IrcAnnounceListener> _announceListeners = new();
     private SpreadManager? _spreadManager;
 
     public SpreadManager? Spread => _spreadManager;
@@ -196,10 +197,24 @@ public class ServerManager : IDisposable
 
         _ircServices[serverConfig.Id] = ircService;
         await ircService.StartAsync();
+
+        // Wire IRC announce listener for auto-racing
+        if (serverConfig.Irc.AnnounceRules.Count > 0 && _spreadManager != null)
+        {
+            var listener = new IrcAnnounceListener(serverConfig.Id, ircService, serverConfig.Irc.AnnounceRules);
+            listener.ReleaseAnnounced += (serverId, section, release) =>
+            {
+                _spreadManager?.TryAutoRace(section, release);
+            };
+            _announceListeners[serverConfig.Id] = listener;
+        }
     }
 
     private async Task StopIrcService(string serverId)
     {
+        if (_announceListeners.Remove(serverId, out var listener))
+            listener.Dispose();
+
         if (!_ircServices.TryGetValue(serverId, out var ircService)) return;
         await ircService.StopAsync();
         ircService.Dispose();
@@ -210,6 +225,10 @@ public class ServerManager : IDisposable
     {
         _spreadManager?.Dispose();
         _spreadManager = null;
+
+        foreach (var listener in _announceListeners.Values)
+            listener.Dispose();
+        _announceListeners.Clear();
 
         foreach (var irc in _ircServices.Values)
         {

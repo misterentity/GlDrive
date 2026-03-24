@@ -235,6 +235,16 @@
                     </ComboBox>
                 </StackPanel>
 
+                <!-- IRC Announce Rules (for auto-racing) -->
+                <TextBlock Text="Announce Rules (auto-race from IRC):" Margin="0,8,0,2" FontWeight="SemiBold"/>
+                <TextBlock Text="Regex with named groups: (?&lt;section&gt;...) (?&lt;release&gt;...)"
+                           Foreground="{DynamicResource ForegroundDimBrush}" FontSize="11" Margin="0,0,0,4"/>
+                <TextBox x:Name="IrcAnnounceRulesBox" AcceptsReturn="True" TextWrapping="Wrap"
+                         Height="60" VerticalScrollBarVisibility="Auto" Margin="0,0,0,4"
+                         ToolTip="One rule per line: #channel pattern&#x0a;e.g. #announce (?&lt;section&gt;\w+) :: (?&lt;release&gt;\S+)&#x0a;Or: #pre \[(?&lt;section&gt;[^\]]+)\]\s*(?&lt;release&gt;\S+)"/>
+                <Button Content="Add Common Patterns" Click="AddCommonAnnouncePatterns_Click"
+                        HorizontalAlignment="Left" Padding="12,4" Margin="0,0,0,8"/>
+
                 <Separator Margin="0,4,0,12"/>
 
                 <!-- Spread/FXP Settings -->
