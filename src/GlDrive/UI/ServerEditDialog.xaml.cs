@@ -482,27 +482,146 @@ public partial class ServerEditDialog : Window
 
     private async void AutoDetectSections_Click(object sender, RoutedEventArgs e)
     {
-        // Reuse the search paths if already discovered, otherwise scan root
-        var searchPaths = (SearchPathsBox.Text ?? "/")
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(s => s.Length > 0).ToList();
+        SpreadSectionsBox.IsEnabled = false;
+        var originalText = SpreadSectionsBox.Text;
 
-        if (searchPaths.Count == 0) searchPaths = ["/"];
-
-        var sections = new Dictionary<string, string>();
-        foreach (var path in searchPaths)
+        try
         {
-            var name = path.Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? path;
-            // Capitalize first letter for section name
-            if (name.Length > 0)
-                name = char.ToUpper(name[0]) + name[1..];
-            sections[name.ToUpper()] = path;
-        }
+            var host = HostBox.Text;
+            var port = int.TryParse(PortBox.Text, out var p) ? Math.Clamp(p, 1, 65535) : 21;
+            var username = UsernameBox.Text;
+            var password = PasswordBox.Password;
+            if (string.IsNullOrEmpty(password))
+                password = CredentialStore.GetPassword(host, port, username) ?? "";
 
-        if (sections.Count > 0)
-        {
-            SpreadSectionsBox.Text = string.Join("\n", sections.Select(kv => $"{kv.Key}={kv.Value}"));
+            AsyncFtpClient client;
+
+            if (ProxyEnabledBox.IsChecked == true && !string.IsNullOrWhiteSpace(ProxyHostBox.Text))
+            {
+                var proxyPort = int.TryParse(ProxyPortBox.Text, out var pp) ? Math.Clamp(pp, 1, 65535) : 1080;
+                var proxyUser = ProxyUsernameBox.Text ?? "";
+                var proxyPw = !string.IsNullOrEmpty(proxyUser) ? ProxyPasswordBox.Password : "";
+
+                var profile = new FtpProxyProfile
+                {
+                    ProxyHost = ProxyHostBox.Text,
+                    ProxyPort = proxyPort,
+                    ProxyCredentials = !string.IsNullOrEmpty(proxyUser)
+                        ? new NetworkCredential(proxyUser, proxyPw) : null,
+                    FtpHost = host, FtpPort = port,
+                    FtpCredentials = new NetworkCredential(username, password),
+                };
+                client = new AsyncFtpClientSocks5Proxy(profile);
+            }
+            else
+            {
+                client = new AsyncFtpClient(host, username, password, port);
+            }
+
+            client.Config.EncryptionMode = FtpEncryptionMode.Explicit;
+            client.Config.DataConnectionEncryption = true;
+            client.Config.CustomStream = typeof(GnuTlsStream);
+            var gnuConfig = new GnuConfig { SecuritySuite = GnuSuite.Secure128 };
+            if (PreferTls12Box.IsChecked == true)
+                gnuConfig.AdvancedOptions = [GnuAdvanced.NoTickets];
+            client.Config.CustomStreamConfig = gnuConfig;
+            client.ValidateCertificate += (_, ev) => ev.Accept = true;
+
+            SpreadSectionsBox.Text = "Connecting...";
+            await client.Connect();
+
+            var useCpsv = client.Capabilities.Contains(FtpCapability.CPSV);
+            var controlHost = host;
+
+            async Task<FtpListItem[]> ListDir(string path)
+            {
+                if (useCpsv)
+                    return await CpsvDataHelper.ListDirectory(client, path, controlHost);
+                return await client.GetListing(path, FtpListOption.AllFiles);
+            }
+
+            // Scan root for content directories
+            var rootPath = string.IsNullOrWhiteSpace(RootPathBox.Text) ? "/" : RootPathBox.Text.TrimEnd('/');
+            if (string.IsNullOrEmpty(rootPath)) rootPath = "/";
+
+            SpreadSectionsBox.Text = "Scanning directories...";
+            var rootItems = await ListDir(rootPath);
+
+            var topDirs = rootItems
+                .Where(i => i.Type == FtpObjectType.Directory && !NonContentDirs.Contains(i.Name))
+                .ToList();
+
+            var sections = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var dir in topDirs)
+            {
+                try
+                {
+                    var subItems = await ListDir(dir.FullName);
+                    var subDirCount = subItems.Count(i => i.Type == FtpObjectType.Directory
+                        && !NonContentDirs.Contains(i.Name));
+
+                    // A content section has multiple subdirectories (releases)
+                    if (subDirCount >= 2)
+                    {
+                        // Use directory name as section name, uppercased
+                        var sectionName = dir.Name.ToUpper()
+                            .Replace(" ", "_").Replace("-", "_");
+                        sections[sectionName] = dir.FullName;
+                    }
+                }
+                catch { }
+            }
+
+            await client.Disconnect();
+            client.Dispose();
+
+            if (sections.Count > 0)
+            {
+                // Merge with existing sections (don't overwrite user edits)
+                var existing = ParseSections(originalText);
+                foreach (var (name, path) in sections)
+                {
+                    if (!existing.ContainsKey(name))
+                        existing[name] = path;
+                }
+
+                SpreadSectionsBox.Text = string.Join("\n",
+                    existing.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key}={kv.Value}"));
+            }
+            else
+            {
+                SpreadSectionsBox.Text = originalText;
+                MessageBox.Show("No content sections detected. Ensure the root path points to a directory containing section folders.",
+                    "Auto-Detect", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
         }
+        catch (Exception ex)
+        {
+            SpreadSectionsBox.Text = originalText;
+            MessageBox.Show($"Auto-detect failed: {ex.Message}", "Error",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            Log.Warning(ex, "Section auto-detect failed");
+        }
+        finally
+        {
+            SpreadSectionsBox.IsEnabled = true;
+        }
+    }
+
+    private static Dictionary<string, string> ParseSections(string? text)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrEmpty(text)) return result;
+        foreach (var line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!line.Contains('=')) continue;
+            var key = line[..line.IndexOf('=')].Trim();
+            var val = line[(line.IndexOf('=') + 1)..].Trim();
+            if (key.Length > 0 && val.Length > 0)
+                result[key] = val;
+        }
+        return result;
     }
 
     private void AddSiteSkiplistRule_Click(object sender, RoutedEventArgs e)
@@ -514,6 +633,36 @@ public partial class ServerEditDialog : Window
     {
         if (SiteSkiplistGrid.SelectedItem is SkiplistRule rule)
             _siteSkiplist.Remove(rule);
+    }
+
+    private void AddDefaultSkiplistRules_Click(object sender, RoutedEventArgs e)
+    {
+        var defaults = new List<SkiplistRule>
+        {
+            new() { Pattern = "*incomplete*", Action = SkiplistAction.Deny, MatchDirectories = true, MatchFiles = false },
+            new() { Pattern = "*NUKED*", Action = SkiplistAction.Deny, MatchDirectories = true, MatchFiles = true },
+            new() { Pattern = ".message", Action = SkiplistAction.Deny, MatchDirectories = true, MatchFiles = true },
+            new() { Pattern = ".banner", Action = SkiplistAction.Deny, MatchDirectories = true, MatchFiles = true },
+            new() { Pattern = "*.jpg", Action = SkiplistAction.Deny, MatchDirectories = false, MatchFiles = true },
+            new() { Pattern = "*.png", Action = SkiplistAction.Deny, MatchDirectories = false, MatchFiles = true },
+            new() { Pattern = "*.txt", Action = SkiplistAction.Deny, MatchDirectories = false, MatchFiles = true },
+            new() { Pattern = "*.url", Action = SkiplistAction.Deny, MatchDirectories = false, MatchFiles = true },
+        };
+
+        // Only add rules that don't already exist (by pattern)
+        var existing = _siteSkiplist.Select(r => r.Pattern).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var added = 0;
+        foreach (var rule in defaults)
+        {
+            if (!existing.Contains(rule.Pattern))
+            {
+                _siteSkiplist.Add(rule);
+                added++;
+            }
+        }
+
+        if (added == 0)
+            MessageBox.Show("All default rules already exist.", "Skiplist", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e)
