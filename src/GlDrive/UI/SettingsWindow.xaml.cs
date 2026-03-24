@@ -56,7 +56,7 @@ public partial class SettingsWindow : Window
 
     private void AddServer_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new ServerEditDialog { Owner = this };
+        var dialog = new ServerEditDialog(serverManager: _serverManager) { Owner = this };
         if (dialog.ShowDialog() == true)
         {
             _config.Servers.Add(dialog.Result);
@@ -71,7 +71,7 @@ public partial class SettingsWindow : Window
         var serverConfig = _config.Servers.FirstOrDefault(s => s.Id == selected.Id);
         if (serverConfig == null) return;
 
-        var dialog = new ServerEditDialog(serverConfig) { Owner = this };
+        var dialog = new ServerEditDialog(serverConfig, _serverManager) { Owner = this };
         if (dialog.ShowDialog() == true)
         {
             RefreshServerList();
