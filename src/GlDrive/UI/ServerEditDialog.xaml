@@ -290,7 +290,9 @@
                 </DataGrid>
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
                     <Button Content="Add Rule" Click="AddSiteSkiplistRule_Click" Padding="12,4" Margin="0,0,6,0"/>
-                    <Button Content="Remove" Click="RemoveSiteSkiplistRule_Click" Padding="12,4"/>
+                    <Button Content="Remove" Click="RemoveSiteSkiplistRule_Click" Padding="12,4" Margin="0,0,6,0"/>
+                    <Button Content="Add Defaults" Click="AddDefaultSkiplistRules_Click" Padding="12,4"
+                            ToolTip="Add common scene skiplist rules (incomplete, sample, proof, etc.)"/>
                 </StackPanel>
 
                 <Separator Margin="0,4,0,12"/>
