@@ -17,12 +17,14 @@ public partial class ServerEditDialog : Window
 {
     private readonly ServerConfig _serverConfig;
     private readonly ObservableCollection<SkiplistRule> _siteSkiplist = new();
+    private readonly Services.ServerManager? _serverManager;
     private string _password = "";
 
     public ServerConfig Result => _serverConfig;
 
-    public ServerEditDialog(ServerConfig? existing = null)
+    public ServerEditDialog(ServerConfig? existing = null, Services.ServerManager? serverManager = null)
     {
+        _serverManager = serverManager;
         InitializeComponent();
 
         _serverConfig = existing ?? new ServerConfig();
@@ -690,6 +692,55 @@ public partial class ServerEditDialog : Window
         }
 
         IrcAnnounceRulesBox.Text = string.Join("\n", lines.Where(l => !string.IsNullOrWhiteSpace(l)));
+    }
+
+    private void DetectIrcPatterns_Click(object sender, RoutedEventArgs e)
+    {
+        if (_serverManager == null)
+        {
+            MessageBox.Show("Server manager not available. Save and reopen this dialog.", "Detect",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var patterns = _serverManager.DetectIrcPatterns(_serverConfig.Id);
+        if (patterns.Count == 0)
+        {
+            MessageBox.Show(
+                "No patterns detected yet. Make sure IRC is connected and the bot has been active in channels for a few minutes.\n\n" +
+                "The detector needs at least 20 messages from a nick that contain scene-style release names.",
+                "No Patterns Found", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var existing = (IrcAnnounceRulesBox.Text ?? "").Trim();
+        var lines = new List<string>();
+        if (!string.IsNullOrEmpty(existing))
+            lines.AddRange(existing.Split('\n'));
+
+        var existingSet = lines.Select(l => l.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var added = 0;
+
+        foreach (var p in patterns.OrderByDescending(p => p.Confidence))
+        {
+            var rule = string.IsNullOrEmpty(p.Channel) ? p.SuggestedPattern : $"{p.Channel} {p.SuggestedPattern}";
+            if (!existingSet.Contains(rule))
+            {
+                lines.Add(rule);
+                added++;
+            }
+        }
+
+        IrcAnnounceRulesBox.Text = string.Join("\n", lines.Where(l => !string.IsNullOrWhiteSpace(l)));
+
+        var details = string.Join("\n", patterns.Select(p =>
+            $"  {p.Channel} from {p.BotNick} ({p.MessageCount} msgs, {p.Confidence:P0} confidence)\n" +
+            $"    Pattern: {p.SuggestedPattern}\n" +
+            $"    Sample: {p.SampleMessages.FirstOrDefault() ?? ""}"));
+
+        MessageBox.Show(
+            $"Detected {patterns.Count} pattern(s), added {added} new rule(s):\n\n{details}",
+            "Patterns Detected", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     private void AddDefaultSkiplistRules_Click(object sender, RoutedEventArgs e)

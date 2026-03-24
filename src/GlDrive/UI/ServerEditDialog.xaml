@@ -242,8 +242,13 @@
                 <TextBox x:Name="IrcAnnounceRulesBox" AcceptsReturn="True" TextWrapping="Wrap"
                          Height="60" VerticalScrollBarVisibility="Auto" Margin="0,0,0,4"
                          ToolTip="One rule per line: #channel pattern&#x0a;e.g. #announce (?&lt;section&gt;\w+) :: (?&lt;release&gt;\S+)&#x0a;Or: #pre \[(?&lt;section&gt;[^\]]+)\]\s*(?&lt;release&gt;\S+)"/>
-                <Button Content="Add Common Patterns" Click="AddCommonAnnouncePatterns_Click"
-                        HorizontalAlignment="Left" Padding="12,4" Margin="0,0,0,8"/>
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <Button Content="Add Common Patterns" Click="AddCommonAnnouncePatterns_Click"
+                            Padding="12,4" Margin="0,0,6,0"/>
+                    <Button Content="Detect from IRC Logs" Click="DetectIrcPatterns_Click"
+                            Padding="12,4"
+                            ToolTip="Analyze buffered IRC messages to auto-detect announce patterns (requires IRC to be connected for a few minutes first)"/>
+                </StackPanel>
 
                 <Separator Margin="0,4,0,12"/>
 

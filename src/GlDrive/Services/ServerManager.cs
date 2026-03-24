@@ -15,6 +15,7 @@ public class ServerManager : IDisposable
     private readonly Dictionary<string, MountService> _servers = new();
     private readonly Dictionary<string, IrcService> _ircServices = new();
     private readonly Dictionary<string, IrcAnnounceListener> _announceListeners = new();
+    private readonly Dictionary<string, IrcPatternDetector> _patternDetectors = new();
     private SpreadManager? _spreadManager;
 
     public SpreadManager? Spread => _spreadManager;
@@ -173,6 +174,16 @@ public class ServerManager : IDisposable
 
     public IReadOnlyDictionary<string, IrcService> GetIrcServices() => _ircServices;
 
+    /// <summary>
+    /// Analyze buffered IRC messages for a server and return detected announce patterns.
+    /// </summary>
+    public List<DetectedPattern> DetectIrcPatterns(string serverId)
+    {
+        if (_patternDetectors.TryGetValue(serverId, out var detector))
+            return detector.Analyze();
+        return [];
+    }
+
     private async Task StartIrcService(ServerConfig serverConfig)
     {
         if (_ircServices.ContainsKey(serverConfig.Id)) return;
@@ -198,6 +209,10 @@ public class ServerManager : IDisposable
         _ircServices[serverConfig.Id] = ircService;
         await ircService.StartAsync();
 
+        // Start pattern detector for learning announce formats
+        var detector = new IrcPatternDetector(ircService);
+        _patternDetectors[serverConfig.Id] = detector;
+
         // Wire IRC announce listener for auto-racing
         if (serverConfig.Irc.AnnounceRules.Count > 0 && _spreadManager != null)
         {
@@ -212,6 +227,8 @@ public class ServerManager : IDisposable
 
     private async Task StopIrcService(string serverId)
     {
+        if (_patternDetectors.Remove(serverId, out var detector))
+            detector.Dispose();
         if (_announceListeners.Remove(serverId, out var listener))
             listener.Dispose();
 
@@ -226,8 +243,9 @@ public class ServerManager : IDisposable
         _spreadManager?.Dispose();
         _spreadManager = null;
 
-        foreach (var listener in _announceListeners.Values)
-            listener.Dispose();
+        foreach (var det in _patternDetectors.Values) det.Dispose();
+        _patternDetectors.Clear();
+        foreach (var listener in _announceListeners.Values) listener.Dispose();
         _announceListeners.Clear();
 
         foreach (var irc in _ircServices.Values)
