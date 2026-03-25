@@ -8,6 +8,7 @@ using FluentFTP.Proxy.AsyncProxy;
 using System.Collections.ObjectModel;
 using GlDrive.Config;
 using GlDrive.Ftp;
+using GlDrive.Spread;
 using Serilog;
 using static GlDrive.Config.SearchMethod;
 
@@ -771,6 +772,169 @@ public partial class ServerEditDialog : Window
 
         if (added == 0)
             MessageBox.Show("All default rules already exist.", "Skiplist", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private async void DetectSiteRules_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var host = HostBox.Text;
+            var port = int.TryParse(PortBox.Text, out var p) ? Math.Clamp(p, 1, 65535) : 21;
+            var username = UsernameBox.Text;
+            var password = PasswordBox.Password;
+            if (string.IsNullOrEmpty(password))
+                password = CredentialStore.GetPassword(host, port, username) ?? "";
+
+            if (string.IsNullOrEmpty(host) || string.IsNullOrEmpty(username))
+            {
+                MessageBox.Show("Enter host and username first.", "Detect Rules",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            AsyncFtpClient client;
+
+            if (ProxyEnabledBox.IsChecked == true && !string.IsNullOrWhiteSpace(ProxyHostBox.Text))
+            {
+                var proxyPort = int.TryParse(ProxyPortBox.Text, out var pp) ? Math.Clamp(pp, 1, 65535) : 1080;
+                var proxyUser = ProxyUsernameBox.Text ?? "";
+                var proxyPw = !string.IsNullOrEmpty(proxyUser) ? ProxyPasswordBox.Password : "";
+
+                var profile = new FtpProxyProfile
+                {
+                    ProxyHost = ProxyHostBox.Text,
+                    ProxyPort = proxyPort,
+                    ProxyCredentials = !string.IsNullOrEmpty(proxyUser)
+                        ? new NetworkCredential(proxyUser, proxyPw) : null,
+                    FtpHost = host, FtpPort = port,
+                    FtpCredentials = new NetworkCredential(username, password),
+                };
+                client = new AsyncFtpClientSocks5Proxy(profile);
+            }
+            else
+            {
+                client = new AsyncFtpClient(host, username, password, port);
+            }
+
+            client.Config.EncryptionMode = FtpEncryptionMode.Explicit;
+            client.Config.DataConnectionEncryption = true;
+            client.Config.CustomStream = typeof(GnuTlsStream);
+            var gnuConfig = new GnuConfig { SecuritySuite = GnuSuite.Secure128 };
+            if (PreferTls12Box.IsChecked == true)
+                gnuConfig.AdvancedOptions = [GnuAdvanced.NoTickets];
+            client.Config.CustomStreamConfig = gnuConfig;
+            client.ValidateCertificate += (_, ev) => ev.Accept = true;
+
+            TestResultText.Text = "Connecting for SITE RULES...";
+            await client.Connect();
+
+            var reply = await client.Execute("SITE RULES");
+
+            await client.Disconnect();
+            client.Dispose();
+
+            if (!reply.Success)
+            {
+                TestResultText.Text = $"SITE RULES failed: {reply.Code} {reply.Message}";
+                return;
+            }
+
+            // FluentFTP stores the full multi-line response in InfoMessages
+            var fullResponse = reply.InfoMessages ?? reply.Message ?? "";
+            if (string.IsNullOrWhiteSpace(fullResponse))
+            {
+                TestResultText.Text = "SITE RULES returned empty response.";
+                return;
+            }
+
+            var parsed = SiteRulesParser.Parse(fullResponse);
+            var changes = new List<string>();
+
+            // Apply max upload/download slots
+            if (parsed.MaxUploads.HasValue)
+            {
+                SpreadMaxUpBox.Text = parsed.MaxUploads.Value.ToString();
+                changes.Add($"Max uploads: {parsed.MaxUploads.Value}");
+            }
+            if (parsed.MaxDownloads.HasValue)
+            {
+                SpreadMaxDownBox.Text = parsed.MaxDownloads.Value.ToString();
+                changes.Add($"Max downloads: {parsed.MaxDownloads.Value}");
+            }
+            if (parsed.MaxSimultaneous.HasValue)
+            {
+                // Apply to both if no specific upload/download limits
+                if (!parsed.MaxUploads.HasValue)
+                    SpreadMaxUpBox.Text = parsed.MaxSimultaneous.Value.ToString();
+                if (!parsed.MaxDownloads.HasValue)
+                    SpreadMaxDownBox.Text = parsed.MaxSimultaneous.Value.ToString();
+                changes.Add($"Max simultaneous: {parsed.MaxSimultaneous.Value}");
+            }
+
+            // Apply affils
+            if (parsed.Affils.Count > 0)
+            {
+                var currentAffils = (SpreadAffilsBox.Text ?? "")
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                foreach (var a in parsed.Affils)
+                    currentAffils.Add(a);
+                SpreadAffilsBox.Text = string.Join(", ", currentAffils.OrderBy(a => a));
+                changes.Add($"Affils: {string.Join(", ", parsed.Affils)}");
+            }
+
+            // Apply skiplist rules from parsed rules
+            var skiplistRules = SiteRulesParser.ToSkiplistRules(parsed);
+            if (skiplistRules.Count > 0)
+            {
+                var existingPatterns = _siteSkiplist.Select(r => r.Pattern).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var added = 0;
+                foreach (var rule in skiplistRules)
+                {
+                    if (!existingPatterns.Contains(rule.Pattern))
+                    {
+                        _siteSkiplist.Add(rule);
+                        existingPatterns.Add(rule.Pattern);
+                        added++;
+                    }
+                }
+                if (added > 0)
+                    changes.Add($"{added} skiplist rule(s)");
+            }
+
+            // Apply denied content patterns
+            if (parsed.DeniedPatterns.Count > 0)
+                changes.Add($"Denied: {string.Join(", ", parsed.DeniedPatterns)}");
+
+            if (changes.Count > 0)
+            {
+                TestResultText.Text = $"SITE RULES applied: {string.Join("; ", changes)}";
+
+                // Show full rules in a detail dialog
+                var rulesText = string.Join("\n", parsed.RawRules.Select((r, i) => $"{i + 1}. {r}"));
+                MessageBox.Show(
+                    $"Detected {parsed.RawRules.Count} rule(s). Applied:\n\n" +
+                    string.Join("\n", changes.Select(c => $"  • {c}")) +
+                    $"\n\nFull rules:\n{rulesText}",
+                    "SITE RULES", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            else
+            {
+                TestResultText.Text = "SITE RULES returned no actionable rules.";
+                var rulesText = string.Join("\n", parsed.RawRules.Select((r, i) => $"{i + 1}. {r}"));
+                if (parsed.RawRules.Count > 0)
+                {
+                    MessageBox.Show(
+                        $"Found {parsed.RawRules.Count} rule(s) but none could be auto-applied:\n\n{rulesText}",
+                        "SITE RULES", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            TestResultText.Text = $"SITE RULES failed: {ex.Message}";
+            Log.Warning(ex, "SITE RULES detection failed");
+        }
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e)
