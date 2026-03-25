@@ -581,33 +581,51 @@ public partial class ServerEditDialog : Window
             if (string.IsNullOrEmpty(rootPath)) rootPath = "/";
 
             SpreadSectionsBox.Text = "Scanning directories...";
-            var rootItems = await ListDir(rootPath);
-
-            var topDirs = rootItems
-                .Where(i => i.Type == FtpObjectType.Directory && !NonContentDirs.Contains(i.Name))
-                .ToList();
 
             var sections = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (var dir in topDirs)
+            // Recurse up to 3 levels deep to find content sections
+            // A content section is a directory with 2+ subdirectories (releases)
+            // Non-content dirs at any level are descended into if they contain further dirs
+            async Task ScanForSections(string path, int depth)
             {
-                try
-                {
-                    var subItems = await ListDir(dir.FullName);
-                    var subDirCount = subItems.Count(i => i.Type == FtpObjectType.Directory
-                        && !NonContentDirs.Contains(i.Name));
+                if (depth > 3) return;
 
-                    // A content section has multiple subdirectories (releases)
-                    if (subDirCount >= 2)
+                FtpListItem[] items;
+                try { items = await ListDir(path); }
+                catch { return; }
+
+                var dirs = items
+                    .Where(i => i.Type == FtpObjectType.Directory && !NonContentDirs.Contains(i.Name))
+                    .ToList();
+
+                foreach (var dir in dirs)
+                {
+                    try
                     {
-                        // Use directory name as section name, uppercased
-                        var sectionName = dir.Name.ToUpper()
-                            .Replace(" ", "_").Replace("-", "_");
-                        sections[sectionName] = dir.FullName;
+                        var subItems = await ListDir(dir.FullName);
+                        var subDirs = subItems.Count(i => i.Type == FtpObjectType.Directory
+                            && !NonContentDirs.Contains(i.Name));
+
+                        if (subDirs >= 2)
+                        {
+                            // Looks like a content section
+                            var sectionName = dir.Name.ToUpper()
+                                .Replace(" ", "_").Replace("-", "_");
+                            sections.TryAdd(sectionName, dir.FullName);
+                        }
+                        else if (subDirs > 0 && depth < 3)
+                        {
+                            // Not enough subdirs to be a section — descend deeper
+                            SpreadSectionsBox.Text = $"Scanning {dir.FullName}...";
+                            await ScanForSections(dir.FullName, depth + 1);
+                        }
                     }
+                    catch { }
                 }
-                catch { }
             }
+
+            await ScanForSections(rootPath, 0);
 
             await client.Disconnect();
             client.Dispose();
