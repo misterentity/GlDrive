@@ -477,7 +477,8 @@ public partial class ServerEditDialog : Window
             var rootItems = await ListDir(rootPath);
 
             var topDirs = rootItems
-                .Where(i => i.Type == FtpObjectType.Directory && !NonContentDirs.Contains(i.Name))
+                .Where(i => (i.Type == FtpObjectType.Directory || i.Type == FtpObjectType.Link)
+                    && !NonContentDirs.Contains(i.Name))
                 .ToList();
 
             var contentPaths = new List<string>();
@@ -487,7 +488,7 @@ public partial class ServerEditDialog : Window
                 try
                 {
                     var subItems = await ListDir(dir.FullName);
-                    var subDirCount = subItems.Count(i => i.Type == FtpObjectType.Directory
+                    var subDirCount = subItems.Count(i => (i.Type == FtpObjectType.Directory || i.Type == FtpObjectType.Link)
                         && !NonContentDirs.Contains(i.Name));
                     if (subDirCount >= 2)
                         contentPaths.Add(dir.FullName);
@@ -596,7 +597,8 @@ public partial class ServerEditDialog : Window
                 catch { return; }
 
                 var dirs = items
-                    .Where(i => i.Type == FtpObjectType.Directory && !NonContentDirs.Contains(i.Name))
+                    .Where(i => (i.Type == FtpObjectType.Directory || i.Type == FtpObjectType.Link)
+                        && !NonContentDirs.Contains(i.Name))
                     .ToList();
 
                 foreach (var dir in dirs)
@@ -604,7 +606,8 @@ public partial class ServerEditDialog : Window
                     try
                     {
                         var subItems = await ListDir(dir.FullName);
-                        var subDirs = subItems.Count(i => i.Type == FtpObjectType.Directory
+                        // Count both real dirs and symlinks (glftpd sections like /recent/ use symlinks)
+                        var subDirs = subItems.Count(i => (i.Type == FtpObjectType.Directory || i.Type == FtpObjectType.Link)
                             && !NonContentDirs.Contains(i.Name));
 
                         if (subDirs >= 2)
