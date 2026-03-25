@@ -156,7 +156,11 @@ public class UpdateChecker : IDisposable
         try
         {
             var checksumText = await _http.GetStringAsync(checksumAsset.BrowserDownloadUrl);
-            var zipName = Path.GetFileName(zipPath);
+            // Match against the actual asset name from GitHub, not the local temp filename
+            var zipAsset = release.Assets.FirstOrDefault(a =>
+                a.Name.Contains("win-x64", StringComparison.OrdinalIgnoreCase) &&
+                a.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
+            var zipName = zipAsset?.Name ?? Path.GetFileName(zipPath);
             var expectedHash = checksumText.Split('\n')
                 .Select(l => l.Trim())
                 .Where(l => !string.IsNullOrEmpty(l))
