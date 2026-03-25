@@ -585,9 +585,13 @@ public partial class ServerEditDialog : Window
 
             var sections = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-            // Recurse up to 3 levels deep to find content sections
-            // A content section is a directory with 2+ subdirectories (releases)
-            // Non-content dirs at any level are descended into if they contain further dirs
+            // Recurse up to 3 levels deep to find content sections.
+            // A content section has 2+ subdirs that are "leaf" (releases with files).
+            // A container (like /recent/) has 2+ subdirs that themselves have 2+ subdirs — descend into it.
+            bool IsDirOrLink(FtpListItem i) =>
+                (i.Type == FtpObjectType.Directory || i.Type == FtpObjectType.Link)
+                && !NonContentDirs.Contains(i.Name);
+
             async Task ScanForSections(string path, int depth)
             {
                 if (depth > 3) return;
@@ -596,32 +600,53 @@ public partial class ServerEditDialog : Window
                 try { items = await ListDir(path); }
                 catch { return; }
 
-                var dirs = items
-                    .Where(i => (i.Type == FtpObjectType.Directory || i.Type == FtpObjectType.Link)
-                        && !NonContentDirs.Contains(i.Name))
-                    .ToList();
+                var dirs = items.Where(IsDirOrLink).ToList();
 
                 foreach (var dir in dirs)
                 {
                     try
                     {
                         var subItems = await ListDir(dir.FullName);
-                        // Count both real dirs and symlinks (glftpd sections like /recent/ use symlinks)
-                        var subDirs = subItems.Count(i => (i.Type == FtpObjectType.Directory || i.Type == FtpObjectType.Link)
-                            && !NonContentDirs.Contains(i.Name));
+                        var subDirItems = subItems.Where(IsDirOrLink).ToList();
 
-                        if (subDirs >= 2)
+                        if (subDirItems.Count < 2)
                         {
-                            // Looks like a content section
+                            // Too few subdirs to be a section — descend if possible
+                            if (subDirItems.Count > 0 && depth < 3)
+                            {
+                                SpreadSectionsBox.Text = $"Scanning {dir.FullName}...";
+                                await ScanForSections(dir.FullName, depth + 1);
+                            }
+                            continue;
+                        }
+
+                        // Has 2+ subdirs — check if this is a container of sections or an actual section.
+                        // Sample up to 3 subdirs: if most also have 2+ subdirs, this is a container.
+                        var sample = subDirItems.Take(3).ToList();
+                        var containerCount = 0;
+                        foreach (var sub in sample)
+                        {
+                            try
+                            {
+                                var grandChildren = await ListDir(sub.FullName);
+                                var gcDirs = grandChildren.Count(IsDirOrLink);
+                                if (gcDirs >= 2) containerCount++;
+                            }
+                            catch { }
+                        }
+
+                        if (containerCount >= 2 && depth < 3)
+                        {
+                            // Most subdirs have their own subdirs — this is a container, descend
+                            SpreadSectionsBox.Text = $"Scanning {dir.FullName}...";
+                            await ScanForSections(dir.FullName, depth + 1);
+                        }
+                        else
+                        {
+                            // Subdirs are mostly leaf (releases) — this is a content section
                             var sectionName = dir.Name.ToUpper()
                                 .Replace(" ", "_").Replace("-", "_");
                             sections.TryAdd(sectionName, dir.FullName);
-                        }
-                        else if (subDirs > 0 && depth < 3)
-                        {
-                            // Not enough subdirs to be a section — descend deeper
-                            SpreadSectionsBox.Text = $"Scanning {dir.FullName}...";
-                            await ScanForSections(dir.FullName, depth + 1);
                         }
                     }
                     catch { }
