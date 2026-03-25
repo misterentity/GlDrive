@@ -257,6 +257,9 @@
                 <DockPanel Margin="0,0,0,2">
                     <Button DockPanel.Dock="Right" Content="Auto-Detect" Click="AutoDetectSections_Click"
                             Padding="8,2" Margin="6,0,0,0" VerticalAlignment="Bottom"/>
+                    <CheckBox x:Name="ScanAllDirsBox" DockPanel.Dock="Right" Content="Scan all"
+                              VerticalAlignment="Bottom" Margin="0,0,6,0"
+                              ToolTip="Scan all directories, not just /incoming/"/>
                     <TextBlock Text="Sections (Name=Path, one per line):" VerticalAlignment="Bottom"/>
                 </DockPanel>
                 <TextBox x:Name="SpreadSectionsBox" AcceptsReturn="True" TextWrapping="Wrap"
