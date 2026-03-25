@@ -577,11 +577,32 @@ public partial class ServerEditDialog : Window
                 return await client.GetListing(path, FtpListOption.AllFiles);
             }
 
-            // Scan root for content directories
+            // For spreading/racing, only /incoming/ matters by default
             var rootPath = string.IsNullOrWhiteSpace(RootPathBox.Text) ? "/" : RootPathBox.Text.TrimEnd('/');
             if (string.IsNullOrEmpty(rootPath)) rootPath = "/";
 
-            SpreadSectionsBox.Text = "Scanning directories...";
+            var scanAll = ScanAllDirsBox.IsChecked == true;
+            if (!scanAll)
+            {
+                // Try /incoming/ under the root path first
+                var incomingPath = rootPath == "/" ? "/incoming" : rootPath + "/incoming";
+                SpreadSectionsBox.Text = $"Checking {incomingPath}...";
+                try
+                {
+                    var incomingItems = await ListDir(incomingPath);
+                    var hasDirs = incomingItems.Any(i =>
+                        (i.Type == FtpObjectType.Directory || i.Type == FtpObjectType.Link)
+                        && !NonContentDirs.Contains(i.Name));
+                    if (hasDirs)
+                        rootPath = incomingPath;
+                }
+                catch
+                {
+                    // /incoming/ doesn't exist — fall back to full root scan
+                }
+            }
+
+            SpreadSectionsBox.Text = $"Scanning {rootPath}...";
 
             var sections = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
