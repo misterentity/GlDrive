@@ -606,75 +606,34 @@ public partial class ServerEditDialog : Window
 
             var sections = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-            // Recurse up to 3 levels deep to find content sections.
-            // A content section has 2+ subdirs that are "leaf" (releases with files).
-            // A container (like /recent/) has 2+ subdirs that themselves have 2+ subdirs — descend into it.
             bool IsDirOrLink(FtpListItem i) =>
                 (i.Type == FtpObjectType.Directory || i.Type == FtpObjectType.Link)
                 && !NonContentDirs.Contains(i.Name);
 
-            async Task ScanForSections(string path, int depth)
+            // List directories under scan root — each with 2+ subdirs is a section
+            FtpListItem[] rootItems;
+            try { rootItems = await ListDir(rootPath); }
+            catch { rootItems = []; }
+
+            var dirs = rootItems.Where(IsDirOrLink).ToList();
+
+            foreach (var dir in dirs)
             {
-                if (depth > 3) return;
-
-                FtpListItem[] items;
-                try { items = await ListDir(path); }
-                catch { return; }
-
-                var dirs = items.Where(IsDirOrLink).ToList();
-
-                foreach (var dir in dirs)
+                try
                 {
-                    try
+                    SpreadSectionsBox.Text = $"Checking {dir.Name}...";
+                    var subItems = await ListDir(dir.FullName);
+                    var subDirCount = subItems.Count(IsDirOrLink);
+
+                    if (subDirCount >= 2)
                     {
-                        var subItems = await ListDir(dir.FullName);
-                        var subDirItems = subItems.Where(IsDirOrLink).ToList();
-
-                        if (subDirItems.Count < 2)
-                        {
-                            // Too few subdirs to be a section — descend if possible
-                            if (subDirItems.Count > 0 && depth < 3)
-                            {
-                                SpreadSectionsBox.Text = $"Scanning {dir.FullName}...";
-                                await ScanForSections(dir.FullName, depth + 1);
-                            }
-                            continue;
-                        }
-
-                        // Has 2+ subdirs — check if this is a container of sections or an actual section.
-                        // Sample up to 3 subdirs: if most also have 2+ subdirs, this is a container.
-                        var sample = subDirItems.Take(3).ToList();
-                        var containerCount = 0;
-                        foreach (var sub in sample)
-                        {
-                            try
-                            {
-                                var grandChildren = await ListDir(sub.FullName);
-                                var gcDirs = grandChildren.Count(IsDirOrLink);
-                                if (gcDirs >= 2) containerCount++;
-                            }
-                            catch { }
-                        }
-
-                        if (containerCount >= 2 && depth < 3)
-                        {
-                            // Most subdirs have their own subdirs — this is a container, descend
-                            SpreadSectionsBox.Text = $"Scanning {dir.FullName}...";
-                            await ScanForSections(dir.FullName, depth + 1);
-                        }
-                        else
-                        {
-                            // Subdirs are mostly leaf (releases) — this is a content section
-                            var sectionName = dir.Name.ToUpper()
-                                .Replace(" ", "_").Replace("-", "_");
-                            sections.TryAdd(sectionName, dir.FullName);
-                        }
+                        var sectionName = dir.Name.ToUpper()
+                            .Replace(" ", "_").Replace("-", "_");
+                        sections.TryAdd(sectionName, dir.FullName);
                     }
-                    catch { }
                 }
+                catch { }
             }
-
-            await ScanForSections(rootPath, 0);
 
             await client.Disconnect();
             client.Dispose();
