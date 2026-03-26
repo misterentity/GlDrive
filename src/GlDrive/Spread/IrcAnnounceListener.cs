@@ -23,7 +23,7 @@ public class IrcAnnounceListener : IDisposable
     private readonly HashSet<string> _recentAnnounces = new(StringComparer.OrdinalIgnoreCase);
     private readonly Lock _lock = new();
 
-    public event Action<string, string, string>? ReleaseAnnounced; // serverId, section, releaseName
+    public event Action<string, string, string, bool>? ReleaseAnnounced; // serverId, section, releaseName, autoRace
 
     public IrcAnnounceListener(string serverId, IrcService ircService, List<IrcAnnounceRule> rules)
     {
@@ -59,7 +59,7 @@ public class IrcAnnounceListener : IDisposable
         if (message.Type != IrcMessageType.Normal && message.Type != IrcMessageType.Notice)
             return;
 
-        foreach (var rule in _rules.Where(r => r.Enabled && r.AutoRace))
+        foreach (var rule in _rules.Where(r => r.Enabled))
         {
             // Check channel match (empty = all channels)
             if (!string.IsNullOrEmpty(rule.Channel) &&
@@ -94,7 +94,7 @@ public class IrcAnnounceListener : IDisposable
                 Log.Information("IRC announce detected: [{Section}] {Release} (from {Channel} on {Server})",
                     section, release, target, _serverId);
 
-                ReleaseAnnounced?.Invoke(_serverId, section, release);
+                ReleaseAnnounced?.Invoke(_serverId, section, release, rule.AutoRace);
             }
             catch (RegexMatchTimeoutException) { }
             catch (Exception ex)

@@ -160,4 +160,45 @@ public class FtpOperations
             return false;
         }
     }
+
+    /// <summary>
+    /// Try SITE DISKFREE to get server disk usage. Returns (totalBytes, freeBytes) or null if unsupported.
+    /// glftpd responds: "200 Total: X MB Free: Y MB"
+    /// </summary>
+    public async Task<(long totalBytes, long freeBytes)?> GetDiskFree(CancellationToken ct = default)
+    {
+        try
+        {
+            await using var conn = await _pool.Borrow(ct);
+            var reply = await conn.Client.Execute("SITE DISKFREE", ct);
+            if (!reply.Success) return null;
+
+            // Parse glftpd format: "200 Total: 1234 MB Free: 567 MB"
+            // Also handle KB/GB variants
+            var msg = reply.Message;
+            var totalMatch = System.Text.RegularExpressions.Regex.Match(msg,
+                @"Total:\s*(\d+)\s*(KB|MB|GB|TB)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            var freeMatch = System.Text.RegularExpressions.Regex.Match(msg,
+                @"Free:\s*(\d+)\s*(KB|MB|GB|TB)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+            if (!totalMatch.Success || !freeMatch.Success) return null;
+
+            var total = ParseDiskSize(long.Parse(totalMatch.Groups[1].Value), totalMatch.Groups[2].Value);
+            var free = ParseDiskSize(long.Parse(freeMatch.Groups[1].Value), freeMatch.Groups[2].Value);
+            return (total, free);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static long ParseDiskSize(long value, string unit) => unit.ToUpperInvariant() switch
+    {
+        "KB" => value * 1024,
+        "MB" => value * 1024 * 1024,
+        "GB" => value * 1024L * 1024 * 1024,
+        "TB" => value * 1024L * 1024 * 1024 * 1024,
+        _ => value
+    };
 }

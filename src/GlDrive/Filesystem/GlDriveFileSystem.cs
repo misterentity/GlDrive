@@ -24,6 +24,9 @@ public class GlDriveFileSystem : FileSystemBase
     private readonly long _spillThresholdBytes;
     private readonly SemaphoreSlim _ftpGate;
     private readonly byte[] _defaultSecurityDescriptor;
+    private long _cachedTotalSize = 1L * 1024 * 1024 * 1024 * 1024; // 1 TB default
+    private long _cachedFreeSize = 500L * 1024 * 1024 * 1024; // 500 GB default
+    private DateTime _lastDiskQuery = DateTime.MinValue;
 
     public GlDriveFileSystem(FtpOperations ftp, DirectoryCache cache, string rootPath, string volumeLabel,
         int fileInfoTimeoutMs = 1000, int dirListTimeoutSeconds = 30, int readBufferSpillThresholdMb = 50)
@@ -85,10 +88,36 @@ public class GlDriveFileSystem : FileSystemBase
     public override int GetVolumeInfo(out VolumeInfo volumeInfo)
     {
         volumeInfo = default;
-        volumeInfo.TotalSize = 1L * 1024 * 1024 * 1024 * 1024; // 1 TB virtual
-        volumeInfo.FreeSize = 500L * 1024 * 1024 * 1024; // 500 GB free
+        volumeInfo.TotalSize = (ulong)Interlocked.Read(ref _cachedTotalSize);
+        volumeInfo.FreeSize = (ulong)Interlocked.Read(ref _cachedFreeSize);
         volumeInfo.SetVolumeLabel(_volumeLabel);
+
+        // Refresh disk info in background every 5 minutes
+        if ((DateTime.UtcNow - _lastDiskQuery).TotalMinutes >= 5)
+        {
+            _lastDiskQuery = DateTime.UtcNow;
+            _ = RefreshDiskFree();
+        }
+
         return STATUS_SUCCESS;
+    }
+
+    private async Task RefreshDiskFree()
+    {
+        try
+        {
+            var result = await _ftp.GetDiskFree();
+            if (result is { } disk)
+            {
+                Interlocked.Exchange(ref _cachedTotalSize, disk.totalBytes);
+                Interlocked.Exchange(ref _cachedFreeSize, disk.freeBytes);
+                Log.Debug("SITE DISKFREE: total={Total} free={Free}", disk.totalBytes, disk.freeBytes);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "SITE DISKFREE query failed");
+        }
     }
 
     public override int GetSecurityByName(

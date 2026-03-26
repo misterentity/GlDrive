@@ -73,7 +73,7 @@ public class SpreadManager : IDisposable
             await pool.DisposeAsync();
     }
 
-    public SpreadJob StartRace(string section, string releaseName,
+    public SpreadJob? StartRace(string section, string releaseName,
         IReadOnlyList<string> serverIds, SpreadMode mode)
     {
         // Sanitize inputs
@@ -81,18 +81,15 @@ public class SpreadManager : IDisposable
         section = SanitizeFtpPath(section);
 
         // Check concurrent race limit
-        int activeCount;
-        lock (_lock) activeCount = _activeJobs.Count;
-
-        if (activeCount >= _config.Spread.MaxConcurrentRaces)
+        lock (_lock)
         {
-            // Queue for later
-            lock (_lock)
+            if (_activeJobs.Count >= _config.Spread.MaxConcurrentRaces)
             {
                 _raceQueue.Enqueue(new PendingRace(section, releaseName, serverIds.ToList(), mode));
+                Log.Information("Race queued (max concurrent {Max}): {Release}",
+                    _config.Spread.MaxConcurrentRaces, releaseName);
+                return null;
             }
-            Log.Information("Race queued (max concurrent {Max}): {Release}", _config.Spread.MaxConcurrentRaces, releaseName);
-            return StartRaceInternal(section, releaseName, serverIds, mode); // still start it, just track
         }
 
         return StartRaceInternal(section, releaseName, serverIds, mode);

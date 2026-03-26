@@ -217,9 +217,11 @@ public class ServerManager : IDisposable
         if (serverConfig.Irc.AnnounceRules.Count > 0 && _spreadManager != null)
         {
             var listener = new IrcAnnounceListener(serverConfig.Id, ircService, serverConfig.Irc.AnnounceRules);
-            listener.ReleaseAnnounced += (serverId, section, release) =>
+            listener.ReleaseAnnounced += (serverId, section, release, autoRace) =>
             {
-                _spreadManager?.TryAutoRace(section, release);
+                Log.Information("IRC announce: [{Section}] {Release} (autoRace={AutoRace})", section, release, autoRace);
+                if (autoRace)
+                    _spreadManager?.TryAutoRace(section, release);
             };
             _announceListeners[serverConfig.Id] = listener;
         }

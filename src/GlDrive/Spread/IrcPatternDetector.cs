@@ -158,9 +158,22 @@ public class IrcPatternDetector : IDisposable
             }
         }
 
-        // If a section appears in 50%+ of messages, it varies (probably a section field)
-        // If one section appears in ALL messages, it's a fixed channel
-        return null; // Section position will be detected from message structure
+        if (sectionCounts.Count == 0) return null;
+
+        // Find the most common section
+        var top = sectionCounts.OrderByDescending(kv => kv.Value).First();
+        var threshold = messages.Count * 0.5;
+
+        // If multiple different sections appear frequently, the section varies per message
+        // — return null so BuildPattern creates a section capture group
+        var frequentSections = sectionCounts.Count(kv => kv.Value >= threshold);
+        if (frequentSections > 1) return null;
+
+        // If one section appears in 80%+ of messages, it's a fixed channel section
+        if (top.Value >= messages.Count * 0.8)
+            return top.Key;
+
+        return null;
     }
 
     private static DetectedPattern? BuildPattern(
@@ -198,10 +211,21 @@ public class IrcPatternDetector : IDisposable
 
         // Build regex pattern
         string pattern;
-        if (hasSectionInPrefix && sectionTokens.Count > 1)
+        if (fixedSection != null && hasSectionInPrefix)
+        {
+            // Fixed section channel — embed literal section and capture release
+            var escapedSection = Regex.Escape(fixedSection);
+            var samplePrefix = prefixes.FirstOrDefault(p => !string.IsNullOrEmpty(p)) ?? "";
+            if (samplePrefix.Contains("::"))
+                pattern = $"(?<section>{escapedSection})\\s*::\\s*(?<release>\\S+)";
+            else if (samplePrefix.Contains('[') && samplePrefix.Contains(']'))
+                pattern = $"\\[(?<section>{escapedSection})\\]\\s*(?<release>\\S+)";
+            else
+                pattern = $"(?<section>{escapedSection})\\s+(?<release>\\S+)";
+        }
+        else if (hasSectionInPrefix && sectionTokens.Count > 1)
         {
             // Multiple different sections seen — the section varies
-            // Find delimiter around section in prefix
             var samplePrefix = prefixes.FirstOrDefault(p => !string.IsNullOrEmpty(p)) ?? "";
             pattern = BuildPatternWithSection(samplePrefix, commonPrefix, commonSuffix);
         }
@@ -222,9 +246,10 @@ public class IrcPatternDetector : IDisposable
             Channel = channel,
             BotNick = nick,
             SuggestedPattern = pattern,
+            FixedSection = fixedSection,
             SampleMessages = messages.Take(3).Select(m => m.msg).ToList(),
             MessageCount = messages.Count,
-            Confidence = CalculateConfidence(messages.Count, commonPrefix, hasSectionInPrefix)
+            Confidence = CalculateConfidence(messages.Count, commonPrefix, hasSectionInPrefix || fixedSection != null)
         };
     }
 
@@ -301,6 +326,7 @@ public class DetectedPattern
     public string Channel { get; set; } = "";
     public string BotNick { get; set; } = "";
     public string SuggestedPattern { get; set; } = "";
+    public string? FixedSection { get; set; }
     public List<string> SampleMessages { get; set; } = [];
     public int MessageCount { get; set; }
     public double Confidence { get; set; }
