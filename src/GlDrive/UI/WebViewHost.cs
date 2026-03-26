@@ -43,6 +43,12 @@ public class WebViewHost : ContentControl
             await _webView.EnsureCoreWebView2Async(env);
             _webView.CoreWebView2.Settings.UserAgent =
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+            _webView.CoreWebView2.NavigationCompleted += (_, args) =>
+            {
+                if (!args.IsSuccess)
+                    Log.Warning("WebView2 navigation failed: status={Status}, id={Id}",
+                        args.WebErrorStatus, args.NavigationId);
+            };
             _webView.CoreWebView2.Navigate(url);
             return true;
         }

@@ -38,6 +38,7 @@ public class SpreadJob : IDisposable
     // File tracking
     private readonly Dictionary<string, HashSet<string>> _fileOwnership = new();
     private readonly Dictionary<string, SpreadFileInfo> _fileInfos = new();
+    private readonly Dictionary<string, SkiplistAction> _fileActions = new(); // per-file skiplist action
     private readonly Dictionary<string, SiteProgress> _siteProgress = new();
     private int _expectedFileCount;
     private (string serverId, string path)? _pendingSfv;
@@ -343,7 +344,11 @@ public class SpreadJob : IDisposable
             owners.Add(serverId);
 
             if (!_fileInfos.ContainsKey(file.Name))
+            {
                 _fileInfos[file.Name] = file;
+                if (action is SkiplistAction.Unique or SkiplistAction.Similar)
+                    _fileActions[file.Name] = action;
+            }
 
             if (fileName.EndsWith(".sfv", StringComparison.OrdinalIgnoreCase) && _expectedFileCount == 0)
                 _pendingSfv = (serverId, file.FullPath);
@@ -456,6 +461,30 @@ public class SpreadJob : IDisposable
                                 srcProgress.ActiveTransfers < _serverConfigs[srcId].SpreadSite.MaxDownloadSlots;
                         }
                         if (!slotsAvailable) continue;
+
+                        // Check Unique/Similar skiplist actions
+                        if (_fileActions.TryGetValue(fileName, out var skipAction))
+                        {
+                            if (skipAction == SkiplistAction.Unique)
+                            {
+                                // Don't transfer if dest already has a file with the same extension
+                                var ext = Path.GetExtension(fileName);
+                                var destHasSameExt = _fileOwnership.Any(kv =>
+                                    kv.Value.Contains(dstId) &&
+                                    Path.GetExtension(kv.Key).Equals(ext, StringComparison.OrdinalIgnoreCase));
+                                if (destHasSameExt) continue;
+                            }
+                            else if (skipAction == SkiplistAction.Similar)
+                            {
+                                // Don't transfer if dest already has a similarly-named file
+                                var baseName = Path.GetFileNameWithoutExtension(fileName);
+                                var destHasSimilar = _fileOwnership.Any(kv =>
+                                    kv.Value.Contains(dstId) &&
+                                    Path.GetFileNameWithoutExtension(kv.Key)
+                                        .Equals(baseName, StringComparison.OrdinalIgnoreCase));
+                                if (destHasSimilar) continue;
+                            }
+                        }
 
                         // Check failure backoff
                         lock (_failureLock)
