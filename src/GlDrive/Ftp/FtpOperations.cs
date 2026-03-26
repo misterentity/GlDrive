@@ -169,8 +169,10 @@ public class FtpOperations
     {
         try
         {
-            await using var conn = await _pool.Borrow(ct);
-            var reply = await conn.Client.Execute("SITE DISKFREE", ct);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(5));
+            await using var conn = await _pool.Borrow(cts.Token);
+            var reply = await conn.Client.Execute("SITE DISKFREE", cts.Token);
             if (!reply.Success) return null;
 
             // Parse glftpd format: "200 Total: 1234 MB Free: 567 MB"

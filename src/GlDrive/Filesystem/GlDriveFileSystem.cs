@@ -26,7 +26,9 @@ public class GlDriveFileSystem : FileSystemBase
     private readonly byte[] _defaultSecurityDescriptor;
     private long _cachedTotalSize = 1L * 1024 * 1024 * 1024 * 1024; // 1 TB default
     private long _cachedFreeSize = 500L * 1024 * 1024 * 1024; // 500 GB default
-    private DateTime _lastDiskQuery = DateTime.MinValue;
+    private DateTime _lastDiskQuery = DateTime.UtcNow; // delay first query until 5min after mount
+    private int _diskQueryRunning; // 0 = idle, 1 = running
+    private bool _diskQueryUnsupported;
 
     public GlDriveFileSystem(FtpOperations ftp, DirectoryCache cache, string rootPath, string volumeLabel,
         int fileInfoTimeoutMs = 1000, int dirListTimeoutSeconds = 30, int readBufferSpillThresholdMb = 50)
@@ -92,32 +94,41 @@ public class GlDriveFileSystem : FileSystemBase
         volumeInfo.FreeSize = (ulong)Interlocked.Read(ref _cachedFreeSize);
         volumeInfo.SetVolumeLabel(_volumeLabel);
 
-        // Refresh disk info in background every 5 minutes
-        if ((DateTime.UtcNow - _lastDiskQuery).TotalMinutes >= 5)
+        // Refresh disk info in background every 5 minutes (skip if unsupported or already running)
+        if (!_diskQueryUnsupported &&
+            (DateTime.UtcNow - _lastDiskQuery).TotalMinutes >= 5 &&
+            Interlocked.CompareExchange(ref _diskQueryRunning, 1, 0) == 0)
         {
-            _lastDiskQuery = DateTime.UtcNow;
-            _ = RefreshDiskFree();
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var result = await _ftp.GetDiskFree();
+                    if (result is { } disk)
+                    {
+                        Interlocked.Exchange(ref _cachedTotalSize, disk.totalBytes);
+                        Interlocked.Exchange(ref _cachedFreeSize, disk.freeBytes);
+                        Log.Debug("SITE DISKFREE: total={Total} free={Free}", disk.totalBytes, disk.freeBytes);
+                    }
+                    else
+                    {
+                        _diskQueryUnsupported = true;
+                        Log.Debug("SITE DISKFREE not supported — using defaults");
+                    }
+                }
+                catch
+                {
+                    _diskQueryUnsupported = true;
+                }
+                finally
+                {
+                    _lastDiskQuery = DateTime.UtcNow;
+                    Interlocked.Exchange(ref _diskQueryRunning, 0);
+                }
+            });
         }
 
         return STATUS_SUCCESS;
-    }
-
-    private async Task RefreshDiskFree()
-    {
-        try
-        {
-            var result = await _ftp.GetDiskFree();
-            if (result is { } disk)
-            {
-                Interlocked.Exchange(ref _cachedTotalSize, disk.totalBytes);
-                Interlocked.Exchange(ref _cachedFreeSize, disk.freeBytes);
-                Log.Debug("SITE DISKFREE: total={Total} free={Free}", disk.totalBytes, disk.freeBytes);
-            }
-        }
-        catch (Exception ex)
-        {
-            Log.Debug(ex, "SITE DISKFREE query failed");
-        }
     }
 
     public override int GetSecurityByName(
