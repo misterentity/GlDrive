@@ -80,7 +80,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     // Bandwidth graph
     private readonly List<double> _speedHistory = new();
     private PointCollection _speedGraphPoints = new();
-    private double _latestSpeed;
+    private readonly Dictionary<string, double> _serverSpeeds = new();
 
     public IrcViewModel Irc => _ircViewModel;
 
@@ -790,7 +790,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     private void OnDownloadProgress(DownloadItem item, DownloadProgress progress)
     {
-        _latestSpeed = progress.BytesPerSecond;
+        _serverSpeeds[item.ServerId] = progress.BytesPerSecond;
         Application.Current?.Dispatcher.InvokeAsync(() =>
         {
             HasActiveDownload = true;
@@ -824,7 +824,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             {
                 HasActiveDownload = false;
                 ActiveDownloadPercent = 0;
-                _latestSpeed = 0;
+                _serverSpeeds.Remove(item.ServerId);
             }
         });
     }
@@ -1501,11 +1501,12 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     private void UpdateStatusBar()
     {
-        // Total speed from active downloads
-        _speedHistory.Add(_latestSpeed);
+        // Aggregate speed across all servers
+        var totalSpeed = _serverSpeeds.Values.Sum();
+        _speedHistory.Add(totalSpeed);
         if (_speedHistory.Count > 60) _speedHistory.RemoveAt(0);
 
-        StatusBarSpeed = _latestSpeed > 0 ? FormatSpeed(_latestSpeed) : "Idle";
+        StatusBarSpeed = totalSpeed > 0 ? FormatSpeed(totalSpeed) : "Idle";
 
         // Queue count
         var queued = 0;
@@ -1531,16 +1532,29 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         }
         catch { StatusBarDiskSpace = ""; }
 
-        // FTP connection counts per server
+        // FTP connection status per server
         var connParts = new List<string>();
         foreach (var server in _serverManager.GetMountedServers())
         {
-            if (server.Pool == null || !server.Pool.IsConnected) continue;
-            var active = server.Pool.ActiveCount;
-            var total = server.Pool.TotalCreated;
-            connParts.Add($"{server.ServerName}: {active}/{total}");
+            if (server.Pool != null && server.Pool.IsConnected)
+            {
+                var active = server.Pool.ActiveCount;
+                var total = server.Pool.TotalCreated;
+                connParts.Add($"{server.ServerName}: {active}/{total}");
+            }
+            else
+            {
+                var stateLabel = server.CurrentState switch
+                {
+                    MountState.Connecting => "connecting",
+                    MountState.Reconnecting => "reconnecting",
+                    MountState.Error => "error",
+                    _ => "disconnected"
+                };
+                connParts.Add($"{server.ServerName}: {stateLabel}");
+            }
         }
-        StatusBarConnections = connParts.Count > 0 ? string.Join("  ", connParts) : "";
+        StatusBarConnections = connParts.Count > 0 ? string.Join("  |  ", connParts) : "";
 
         // Update bandwidth graph points
         UpdateSpeedGraph();

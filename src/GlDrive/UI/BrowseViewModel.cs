@@ -95,22 +95,43 @@ public class BrowseViewModel : INotifyPropertyChanged, IDisposable
         LeftDoubleClickCommand = new RelayCommand<BrowseItemVm>(async item => await NavigateLeft(item));
         RightDoubleClickCommand = new RelayCommand<BrowseItemVm>(async item => await NavigateRight(item));
 
-        // Populate server list without triggering loads
-        foreach (var server in _serverManager.GetMountedServers())
-            ServerList.Add(server.ServerName);
-
-        if (ServerList.Count > 0)
-        {
-            _leftServer = ServerList[0];
-            _rightServer = ServerList.Count > 1 ? ServerList[1] : ServerList[0];
-            OnPropertyChanged(nameof(LeftServer));
-            OnPropertyChanged(nameof(RightServer));
-        }
+        RefreshServerList();
 
         _initializing = false;
 
+        // Update server list when servers connect/disconnect
+        _serverManager.ServerStateChanged += (_, _, _) =>
+            System.Windows.Application.Current?.Dispatcher.InvokeAsync(RefreshServerList);
+
         // Fire both initial loads in parallel
         _ = LoadBothAsync();
+    }
+
+    private void RefreshServerList()
+    {
+        var mounted = _serverManager.GetMountedServers().Select(s => s.ServerName).ToList();
+        var currentLeft = _leftServer;
+        var currentRight = _rightServer;
+
+        // Only update if the list changed
+        var existing = ServerList.ToList();
+        if (existing.SequenceEqual(mounted)) return;
+
+        _initializing = true;
+        ServerList.Clear();
+        foreach (var name in mounted)
+            ServerList.Add(name);
+
+        // Preserve current selections if still valid
+        if (ServerList.Count > 0)
+        {
+            _leftServer = ServerList.Contains(currentLeft) ? currentLeft : ServerList[0];
+            _rightServer = ServerList.Contains(currentRight) ? currentRight :
+                (ServerList.Count > 1 ? ServerList[1] : ServerList[0]);
+            OnPropertyChanged(nameof(LeftServer));
+            OnPropertyChanged(nameof(RightServer));
+        }
+        _initializing = false;
     }
 
     private async Task LoadBothAsync()

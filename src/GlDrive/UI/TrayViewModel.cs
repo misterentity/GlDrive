@@ -22,8 +22,8 @@ public class TrayViewModel : INotifyPropertyChanged
     private DashboardWindow? _dashboardWindow;
     private GitHubRelease? _availableUpdate;
     private readonly Dictionary<string, (Action<DownloadItem, DownloadProgress> progress, Action<DownloadItem> status)> _subscribedDownloadHandlers = new();
-    private double _lastDownloadSpeed;
-    private int _activeDownloadCount;
+    private readonly Dictionary<string, double> _serverSpeeds = new();
+    private readonly Dictionary<string, int> _serverDownloadCounts = new();
     private DateTime _lastSpeedUpdate;
 
     public TrayViewModel(ServerManager serverManager, AppConfig config, NotificationStore notificationStore)
@@ -60,9 +60,10 @@ public class TrayViewModel : INotifyPropertyChanged
                             server.Downloads.DownloadStatusChanged -= old.status;
                         }
 
+                        var capturedServerId = serverId;
                         Action<DownloadItem, DownloadProgress> progressHandler = (downloadItem, progress) =>
                         {
-                            _lastDownloadSpeed = progress.BytesPerSecond;
+                            _serverSpeeds[capturedServerId] = progress.BytesPerSecond;
                             var now = DateTime.UtcNow;
                             if ((now - _lastSpeedUpdate).TotalSeconds < 1) return;
                             _lastSpeedUpdate = now;
@@ -74,7 +75,7 @@ public class TrayViewModel : INotifyPropertyChanged
                         };
                         Action<DownloadItem> statusHandler = downloadItem =>
                         {
-                            _activeDownloadCount = server.Downloads.Store.Items
+                            _serverDownloadCounts[capturedServerId] = server.Downloads.Store.Items
                                 .Count(i => i.Status == DownloadStatus.Downloading);
                             if (downloadItem.Status == DownloadStatus.Completed)
                             {
@@ -127,11 +128,18 @@ public class TrayViewModel : INotifyPropertyChanged
 
         OpenDriveCommand = new RelayCommand(() =>
         {
-            var mounted = _serverManager.GetMountedServers();
-            if (mounted.Count > 0)
+            var mounted = _serverManager.GetMountedServers()
+                .Where(s => s.CurrentState == MountState.Connected && !string.IsNullOrEmpty(s.DriveLetter))
+                .ToList();
+            if (mounted.Count == 1)
             {
-                var path = mounted[0].DriveLetter + ":\\";
-                Process.Start("explorer.exe", path);
+                Process.Start("explorer.exe", mounted[0].DriveLetter + ":\\");
+            }
+            else if (mounted.Count > 1)
+            {
+                // Multiple servers — open each drive in Explorer
+                foreach (var s in mounted)
+                    Process.Start("explorer.exe", s.DriveLetter + ":\\");
             }
         });
 
@@ -271,6 +279,8 @@ public class TrayViewModel : INotifyPropertyChanged
     {
         var mounted = _serverManager.GetMountedServers();
         var total = _config.Servers.Count;
+        var totalSpeed = _serverSpeeds.Values.Sum();
+        var totalDownloads = _serverDownloadCounts.Values.Sum();
 
         if (total == 0)
         {
@@ -297,23 +307,20 @@ public class TrayViewModel : INotifyPropertyChanged
                 MountState.Error => "Error",
                 _ => "Unmounted"
             };
-            StatusText = _activeDownloadCount > 0 && _lastDownloadSpeed > 0
-                ? $"{baseStatus} | {FormatSpeed(_lastDownloadSpeed)}"
+            StatusText = totalDownloads > 0 && totalSpeed > 0
+                ? $"{baseStatus} | {FormatSpeed(totalSpeed)}"
                 : baseStatus;
             return;
         }
 
         // Multi-server: summarize
-        var drives = mounted
-            .Where(s => s.CurrentState == MountState.Connected)
-            .Select(s => $"{s.ServerName} ({s.DriveLetter}:)");
         StatusText = connectedCount > 0
             ? $"{connectedCount}/{total} connected"
             : "No servers connected";
 
-        // Append active transfer info
-        if (_activeDownloadCount > 0 && _lastDownloadSpeed > 0)
-            StatusText += $" | {FormatSpeed(_lastDownloadSpeed)}";
+        // Append aggregate transfer info
+        if (totalDownloads > 0 && totalSpeed > 0)
+            StatusText += $" | {FormatSpeed(totalSpeed)}";
     }
 
     private static string FormatSpeed(double bytesPerSecond)
