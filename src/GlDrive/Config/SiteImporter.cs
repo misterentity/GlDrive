@@ -90,9 +90,67 @@ public static class SiteImporter
     }
 
     /// <summary>
+    /// Import sites from FlashFXP's .ftp export files (XML format).
+    /// </summary>
+    public static List<ServerConfig> ImportFlashFxpXml(string xmlPath)
+    {
+        var results = new List<ServerConfig>();
+        var doc = XDocument.Load(xmlPath);
+
+        foreach (var site in doc.Descendants("SITE"))
+        {
+            try
+            {
+                var host = site.Element("ADDRESS")?.Value?.Trim();
+                if (string.IsNullOrEmpty(host)) continue;
+
+                var port = 21;
+                if (int.TryParse(site.Element("PORT")?.Value, out var p) && p > 0)
+                    port = p;
+
+                var user = site.Element("USERNAME")?.Value?.Trim() ?? "";
+                var name = site.Attribute("NAME")?.Value ?? host;
+                var password = site.Element("PASSWORD")?.Value?.Trim();
+
+                var server = new ServerConfig
+                {
+                    Name = name,
+                    Connection =
+                    {
+                        Host = host,
+                        Port = port,
+                        Username = user,
+                        RootPath = "/"
+                    },
+                    Mount = { AutoMountOnStart = false }
+                };
+
+                // TLS detection
+                var ssl = site.Element("SSL")?.Value?.Trim();
+                if (!string.IsNullOrEmpty(ssl) && !ssl.Equals("NONE", StringComparison.OrdinalIgnoreCase))
+                    server.Tls.PreferTls12 = true;
+
+                // Save password to Credential Manager if present
+                if (!string.IsNullOrEmpty(password) && !string.IsNullOrEmpty(user))
+                    CredentialStore.SavePassword(host, port, user, password);
+
+                results.Add(server);
+                Log.Debug("FlashFXP XML import: {Name} ({Host}:{Port})", name, host, port);
+            }
+            catch (Exception ex)
+            {
+                Log.Debug(ex, "Skipping FlashFXP XML site entry");
+            }
+        }
+
+        Log.Information("FlashFXP XML import: {Count} sites from {File}", results.Count, Path.GetFileName(xmlPath));
+        return results;
+    }
+
+    /// <summary>
     /// Import sites from FlashFXP's Sites.dat (INI format).
     /// </summary>
-    public static List<ServerConfig> ImportFlashFxp(string datPath)
+    public static List<ServerConfig> ImportFlashFxpDat(string datPath)
     {
         var results = new List<ServerConfig>();
         var lines = File.ReadAllLines(datPath);
