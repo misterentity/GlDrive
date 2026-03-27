@@ -1,15 +1,20 @@
 using System.IO;
+using System.Text;
 using System.Xml.Linq;
 using Serilog;
 
 namespace GlDrive.Config;
 
 /// <summary>
-/// Imports FTP site definitions from FTPRush (RushSite.xml) and FlashFXP (Sites.dat).
-/// Passwords are not imported — they use proprietary encryption and the user should re-enter them.
+/// Imports FTP site definitions from FTPRush (RushSite.xml) and FlashFXP (Sites.dat/.ftp).
 /// </summary>
 public static class SiteImporter
 {
+    static SiteImporter()
+    {
+        // Enable legacy encodings (windows-1252, etc.) used by FlashFXP/FTPRush XML exports
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+    }
     /// <summary>
     /// Import sites from FTPRush's RushSite.xml.
     /// </summary>
