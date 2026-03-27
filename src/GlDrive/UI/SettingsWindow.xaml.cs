@@ -102,7 +102,7 @@ public partial class SettingsWindow : Window
         var dialog = new Microsoft.Win32.OpenFileDialog
         {
             Title = "Import Sites from FTPRush or FlashFXP",
-            Filter = "Site files|RushSite.xml;Sites.dat|FTPRush (RushSite.xml)|RushSite.xml|FlashFXP (Sites.dat)|Sites.dat|All files|*.*"
+            Filter = "Site files|RushSite.xml;Sites.dat;*.ftp|FTPRush (RushSite.xml)|RushSite.xml|FlashFXP (Sites.dat, *.ftp)|Sites.dat;*.ftp|All files|*.*"
         };
 
         if (dialog.ShowDialog() != true) return;
@@ -113,14 +113,25 @@ public partial class SettingsWindow : Window
             var name = Path.GetFileName(file);
             List<ServerConfig> imported;
 
-            if (name.Equals("RushSite.xml", StringComparison.OrdinalIgnoreCase) ||
-                file.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
+            if (name.Equals("RushSite.xml", StringComparison.OrdinalIgnoreCase))
             {
                 imported = SiteImporter.ImportFtpRush(file);
             }
-            else
+            else if (file.EndsWith(".ftp", StringComparison.OrdinalIgnoreCase))
             {
-                imported = SiteImporter.ImportFlashFxp(file);
+                imported = SiteImporter.ImportFlashFxpXml(file);
+            }
+            else if (file.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
+            {
+                // Try to detect: FlashFXP XML has <SITES>, FTPRush has <SITE> at root
+                var peek = System.IO.File.ReadAllText(file, System.Text.Encoding.UTF8);
+                imported = peek.Contains("<SITES", StringComparison.OrdinalIgnoreCase)
+                    ? SiteImporter.ImportFlashFxpXml(file)
+                    : SiteImporter.ImportFtpRush(file);
+            }
+            else // Sites.dat — FlashFXP INI format
+            {
+                imported = SiteImporter.ImportFlashFxpDat(file);
             }
 
             if (imported.Count == 0)
@@ -148,7 +159,9 @@ public partial class SettingsWindow : Window
             var skipped = imported.Count - added;
             var msg = $"Imported {added} server(s)";
             if (skipped > 0) msg += $" ({skipped} duplicates skipped)";
-            msg += ".\n\nPasswords cannot be imported — please edit each server to set the password.";
+            // FlashFXP .ftp exports include plaintext passwords (auto-saved to Credential Manager)
+            if (!file.EndsWith(".ftp", StringComparison.OrdinalIgnoreCase))
+                msg += ".\n\nPasswords cannot be imported — please edit each server to set the password.";
             MessageBox.Show(msg, "Import Complete", MessageBoxButton.OK, MessageBoxImage.Information);
             Log.Information("Imported {Added} sites from {File} ({Skipped} duplicates skipped)", added, name, skipped);
         }
