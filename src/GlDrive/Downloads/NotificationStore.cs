@@ -31,7 +31,7 @@ public class NotificationStore
 
     private readonly object _lock = new();
     private List<NotificationItem> _items = [];
-    private int _pendingSaves;
+    private volatile bool _saveQueued;
 
     public IReadOnlyList<NotificationItem> Items
     {
@@ -40,24 +40,28 @@ public class NotificationStore
 
     public void Load()
     {
-        lock (_lock)
+        List<NotificationItem> loaded;
+        if (!File.Exists(FilePath))
         {
-            if (!File.Exists(FilePath))
-            {
-                _items = [];
-                return;
-            }
-
+            loaded = [];
+        }
+        else
+        {
             try
             {
                 var json = File.ReadAllText(FilePath);
-                _items = JsonSerializer.Deserialize<List<NotificationItem>>(json, JsonOptions) ?? [];
+                loaded = JsonSerializer.Deserialize<List<NotificationItem>>(json, JsonOptions) ?? [];
             }
             catch (Exception ex)
             {
                 Log.Warning(ex, "Failed to load notifications, starting empty");
-                _items = [];
+                loaded = [];
             }
+        }
+
+        lock (_lock)
+        {
+            _items = loaded;
         }
     }
 
@@ -101,11 +105,12 @@ public class NotificationStore
 
     private void ScheduleSave()
     {
-        if (Interlocked.Increment(ref _pendingSaves) > 1) return;
+        if (_saveQueued) return;
+        _saveQueued = true;
         _ = Task.Run(async () =>
         {
             await Task.Delay(500); // debounce rapid adds
-            Interlocked.Exchange(ref _pendingSaves, 0);
+            _saveQueued = false;
             Save();
         });
     }

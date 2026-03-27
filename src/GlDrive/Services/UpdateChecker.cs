@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Net.Http.Json;
 using System.Reflection;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json.Serialization;
 using Serilog;
 
@@ -149,8 +150,8 @@ public class UpdateChecker : IDisposable
 
         if (checksumAsset == null)
         {
-            Log.Warning("No checksums.sha256 asset found — skipping verification");
-            return true;
+            Log.Warning("No checksums.sha256 asset found — rejecting update");
+            return false;
         }
 
         try
@@ -190,8 +191,8 @@ public class UpdateChecker : IDisposable
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "Hash verification failed — allowing update");
-            return true;
+            Log.Error(ex, "Hash verification failed — rejecting update");
+            return false;
         }
     }
 
@@ -213,16 +214,24 @@ public class UpdateChecker : IDisposable
             extractDir = entries[0];
         }
 
-        if (!File.Exists(Path.Combine(extractDir, "GlDrive.exe")))
+        var exePath = Path.Combine(extractDir, "GlDrive.exe");
+        if (!File.Exists(exePath))
         {
             Log.Error("Extraction failed — GlDrive.exe not found in {Path}", extractDir);
+            return;
+        }
+
+        // Verify Authenticode signature if the current binary is signed
+        if (!VerifyAuthenticode(exePath))
+        {
+            Log.Error("Update binary failed Authenticode verification — aborting");
+            try { Directory.Delete(extractDir, true); } catch { }
             return;
         }
 
         try { File.Delete(zipPath); } catch { }
 
         var pid = Environment.ProcessId;
-        var exePath = Path.Combine(extractDir, "GlDrive.exe");
         var installDir = _installPath.TrimEnd(Path.DirectorySeparatorChar);
 
         Log.Information("Launching updater: --apply-update {Pid} \"{ExtractDir}\" \"{InstallDir}\"",
@@ -248,6 +257,62 @@ public class UpdateChecker : IDisposable
         RestartRequested?.Invoke();
     }
 
+    private static bool VerifyAuthenticode(string filePath)
+    {
+        try
+        {
+            // Check if the CURRENT binary is signed — if not, skip Authenticode check
+            // (development builds are unsigned)
+            var currentExe = Process.GetCurrentProcess().MainModule?.FileName;
+            if (currentExe == null) return true;
+
+            X509Certificate2? currentCert = null;
+            try
+            {
+                var raw = X509Certificate.CreateFromSignedFile(currentExe);
+                currentCert = new X509Certificate2(raw);
+            }
+            catch (CryptographicException) { }
+
+            if (currentCert == null)
+            {
+                Log.Debug("Current binary is unsigned — skipping Authenticode check on update");
+                return true;
+            }
+
+            // Current binary IS signed — require the update to be signed by the same issuer
+            X509Certificate2? updateCert = null;
+            try
+            {
+                var raw = X509Certificate.CreateFromSignedFile(filePath);
+                updateCert = new X509Certificate2(raw);
+            }
+            catch (CryptographicException) { }
+
+            if (updateCert == null)
+            {
+                Log.Error("Update binary is not signed but current binary is — rejecting");
+                return false;
+            }
+
+            // Compare issuer to prevent cross-signed attacks
+            if (!currentCert.Issuer.Equals(updateCert.Issuer, StringComparison.Ordinal))
+            {
+                Log.Error("Update binary signed by different issuer: expected={Expected}, got={Got}",
+                    currentCert.Issuer, updateCert.Issuer);
+                return false;
+            }
+
+            Log.Information("Authenticode verification passed: {Subject}", updateCert.Subject);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Authenticode verification error — rejecting update");
+            return false;
+        }
+    }
+
     public static void ApplyUpdate(int pid, string extractDir, string installDir)
     {
         var logPath = Path.Combine(Path.GetTempPath(), "gldrive-update.log");
@@ -259,7 +324,30 @@ public class UpdateChecker : IDisposable
 
         try
         {
-            LogUpdate($"ApplyUpdate started — pid={pid}, extractDir={extractDir}, installDir={installDir}");
+            // Validate paths to prevent arbitrary file overwrite
+            var fullExtract = Path.GetFullPath(extractDir);
+            var fullInstall = Path.GetFullPath(installDir);
+            var tempDir = Path.GetFullPath(Path.GetTempPath());
+
+            if (!fullExtract.StartsWith(tempDir, StringComparison.OrdinalIgnoreCase))
+            {
+                LogUpdate($"SECURITY: extractDir is not in temp directory — aborting. extractDir={fullExtract}");
+                Environment.Exit(1);
+            }
+
+            if (!fullInstall.Contains("GlDrive", StringComparison.OrdinalIgnoreCase))
+            {
+                LogUpdate($"SECURITY: installDir does not look like a GlDrive installation — aborting. installDir={fullInstall}");
+                Environment.Exit(1);
+            }
+
+            if (!File.Exists(Path.Combine(fullExtract, "GlDrive.exe")))
+            {
+                LogUpdate($"SECURITY: GlDrive.exe not found in extractDir — aborting");
+                Environment.Exit(1);
+            }
+
+            LogUpdate($"ApplyUpdate started — pid={pid}, extractDir={fullExtract}, installDir={fullInstall}");
 
             // Wait for the original process to exit (up to 60s)
             try

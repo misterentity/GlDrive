@@ -10,7 +10,7 @@ namespace GlDrive.Irc;
 public class FishKeyEntry
 {
     public string Key { get; set; } = "";
-    public FishMode Mode { get; set; } = FishMode.ECB;
+    public FishMode Mode { get; set; } = FishMode.CBC;
     public DateTime SetAt { get; set; } = DateTime.UtcNow;
 }
 

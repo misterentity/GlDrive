@@ -41,8 +41,24 @@ public class WebViewHost : ContentControl
                 "GlDrive", "WebView2");
             var env = await CoreWebView2Environment.CreateAsync(userDataFolder: dataDir);
             await _webView.EnsureCoreWebView2Async(env);
-            _webView.CoreWebView2.Settings.UserAgent =
+            var settings = _webView.CoreWebView2.Settings;
+            settings.UserAgent =
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+            settings.AreDevToolsEnabled = false;
+            settings.IsWebMessageEnabled = false;
+            settings.AreDefaultContextMenusEnabled = false;
+            settings.IsStatusBarEnabled = false;
+
+            // Restrict navigation to the initial origin
+            var allowedOrigin = new Uri(url).GetLeftPart(UriPartial.Authority);
+            _webView.CoreWebView2.NavigationStarting += (_, args) =>
+            {
+                if (args.Uri != null && !args.Uri.StartsWith(allowedOrigin, StringComparison.OrdinalIgnoreCase))
+                {
+                    args.Cancel = true;
+                    Log.Warning("WebView2 blocked navigation to {Uri} (allowed: {Origin})", args.Uri, allowedOrigin);
+                }
+            };
             _webView.CoreWebView2.NavigationCompleted += (_, args) =>
             {
                 if (!args.IsSuccess)

@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.RegularExpressions;
 using FluentFTP;
 using Serilog;
 
@@ -6,6 +7,9 @@ namespace GlDrive.Ftp;
 
 public class FtpOperations
 {
+    private static readonly Regex DiskTotalRegex = new(@"Total:\s*(\d+)\s*(KB|MB|GB|TB)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex DiskFreeRegex = new(@"Free:\s*(\d+)\s*(KB|MB|GB|TB)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private readonly FtpConnectionPool _pool;
 
     public FtpOperations(FtpConnectionPool pool)
@@ -57,7 +61,7 @@ public class FtpOperations
     public async Task<Stream> DownloadFileStream(string remotePath, CancellationToken ct = default)
     {
         var data = await DownloadFile(remotePath, ct);
-        return new MemoryStream(data);
+        return new MemoryStream(data, false);
     }
 
     public async Task UploadFile(string remotePath, byte[] data, CancellationToken ct = default)
@@ -178,10 +182,8 @@ public class FtpOperations
             // Parse glftpd format: "200 Total: 1234 MB Free: 567 MB"
             // Also handle KB/GB variants
             var msg = reply.Message;
-            var totalMatch = System.Text.RegularExpressions.Regex.Match(msg,
-                @"Total:\s*(\d+)\s*(KB|MB|GB|TB)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-            var freeMatch = System.Text.RegularExpressions.Regex.Match(msg,
-                @"Free:\s*(\d+)\s*(KB|MB|GB|TB)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            var totalMatch = DiskTotalRegex.Match(msg);
+            var freeMatch = DiskFreeRegex.Match(msg);
 
             if (!totalMatch.Success || !freeMatch.Success) return null;
 
@@ -195,12 +197,12 @@ public class FtpOperations
         }
     }
 
-    private static long ParseDiskSize(long value, string unit) => unit.ToUpperInvariant() switch
+    private static long ParseDiskSize(long value, string unit)
     {
-        "KB" => value * 1024,
-        "MB" => value * 1024 * 1024,
-        "GB" => value * 1024L * 1024 * 1024,
-        "TB" => value * 1024L * 1024 * 1024 * 1024,
-        _ => value
-    };
+        if (string.Equals(unit, "KB", StringComparison.OrdinalIgnoreCase)) return value * 1024;
+        if (string.Equals(unit, "MB", StringComparison.OrdinalIgnoreCase)) return value * 1024 * 1024;
+        if (string.Equals(unit, "GB", StringComparison.OrdinalIgnoreCase)) return value * 1024L * 1024 * 1024;
+        if (string.Equals(unit, "TB", StringComparison.OrdinalIgnoreCase)) return value * 1024L * 1024 * 1024 * 1024;
+        return value;
+    }
 }

@@ -48,7 +48,7 @@ public class TrayViewModel : INotifyPropertyChanged
                     if (server?.Matcher != null)
                     {
                         server.Matcher.MatchFound += (item, cat, rel) =>
-                            Application.Current?.Dispatcher.Invoke(() =>
+                            Application.Current?.Dispatcher.InvokeAsync(() =>
                                 ShowNotification("Grabbed", $"{item.Title} [{cat}] ({serverName})"));
                     }
                     if (server?.Downloads != null)

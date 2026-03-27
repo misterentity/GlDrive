@@ -41,7 +41,9 @@ public class ConfigManager
                 return config;
             }
 
-            return JsonSerializer.Deserialize<AppConfig>(json, JsonOptions) ?? new AppConfig();
+            var result = JsonSerializer.Deserialize<AppConfig>(json, JsonOptions) ?? new AppConfig();
+            MigrateApiKeys(json, result);
+            return result;
         }
         catch (Exception ex)
         {
@@ -109,5 +111,42 @@ public class ConfigManager
 
         config.Servers.Add(server);
         return config;
+    }
+
+    /// <summary>
+    /// Migrate plaintext API keys from config JSON to Credential Manager, then re-save to strip them.
+    /// </summary>
+    private static void MigrateApiKeys(string json, AppConfig config)
+    {
+        try
+        {
+            var node = JsonNode.Parse(json);
+            var downloads = node?["downloads"];
+            if (downloads == null) return;
+
+            var omdb = downloads["omdbApiKey"]?.GetValue<string>();
+            var tmdb = downloads["tmdbApiKey"]?.GetValue<string>();
+            bool migrated = false;
+
+            if (!string.IsNullOrEmpty(omdb) && CredentialStore.GetApiKey("omdb") == null)
+            {
+                CredentialStore.SaveApiKey("omdb", omdb);
+                Log.Information("Migrated OMDB API key to Credential Manager");
+                migrated = true;
+            }
+            if (!string.IsNullOrEmpty(tmdb) && CredentialStore.GetApiKey("tmdb") == null)
+            {
+                CredentialStore.SaveApiKey("tmdb", tmdb);
+                Log.Information("Migrated TMDB API key to Credential Manager");
+                migrated = true;
+            }
+
+            if (migrated)
+                Save(config); // Re-save without the plaintext keys (now JsonIgnored)
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "API key migration check failed");
+        }
     }
 }

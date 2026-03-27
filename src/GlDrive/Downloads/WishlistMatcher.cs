@@ -33,6 +33,8 @@ public class WishlistMatcher
     {
         try
         {
+            // Phase 1: collect matches under lock (no calls to DownloadManager)
+            var matched = new List<(WishlistItem item, DownloadItem download)>();
             lock (_matchLock)
             {
                 foreach (var item in _wishlist.Items)
@@ -56,8 +58,7 @@ public class WishlistMatcher
                         category, releaseName, item.Title, _serverName);
 
                     var localPath = BuildLocalPath(item, category, releaseName);
-
-                    var downloadItem = new DownloadItem
+                    matched.Add((item, new DownloadItem
                     {
                         RemotePath = remotePath,
                         ReleaseName = releaseName,
@@ -66,19 +67,22 @@ public class WishlistMatcher
                         Category = category,
                         ServerId = _serverId,
                         ServerName = _serverName
-                    };
-
-                    if (!_downloadManager.Enqueue(downloadItem))
-                    {
-                        Log.Information("Wishlist match skipped (duplicate): {Release}", releaseName);
-                        continue;
-                    }
-
-                    item.GrabbedReleases.Add(releaseName);
-                    _wishlist.Update(item);
-
-                    MatchFound?.Invoke(item, category, releaseName);
+                    }));
                 }
+            }
+
+            // Phase 2: enqueue outside lock (no nested lock risk)
+            foreach (var (item, downloadItem) in matched)
+            {
+                if (!_downloadManager.Enqueue(downloadItem))
+                {
+                    Log.Information("Wishlist match skipped (duplicate): {Release}", releaseName);
+                    continue;
+                }
+
+                item.GrabbedReleases.Add(releaseName);
+                _wishlist.Update(item);
+                MatchFound?.Invoke(item, category, releaseName);
             }
         }
         catch (Exception ex)
@@ -90,16 +94,18 @@ public class WishlistMatcher
     private string BuildLocalPath(WishlistItem item, string category, string releaseName)
     {
         var basePath = _config.GetPathForCategory(category);
+        var safeRelease = PathSanitizer.Sanitize(releaseName);
+        var safeTitle = PathSanitizer.Sanitize(item.Title);
 
         if (item.Type == MediaType.Movie)
         {
             var yearStr = item.Year.HasValue ? $" ({item.Year})" : "";
-            return Path.Combine(basePath, "Movies", $"{item.Title}{yearStr}", releaseName);
+            return Path.Combine(basePath, "Movies", $"{safeTitle}{yearStr}", safeRelease);
         }
 
         // TV: extract season from release name
         var parsed = SceneNameParser.Parse(releaseName);
         var seasonFolder = parsed.Season.HasValue ? $"Season {parsed.Season:D2}" : "Season 01";
-        return Path.Combine(basePath, "TV", item.Title, seasonFolder, releaseName);
+        return Path.Combine(basePath, "TV", safeTitle, seasonFolder, safeRelease);
     }
 }

@@ -14,7 +14,7 @@ public class IrcConfig
     public bool AutoConnect { get; set; }
     public string InviteNick { get; set; } = "";
     public bool FishEnabled { get; set; }
-    public FishMode FishMode { get; set; } = FishMode.ECB;
+    public FishMode FishMode { get; set; } = FishMode.CBC;
     public List<IrcChannelConfig> Channels { get; set; } = [];
     public List<IrcAnnounceRule> AnnounceRules { get; set; } = [];
 }

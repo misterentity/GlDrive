@@ -64,13 +64,10 @@ public class DirectoryCache
                 return true;
             }
 
-            // Already refreshing — serve stale
-            if (_refreshing.ContainsKey(key))
-            {
-                Interlocked.Increment(ref _staleHits);
-                items = cached.Items;
-                return true;
-            }
+            // TryAdd failed → already refreshing, serve stale
+            Interlocked.Increment(ref _staleHits);
+            items = cached.Items;
+            return true;
         }
 
         Interlocked.Increment(ref _misses);
@@ -98,8 +95,10 @@ public class DirectoryCache
 
     public void InvalidateParent(string remotePath)
     {
-        var parent = GetParentPath(remotePath);
-        Invalidate(parent);
+        var normalized = NormalizePath(remotePath);
+        var idx = normalized.LastIndexOf('/');
+        var parent = idx <= 0 ? "/" : normalized[..idx];
+        _cache.TryRemove(parent, out _);
     }
 
     public void Clear()
@@ -110,14 +109,16 @@ public class DirectoryCache
 
     public FtpListItem? FindItem(string remotePath)
     {
-        var parent = GetParentPath(remotePath);
-        var name = GetFileName(remotePath);
+        var normalized = NormalizePath(remotePath);
+        var idx = normalized.LastIndexOf('/');
+        var parent = idx <= 0 ? "/" : normalized[..idx];
+        var name = idx < 0 ? normalized : normalized[(idx + 1)..];
 
-        if (!TryGet(parent, out var items))
+        if (!_cache.TryGetValue(parent, out var cached) || cached.IsExpired(_ttlSeconds))
             return null;
 
-        return items.FirstOrDefault(i =>
-            string.Equals(i.Name, name, StringComparison.Ordinal));
+        Interlocked.Increment(ref _hits);
+        return cached.FindByName(name);
     }
 
     /// <summary>
@@ -139,15 +140,13 @@ public class DirectoryCache
 
     private void EvictOldest()
     {
-        var oldest = _cache
-            .OrderBy(kv => kv.Value.CachedAt)
-            .Take(_cache.Count / 4)
-            .Select(kv => kv.Key)
-            .ToList();
-
-        foreach (var key in oldest)
+        // Find the oldest quarter by scanning once (O(n) instead of O(n log n) sort)
+        var entries = _cache.ToArray();
+        Array.Sort(entries, (a, b) => a.Value.CachedAt.CompareTo(b.Value.CachedAt));
+        var toRemove = entries.Length / 4;
+        for (int i = 0; i < toRemove; i++)
         {
-            _cache.TryRemove(key, out _);
+            _cache.TryRemove(entries[i].Key, out _);
             Interlocked.Increment(ref _evictions);
         }
     }
@@ -160,24 +159,11 @@ public class DirectoryCache
         return path.TrimEnd('/');
     }
 
-    private static string GetParentPath(string path)
-    {
-        path = NormalizePath(path);
-        var idx = path.LastIndexOf('/');
-        return idx <= 0 ? "/" : path[..idx];
-    }
-
-    private static string GetFileName(string path)
-    {
-        path = NormalizePath(path);
-        var idx = path.LastIndexOf('/');
-        return idx < 0 ? path : path[(idx + 1)..];
-    }
-
     private class CachedDirectory
     {
         public FtpListItem[] Items { get; }
         public DateTime CachedAt { get; }
+        private Dictionary<string, FtpListItem>? _nameLookup;
 
         public CachedDirectory(FtpListItem[] items)
         {
@@ -187,5 +173,12 @@ public class DirectoryCache
 
         public bool IsExpired(int ttlSeconds) =>
             (DateTime.UtcNow - CachedAt).TotalSeconds > ttlSeconds;
+
+        public FtpListItem? FindByName(string name)
+        {
+            // Lazy-init dictionary on first lookup
+            _nameLookup ??= Items.ToDictionary(i => i.Name, StringComparer.Ordinal);
+            return _nameLookup.GetValueOrDefault(name);
+        }
     }
 }

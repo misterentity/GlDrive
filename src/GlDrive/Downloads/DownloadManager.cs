@@ -92,25 +92,27 @@ public class DownloadManager : IDisposable
 
     public bool Enqueue(DownloadItem item)
     {
-        // Duplicate detection: check for matching RemotePath with active status
-        var existing = _store.Items.FirstOrDefault(i =>
-            i.RemotePath == item.RemotePath &&
-            i.Status is DownloadStatus.Queued or DownloadStatus.Downloading or DownloadStatus.Extracting);
-        if (existing != null)
+        lock (_queueLock)
         {
-            Log.Information("Skipped duplicate download: {Release} (already {Status})", item.ReleaseName, existing.Status);
-            return false;
-        }
+            // Duplicate detection under lock to prevent race with ProcessItem
+            var existing = _store.Items.FirstOrDefault(i =>
+                i.RemotePath == item.RemotePath &&
+                i.Status is DownloadStatus.Queued or DownloadStatus.Downloading or DownloadStatus.Extracting);
+            if (existing != null)
+            {
+                Log.Information("Skipped duplicate download: {Release} (already {Status})", item.ReleaseName, existing.Status);
+                return false;
+            }
 
-        // Check if local path already exists
-        if (Directory.Exists(item.LocalPath))
-        {
-            Log.Information("Skipped download: {Release} (local path already exists)", item.ReleaseName);
-            return false;
-        }
+            if (Directory.Exists(item.LocalPath))
+            {
+                Log.Information("Skipped download: {Release} (local path already exists)", item.ReleaseName);
+                return false;
+            }
 
-        _store.Add(item);
-        lock (_queueLock) _pendingQueue.Add(item);
+            _store.Add(item);
+            _pendingQueue.Add(item);
+        }
         _queueSignal.Release();
         DownloadStatusChanged?.Invoke(item);
         Log.Information("Enqueued download: {Release}", item.ReleaseName);
@@ -323,19 +325,20 @@ public class DownloadManager : IDisposable
                 }
 
                 long completedBytes = 0;
+                var localPathFull = Path.GetFullPath(item.LocalPath);
 
                 foreach (var file in dataFiles)
                 {
                     itemCts.Token.ThrowIfCancellationRequested();
 
-                    var safeName = Path.GetFileName(file.Name);
+                    var safeName = PathSanitizer.Sanitize(Path.GetFileName(file.Name));
                     if (string.IsNullOrEmpty(safeName) || safeName.Contains(".."))
                     {
                         Log.Warning("Skipping file with unsafe name: {Name}", file.Name);
                         continue;
                     }
                     var localFilePath = Path.Combine(item.LocalPath, safeName);
-                    if (!Path.GetFullPath(localFilePath).StartsWith(Path.GetFullPath(item.LocalPath), StringComparison.OrdinalIgnoreCase))
+                    if (!Path.GetFullPath(localFilePath).StartsWith(localPathFull, StringComparison.OrdinalIgnoreCase))
                     {
                         Log.Warning("Skipping file that escapes download directory: {Name}", file.Name);
                         continue;
