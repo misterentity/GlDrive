@@ -1,7 +1,9 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 using System.Windows;
+using System.Xml.Linq;
 using GlDrive.Config;
 using GlDrive.Logging;
 using GlDrive.Services;
@@ -93,6 +95,68 @@ public partial class SettingsWindow : Window
 
         _config.Servers.RemoveAll(s => s.Id == selected.Id);
         RefreshServerList();
+    }
+
+    private void ImportSites_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Import Sites from FTPRush or FlashFXP",
+            Filter = "Site files|RushSite.xml;Sites.dat|FTPRush (RushSite.xml)|RushSite.xml|FlashFXP (Sites.dat)|Sites.dat|All files|*.*"
+        };
+
+        if (dialog.ShowDialog() != true) return;
+
+        try
+        {
+            var file = dialog.FileName;
+            var name = Path.GetFileName(file);
+            List<ServerConfig> imported;
+
+            if (name.Equals("RushSite.xml", StringComparison.OrdinalIgnoreCase) ||
+                file.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
+            {
+                imported = SiteImporter.ImportFtpRush(file);
+            }
+            else
+            {
+                imported = SiteImporter.ImportFlashFxp(file);
+            }
+
+            if (imported.Count == 0)
+            {
+                MessageBox.Show("No sites found in the selected file.", "Import", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            // Skip duplicates (same host:port:user)
+            var added = 0;
+            foreach (var server in imported)
+            {
+                var exists = _config.Servers.Any(s =>
+                    s.Connection.Host.Equals(server.Connection.Host, StringComparison.OrdinalIgnoreCase) &&
+                    s.Connection.Port == server.Connection.Port &&
+                    s.Connection.Username.Equals(server.Connection.Username, StringComparison.OrdinalIgnoreCase));
+                if (exists) continue;
+
+                _config.Servers.Add(server);
+                added++;
+            }
+
+            RefreshServerList();
+
+            var skipped = imported.Count - added;
+            var msg = $"Imported {added} server(s)";
+            if (skipped > 0) msg += $" ({skipped} duplicates skipped)";
+            msg += ".\n\nPasswords cannot be imported — please edit each server to set the password.";
+            MessageBox.Show(msg, "Import Complete", MessageBoxButton.OK, MessageBoxImage.Information);
+            Log.Information("Imported {Added} sites from {File} ({Skipped} duplicates skipped)", added, name, skipped);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Site import failed");
+            MessageBox.Show($"Import failed: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private void ClearCerts_Click(object sender, RoutedEventArgs e)
