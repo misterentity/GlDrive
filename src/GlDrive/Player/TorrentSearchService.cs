@@ -52,15 +52,17 @@ public class TorrentSearchService : IDisposable
 
     public async Task<List<TorrentSearchResult>> SearchAsync(string query, CancellationToken ct = default)
     {
-        // Search both sources in parallel, merge and deduplicate
+        // Search all sources in parallel, merge and deduplicate
         var apibayTask = SearchApiBay(query, ct);
         var solidTask = SearchSolidTorrents(query, ct);
+        var csvTask = SearchTorrentsCsv(query, ct);
 
-        await Task.WhenAll(apibayTask, solidTask);
+        await Task.WhenAll(apibayTask, solidTask, csvTask);
 
         var combined = new List<TorrentSearchResult>();
         combined.AddRange(apibayTask.Result);
         combined.AddRange(solidTask.Result);
+        combined.AddRange(csvTask.Result);
 
         if (combined.Count == 0)
         {
@@ -79,8 +81,8 @@ public class TorrentSearchService : IDisposable
         }
 
         var results = deduped.Take(30).ToList();
-        Log.Information("Torrent search for \"{Query}\": {Count} results ({ApiBay} apibay + {Solid} solid, {Dupes} dupes removed)",
-            query, results.Count, apibayTask.Result.Count, solidTask.Result.Count,
+        Log.Information("Torrent search for \"{Query}\": {Count} results ({ApiBay} apibay + {Solid} solid + {Csv} csv, {Dupes} dupes removed)",
+            query, results.Count, apibayTask.Result.Count, solidTask.Result.Count, csvTask.Result.Count,
             combined.Count - deduped.Count);
 
         return results;
@@ -207,6 +209,59 @@ public class TorrentSearchService : IDisposable
         return results;
     }
 
+    // ── Torrents-CSV (open source DHT aggregator) ──
+
+    private const string TorrentsCsvApi = "https://torrents-csv.com/service/search";
+    private bool _csvChecked;
+    private bool _csvAvailable;
+
+    private async Task<List<TorrentSearchResult>> SearchTorrentsCsv(string query, CancellationToken ct)
+    {
+        var results = new List<TorrentSearchResult>();
+        try
+        {
+            if (!_csvChecked)
+            {
+                _csvChecked = true;
+                try
+                {
+                    var probe = await _http.GetAsync($"{TorrentsCsvApi}?q=test&size=1", ct);
+                    _csvAvailable = probe.IsSuccessStatusCode;
+                    if (_csvAvailable) Log.Information("Torrents-CSV API available");
+                }
+                catch (Exception ex)
+                {
+                    Log.Debug(ex, "Torrents-CSV probe failed");
+                    _csvAvailable = false;
+                }
+            }
+
+            if (!_csvAvailable) return results;
+
+            var url = $"{TorrentsCsvApi}?q={Uri.EscapeDataString(query)}&size=30";
+            using var response = await _http.GetAsync(url, ct);
+            if (!response.IsSuccessStatusCode) return results;
+
+            var json = await response.Content.ReadAsStringAsync(ct);
+            var data = JsonSerializer.Deserialize<CsvResponse>(json, JsonOptions);
+            if (data?.Torrents == null || data.Torrents.Count == 0) return results;
+
+            foreach (var item in data.Torrents.Where(i => i.Seeders > 0).OrderByDescending(i => i.Seeders).Take(30))
+            {
+                results.Add(new TorrentSearchResult(
+                    item.Name,
+                    BuildMagnetLink(item.InfoHash, item.Name),
+                    item.Seeders,
+                    item.Leechers,
+                    FormatBytes(item.SizeBytes),
+                    ""));
+            }
+        }
+        catch (TaskCanceledException) { }
+        catch (Exception ex) { Log.Warning(ex, "Torrents-CSV search failed"); }
+        return results;
+    }
+
     /// <summary>
     /// Returns the magnet link. With API backends, the magnet is stored directly in DetailUrl.
     /// </summary>
@@ -305,5 +360,29 @@ public class TorrentSearchService : IDisposable
 
         [JsonPropertyName("size")]
         public long Size { get; set; }
+    }
+
+    private class CsvResponse
+    {
+        [JsonPropertyName("torrents")]
+        public List<CsvResult> Torrents { get; set; } = [];
+    }
+
+    private class CsvResult
+    {
+        [JsonPropertyName("infohash")]
+        public string InfoHash { get; set; } = "";
+
+        [JsonPropertyName("name")]
+        public string Name { get; set; } = "";
+
+        [JsonPropertyName("size_bytes")]
+        public long SizeBytes { get; set; }
+
+        [JsonPropertyName("seeders")]
+        public int Seeders { get; set; }
+
+        [JsonPropertyName("leechers")]
+        public int Leechers { get; set; }
     }
 }
