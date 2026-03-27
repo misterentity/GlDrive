@@ -246,12 +246,16 @@ public class IrcService : IDisposable
         var nick = msg.Nick;
         var wasEncrypted = false;
 
-        // CTCP ACTION
-        if (text.StartsWith("\x01ACTION ") && text.EndsWith('\x01'))
+        // CTCP handling
+        if (text.StartsWith('\x01'))
         {
-            var action = StripFormatting(text[8..^1]);
-            var displayTarget = IsChannel(target) ? target : nick;
-            AddMessage(displayTarget, new IrcMessageItem { Nick = nick, Text = action, Type = IrcMessageType.Action });
+            if (text.StartsWith("\x01ACTION ") && text.EndsWith('\x01'))
+            {
+                var action = StripFormatting(text[8..^1]);
+                var displayTarget = IsChannel(target) ? target : nick;
+                AddMessage(displayTarget, new IrcMessageItem { Nick = nick, Text = action, Type = IrcMessageType.Action });
+            }
+            // Drop all other CTCP messages (VERSION, FINGER, DCC, etc.)
             return;
         }
 

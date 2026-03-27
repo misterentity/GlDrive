@@ -9,6 +9,10 @@ public static partial class SceneNameParser
     private static readonly Regex YearRegex = MyYearRegex();
     private static readonly Regex GroupRegex = MyGroupRegex();
 
+    private static readonly string[] CommonTags = ["BluRay", "BDRip", "WEB-DL", "WEBRip", "HDTV", "DVDRip", "PROPER", "REPACK", "REMUX"];
+    private static readonly Regex NonAlphanumRegex = new(@"[^a-z0-9\s]", RegexOptions.Compiled);
+    private static readonly Regex MultiSpaceRegex = new(@"\s+", RegexOptions.Compiled);
+
     private static readonly Dictionary<string, QualityProfile> QualityTokens = new(StringComparer.OrdinalIgnoreCase)
     {
         ["2160p"] = QualityProfile.Q2160p,
@@ -115,7 +119,7 @@ public static partial class SceneNameParser
         }
 
         // Cut at common tags
-        foreach (var tag in new[] { "BluRay", "BDRip", "WEB-DL", "WEBRip", "HDTV", "DVDRip", "PROPER", "REPACK", "REMUX" })
+        foreach (var tag in CommonTags)
         {
             var idx = name.IndexOf(tag, StringComparison.OrdinalIgnoreCase);
             if (idx >= 0 && idx < cutoff)
@@ -146,8 +150,8 @@ public static partial class SceneNameParser
             }
         }
         // Keep only alphanumeric and spaces, collapse spaces
-        normalized = Regex.Replace(normalized, @"[^a-z0-9\s]", "");
-        normalized = Regex.Replace(normalized, @"\s+", " ").Trim();
+        normalized = NonAlphanumRegex.Replace(normalized, "");
+        normalized = MultiSpaceRegex.Replace(normalized, " ").Trim();
         return normalized;
     }
 

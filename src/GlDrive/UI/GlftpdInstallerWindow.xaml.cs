@@ -372,7 +372,7 @@ public partial class GlftpdInstallerWindow : Window
             UpdateProgress(1, totalSteps, "CREATING DIR");
             await Task.Run(() =>
             {
-                var cmd = _ssh!.RunCommand($"mkdir -p {remotePath}");
+                var cmd = _ssh!.RunCommand($"mkdir -p '{remotePath.Replace("'", "'\\''")}'");
                 if (cmd.ExitStatus != 0) throw new Exception($"mkdir failed: {cmd.Error}");
             });
             AppendLog("Created installation directory");
@@ -411,7 +411,7 @@ public partial class GlftpdInstallerWindow : Window
             UpdateProgress(4, totalSteps, "SETTING UP");
             await Task.Run(() =>
             {
-                var cmd = _ssh!.RunCommand($"chmod +x {remotePath}/install.sh");
+                var cmd = _ssh!.RunCommand($"chmod +x '{remotePath.Replace("'", "'\\''")}/install.sh'");
                 if (cmd.ExitStatus != 0) throw new Exception($"chmod failed: {cmd.Error}");
             });
             AppendLog("Made install.sh executable");
@@ -420,7 +420,7 @@ public partial class GlftpdInstallerWindow : Window
             UpdateProgress(stageStep, totalSteps, "INSTALLING");
             await Task.Run(() =>
             {
-                using var shellCmd = _ssh!.CreateCommand($"sudo -S {remotePath}/install.sh");
+                using var shellCmd = _ssh!.CreateCommand($"sudo -S '{remotePath.Replace("'", "'\\''")}/install.sh'");
                 shellCmd.CommandTimeout = TimeSpan.FromMinutes(30);
 
                 var asyncResult = shellCmd.BeginExecute();
@@ -486,7 +486,7 @@ public partial class GlftpdInstallerWindow : Window
 
             installOk = true;
             UpdateProgress(totalSteps, totalSteps, "COMPLETE");
-            await Task.Run(() => _ssh!.RunCommand($"rm -rf {remotePath}"));
+            await Task.Run(() => _ssh!.RunCommand($"rm -rf '{remotePath.Replace("'", "'\\''")}'"));
             AppendLog("Installation completed successfully!", "success");
             MessageBox.Show("Installation completed!", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
         }

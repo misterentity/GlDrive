@@ -262,12 +262,12 @@ public class GlDriveFileSystem : FileSystemBase
 
             if (isDir)
             {
-                Task.Run(() => _ftp.CreateDirectory(remotePath)).GetAwaiter().GetResult();
+                _ftp.CreateDirectory(remotePath).GetAwaiter().GetResult();
             }
             else
             {
                 // Create empty file
-                Task.Run(() => _ftp.UploadFile(remotePath, [])).GetAwaiter().GetResult();
+                _ftp.UploadFile(remotePath, []).GetAwaiter().GetResult();
             }
 
             _cache.InvalidateParent(remotePath);
@@ -341,7 +341,7 @@ public class GlDriveFileSystem : FileSystemBase
             if (!node.ReadBufferLoaded)
             {
                 Log.Debug("Read: downloading {Path}", node.RemotePath);
-                var data = Task.Run(() => _ftp.DownloadFile(node.RemotePath)).GetAwaiter().GetResult();
+                var data = _ftp.DownloadFile(node.RemotePath).GetAwaiter().GetResult();
                 node.ReadBuffer = new MemoryStream(data);
                 node.ReadBufferLoaded = true;
                 node.FileSize = data.Length;
@@ -525,9 +525,9 @@ public class GlDriveFileSystem : FileSystemBase
                 Log.Debug("Cleanup delete: {Path} (dir={IsDir})", remotePath, node.IsDirectory);
 
                 if (node.IsDirectory)
-                    Task.Run(() => _ftp.DeleteDirectory(remotePath)).GetAwaiter().GetResult();
+                    _ftp.DeleteDirectory(remotePath).GetAwaiter().GetResult();
                 else
-                    Task.Run(() => _ftp.DeleteFile(remotePath)).GetAwaiter().GetResult();
+                    _ftp.DeleteFile(remotePath).GetAwaiter().GetResult();
 
                 _cache.InvalidateParent(remotePath);
                 _cache.Invalidate(remotePath);
@@ -541,7 +541,7 @@ public class GlDriveFileSystem : FileSystemBase
                 if (uploadStream != null)
                 {
                     Log.Debug("Cleanup upload: {Path} ({Bytes} bytes)", node.RemotePath, uploadStream.Length);
-                    Task.Run(() => _ftp.UploadFile(node.RemotePath, uploadStream)).GetAwaiter().GetResult();
+                    _ftp.UploadFile(node.RemotePath, uploadStream).GetAwaiter().GetResult();
                     node.IsDirty = false;
                     _cache.InvalidateParent(node.RemotePath);
                 }
@@ -639,9 +639,7 @@ public class GlDriveFileSystem : FileSystemBase
 
             var entry = node.DirEntries[entryIndex];
             fileName = entry.Name;
-
-            var entryNode = FileNode.FromListItem(node.RemotePath, entry);
-            FillFileInfo(entryNode, out fileInfo);
+            FillFileInfoFromListItem(entry, out fileInfo);
             context = index + 1;
             return true;
         }
@@ -665,7 +663,7 @@ public class GlDriveFileSystem : FileSystemBase
             var toPath = ToRemotePath(newFileName);
             Log.Debug("Rename: {From} -> {To}", fromPath, toPath);
 
-            Task.Run(() => _ftp.Rename(fromPath, toPath)).GetAwaiter().GetResult();
+            _ftp.Rename(fromPath, toPath).GetAwaiter().GetResult();
             _cache.InvalidateParent(fromPath);
             _cache.InvalidateParent(toPath);
             _cache.Invalidate(fromPath);
@@ -711,14 +709,17 @@ public override int CanDelete(
             if (_cache.TryGet(remotePath, out cached))
                 return cached;
 
-            var task = Task.Run(() => _ftp.ListDirectory(remotePath));
-            if (!task.Wait(TimeSpan.FromSeconds(_dirListTimeoutSeconds)))
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(_dirListTimeoutSeconds));
+            FtpListItem[] items;
+            try
+            {
+                items = _ftp.ListDirectory(remotePath, cts.Token).GetAwaiter().GetResult();
+            }
+            catch (OperationCanceledException)
             {
                 Log.Warning("ListDirectory timed out after {Seconds}s: {Path}", _dirListTimeoutSeconds, remotePath);
                 throw new TimeoutException($"ListDirectory timed out: {remotePath}");
             }
-
-            var items = task.Result;
             Log.Debug("Listed {Path}: {Count} entries", remotePath, items.Length);
             _cache.Set(remotePath, items);
             return items;
@@ -739,6 +740,23 @@ public override int CanDelete(
         fileInfo.LastAccessTime = FileNode.ToFileTime(node.LastAccessTime);
         fileInfo.LastWriteTime = FileNode.ToFileTime(node.LastWriteTime);
         fileInfo.ChangeTime = FileNode.ToFileTime(node.LastWriteTime);
+    }
+
+    private static void FillFileInfoFromListItem(FtpListItem item, out FileInfo fileInfo)
+    {
+        fileInfo = default;
+        bool isDir = item.Type == FtpObjectType.Directory;
+        fileInfo.FileAttributes = isDir
+            ? (uint)FileAttributes.Directory
+            : (uint)(FileAttributes.Archive | FileAttributes.Normal);
+        fileInfo.FileSize = isDir ? 0 : (ulong)item.Size;
+        fileInfo.AllocationSize = (fileInfo.FileSize + 4095) / 4096 * 4096;
+        var modified = item.Modified != DateTime.MinValue ? item.Modified : DateTime.UtcNow;
+        var ft = FileNode.ToFileTime(modified);
+        fileInfo.CreationTime = ft;
+        fileInfo.LastAccessTime = ft;
+        fileInfo.LastWriteTime = ft;
+        fileInfo.ChangeTime = ft;
     }
 
     private static string GetParentRemotePath(string path)

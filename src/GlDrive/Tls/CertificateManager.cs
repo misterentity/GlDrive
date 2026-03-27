@@ -48,8 +48,22 @@ public class CertificateManager
                 return true;
             }
 
-            Log.Warning("Certificate fingerprint MISMATCH — expected {Expected}, got {Actual}",
-                trusted.Fingerprint, fingerprint);
+            Log.Warning("Certificate fingerprint MISMATCH for {Key} — expected {Expected}, got {Actual}",
+                key, trusted.Fingerprint, fingerprint);
+
+            // Allow user to re-accept changed certificate (e.g. server cert rotation)
+            if (CertificatePrompt != null)
+            {
+                var accepted = await CertificatePrompt(
+                    $"CERTIFICATE CHANGED for {key}",
+                    $"Old: {trusted.Fingerprint}\nNew: {fingerprint}");
+                if (accepted)
+                {
+                    TrustCertificate(key, fingerprint);
+                    return true;
+                }
+            }
+
             return false;
         }
 

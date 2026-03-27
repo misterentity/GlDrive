@@ -20,8 +20,8 @@ public class IrcPatternDetector : IDisposable
     private readonly IrcService _ircService;
     private readonly Lock _lock = new();
 
-    // channel -> nick -> list of messages
-    private readonly Dictionary<string, Dictionary<string, List<string>>> _buffer = new(StringComparer.OrdinalIgnoreCase);
+    // channel -> nick -> message queue
+    private readonly Dictionary<string, Dictionary<string, Queue<string>>> _buffer = new(StringComparer.OrdinalIgnoreCase);
 
     // Scene release name pattern: at least 3 segments with dots/dashes, ends with -GROUP
     private static readonly Regex SceneNameRegex = new(
@@ -61,7 +61,7 @@ public class IrcPatternDetector : IDisposable
         {
             if (!_buffer.TryGetValue(target, out var channelBuffer))
             {
-                channelBuffer = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+                channelBuffer = new Dictionary<string, Queue<string>>(StringComparer.OrdinalIgnoreCase);
                 _buffer[target] = channelBuffer;
             }
 
@@ -70,13 +70,13 @@ public class IrcPatternDetector : IDisposable
 
             if (!channelBuffer.TryGetValue(message.Nick, out var msgs))
             {
-                msgs = new List<string>();
+                msgs = new Queue<string>();
                 channelBuffer[message.Nick] = msgs;
             }
 
-            msgs.Add(message.Text);
+            msgs.Enqueue(message.Text);
             if (msgs.Count > MaxBufferPerNick)
-                msgs.RemoveAt(0);
+                msgs.Dequeue();
         }
     }
 

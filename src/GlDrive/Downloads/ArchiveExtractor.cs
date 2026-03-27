@@ -22,9 +22,7 @@ public static partial class ArchiveExtractor
         if (!dir.Exists) return false;
 
         // Find .rar files only (first volume) — skip numbered volumes like .r00, .r01, etc.
-        var rarFiles = dir.GetFiles("*.rar")
-            .Where(f => f.Extension.Equals(".rar", StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        var rarFiles = dir.GetFiles("*.rar").ToList();
 
         if (rarFiles.Count == 0) return false;
 

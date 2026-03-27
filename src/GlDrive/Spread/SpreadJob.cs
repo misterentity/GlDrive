@@ -39,12 +39,13 @@ public class SpreadJob : IDisposable
     private readonly Dictionary<string, HashSet<string>> _fileOwnership = new();
     private readonly Dictionary<string, SpreadFileInfo> _fileInfos = new();
     private readonly Dictionary<string, SkiplistAction> _fileActions = new(); // per-file skiplist action
+    private readonly Dictionary<string, int> _serverFileCount = new(); // per-server owned file count
     private readonly Dictionary<string, SiteProgress> _siteProgress = new();
     private int _expectedFileCount;
     private (string serverId, string path)? _pendingSfv;
 
     // Transfer tracking
-    private readonly Dictionary<string, int> _failureCounts = new();
+    private readonly Dictionary<(string file, string src, string dst), int> _failureCounts = new();
     private readonly Dictionary<string, ActiveTransferInfo> _activeTransfers = new();
 
     // Scan debouncing
@@ -341,7 +342,11 @@ public class SpreadJob : IDisposable
                 owners = new HashSet<string>();
                 _fileOwnership[file.Name] = owners;
             }
-            owners.Add(serverId);
+            if (owners.Add(serverId))
+            {
+                _serverFileCount.TryGetValue(serverId, out var cnt);
+                _serverFileCount[serverId] = cnt + 1;
+            }
 
             if (!_fileInfos.ContainsKey(file.Name))
             {
@@ -354,15 +359,18 @@ public class SpreadJob : IDisposable
                 _pendingSfv = (serverId, file.FullPath);
         }
 
-        // Update site progress
+        // Snapshot counts under ownership lock, then update progress outside it
+        var owned = _serverFileCount.GetValueOrDefault(serverId);
+        var total = _expectedFileCount > 0 ? _expectedFileCount : _fileInfos.Count;
+
         lock (_progressLock)
         {
             if (_siteProgress.TryGetValue(serverId, out var progress))
             {
-                progress.FilesOwned = _fileOwnership.Count(kv => kv.Value.Contains(serverId));
-                progress.FilesTotal = _expectedFileCount > 0 ? _expectedFileCount : _fileInfos.Count;
-                progress.IsSource = progress.FilesOwned > 0;
-                progress.IsComplete = progress.FilesOwned >= progress.FilesTotal && progress.FilesTotal > 0;
+                progress.FilesOwned = owned;
+                progress.FilesTotal = total;
+                progress.IsSource = owned > 0;
+                progress.IsComplete = owned >= total && total > 0;
             }
         }
 
@@ -423,6 +431,19 @@ public class SpreadJob : IDisposable
             }
         }
 
+        // Snapshot progress and failure data OUTSIDE ownership lock to avoid lock inversion
+        Dictionary<string, int> activeTransferSnapshot;
+        lock (_progressLock)
+        {
+            activeTransferSnapshot = _siteProgress.ToDictionary(kv => kv.Key, kv => kv.Value.ActiveTransfers);
+        }
+
+        Dictionary<(string, string, string), int> failureSnapshot;
+        lock (_failureLock)
+        {
+            failureSnapshot = new(_failureCounts);
+        }
+
         SpreadFileInfo? bestFile = null;
         string? bestSrc = null, bestDst = null;
         int bestScore = -1;
@@ -434,6 +455,34 @@ public class SpreadJob : IDisposable
             var maxFileSize = 1L;
             foreach (var fi in _fileInfos.Values)
                 if (fi.Size > maxFileSize) maxFileSize = fi.Size;
+
+            // Pre-build per-dest extension/basename sets for Unique/Similar checks
+            Dictionary<string, HashSet<string>>? destExtensions = null;
+            Dictionary<string, HashSet<string>>? destBaseNames = null;
+            if (_fileActions.Count > 0)
+            {
+                destExtensions = new(StringComparer.Ordinal);
+                destBaseNames = new(StringComparer.Ordinal);
+                foreach (var (fn, owners2) in _fileOwnership)
+                {
+                    foreach (var sid in owners2)
+                    {
+                        if (!destExtensions.TryGetValue(sid, out var exts))
+                        {
+                            exts = new(StringComparer.OrdinalIgnoreCase);
+                            destExtensions[sid] = exts;
+                        }
+                        exts.Add(Path.GetExtension(fn));
+
+                        if (!destBaseNames.TryGetValue(sid, out var bases))
+                        {
+                            bases = new(StringComparer.OrdinalIgnoreCase);
+                            destBaseNames[sid] = bases;
+                        }
+                        bases.Add(Path.GetFileNameWithoutExtension(fn));
+                    }
+                }
+            }
 
             foreach (var (fileName, owners) in _fileOwnership)
             {
@@ -450,49 +499,33 @@ public class SpreadJob : IDisposable
                         if (dstConfig.SpreadSite.DownloadOnly) continue;
                         if (_affilCache.GetValueOrDefault(dstId)) continue;
 
-                        // Check slots under progress lock
-                        bool slotsAvailable;
-                        lock (_progressLock)
-                        {
-                            var dstProgress = _siteProgress[dstId];
-                            var srcProgress = _siteProgress[srcId];
-                            slotsAvailable =
-                                dstProgress.ActiveTransfers < dstConfig.SpreadSite.MaxUploadSlots &&
-                                srcProgress.ActiveTransfers < _serverConfigs[srcId].SpreadSite.MaxDownloadSlots;
-                        }
-                        if (!slotsAvailable) continue;
+                        // Check slots from snapshot (no nested lock)
+                        var dstActive = activeTransferSnapshot.GetValueOrDefault(dstId);
+                        var srcActive = activeTransferSnapshot.GetValueOrDefault(srcId);
+                        if (dstActive >= dstConfig.SpreadSite.MaxUploadSlots ||
+                            srcActive >= _serverConfigs[srcId].SpreadSite.MaxDownloadSlots)
+                            continue;
 
-                        // Check Unique/Similar skiplist actions
+                        // Check Unique/Similar skiplist actions (O(1) via pre-built sets)
                         if (_fileActions.TryGetValue(fileName, out var skipAction))
                         {
                             if (skipAction == SkiplistAction.Unique)
                             {
-                                // Don't transfer if dest already has a file with the same extension
                                 var ext = Path.GetExtension(fileName);
-                                var destHasSameExt = _fileOwnership.Any(kv =>
-                                    kv.Value.Contains(dstId) &&
-                                    Path.GetExtension(kv.Key).Equals(ext, StringComparison.OrdinalIgnoreCase));
-                                if (destHasSameExt) continue;
+                                if (destExtensions!.TryGetValue(dstId, out var exts) && exts.Contains(ext))
+                                    continue;
                             }
                             else if (skipAction == SkiplistAction.Similar)
                             {
-                                // Don't transfer if dest already has a similarly-named file
                                 var baseName = Path.GetFileNameWithoutExtension(fileName);
-                                var destHasSimilar = _fileOwnership.Any(kv =>
-                                    kv.Value.Contains(dstId) &&
-                                    Path.GetFileNameWithoutExtension(kv.Key)
-                                        .Equals(baseName, StringComparison.OrdinalIgnoreCase));
-                                if (destHasSimilar) continue;
+                                if (destBaseNames!.TryGetValue(dstId, out var bases) && bases.Contains(baseName))
+                                    continue;
                             }
                         }
 
-                        // Check failure backoff
-                        lock (_failureLock)
-                        {
-                            var failKey = $"{fileName}|{srcId}|{dstId}";
-                            if (_failureCounts.TryGetValue(failKey, out var fails) && fails >= 5)
-                                continue;
-                        }
+                        // Check failure backoff from snapshot (no nested lock)
+                        if (failureSnapshot.TryGetValue((fileName, srcId, dstId), out var fails) && fails >= 5)
+                            continue;
 
                         var ownedPercent = _pools.Count > 0
                             ? owners.Count / (double)_pools.Count
@@ -595,8 +628,11 @@ public class SpreadJob : IDisposable
 
                 lock (_ownershipLock)
                 {
-                    if (_fileOwnership.TryGetValue(file.Name, out var owners))
-                        owners.Add(dstId);
+                    if (_fileOwnership.TryGetValue(file.Name, out var owners) && owners.Add(dstId))
+                    {
+                        _serverFileCount.TryGetValue(dstId, out var cnt);
+                        _serverFileCount[dstId] = cnt + 1;
+                    }
                 }
 
                 Log.Information("FXP complete: {File} ({Src} -> {Dst})", file.Name,
@@ -606,7 +642,7 @@ public class SpreadJob : IDisposable
             {
                 lock (_failureLock)
                 {
-                    var failKey = $"{file.Name}|{srcId}|{dstId}";
+                    var failKey = (file.Name, srcId, dstId);
                     _failureCounts.TryGetValue(failKey, out var count);
                     _failureCounts[failKey] = count + 1;
                 }
@@ -643,7 +679,7 @@ public class SpreadJob : IDisposable
             foreach (var (serverId, _) in _siteProgress)
             {
                 if (_serverConfigs[serverId].SpreadSite.DownloadOnly) continue;
-                var owned = _fileOwnership.Count(kv => kv.Value.Contains(serverId));
+                var owned = _serverFileCount.GetValueOrDefault(serverId);
                 if (owned < _fileInfos.Count) return false;
             }
             return true;

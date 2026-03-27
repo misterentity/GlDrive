@@ -444,6 +444,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         _preDbRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(15) };
         _preDbRefreshTimer.Tick += async (_, _) =>
         {
+            if (!_isPreDbTabActive) return;
             if (!_isPreDbSearching && string.IsNullOrWhiteSpace(_preDbQuery))
                 await LoadLatestPreDb();
         };
@@ -675,20 +676,22 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
         var parsed = SceneNameParser.Parse(result.ReleaseName);
         var localBase = _config.Downloads.GetPathForCategory(result.Category);
+        var safeRelease = PathSanitizer.Sanitize(result.ReleaseName);
+        var safeTitle = PathSanitizer.Sanitize(parsed.Title);
 
         string localPath;
         if (parsed.Season != null)
         {
             var seasonFolder = $"Season {parsed.Season:D2}";
-            localPath = Path.Combine(localBase, "TV", parsed.Title, seasonFolder, result.ReleaseName);
+            localPath = Path.Combine(localBase, "TV", safeTitle, seasonFolder, safeRelease);
         }
         else if (parsed.Year != null)
         {
-            localPath = Path.Combine(localBase, "Movies", $"{parsed.Title} ({parsed.Year})", result.ReleaseName);
+            localPath = Path.Combine(localBase, "Movies", $"{safeTitle} ({parsed.Year})", safeRelease);
         }
         else
         {
-            localPath = Path.Combine(localBase, result.Category, result.ReleaseName);
+            localPath = Path.Combine(localBase, PathSanitizer.Sanitize(result.Category), safeRelease);
         }
 
         var item = new DownloadItem
@@ -737,20 +740,22 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
                 var parsed = SceneNameParser.Parse(match.ReleaseName);
                 var localBase = _config.Downloads.GetPathForCategory(match.Category);
+                var safeRelease = PathSanitizer.Sanitize(match.ReleaseName);
+                var safeTitle = PathSanitizer.Sanitize(parsed.Title);
 
                 string localPath;
                 if (parsed.Season != null)
                 {
                     var seasonFolder = $"Season {parsed.Season:D2}";
-                    localPath = Path.Combine(localBase, "TV", parsed.Title, seasonFolder, match.ReleaseName);
+                    localPath = Path.Combine(localBase, "TV", safeTitle, seasonFolder, safeRelease);
                 }
                 else if (parsed.Year != null)
                 {
-                    localPath = Path.Combine(localBase, "Movies", $"{parsed.Title} ({parsed.Year})", match.ReleaseName);
+                    localPath = Path.Combine(localBase, "Movies", $"{safeTitle} ({parsed.Year})", safeRelease);
                 }
                 else
                 {
-                    localPath = Path.Combine(localBase, match.Category, match.ReleaseName);
+                    localPath = Path.Combine(localBase, PathSanitizer.Sanitize(match.Category), safeRelease);
                 }
 
                 var item = new DownloadItem
@@ -786,7 +791,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private void OnDownloadProgress(DownloadItem item, DownloadProgress progress)
     {
         _latestSpeed = progress.BytesPerSecond;
-        Application.Current?.Dispatcher.Invoke(() =>
+        Application.Current?.Dispatcher.InvokeAsync(() =>
         {
             HasActiveDownload = true;
             ActiveDownloadName = item.ReleaseName;
@@ -812,7 +817,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     private void OnDownloadStatusChanged(DownloadItem item)
     {
-        Application.Current?.Dispatcher.Invoke(() =>
+        Application.Current?.Dispatcher.InvokeAsync(() =>
         {
             RefreshDownloads();
             if (item.Status != DownloadStatus.Downloading && item.Status != DownloadStatus.Extracting)
@@ -1281,20 +1286,22 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
         var parsed = SceneNameParser.Parse(n.ReleaseName);
         var localBase = _config.Downloads.GetPathForCategory(n.Category);
+        var safeRelease = PathSanitizer.Sanitize(n.ReleaseName);
+        var safeTitle = PathSanitizer.Sanitize(parsed.Title);
 
         string localPath;
         if (parsed.Season != null)
         {
             var seasonFolder = $"Season {parsed.Season:D2}";
-            localPath = Path.Combine(localBase, "TV", parsed.Title, seasonFolder, n.ReleaseName);
+            localPath = Path.Combine(localBase, "TV", safeTitle, seasonFolder, safeRelease);
         }
         else if (parsed.Year != null)
         {
-            localPath = Path.Combine(localBase, "Movies", $"{parsed.Title} ({parsed.Year})", n.ReleaseName);
+            localPath = Path.Combine(localBase, "Movies", $"{safeTitle} ({parsed.Year})", safeRelease);
         }
         else
         {
-            localPath = Path.Combine(localBase, n.Category, n.ReleaseName);
+            localPath = Path.Combine(localBase, PathSanitizer.Sanitize(n.Category), safeRelease);
         }
 
         var item = new DownloadItem

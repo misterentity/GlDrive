@@ -120,13 +120,15 @@ public class DownloadConfig
     public int StreamingBufferSizeKb { get; set; } = 256;
     public int WriteBufferLimitMb { get; set; } = 0;
     public string QualityDefault { get; set; } = "1080p";
+    [System.Text.Json.Serialization.JsonIgnore]
     public string OmdbApiKey { get; set; } = "";
+    [System.Text.Json.Serialization.JsonIgnore]
     public string TmdbApiKey { get; set; } = "";
 
-    /// <summary>Resolve OMDB key: Credential Manager first, then config fallback.</summary>
-    public string ResolveOmdbKey() => CredentialStore.GetApiKey("omdb") ?? OmdbApiKey;
-    /// <summary>Resolve TMDB key: Credential Manager first, then config fallback.</summary>
-    public string ResolveTmdbKey() => CredentialStore.GetApiKey("tmdb") ?? TmdbApiKey;
+    /// <summary>Resolve OMDB key from Credential Manager only.</summary>
+    public string ResolveOmdbKey() => CredentialStore.GetApiKey("omdb") ?? "";
+    /// <summary>Resolve TMDB key from Credential Manager only.</summary>
+    public string ResolveTmdbKey() => CredentialStore.GetApiKey("tmdb") ?? "";
     public bool AutoDownloadWishlist { get; set; } = true;
     public bool AutoExtract { get; set; } = true;
     public bool DeleteArchivesAfterExtract { get; set; } = true;

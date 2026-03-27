@@ -23,6 +23,8 @@ public static class CpsvDataHelper
     private static readonly Regex PasvRegex = new(@"\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)\)", RegexOptions.Compiled);
     private static readonly Regex UnixListRegex = new(@"^([dlcbps-])[rwxsStT-]{9}\s+\d+\s+\S+\s+\S+\s+(\d+)\s+(\w{3}\s+\d+\s+[\d:]+)\s+(.+)$", RegexOptions.Compiled);
 
+    private static readonly string[] DateFormats = ["MMM dd HH:mm", "MMM dd yyyy", "MMM  d HH:mm", "MMM  d yyyy"];
+
     private static readonly Lazy<X509Certificate2> SelfSignedCert = new(() =>
     {
         using var rsa = RSA.Create(2048);
@@ -149,7 +151,7 @@ public static class CpsvDataHelper
 
             try
             {
-                using var ms = new MemoryStream();
+                var ms = new MemoryStream();
                 await ssl.CopyToAsync(ms, ct);
 
                 ssl.Close();
@@ -158,6 +160,9 @@ public static class CpsvDataHelper
                 var completeReply = await client.GetReply(ct);
                 Log.Debug("RETR complete: {Code} {Message}", completeReply.Code, completeReply.Message);
 
+                // Return exact-sized array without extra copy when possible
+                if (ms.TryGetBuffer(out var segment) && segment.Offset == 0 && segment.Count == (int)ms.Length)
+                    return segment.Array!;
                 return ms.ToArray();
             }
             finally
@@ -264,9 +269,42 @@ public static class CpsvDataHelper
     public static async Task UploadFileStream(
         AsyncFtpClient client, string remotePath, Stream stream, string controlHost, CancellationToken ct = default)
     {
-        using var ms = new MemoryStream();
-        await stream.CopyToAsync(ms, ct);
-        await UploadFile(client, remotePath, ms.ToArray(), controlHost, ct);
+        // If stream is a small MemoryStream, use the fast byte[] path
+        if (stream is MemoryStream ms2 && ms2.TryGetBuffer(out var seg))
+        {
+            await UploadFile(client, remotePath, seg.Count == seg.Array!.Length
+                ? seg.Array : ms2.ToArray(), controlHost, ct);
+            return;
+        }
+
+        // Stream directly to SSL — avoids double-buffering for large files
+        await client.Execute("TYPE I", ct);
+        var tcp = await OpenDataTcp(client, ct);
+        try
+        {
+            var storReply = await client.Execute($"STOR {remotePath}", ct);
+            if (storReply.Code != "150" && storReply.Code != "125")
+                throw new IOException($"STOR failed: {storReply.Code} {storReply.Message}");
+
+            var ssl = await NegotiateDataTls(tcp.GetStream(), ct);
+            try
+            {
+                stream.Position = 0;
+                await stream.CopyToAsync(ssl, ct);
+                ssl.Close();
+                tcp.Close();
+                var completeReply = await client.GetReply(ct);
+                Log.Debug("STOR stream complete: {Code} {Message}", completeReply.Code, completeReply.Message);
+            }
+            finally
+            {
+                ssl.Dispose();
+            }
+        }
+        finally
+        {
+            tcp.Dispose();
+        }
     }
 
     private static (string ip, int port) ParsePasvResponse(string message)
@@ -282,7 +320,7 @@ public static class CpsvDataHelper
 
     private static FtpListItem[] ParseUnixListing(string listing, string parentPath)
     {
-        var items = new List<FtpListItem>();
+        var items = new List<FtpListItem>(64);
         foreach (var line in listing.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
             var trimmed = line.TrimEnd('\r');
@@ -317,8 +355,7 @@ public static class CpsvDataHelper
             return null;
 
         DateTime modified = DateTime.MinValue;
-        var formats = new[] { "MMM dd HH:mm", "MMM dd yyyy", "MMM  d HH:mm", "MMM  d yyyy" };
-        if (DateTime.TryParseExact(dateStr, formats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
+        if (DateTime.TryParseExact(dateStr, DateFormats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
         {
             modified = dt;
             if (modified.Year == 1 && dateStr.Contains(':'))

@@ -11,8 +11,8 @@ public class IrcMessage
     public List<string> Params { get; set; } = [];
     public string? Trailing { get; set; }
 
-    public string Nick => Prefix?.Split('!')[0] ?? "";
-    public string UserHost => Prefix?.Contains('!') == true ? Prefix[(Prefix.IndexOf('!') + 1)..] : "";
+    public string Nick { get; private set; } = "";
+    public string UserHost { get; private set; } = "";
 
     public static IrcMessage Parse(string raw)
     {
@@ -25,6 +25,16 @@ public class IrcMessage
             var space = raw.IndexOf(' ', 1);
             if (space < 0) { msg.Command = raw[1..]; return msg; }
             msg.Prefix = raw[1..space];
+            var bangIdx = msg.Prefix.IndexOf('!');
+            if (bangIdx >= 0)
+            {
+                msg.Nick = msg.Prefix[..bangIdx];
+                msg.UserHost = msg.Prefix[(bangIdx + 1)..];
+            }
+            else
+            {
+                msg.Nick = msg.Prefix;
+            }
             pos = space + 1;
         }
 

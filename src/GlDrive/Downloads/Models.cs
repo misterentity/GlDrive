@@ -65,3 +65,51 @@ public record ParsedRelease(
     bool IsSeasonPack);
 
 public record DownloadProgress(long DownloadedBytes, long TotalBytes, double BytesPerSecond, string? CurrentFileName = null);
+
+/// <summary>
+/// Sanitizes a string for use as a Windows path segment (file or folder name).
+/// Strips characters illegal on Windows and trims leading/trailing dots/spaces.
+/// </summary>
+public static class PathSanitizer
+{
+    private static readonly char[] IllegalChars = ['\\', '/', ':', '*', '?', '"', '<', '>', '|'];
+    private static readonly HashSet<string> ReservedNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+    };
+
+    public static string Sanitize(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "_";
+
+        var span = name.AsSpan();
+        Span<char> buf = stackalloc char[Math.Min(span.Length, 255)];
+        int len = 0;
+
+        for (int i = 0; i < span.Length && len < buf.Length; i++)
+        {
+            var c = span[i];
+            if (c < 32 || IllegalChars.AsSpan().Contains(c))
+                continue; // strip illegal chars and control chars
+            buf[len++] = c;
+        }
+
+        // Trim leading/trailing dots and spaces (Windows silently strips these)
+        var result = buf[..len];
+        result = result.TrimStart(['.', ' ']);
+        result = result.TrimEnd(['.', ' ']);
+
+        if (result.Length == 0) return "_";
+
+        var str = new string(result);
+
+        // Check for Windows reserved device names (CON, NUL, COM1, etc.)
+        var baseName = System.IO.Path.GetFileNameWithoutExtension(str);
+        if (ReservedNames.Contains(baseName))
+            str = "_" + str;
+
+        return str;
+    }
+}

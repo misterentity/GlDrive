@@ -2,7 +2,7 @@ namespace GlDrive.Spread;
 
 public class SpeedTracker
 {
-    private readonly Dictionary<string, Queue<double>> _speeds = new();
+    private readonly Dictionary<(string src, string dst), Queue<double>> _speeds = new();
     private readonly Lock _lock = new();
     private const int MaxSamples = 10;
 
@@ -10,7 +10,7 @@ public class SpeedTracker
     {
         if (duration.TotalSeconds < 0.1 || bytes <= 0) return;
 
-        var key = $"{srcId}->{dstId}";
+        var key = (srcId, dstId);
         var speed = bytes / duration.TotalSeconds;
 
         lock (_lock)
@@ -28,7 +28,7 @@ public class SpeedTracker
 
     public double GetAverageSpeed(string srcId, string dstId)
     {
-        var key = $"{srcId}->{dstId}";
+        var key = (srcId, dstId);
         lock (_lock)
         {
             if (!_speeds.TryGetValue(key, out var queue) || queue.Count == 0)

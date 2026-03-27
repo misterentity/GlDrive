@@ -233,13 +233,13 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
         if (!_subscribedServices.Add(irc.ServerId)) return;
 
         Action<string, IrcMessageItem> msgHandler = (target, item) =>
-            Application.Current?.Dispatcher.Invoke(() => OnIrcMessage(irc.ServerId, irc.ServerName, target, item));
+            Application.Current?.Dispatcher.InvokeAsync(() => OnIrcMessage(irc.ServerId, irc.ServerName, target, item));
         Action<string> namesHandler = channel =>
-            Application.Current?.Dispatcher.Invoke(() => OnNamesUpdated(irc.ServerId, channel, irc));
+            Application.Current?.Dispatcher.InvokeAsync(() => OnNamesUpdated(irc.ServerId, channel, irc));
         Action<string, string> topicHandler = (channel, topic) =>
-            Application.Current?.Dispatcher.Invoke(() => OnTopicChanged(irc.ServerId, channel, topic));
+            Application.Current?.Dispatcher.InvokeAsync(() => OnTopicChanged(irc.ServerId, channel, topic));
         Action<IrcServiceState> stateHandler = state =>
-            Application.Current?.Dispatcher.Invoke(UpdateStatus);
+            Application.Current?.Dispatcher.InvokeAsync(UpdateStatus);
 
         irc.MessageReceived += msgHandler;
         irc.NamesUpdated += namesHandler;
