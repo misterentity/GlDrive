@@ -457,7 +457,11 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
         IsLoading = true;
         SearchResults.Clear();
-        PlayerStatus = $"Searching TMDb for \"{_searchText}\"...";
+        PlayerStatus = $"Searching for \"{_searchText}\"...";
+
+        // Search TMDB, FTP, and torrent in parallel
+        var torrentBg = SearchTorrent(_searchText);
+        var ftpBg = SearchFtpDirect(_searchText);
 
         try
         {
@@ -480,19 +484,24 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
             }
 
             OnPropertyChanged(nameof(HasSearchResults));
-            PlayerStatus = SearchResults.Count > 0
-                ? $"{SearchResults.Count} result(s) from TMDb"
-                : $"No results for \"{_searchText}\"";
         }
         catch (Exception ex)
         {
             Log.Warning(ex, "TMDb search failed");
-            PlayerStatus = "Search failed";
         }
-        finally
-        {
-            IsLoading = false;
-        }
+
+        // Await FTP + torrent to finish
+        await Task.WhenAll(ftpBg, torrentBg);
+
+        var parts = new List<string>();
+        if (SearchResults.Count > 0) parts.Add($"{SearchResults.Count} TMDb");
+        if (FtpResults.Count > 0) parts.Add($"{FtpResults.Count} FTP");
+        if (TorrentResults.Count > 0) parts.Add($"{TorrentResults.Count} torrent");
+        PlayerStatus = parts.Count > 0
+            ? string.Join(" + ", parts) + " result(s)"
+            : $"No results for \"{_searchText}\"";
+
+        IsLoading = false;
     }
 
     private async Task SearchFtpDirect(string query)

@@ -28,10 +28,14 @@ public class TorrentSearchService : IDisposable
     private string _apibayHost = "";
     private bool _apibayChecked;
 
-    // SolidTorrents state
-    private const string SolidTorrentsApi = "https://solidtorrents.to/api/v1/search";
+    // SolidTorrents state (domain migrates frequently)
+    private static readonly string[] SolidTorrentsHosts = [
+        "https://solidtorrents.to/api/v1/search",
+        "https://solidtorrents.net/api/v1/search",
+        "https://bitsearch.to/api/v1/search"
+    ];
+    private string _solidHost = "";
     private bool _solidChecked;
-    private bool _solidAvailable;
 
     public TorrentSearchService()
     {
@@ -153,28 +157,31 @@ public class TorrentSearchService : IDisposable
             if (!_solidChecked)
             {
                 _solidChecked = true;
-                try
+                foreach (var host in SolidTorrentsHosts)
                 {
-                    var probe = await _http.GetAsync($"{SolidTorrentsApi}?q=test&sort=seeders", ct);
-                    _solidAvailable = probe.IsSuccessStatusCode;
-                    if (_solidAvailable) Log.Information("SolidTorrents API available");
-                }
-                catch (Exception ex)
-                {
-                    Log.Debug(ex, "SolidTorrents probe failed");
-                    _solidAvailable = false;
+                    try
+                    {
+                        var probe = await _http.GetAsync($"{host}?q=test&sort=seeders", ct);
+                        if (probe.IsSuccessStatusCode)
+                        {
+                            _solidHost = host;
+                            Log.Information("SolidTorrents available: {Host}", host);
+                            break;
+                        }
+                    }
+                    catch (Exception ex) { Log.Debug(ex, "SolidTorrents probe failed for {Host}", host); }
                 }
             }
 
-            if (!_solidAvailable) return results;
+            if (string.IsNullOrEmpty(_solidHost)) return results;
 
-            var url = $"{SolidTorrentsApi}?q={Uri.EscapeDataString(query)}&category=video&sort=seeders";
+            var url = $"{_solidHost}?q={Uri.EscapeDataString(query)}&category=video&sort=seeders";
             using var response = await _http.GetAsync(url, ct);
             if (!response.IsSuccessStatusCode)
             {
                 if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.ServiceUnavailable)
                 {
-                    _solidAvailable = false;
+                    _solidHost = "";
                     _solidChecked = false;
                 }
                 return results;
