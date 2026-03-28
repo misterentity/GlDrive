@@ -16,8 +16,36 @@ public static class SiteImporter
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
     }
     /// <summary>
-    /// Import sites from FTPRush's RushSite.xml.
+    /// Auto-detect file format and import sites.
     /// </summary>
+    public static List<ServerConfig> ImportAuto(string filePath)
+    {
+        var ext = Path.GetExtension(filePath);
+
+        if (ext.Equals(".ftp", StringComparison.OrdinalIgnoreCase))
+            return ImportFlashFxpXml(filePath);
+
+        if (ext.Equals(".dat", StringComparison.OrdinalIgnoreCase))
+            return ImportFlashFxpDat(filePath);
+
+        if (ext.Equals(".xml", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var doc = XDocument.Load(filePath);
+                var firstSite = doc.Descendants("SITE").FirstOrDefault();
+                if (firstSite?.Element("ADDRESS") != null)
+                    return ImportFlashFxpXml(filePath);
+            }
+            catch { }
+
+            return ImportFtpRush(filePath);
+        }
+
+        try { return ImportFtpRush(filePath); }
+        catch { return ImportFlashFxpDat(filePath); }
+    }
+
     public static List<ServerConfig> ImportFtpRush(string xmlPath)
     {
         var results = new List<ServerConfig>();
