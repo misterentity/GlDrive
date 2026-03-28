@@ -102,6 +102,20 @@ public partial class App : Application
 
         // Init services
         var certManager = new CertificateManager();
+        certManager.CertificatePrompt += (hostInfo, fingerprint) =>
+        {
+            var tcs = new TaskCompletionSource<bool>();
+            Dispatcher.Invoke(() =>
+            {
+                var msg = fingerprint.Contains('\n')
+                    ? $"Certificate has changed for {hostInfo}:\n\n{fingerprint}\n\nAccept the new certificate?"
+                    : $"New TLS certificate for {hostInfo}:\n\nFingerprint: {fingerprint}\n\nTrust this certificate?";
+                var result = System.Windows.MessageBox.Show(msg, "GlDrive — Certificate Verification",
+                    System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning);
+                tcs.SetResult(result == System.Windows.MessageBoxResult.Yes);
+            });
+            return tcs.Task;
+        };
         var notificationStore = new NotificationStore();
         notificationStore.Load();
         _serverManager = new ServerManager(config, certManager, notificationStore);

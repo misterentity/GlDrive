@@ -206,11 +206,28 @@ public partial class ServerEditDialog : Window
             if (PreferTls12Box.IsChecked == true)
                 gnuConfig.AdvancedOptions = [GnuAdvanced.NoTickets];
             client.Config.CustomStreamConfig = gnuConfig;
-            client.ValidateCertificate += (_, e) => e.Accept = true;
+            string? certFingerprint = null;
+            client.ValidateCertificate += (control, e) =>
+            {
+                e.Accept = true;
+                if (e.Certificate != null)
+                {
+                    using var cert2 = new System.Security.Cryptography.X509Certificates.X509Certificate2(e.Certificate);
+                    certFingerprint = Convert.ToHexString(
+                        cert2.GetCertHash(System.Security.Cryptography.HashAlgorithmName.SHA256));
+                }
+            };
 
             await client.Connect();
             var listing = await client.GetListing("/");
             await client.Disconnect();
+
+            // Auto-trust the certificate so subsequent connects succeed
+            if (certFingerprint != null)
+            {
+                var certMgr = new Tls.CertificateManager();
+                certMgr.TrustCertificate($"{host}:{port}", certFingerprint);
+            }
             client.Dispose();
 
             var via = ProxyEnabledBox.IsChecked == true ? " (via SOCKS5 proxy)" : "";
