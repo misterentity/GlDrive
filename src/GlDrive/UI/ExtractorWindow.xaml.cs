@@ -44,8 +44,8 @@ public partial class ExtractorWindow : Window
     // Match any volume file belonging to a RAR set (for size calculation)
     private static readonly Regex RarVolumeFileRegex = new(@"\.[rs]\d{2,3}$|\.part\d+\.rar$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    private static readonly string WatchFoldersPath =
-        Path.Combine(ConfigManager.AppDataPath, "watch-folders.json");
+    private static readonly string SettingsPath =
+        Path.Combine(ConfigManager.AppDataPath, "extractor-settings.json");
 
     public ExtractorWindow()
     {
@@ -53,8 +53,10 @@ public partial class ExtractorWindow : Window
         ArchiveGrid.ItemsSource = Archives;
         Archives.CollectionChanged += (_, _) => UpdateDropHint();
         UpdateDropHint();
-        LoadWatchFolders();
+        LoadSettings();
     }
+
+    private void Settings_Changed(object sender, RoutedEventArgs e) => SaveSettings();
 
     private void UpdateDropHint() =>
         DropHint.Visibility = Archives.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -560,9 +562,8 @@ public partial class ExtractorWindow : Window
             var pm = Regex.Match(baseName, @"^(.+)\.part\d+$", RegexOptions.IgnoreCase);
             var setBase = pm.Success ? pm.Groups[1].Value : baseName;
 
-            // Collect all files belonging to this archive set, then delete them all.
-            // Enumerate the full directory instead of using glob patterns which can
-            // fail on network drives or match incorrectly with 8.3 short names.
+            Log.Information("Cleaning up archive set: base={Base}, dir={Dir}", setBase, dir);
+
             var toDelete = new List<string>();
 
             try
@@ -571,42 +572,39 @@ public partial class ExtractorWindow : Window
                 {
                     var fn = Path.GetFileName(file);
 
-                    // Must start with the set base name
+                    // Must start with the set base name (case-insensitive)
                     if (!fn.StartsWith(setBase, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    // Character after base name must be a dot or end of name
+                    // (prevents "moviename" matching "moviename-sample.rar")
+                    if (fn.Length > setBase.Length && fn[setBase.Length] != '.')
                         continue;
 
                     var ext = Path.GetExtension(fn);
 
-                    // The main .rar file
-                    if (file.Equals(archivePath, StringComparison.OrdinalIgnoreCase))
+                    // .rar (main or .partNN.rar)
+                    if (ext.Equals(".rar", StringComparison.OrdinalIgnoreCase))
                     {
                         toDelete.Add(file);
                         continue;
                     }
 
-                    // Old-style volumes: baseName.r00, .r01, .s00, .s01, etc.
+                    // Old-style volumes: .r00-.r999, .s00-.s999, .001-.999
                     if (VolumeExtRegex.IsMatch(ext))
                     {
                         toDelete.Add(file);
                         continue;
                     }
 
-                    // SFV files
+                    // SFV checksum files
                     if (ext.Equals(".sfv", StringComparison.OrdinalIgnoreCase))
                     {
                         toDelete.Add(file);
                         continue;
                     }
 
-                    // Modern multi-part: setBase.part02.rar, .part03.rar, etc.
-                    if (fn.EndsWith(".rar", StringComparison.OrdinalIgnoreCase) &&
-                        Regex.IsMatch(fn, @"\.part\d+\.rar$", RegexOptions.IgnoreCase))
-                    {
-                        toDelete.Add(file);
-                        continue;
-                    }
-
-                    // Split archives: .001, .002, etc (numeric 3+ digit extensions)
+                    // Split archives: .001, .002, etc
                     if (Regex.IsMatch(ext, @"^\.\d{3,}$"))
                     {
                         toDelete.Add(file);
@@ -618,12 +616,21 @@ public partial class ExtractorWindow : Window
                 Log.Warning(ex, "Error enumerating files for cleanup in {Dir}", dir);
             }
 
-            Log.Information("Deleting {Count} archive files for set {Base}", toDelete.Count, setBase);
+            if (toDelete.Count == 0)
+            {
+                Log.Warning("No archive files found to delete for set {Base} in {Dir}", setBase, dir);
+                return;
+            }
+
+            Log.Information("Deleting {Count} archive files for set {Base}: {Files}",
+                toDelete.Count, setBase, string.Join(", ", toDelete.Select(Path.GetFileName)));
+
             foreach (var file in toDelete)
             {
                 try
                 {
                     File.Delete(file);
+                    Log.Debug("Deleted: {File}", Path.GetFileName(file));
                 }
                 catch (Exception ex)
                 {
@@ -649,45 +656,97 @@ public partial class ExtractorWindow : Window
 
         _watchFolders.Add(folder);
         WatchFoldersText.Text = string.Join("; ", _watchFolders);
-        SaveWatchFolders();
+        SaveSettings();
 
         if (_watchEnabled)
             StartWatcherFor(folder);
     }
 
-    private void LoadWatchFolders()
+    private void LoadSettings()
     {
         try
         {
-            if (!File.Exists(WatchFoldersPath)) return;
-            var json = File.ReadAllText(WatchFoldersPath);
-            var folders = JsonSerializer.Deserialize<List<string>>(json);
-            if (folders == null) return;
+            // Migrate old watch-folders.json if present
+            var oldPath = Path.Combine(ConfigManager.AppDataPath, "watch-folders.json");
+            if (File.Exists(oldPath) && !File.Exists(SettingsPath))
+            {
+                var oldFolders = JsonSerializer.Deserialize<List<string>>(File.ReadAllText(oldPath));
+                if (oldFolders != null)
+                {
+                    var settings = new ExtractorSettings { WatchFolders = oldFolders };
+                    File.WriteAllText(SettingsPath, JsonSerializer.Serialize(settings, _jsonOptions));
+                    try { File.Delete(oldPath); } catch { }
+                }
+            }
 
-            foreach (var f in folders.Where(f => !string.IsNullOrWhiteSpace(f) && Directory.Exists(f)))
+            if (!File.Exists(SettingsPath)) return;
+            var json = File.ReadAllText(SettingsPath);
+            var s = JsonSerializer.Deserialize<ExtractorSettings>(json, _jsonOptions);
+            if (s == null) return;
+
+            foreach (var f in s.WatchFolders.Where(f => !string.IsNullOrWhiteSpace(f) && Directory.Exists(f)))
                 _watchFolders.Add(f);
 
             if (_watchFolders.Count > 0)
                 WatchFoldersText.Text = string.Join("; ", _watchFolders);
+
+            ChkDeleteAfter.IsChecked = s.DeleteAfterExtract;
+            ChkRecursive.IsChecked = s.ScanSubfolders;
+            ChkCreateSubfolder.IsChecked = s.CreateSubfolder;
+            OutputMode.SelectedIndex = s.OutputMode;
+            OverwriteMode.SelectedIndex = s.OverwriteMode;
+            if (!string.IsNullOrEmpty(s.CustomOutputPath))
+                CustomOutputPath.Text = s.CustomOutputPath;
+
+            // Auto-start watchers if they were enabled
+            if (s.WatchEnabled && _watchFolders.Count > 0)
+            {
+                _watchEnabled = true;
+                WatchToggle.Content = "On";
+                WatchToggle.IsChecked = true;
+                foreach (var folder in _watchFolders)
+                {
+                    ScanAndAutoExtract(folder);
+                    StartWatcherFor(folder);
+                }
+            }
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "Failed to load watch folders");
+            Log.Warning(ex, "Failed to load extractor settings");
         }
     }
 
-    private void SaveWatchFolders()
+    private void SaveSettings()
     {
         try
         {
-            var json = JsonSerializer.Serialize(_watchFolders);
-            File.WriteAllText(WatchFoldersPath, json);
+            var s = new ExtractorSettings
+            {
+                WatchFolders = _watchFolders,
+                WatchEnabled = _watchEnabled,
+                DeleteAfterExtract = ChkDeleteAfter.IsChecked == true,
+                ScanSubfolders = ChkRecursive.IsChecked == true,
+                CreateSubfolder = ChkCreateSubfolder.IsChecked == true,
+                OutputMode = OutputMode.SelectedIndex,
+                OverwriteMode = OverwriteMode.SelectedIndex,
+                CustomOutputPath = CustomOutputPath.Text
+            };
+            Directory.CreateDirectory(ConfigManager.AppDataPath);
+            var json = JsonSerializer.Serialize(s, _jsonOptions);
+            File.WriteAllText(SettingsPath, json);
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "Failed to save watch folders");
+            Log.Warning(ex, "Failed to save extractor settings");
         }
     }
+
+    private static readonly JsonSerializerOptions _jsonOptions = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
 
     private void WatchToggle_Click(object sender, RoutedEventArgs e)
     {
@@ -719,6 +778,7 @@ public partial class ExtractorWindow : Window
                 StartWatcherFor(folder);
             }
         }
+        SaveSettings();
     }
 
     private void StartWatcherFor(string folder)
@@ -905,9 +965,22 @@ public partial class ExtractorWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        SaveSettings();
         StopAllWatchers();
         base.OnClosed(e);
     }
+}
+
+public class ExtractorSettings
+{
+    public List<string> WatchFolders { get; set; } = [];
+    public bool WatchEnabled { get; set; }
+    public bool DeleteAfterExtract { get; set; }
+    public bool ScanSubfolders { get; set; } = true;
+    public bool CreateSubfolder { get; set; }
+    public int OutputMode { get; set; }
+    public int OverwriteMode { get; set; }
+    public string CustomOutputPath { get; set; } = "";
 }
 
 // ── View Model ──
