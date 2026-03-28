@@ -81,6 +81,37 @@ public static class SiteImporter
                 if (ssl == "True" || ssl == "1" || sslMode is "1" or "2" or "3")
                     server.Tls.PreferTls12 = true;
 
+                // Proxy settings (FTPRush uses PROXY_HOST, PROXY_PORT, PROXY_USER, PROXY_TYPE)
+                var proxyHost = site.Element("PROXY_HOST")?.Value?.Trim()
+                             ?? site.Element("ProxyHost")?.Value?.Trim();
+                if (!string.IsNullOrEmpty(proxyHost))
+                {
+                    var proxyPort = 1080;
+                    var proxyPortStr = site.Element("PROXY_PORT")?.Value ?? site.Element("ProxyPort")?.Value;
+                    if (int.TryParse(proxyPortStr, out var pp) && pp > 0)
+                        proxyPort = pp;
+
+                    var proxyUser = site.Element("PROXY_USER")?.Value?.Trim()
+                                 ?? site.Element("ProxyUser")?.Value?.Trim() ?? "";
+
+                    server.Connection.Proxy = new ProxyConfig
+                    {
+                        Enabled = true,
+                        Host = proxyHost,
+                        Port = proxyPort,
+                        Username = proxyUser
+                    };
+                    Log.Debug("  with proxy: {ProxyHost}:{ProxyPort}", proxyHost, proxyPort);
+                }
+
+                // Skiplist / file filter patterns
+                var skiplistEl = site.Element("SKIPLIST") ?? site.Element("MASK");
+                if (skiplistEl != null)
+                {
+                    foreach (var rule in ParseSkiplistElement(skiplistEl))
+                        server.SpreadSite.Skiplist.Add(rule);
+                }
+
                 results.Add(server);
                 Log.Debug("FTPRush import: {Name} ({Host}:{Port})", name, host, port);
             }
@@ -134,6 +165,25 @@ public static class SiteImporter
                 var ssl = site.Element("SSL")?.Value?.Trim();
                 if (!string.IsNullOrEmpty(ssl) && !ssl.Equals("NONE", StringComparison.OrdinalIgnoreCase))
                     server.Tls.PreferTls12 = true;
+
+                // Proxy (FlashFXP XML may include PROXY_HOST etc.)
+                var proxyHost = site.Element("PROXY_HOST")?.Value?.Trim()
+                             ?? site.Element("PROXY")?.Element("HOST")?.Value?.Trim();
+                if (!string.IsNullOrEmpty(proxyHost))
+                {
+                    var proxyPort = 1080;
+                    var proxyPortStr = site.Element("PROXY_PORT")?.Value
+                                    ?? site.Element("PROXY")?.Element("PORT")?.Value;
+                    if (int.TryParse(proxyPortStr, out var pp) && pp > 0)
+                        proxyPort = pp;
+
+                    server.Connection.Proxy = new ProxyConfig
+                    {
+                        Enabled = true,
+                        Host = proxyHost,
+                        Port = proxyPort
+                    };
+                }
 
                 // Save password to Credential Manager if present
                 if (!string.IsNullOrEmpty(password) && !string.IsNullOrEmpty(user))
@@ -244,5 +294,105 @@ public static class SiteImporter
             Log.Debug(ex, "Skipping FlashFXP section: {Section}", sectionName);
             return null;
         }
+    }
+
+    /// <summary>
+    /// Import skiplist rules from a text file. Supports multiple formats:
+    /// - One glob pattern per line (e.g. *.nfo, *.jpg, Sample)
+    /// - FTPRush-style prefixes: %D% = directories only, %F% = files only
+    /// - Lines starting with # or ; are comments
+    /// - Lines starting with + are Allow rules, all others are Deny
+    /// </summary>
+    public static List<SkiplistRule> ImportSkiplist(string filePath)
+    {
+        var rules = new List<SkiplistRule>();
+
+        foreach (var rawLine in File.ReadLines(filePath))
+        {
+            var line = rawLine.Trim();
+            if (string.IsNullOrEmpty(line) || line[0] is '#' or ';')
+                continue;
+
+            var action = SkiplistAction.Deny;
+
+            // + prefix = Allow rule
+            if (line.StartsWith('+'))
+            {
+                action = SkiplistAction.Allow;
+                line = line[1..].Trim();
+            }
+
+            var rule = ParseSkipPattern(line);
+            if (rule == null) continue;
+            rule.Action = action;
+
+            // Detect regex (contains regex-only metacharacters beyond simple glob * and ?)
+            rule.IsRegex = rule.Pattern.AsSpan().IndexOfAny("([{^$|") >= 0;
+
+            rules.Add(rule);
+        }
+
+        Log.Information("Skiplist import: {Count} rules from {File}", rules.Count, Path.GetFileName(filePath));
+        return rules;
+    }
+
+    /// <summary>
+    /// Parse skiplist patterns from an FTPRush XML element (SKIPLIST or MASK child elements).
+    /// </summary>
+    private static List<SkiplistRule> ParseSkiplistElement(XElement el)
+    {
+        var rules = new List<SkiplistRule>();
+
+        // Try child elements first, then split text value by newlines/semicolons
+        var hasChildren = false;
+        foreach (var child in el.Elements())
+        {
+            hasChildren = true;
+            var rule = ParseSkipPattern(child.Value.Trim());
+            if (rule != null) rules.Add(rule);
+        }
+
+        if (!hasChildren && !string.IsNullOrWhiteSpace(el.Value))
+        {
+            foreach (var part in el.Value.Split(['\n', '\r', ';'], StringSplitOptions.RemoveEmptyEntries))
+            {
+                var rule = ParseSkipPattern(part.Trim());
+                if (rule != null) rules.Add(rule);
+            }
+        }
+
+        return rules;
+    }
+
+    /// <summary>
+    /// Parse a single skip pattern with optional %D%/%F% prefix.
+    /// </summary>
+    private static SkiplistRule? ParseSkipPattern(string pattern)
+    {
+        if (string.IsNullOrEmpty(pattern)) return null;
+
+        var matchDirs = true;
+        var matchFiles = true;
+
+        if (pattern.StartsWith("%D%", StringComparison.OrdinalIgnoreCase))
+        {
+            matchFiles = false;
+            pattern = pattern[3..].Trim();
+        }
+        else if (pattern.StartsWith("%F%", StringComparison.OrdinalIgnoreCase))
+        {
+            matchDirs = false;
+            pattern = pattern[3..].Trim();
+        }
+
+        if (string.IsNullOrEmpty(pattern)) return null;
+
+        return new SkiplistRule
+        {
+            Pattern = pattern,
+            Action = SkiplistAction.Deny,
+            MatchDirectories = matchDirs,
+            MatchFiles = matchFiles
+        };
     }
 }
