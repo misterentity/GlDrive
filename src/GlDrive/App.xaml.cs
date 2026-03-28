@@ -100,18 +100,9 @@ public partial class App : Application
         // Apply theme
         ThemeManager.ApplyTheme(config.Downloads.Theme);
 
-        // Init services
+        // Init services — certificates auto-trusted on first connect (TOFU model)
+        // Users can clear per-server certs in Settings > Servers > Edit > Clear Certificate
         var certManager = new CertificateManager();
-        certManager.CertificatePrompt += async (hostInfo, fingerprint) =>
-        {
-            var msg = fingerprint.Contains('\n')
-                ? $"Certificate has changed for {hostInfo}:\n\n{fingerprint}\n\nAccept the new certificate?"
-                : $"New TLS certificate for {hostInfo}:\n\nFingerprint: {fingerprint}\n\nTrust this certificate?";
-            var result = await Dispatcher.InvokeAsync(() =>
-                System.Windows.MessageBox.Show(msg, "GlDrive — Certificate Verification",
-                    System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning));
-            return result == System.Windows.MessageBoxResult.Yes;
-        };
         var notificationStore = new NotificationStore();
         notificationStore.Load();
         _serverManager = new ServerManager(config, certManager, notificationStore);

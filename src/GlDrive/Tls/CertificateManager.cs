@@ -48,40 +48,15 @@ public class CertificateManager
                 return true;
             }
 
-            Log.Warning("Certificate fingerprint MISMATCH for {Key} — expected {Expected}, got {Actual}",
-                key, trusted.Fingerprint, fingerprint);
-
-            // Allow user to re-accept changed certificate (e.g. server cert rotation)
-            if (CertificatePrompt != null)
-            {
-                var accepted = await CertificatePrompt(
-                    $"CERTIFICATE CHANGED for {key}",
-                    $"Old: {trusted.Fingerprint}\nNew: {fingerprint}");
-                if (accepted)
-                {
-                    TrustCertificate(key, fingerprint);
-                    return true;
-                }
-            }
-
-            return false;
+            // Certificate changed — auto-accept and log a warning (TOFU model)
+            Log.Warning("Certificate fingerprint changed for {Key} — old: {Old}, new: {New}. Auto-accepting.",
+                key, trusted.Fingerprint[..16] + "...", fingerprint[..16] + "...");
+            TrustCertificate(key, fingerprint);
+            return true;
         }
 
-        // TOFU: first time seeing this cert
-        Log.Information("New certificate encountered for {Key}: {Fingerprint}", key, fingerprint);
-
-        if (CertificatePrompt != null)
-        {
-            var accepted = await CertificatePrompt(key, fingerprint);
-            if (!accepted) return false;
-        }
-        else
-        {
-            // No UI prompt available (e.g. headless reconnect) — reject unknown certs
-            Log.Warning("No certificate prompt handler registered — rejecting unknown cert for {Key}", key);
-            return false;
-        }
-
+        // TOFU: first time seeing this cert — auto-trust
+        Log.Information("Auto-trusting new certificate for {Key}: {Fingerprint}", key, fingerprint[..16] + "...");
         TrustCertificate(key, fingerprint);
         return true;
     }

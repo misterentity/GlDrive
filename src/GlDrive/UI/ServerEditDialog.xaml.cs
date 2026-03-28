@@ -161,6 +161,16 @@ public partial class ServerEditDialog : Window
         }
     }
 
+    private void ClearCert_Click(object sender, RoutedEventArgs e)
+    {
+        var host = HostBox.Text;
+        var port = int.TryParse(PortBox.Text, out var p) ? Math.Clamp(p, 1, 65535) : 21;
+        var key = $"{host}:{port}";
+        var certMgr = new Tls.CertificateManager();
+        certMgr.RemoveTrustedCertificate(key);
+        TestResultText.Text = $"Certificate cleared for {key}. Will be re-accepted on next connect.";
+    }
+
     private async void TestConnection_Click(object sender, RoutedEventArgs e)
     {
         TestResultText.Text = "Testing connection...";
