@@ -319,8 +319,12 @@
 
                 <Separator Margin="0,4,0,12"/>
 
-                <Button Content="Test Connection" Click="TestConnection_Click"
-                        HorizontalAlignment="Left" Padding="16,6"/>
+                <StackPanel Orientation="Horizontal">
+                    <Button Content="Test Connection" Click="TestConnection_Click"
+                            Padding="16,6" Margin="0,0,8,0"/>
+                    <Button Content="Clear Certificate" Click="ClearCert_Click"
+                            Padding="16,6" ToolTip="Remove the trusted TLS certificate for this server (will be re-accepted on next connect)"/>
+                </StackPanel>
                 <TextBlock x:Name="TestResultText" Margin="0,8,0,0" TextWrapping="Wrap"/>
             </StackPanel>
         </ScrollViewer>
