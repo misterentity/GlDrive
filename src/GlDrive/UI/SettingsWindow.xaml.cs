@@ -102,7 +102,7 @@ public partial class SettingsWindow : Window
         var dialog = new Microsoft.Win32.OpenFileDialog
         {
             Title = "Import Sites from FTPRush or FlashFXP",
-            Filter = "Site files|RushSite.xml;Sites.dat;*.ftp|FTPRush (RushSite.xml)|RushSite.xml|FlashFXP (Sites.dat, *.ftp)|Sites.dat;*.ftp|All files|*.*"
+            Filter = "Site files (*.xml, *.ftp, *.dat)|*.xml;*.ftp;*.dat|FTPRush (*.xml)|*.xml|FlashFXP (*.ftp, *.dat)|*.ftp;*.dat|All files|*.*"
         };
 
         if (dialog.ShowDialog() != true) return;
@@ -236,6 +236,28 @@ public partial class SettingsWindow : Window
     {
         if (GlobalSkiplistGrid.SelectedItem is SkiplistRule rule)
             _vm.GlobalSkiplist.Remove(rule);
+    }
+
+    private void ImportGlobalSkiplist_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Import Skiplist Rules",
+            Filter = "Text files (*.txt)|*.txt|All files|*.*"
+        };
+        if (dialog.ShowDialog() != true) return;
+
+        try
+        {
+            var rules = SiteImporter.ImportSkiplist(dialog.FileName);
+            foreach (var rule in rules)
+                _vm.GlobalSkiplist.Add(rule);
+            MessageBox.Show($"Imported {rules.Count} skiplist rule(s).", "Import", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Import failed: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private void Save_Click(object sender, RoutedEventArgs e)

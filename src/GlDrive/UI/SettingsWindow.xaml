@@ -185,6 +185,8 @@
                             <Button Content="Add Rule" Click="AddGlobalSkiplistRule_Click" Padding="12,4" Margin="0,0,6,0"
                                     Style="{StaticResource SecondaryButton}"/>
                             <Button Content="Remove" Click="RemoveGlobalSkiplistRule_Click" Padding="12,4"
+                                    Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"/>
+                            <Button Content="Import..." Click="ImportGlobalSkiplist_Click" Padding="12,4"
                                     Style="{StaticResource SecondaryButton}"/>
                         </StackPanel>
                     </StackPanel>

@@ -714,6 +714,28 @@ public partial class ServerEditDialog : Window
             _siteSkiplist.Remove(rule);
     }
 
+    private void ImportSiteSkiplist_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Import Skiplist Rules",
+            Filter = "Text files (*.txt)|*.txt|All files|*.*"
+        };
+        if (dialog.ShowDialog() != true) return;
+
+        try
+        {
+            var rules = Config.SiteImporter.ImportSkiplist(dialog.FileName);
+            foreach (var rule in rules)
+                _siteSkiplist.Add(rule);
+            MessageBox.Show($"Imported {rules.Count} skiplist rule(s).", "Import", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Import failed: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     private void AddCommonAnnouncePatterns_Click(object sender, RoutedEventArgs e)
     {
         var patterns = new[]
