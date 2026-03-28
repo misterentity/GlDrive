@@ -111,28 +111,7 @@ public partial class SettingsWindow : Window
         {
             var file = dialog.FileName;
             var name = Path.GetFileName(file);
-            List<ServerConfig> imported;
-
-            if (name.Equals("RushSite.xml", StringComparison.OrdinalIgnoreCase))
-            {
-                imported = SiteImporter.ImportFtpRush(file);
-            }
-            else if (file.EndsWith(".ftp", StringComparison.OrdinalIgnoreCase))
-            {
-                imported = SiteImporter.ImportFlashFxpXml(file);
-            }
-            else if (file.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
-            {
-                // Try to detect: FlashFXP XML has <SITES>, FTPRush has <SITE> at root
-                var peek = System.IO.File.ReadAllText(file, System.Text.Encoding.UTF8);
-                imported = peek.Contains("<SITES", StringComparison.OrdinalIgnoreCase)
-                    ? SiteImporter.ImportFlashFxpXml(file)
-                    : SiteImporter.ImportFtpRush(file);
-            }
-            else // Sites.dat — FlashFXP INI format
-            {
-                imported = SiteImporter.ImportFlashFxpDat(file);
-            }
+            var imported = SiteImporter.ImportAuto(file);
 
             if (imported.Count == 0)
             {
