@@ -145,11 +145,14 @@
                 <!-- Row 2: Options -->
                 <WrapPanel Grid.Row="2" Grid.Column="0" VerticalAlignment="Center">
                     <CheckBox x:Name="ChkDeleteAfter" Content="Delete after extract" Margin="0,0,14,0"
-                              Foreground="{DynamicResource ForegroundBrush}" FontSize="11"/>
+                              Foreground="{DynamicResource ForegroundBrush}" FontSize="11"
+                              Checked="Settings_Changed" Unchecked="Settings_Changed"/>
                     <CheckBox x:Name="ChkRecursive" Content="Scan subfolders" Margin="0,0,14,0"
-                              Foreground="{DynamicResource ForegroundBrush}" FontSize="11" IsChecked="True"/>
+                              Foreground="{DynamicResource ForegroundBrush}" FontSize="11" IsChecked="True"
+                              Checked="Settings_Changed" Unchecked="Settings_Changed"/>
                     <CheckBox x:Name="ChkCreateSubfolder" Content="Create subfolder per archive" Margin="0,0,14,0"
-                              Foreground="{DynamicResource ForegroundBrush}" FontSize="11"/>
+                              Foreground="{DynamicResource ForegroundBrush}" FontSize="11"
+                              Checked="Settings_Changed" Unchecked="Settings_Changed"/>
                     <StackPanel Orientation="Horizontal" Margin="0,0,14,0">
                         <TextBlock Text="Overwrite:" Style="{StaticResource SmallLabel}" Margin="0,0,4,0"/>
                         <ComboBox x:Name="OverwriteMode" Width="90" SelectedIndex="0" FontSize="11"
