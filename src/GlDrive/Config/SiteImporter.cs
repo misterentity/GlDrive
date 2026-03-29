@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text;
+using System.Text.Json;
 using System.Xml.Linq;
 using Serilog;
 
@@ -22,6 +23,9 @@ public static class SiteImporter
     {
         var ext = Path.GetExtension(filePath);
 
+        if (ext.Equals(".json", StringComparison.OrdinalIgnoreCase))
+            return ImportFtpRushJson(filePath);
+
         if (ext.Equals(".ftp", StringComparison.OrdinalIgnoreCase))
             return ImportFlashFxpXml(filePath);
 
@@ -42,8 +46,125 @@ public static class SiteImporter
             return ImportFtpRush(filePath);
         }
 
-        try { return ImportFtpRush(filePath); }
-        catch { return ImportFlashFxpDat(filePath); }
+        try { return ImportFtpRushJson(filePath); }
+        catch { try { return ImportFtpRush(filePath); } catch { return ImportFlashFxpDat(filePath); } }
+    }
+
+    /// <summary>
+    /// Import sites from FTPRush's JSON export (site.json / sites.json).
+    /// Tree structure: RootItem.Children[].Server + recursive Children.
+    /// </summary>
+    public static List<ServerConfig> ImportFtpRushJson(string jsonPath)
+    {
+        var results = new List<ServerConfig>();
+        var json = File.ReadAllText(jsonPath);
+        using var doc = JsonDocument.Parse(json);
+
+        var root = doc.RootElement;
+        if (root.TryGetProperty("RootItem", out var rootItem))
+            WalkFtpRushNode(rootItem, results);
+        else if (root.TryGetProperty("Children", out _))
+            WalkFtpRushNode(root, results);
+
+        Log.Information("FTPRush JSON import: {Count} sites from {File}", results.Count, Path.GetFileName(jsonPath));
+        return results;
+    }
+
+    private static void WalkFtpRushNode(JsonElement node, List<ServerConfig> results)
+    {
+        // If this node has a Server, import it
+        if (node.TryGetProperty("Server", out var serverEl) && serverEl.ValueKind == JsonValueKind.Object)
+        {
+            var server = ParseFtpRushJsonServer(node, serverEl);
+            if (server != null)
+                results.Add(server);
+        }
+
+        // Recurse into children
+        if (node.TryGetProperty("Children", out var children) && children.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var child in children.EnumerateArray())
+                WalkFtpRushNode(child, results);
+        }
+    }
+
+    private static ServerConfig? ParseFtpRushJsonServer(JsonElement node, JsonElement s)
+    {
+        try
+        {
+            var host = s.GetProperty("Host").GetString()?.Trim();
+            if (string.IsNullOrEmpty(host) || host == "127.0.0.1") return null;
+
+            var port = s.TryGetProperty("Port", out var portEl) ? portEl.GetInt32() : 21;
+            if (port <= 0) port = 21;
+
+            var user = s.TryGetProperty("Username", out var userEl) ? userEl.GetString()?.Trim() ?? "" : "";
+            var name = node.TryGetProperty("Name", out var nameEl) ? nameEl.GetString() ?? host : host;
+            if (string.IsNullOrEmpty(name) || name == "New Site") name = host;
+
+            var remotePath = s.TryGetProperty("DefaultRemotePath", out var rpEl) ? rpEl.GetString()?.Trim() ?? "" : "";
+
+            var server = new ServerConfig
+            {
+                Name = name,
+                Connection =
+                {
+                    Host = host,
+                    Port = port,
+                    Username = user,
+                    RootPath = !string.IsNullOrEmpty(remotePath) ? remotePath : "/"
+                },
+                Mount = { AutoMountOnStart = false }
+            };
+
+            // TLS: FTPEnryptMode 1=Implicit, 2=Explicit
+            if (s.TryGetProperty("FTPEnryptMode", out var encEl))
+            {
+                var mode = encEl.GetInt32();
+                if (mode is 1 or 2)
+                    server.Tls.PreferTls12 = true;
+            }
+
+            // Password: Base64-encoded
+            if (s.TryGetProperty("Base64Password", out var pwEl))
+            {
+                var b64 = pwEl.GetString();
+                if (!string.IsNullOrEmpty(b64))
+                {
+                    try
+                    {
+                        var password = Encoding.UTF8.GetString(Convert.FromBase64String(b64));
+                        if (!string.IsNullOrEmpty(password) && !string.IsNullOrEmpty(user))
+                            CredentialStore.SavePassword(host, port, user, password);
+                    }
+                    catch { }
+                }
+            }
+
+            // File filters → skiplist
+            if (s.TryGetProperty("FileFilters", out var filters) && filters.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var filter in filters.EnumerateArray())
+                {
+                    var pattern = filter.TryGetProperty("Pattern", out var patEl) ? patEl.GetString() : null;
+                    if (pattern == null && filter.ValueKind == JsonValueKind.String)
+                        pattern = filter.GetString();
+                    if (string.IsNullOrEmpty(pattern)) continue;
+
+                    var rule = ParseSkipPattern(pattern);
+                    if (rule != null)
+                        server.SpreadSite.Skiplist.Add(rule);
+                }
+            }
+
+            Log.Debug("FTPRush JSON import: {Name} ({Host}:{Port})", name, host, port);
+            return server;
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Skipping FTPRush JSON site entry");
+            return null;
+        }
     }
 
     public static List<ServerConfig> ImportFtpRush(string xmlPath)

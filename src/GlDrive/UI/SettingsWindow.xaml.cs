@@ -102,7 +102,7 @@ public partial class SettingsWindow : Window
         var dialog = new Microsoft.Win32.OpenFileDialog
         {
             Title = "Import Sites from FTPRush or FlashFXP",
-            Filter = "Site files (*.xml, *.ftp, *.dat)|*.xml;*.ftp;*.dat|FTPRush (*.xml)|*.xml|FlashFXP (*.ftp, *.dat)|*.ftp;*.dat|All files|*.*"
+            Filter = "Site files (*.json, *.xml, *.ftp, *.dat)|*.json;*.xml;*.ftp;*.dat|FTPRush (*.json, *.xml)|*.json;*.xml|FlashFXP (*.ftp, *.dat)|*.ftp;*.dat|All files|*.*"
         };
 
         if (dialog.ShowDialog() != true) return;
@@ -138,8 +138,10 @@ public partial class SettingsWindow : Window
             var skipped = imported.Count - added;
             var msg = $"Imported {added} server(s)";
             if (skipped > 0) msg += $" ({skipped} duplicates skipped)";
-            // FlashFXP .ftp exports include plaintext passwords (auto-saved to Credential Manager)
-            if (!file.EndsWith(".ftp", StringComparison.OrdinalIgnoreCase))
+            // FlashFXP .ftp and FTPRush .json exports include passwords (auto-saved to Credential Manager)
+            var hasPasswords = file.EndsWith(".ftp", StringComparison.OrdinalIgnoreCase) ||
+                               file.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
+            if (!hasPasswords)
                 msg += ".\n\nPasswords cannot be imported — please edit each server to set the password.";
             MessageBox.Show(msg, "Import Complete", MessageBoxButton.OK, MessageBoxImage.Information);
             Log.Information("Imported {Added} sites from {File} ({Skipped} duplicates skipped)", added, name, skipped);
