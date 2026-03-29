@@ -38,11 +38,13 @@ public static class SiteImporter
             {
                 var doc = XDocument.Load(filePath);
                 var firstSite = doc.Descendants("SITE").FirstOrDefault();
+                // FlashFXP uses <ADDRESS>, FTPRush uses <HOST> or <Host>
                 if (firstSite?.Element("ADDRESS") != null)
                     return ImportFlashFxpXml(filePath);
             }
             catch { }
 
+            // Default to FTPRush for XML (handles both old ALLCAPS and new camelCase)
             return ImportFtpRush(filePath);
         }
 
@@ -172,21 +174,24 @@ public static class SiteImporter
         var results = new List<ServerConfig>();
         var doc = XDocument.Load(xmlPath);
 
+        // FTPRush XML can nest SITE elements inside GROUP elements or under FTPRUSHSITES
         foreach (var site in doc.Descendants("SITE"))
         {
             try
             {
-                var host = site.Element("HOST")?.Value?.Trim();
-                var user = site.Element("USER")?.Value?.Trim();
+                // FTPRush 2+ uses camelCase (Host, Username, Port) matching Server class
+                // Older versions use ALLCAPS (HOST, USER, PORT)
+                var host = (site.Element("Host") ?? site.Element("HOST"))?.Value?.Trim();
+                var user = (site.Element("Username") ?? site.Element("USER"))?.Value?.Trim();
                 if (string.IsNullOrEmpty(host)) continue;
 
                 var port = 21;
-                var portEl = site.Element("PORT");
-                if (portEl != null && int.TryParse(portEl.Value, out var p) && p > 0)
+                var portStr = (site.Element("Port") ?? site.Element("PORT"))?.Value;
+                if (int.TryParse(portStr, out var p) && p > 0)
                     port = p;
 
-                // Fallback: parse port from NAME attribute (ftp://user:***@host:port)
-                if (portEl == null)
+                // Fallback: parse from NAME attribute (ftp://user:***@host:port)
+                if (portStr == null)
                 {
                     var nameAttr = site.Attribute("NAME")?.Value;
                     if (nameAttr != null)
@@ -202,14 +207,14 @@ public static class SiteImporter
                     }
                 }
 
-                var name = site.Attribute("NAME")?.Value;
-                // Clean up display name — strip ftp:// prefix if present
+                var name = site.Attribute("NAME")?.Value ?? site.Element("Name")?.Value;
                 if (name != null && name.Contains("://"))
                     name = host;
-                name ??= host;
+                if (string.IsNullOrEmpty(name) || name == "New Site")
+                    name = host;
 
-                var initDir = site.Element("INITDIR")?.Value?.Trim()
-                           ?? site.Element("REMOTEPATH")?.Value?.Trim();
+                var initDir = (site.Element("DefaultRemotePath") ?? site.Element("INITDIR")
+                            ?? site.Element("REMOTEPATH"))?.Value?.Trim();
 
                 var server = new ServerConfig
                 {
@@ -224,11 +229,26 @@ public static class SiteImporter
                     Mount = { AutoMountOnStart = false }
                 };
 
-                // Check for SSL/TLS settings
+                // TLS: FTPRush 2+ uses FTPEnryptMode (1=Implicit, 2=Explicit)
+                // Older uses SSL/SSLMODE
+                var encMode = site.Element("FTPEnryptMode")?.Value;
                 var ssl = site.Element("SSL")?.Value;
                 var sslMode = site.Element("SSLMODE")?.Value;
-                if (ssl == "True" || ssl == "1" || sslMode is "1" or "2" or "3")
+                if (encMode is "1" or "2" || ssl == "True" || ssl == "1" || sslMode is "1" or "2" or "3")
                     server.Tls.PreferTls12 = true;
+
+                // Password: FTPRush 2+ stores Base64Password
+                var b64pw = site.Element("Base64Password")?.Value;
+                if (!string.IsNullOrEmpty(b64pw))
+                {
+                    try
+                    {
+                        var password = Encoding.UTF8.GetString(Convert.FromBase64String(b64pw));
+                        if (!string.IsNullOrEmpty(password) && !string.IsNullOrEmpty(user))
+                            CredentialStore.SavePassword(host, port, user, password);
+                    }
+                    catch { }
+                }
 
                 // Proxy settings (FTPRush uses PROXY_HOST, PROXY_PORT, PROXY_USER, PROXY_TYPE)
                 var proxyHost = site.Element("PROXY_HOST")?.Value?.Trim()
