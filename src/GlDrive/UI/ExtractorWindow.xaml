@@ -35,8 +35,11 @@
                     Style="{StaticResource SecondaryButton}" FontSize="11"/>
             <Button Content="Clear All" Click="ClearAll_Click" Padding="14,5" Margin="0,0,16,0"
                     Style="{StaticResource SecondaryButton}" FontSize="11"/>
-            <Button x:Name="ExtractButton" Content="Extract All" Click="Extract_Click" Padding="18,5"
+            <Button x:Name="ExtractButton" Content="Extract All" Click="Extract_Click" Padding="18,5" Margin="0,0,4,0"
                     Style="{StaticResource PrimaryButton}" FontSize="11" FontWeight="SemiBold"/>
+            <Button Content="Clean Folders" Click="CleanFolders_Click" Padding="14,5"
+                    Style="{StaticResource SecondaryButton}" FontSize="11"
+                    ToolTip="Scan folders for leftover archives after extraction"/>
         </StackPanel>
 
         <!-- Archive list -->
