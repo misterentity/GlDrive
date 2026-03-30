@@ -963,6 +963,12 @@ public partial class ExtractorWindow : Window
         return $"{bytes} B";
     }
 
+    private void CleanFolders_Click(object sender, RoutedEventArgs e)
+    {
+        var win = new CleanupWindow { Owner = this };
+        win.Show();
+    }
+
     protected override void OnClosed(EventArgs e)
     {
         SaveSettings();
