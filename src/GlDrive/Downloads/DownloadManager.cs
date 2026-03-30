@@ -407,6 +407,8 @@ public class DownloadManager : IDisposable
                     DownloadStatusChanged?.Invoke(item);
 
                     var extracted = await ArchiveExtractor.ExtractIfNeeded(item.LocalPath, itemCts.Token);
+                    Log.Information("Extraction result for {Release}: extracted={Extracted}, deleteEnabled={Delete}",
+                        item.ReleaseName, extracted, _config.DeleteArchivesAfterExtract);
                     if (extracted && _config.DeleteArchivesAfterExtract)
                         ArchiveExtractor.DeleteArchives(item.LocalPath);
                 }
