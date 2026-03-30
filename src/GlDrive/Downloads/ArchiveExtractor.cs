@@ -13,16 +13,19 @@ public static partial class ArchiveExtractor
     // Split archives: .001-.999
     private static readonly Regex VolumeExtRegex = MyVolumeExtRegex();
 
-    // Modern RAR multi-part: name.part02.rar, name.part003.rar
-    private static readonly Regex PartNRegex = PartVolumeRegex();
+    // Modern RAR multi-part: name.part02.rar, name.part003.rar (non-first volumes)
+    private static readonly Regex PartNonFirstRegex = PartNonFirstVolumeRegex();
 
     public static async Task<bool> ExtractIfNeeded(string dirPath, CancellationToken ct)
     {
         var dir = new DirectoryInfo(dirPath);
         if (!dir.Exists) return false;
 
-        // Find .rar files only (first volume) — skip numbered volumes like .r00, .r01, etc.
-        var rarFiles = dir.GetFiles("*.rar").ToList();
+        // Find .rar files only (first volume) — skip numbered volumes like .r00, .r01
+        // and non-first modern multi-part volumes like .part02.rar, .part03.rar
+        var rarFiles = dir.GetFiles("*.rar")
+            .Where(f => !PartNonFirstRegex.IsMatch(f.Name))
+            .ToList();
 
         if (rarFiles.Count == 0) return false;
 
@@ -83,26 +86,61 @@ public static partial class ArchiveExtractor
         var dir = new DirectoryInfo(dirPath);
         if (!dir.Exists) return;
 
-        var deleted = 0;
-        // Scan all files including subdirectories
-        foreach (var file in dir.GetFiles("*", SearchOption.AllDirectories))
+        // Collect archive files to delete
+        var toDelete = dir.GetFiles("*", SearchOption.AllDirectories)
+            .Where(f => IsArchiveFile(f.Name))
+            .ToList();
+
+        if (toDelete.Count == 0)
         {
-            if (IsArchiveFile(file.Name))
-            {
-                try
-                {
-                    file.Delete();
-                    deleted++;
-                }
-                catch (Exception ex)
-                {
-                    Log.Warning(ex, "Failed to delete archive file: {File}", file.Name);
-                }
-            }
+            Log.Information("No archive files found to delete in {Dir}", dir.Name);
+            return;
         }
 
-        if (deleted > 0)
-            Log.Information("Deleted {Count} archive files from {Dir}", deleted, dir.Name);
+        Log.Information("Deleting {Count} archive files from {Dir}: {Files}",
+            toDelete.Count, dir.Name, string.Join(", ", toDelete.Select(f => f.Name)));
+
+        var deleted = 0;
+        var failed = 0;
+        foreach (var file in toDelete)
+        {
+            if (TryDeleteWithRetry(file.FullName))
+                deleted++;
+            else
+                failed++;
+        }
+
+        Log.Information("Archive cleanup: {Deleted} deleted, {Failed} failed in {Dir}", deleted, failed, dir.Name);
+    }
+
+    /// <summary>
+    /// Try to delete a file with retries to handle Windows file handle release delays
+    /// (e.g. after SharpCompress disposes archive streams).
+    /// </summary>
+    private static bool TryDeleteWithRetry(string path, int maxAttempts = 3, int delayMs = 500)
+    {
+        for (var i = 0; i < maxAttempts; i++)
+        {
+            try
+            {
+                File.Delete(path);
+                return true;
+            }
+            catch (IOException) when (i < maxAttempts - 1)
+            {
+                Thread.Sleep(delayMs * (i + 1));
+            }
+            catch (UnauthorizedAccessException) when (i < maxAttempts - 1)
+            {
+                Thread.Sleep(delayMs * (i + 1));
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to delete archive file: {File}", Path.GetFileName(path));
+                return false;
+            }
+        }
+        return false;
     }
 
     public static bool IsArchiveFile(string fileName)
@@ -144,7 +182,7 @@ public static partial class ArchiveExtractor
     [GeneratedRegex(@"^\.[rs]\d{2,3}$|^\.\d{3}$", RegexOptions.IgnoreCase)]
     private static partial Regex MyVolumeExtRegex();
 
-    // Matches .partNN.rar pattern (for reference, not used in IsArchiveFile since .rar catches it)
-    [GeneratedRegex(@"\.part\d+\.rar$", RegexOptions.IgnoreCase)]
-    private static partial Regex PartVolumeRegex();
+    // Matches non-first modern multi-part volumes: .part02.rar, .part003.rar (but NOT .part01.rar or .part001.rar)
+    [GeneratedRegex(@"\.part(?!0*1\.rar)\d+\.rar$", RegexOptions.IgnoreCase)]
+    private static partial Regex PartNonFirstVolumeRegex();
 }
