@@ -110,29 +110,58 @@ public class SpreadJob : IDisposable
 
         try
         {
+            // Auto-discover the release path on each server:
+            // 1. Try the exact section name (case-insensitive)
+            // 2. Try ALL section paths — the release might be under a differently-named section
             var sitePaths = new Dictionary<string, string>();
             foreach (var (serverId, config) in _serverConfigs)
             {
-                // Case-insensitive section lookup
-                var sectionPath = config.SpreadSite.Sections
-                    .FirstOrDefault(kvp => kvp.Key.Equals(Section, StringComparison.OrdinalIgnoreCase))
-                    .Value;
+                string? foundPath = null;
 
-                if (!string.IsNullOrEmpty(sectionPath))
+                // First: try exact section match (case-insensitive)
+                var exactMatch = config.SpreadSite.Sections
+                    .FirstOrDefault(kvp => kvp.Key.Equals(Section, StringComparison.OrdinalIgnoreCase));
+                if (!string.IsNullOrEmpty(exactMatch.Value))
+                    foundPath = exactMatch.Value.TrimEnd('/') + "/" + ReleaseName;
+
+                // If no exact match, probe ALL section paths on this server via FTP
+                if (foundPath == null && _pools.TryGetValue(serverId, out var pool))
                 {
-                    sitePaths[serverId] = sectionPath.TrimEnd('/') + "/" + ReleaseName;
-                    Log.Information("Spread: {Server} path = {Path}", config.Name, sitePaths[serverId]);
+                    foreach (var (sectionName, sectionPath) in config.SpreadSite.Sections)
+                    {
+                        try
+                        {
+                            var probePath = sectionPath.TrimEnd('/') + "/" + ReleaseName;
+                            await using var conn = await pool.Borrow(ct);
+                            var exists = await conn.Client.DirectoryExists(probePath, ct);
+                            if (exists)
+                            {
+                                foundPath = probePath;
+                                Log.Information("Spread: auto-discovered {Release} on {Server} at [{Section}] {Path}",
+                                    ReleaseName, config.Name, sectionName, probePath);
+                                break;
+                            }
+                        }
+                        catch (OperationCanceledException) { throw; }
+                        catch { } // FTP error probing this path — try next section
+                    }
+                }
+
+                if (foundPath != null)
+                {
+                    sitePaths[serverId] = foundPath;
+                    Log.Information("Spread: {Server} → {Path}", config.Name, foundPath);
                 }
                 else
                 {
-                    Log.Warning("Spread: {Server} has no section '{Section}' (available: {Sections})",
-                        config.Name, Section, string.Join(", ", config.SpreadSite.Sections.Keys));
+                    Log.Debug("Spread: {Server} — release not found in any section", config.Name);
                 }
             }
 
             if (sitePaths.Count < 2)
             {
-                SetFailed($"Need at least 2 servers with section '{Section}' configured (found {sitePaths.Count})");
+                var serverNames = string.Join(", ", _serverConfigs.Values.Select(c => c.Name));
+                SetFailed($"Release found on {sitePaths.Count} server(s) — need 2+ (checked: {serverNames})");
                 return;
             }
             Log.Information("Spread race starting: {Release} [{Section}] on {Count} servers",
