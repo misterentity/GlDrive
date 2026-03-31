@@ -361,7 +361,24 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
             Name = target,
             HasFishKey = hasFishKey
         };
-        Channels.Add(vm);
+
+        // Insert grouped under the correct server: find the last item for this server
+        // and insert after it, keeping channels sorted (server header, channels, PMs)
+        var insertIdx = -1;
+        for (var i = Channels.Count - 1; i >= 0; i--)
+        {
+            if (Channels[i].ServerId == serverId)
+            {
+                insertIdx = i + 1;
+                break;
+            }
+        }
+
+        if (insertIdx >= 0 && insertIdx <= Channels.Count)
+            Channels.Insert(insertIdx, vm);
+        else
+            Channels.Add(vm);
+
         return vm;
     }
 
