@@ -158,6 +158,77 @@ public class ServerManager : IDisposable
             UnmountServer(serverId);
     }
 
+    /// <summary>
+    /// Sync running services with current config after settings change.
+    /// Mounts new enabled servers, unmounts removed servers, and starts/stops IRC as needed.
+    /// </summary>
+    public async Task SyncAfterConfigChange()
+    {
+        var configIds = new HashSet<string>(_config.Servers.Select(s => s.Id));
+
+        // Unmount servers that were removed from config
+        foreach (var serverId in _servers.Keys.ToList())
+        {
+            if (!configIds.Contains(serverId))
+            {
+                Log.Information("Server {ServerId} removed from config, unmounting", serverId);
+                await UnmountServerAsync(serverId);
+            }
+        }
+
+        // Mount new enabled servers that aren't mounted yet
+        foreach (var server in _config.Servers.Where(s => s.Enabled))
+        {
+            if (!_servers.ContainsKey(server.Id))
+            {
+                try
+                {
+                    Log.Information("New server {ServerName} detected, mounting", server.Name);
+                    await MountServer(server.Id);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "Failed to mount new server {ServerName}", server.Name);
+                }
+            }
+            else
+            {
+                // Server already mounted — check if IRC config changed
+                var ircEnabled = server.Irc.Enabled && !string.IsNullOrEmpty(server.Irc.Host);
+                var ircRunning = _ircServices.ContainsKey(server.Id);
+
+                if (ircEnabled && !ircRunning)
+                {
+                    try
+                    {
+                        await StartIrcService(server);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning(ex, "Failed to start IRC for {ServerName}", server.Name);
+                    }
+                }
+                else if (!ircEnabled && ircRunning)
+                {
+                    await StopIrcService(server.Id);
+                }
+            }
+        }
+
+        // Unmount disabled servers that are still mounted
+        foreach (var server in _config.Servers.Where(s => !s.Enabled))
+        {
+            if (_servers.ContainsKey(server.Id))
+            {
+                Log.Information("Server {ServerName} disabled, unmounting", server.Name);
+                await UnmountServerAsync(server.Id);
+            }
+        }
+
+        // Fire a state change to refresh tray menu
+        ServerStateChanged?.Invoke("", "", MountState.Unmounted);
+    }
+
     public MountService? GetServer(string serverId)
     {
         _servers.TryGetValue(serverId, out var service);

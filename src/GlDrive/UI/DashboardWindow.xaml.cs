@@ -141,10 +141,11 @@ public partial class DashboardWindow : Window
         {
             _spreadLoaded = true;
             _spreadVm = new SpreadViewModel(_serverManager, _config);
-            _spreadVm.SetOpenSettingsAction(() =>
+            _spreadVm.SetOpenSettingsAction(async () =>
             {
                 var window = new SettingsWindow(_config, _serverManager) { Owner = this };
-                window.ShowDialog();
+                if (window.ShowDialog() == true)
+                    await _serverManager.SyncAfterConfigChange();
                 _spreadVm?.RefreshSections();
             });
             SpreadTab.DataContext = _spreadVm;
@@ -389,11 +390,12 @@ public partial class DashboardWindow : Window
         _playerVm?.LoadLibrary();
     }
 
-        private void Settings_Click(object sender, RoutedEventArgs e)
+        private async void Settings_Click(object sender, RoutedEventArgs e)
     {
         var window = new SettingsWindow(_config, _serverManager);
         window.Owner = this;
-        window.ShowDialog();
+        if (window.ShowDialog() == true)
+            await _serverManager.SyncAfterConfigChange();
     }
 
     // Drag-and-drop: handle drop on Downloads grid
