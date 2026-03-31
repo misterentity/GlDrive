@@ -19,6 +19,7 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
     private Action? _openSettingsAction;
     private string _selectedSection = "";
     private string _spreadReleaseName = "";
+    private string _spreadStatus = "";
     private SpreadJobVm? _selectedSpreadJob;
     private bool _isRefreshing;
 
@@ -38,6 +39,12 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
     {
         get => _spreadReleaseName;
         set { _spreadReleaseName = value; OnPropertyChanged(); }
+    }
+
+    public string SpreadStatus
+    {
+        get => _spreadStatus;
+        set { _spreadStatus = value; OnPropertyChanged(); }
     }
 
     public SpreadJobVm? SelectedSpreadJob
@@ -100,21 +107,71 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
 
     private void StartRace()
     {
-        if (string.IsNullOrWhiteSpace(SpreadReleaseName) || string.IsNullOrWhiteSpace(SelectedSection))
+        if (string.IsNullOrWhiteSpace(SpreadReleaseName))
+        {
+            SpreadStatus = "Enter a release name";
             return;
+        }
+        if (string.IsNullOrWhiteSpace(SelectedSection))
+        {
+            SpreadStatus = "Select a section";
+            return;
+        }
 
         var spread = _serverManager.Spread;
-        if (spread == null) return;
+        if (spread == null)
+        {
+            SpreadStatus = "Spread engine not available";
+            return;
+        }
 
-        var serverIds = _config.Servers
+        var connectedIds = spread.GetConnectedServerIds();
+        Log.Information("Spread pools connected: {Ids}", string.Join(", ", connectedIds));
+
+        // Find servers with this section AND a connected spread pool
+        var allWithSection = _config.Servers
             .Where(s => s.Enabled && s.SpreadSite.Sections.ContainsKey(SelectedSection))
-            .Select(s => s.Id)
-            .Where(id => spread.GetConnectedServerIds().Contains(id))
             .ToList();
 
-        if (serverIds.Count < 2) return;
+        var serverIds = allWithSection
+            .Select(s => s.Id)
+            .Where(id => connectedIds.Contains(id))
+            .ToList();
 
-        spread.StartRace(SelectedSection, SpreadReleaseName, serverIds, SpreadMode.Race);
+        if (allWithSection.Count == 0)
+        {
+            SpreadStatus = $"No servers have section \"{SelectedSection}\" configured";
+            return;
+        }
+
+        if (serverIds.Count == 0)
+        {
+            var names = string.Join(", ", allWithSection.Select(s => s.Name));
+            SpreadStatus = $"Servers with [{SelectedSection}] ({names}) have no spread pool connected — check FTP connections";
+            return;
+        }
+
+        if (serverIds.Count < 2)
+        {
+            var connectedName = _config.Servers.First(s => s.Id == serverIds[0]).Name;
+            var allNames = string.Join(", ", allWithSection.Select(s => s.Name));
+            SpreadStatus = $"Need 2+ connected servers for [{SelectedSection}] — only {connectedName} is connected (configured: {allNames})";
+            return;
+        }
+
+        try
+        {
+            var names = serverIds.Select(id => _config.Servers.First(s => s.Id == id).Name);
+            spread.StartRace(SelectedSection, SpreadReleaseName, serverIds, SpreadMode.Race);
+            SpreadStatus = $"Race started: {SpreadReleaseName} [{SelectedSection}] on {string.Join(", ", names)}";
+            Log.Information("Manual race started: {Release} [{Section}] on {Servers}",
+                SpreadReleaseName, SelectedSection, string.Join(", ", names));
+        }
+        catch (Exception ex)
+        {
+            SpreadStatus = $"Race failed: {ex.Message}";
+            Log.Warning(ex, "StartRace failed for {Release}", SpreadReleaseName);
+        }
     }
 
     private void StopJob()

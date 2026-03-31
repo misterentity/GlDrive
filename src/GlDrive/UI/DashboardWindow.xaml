@@ -1198,11 +1198,19 @@
                                       Width="120" Margin="0,0,6,0" ToolTip="Section"/>
                             <TextBox Text="{Binding SpreadReleaseName, UpdateSourceTrigger=PropertyChanged}"
                                      Width="280" VerticalContentAlignment="Center"
-                                     ToolTip="Release name" Margin="0,0,6,0"/>
+                                     ToolTip="Release name" Margin="0,0,6,0">
+                                <TextBox.InputBindings>
+                                    <KeyBinding Key="Return" Command="{Binding StartRaceCommand}"/>
+                                </TextBox.InputBindings>
+                            </TextBox>
                             <Button Content="Settings" Command="{Binding OpenSettingsCommand}"
                                     Padding="12,6" Style="{StaticResource SecondaryButton}"/>
                         </StackPanel>
                     </Border>
+                    <!-- Status -->
+                    <TextBlock DockPanel.Dock="Top" Text="{Binding SpreadStatus}" FontSize="12"
+                               Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,8"
+                               TextWrapping="Wrap"/>
                     <!-- Auto-Race Activity Log (bottom) -->
                     <Border DockPanel.Dock="Bottom" Height="140"
                             Background="{DynamicResource SurfaceBrush}"
