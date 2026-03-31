@@ -25,7 +25,7 @@ public class WebViewHost : ContentControl
         }
     }
 
-    public async Task<bool> InitializeAsync(string url)
+    public async Task<bool> InitializeAsync(string url, bool allowCrossOrigin = false)
     {
         if (!IsRuntimeAvailable())
         {
@@ -50,16 +50,19 @@ public class WebViewHost : ContentControl
             settings.AreDefaultContextMenusEnabled = false;
             settings.IsStatusBarEnabled = false;
 
-            // Restrict navigation to the initial origin
-            var allowedOrigin = new Uri(url).GetLeftPart(UriPartial.Authority);
-            _webView.CoreWebView2.NavigationStarting += (_, args) =>
+            // Restrict navigation to the initial origin (unless cross-origin is allowed for login flows)
+            if (!allowCrossOrigin)
             {
-                if (args.Uri != null && !args.Uri.StartsWith(allowedOrigin, StringComparison.OrdinalIgnoreCase))
+                var allowedOrigin = new Uri(url).GetLeftPart(UriPartial.Authority);
+                _webView.CoreWebView2.NavigationStarting += (_, args) =>
                 {
-                    args.Cancel = true;
-                    Log.Warning("WebView2 blocked navigation to {Uri} (allowed: {Origin})", args.Uri, allowedOrigin);
-                }
-            };
+                    if (args.Uri != null && !args.Uri.StartsWith(allowedOrigin, StringComparison.OrdinalIgnoreCase))
+                    {
+                        args.Cancel = true;
+                        Log.Warning("WebView2 blocked navigation to {Uri} (allowed: {Origin})", args.Uri, allowedOrigin);
+                    }
+                };
+            }
             _webView.CoreWebView2.NavigationCompleted += (_, args) =>
             {
                 if (!args.IsSuccess)
