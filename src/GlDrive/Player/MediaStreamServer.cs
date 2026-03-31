@@ -117,10 +117,15 @@ public class MediaStreamServer : IDisposable
         var releaseDir = Path.Combine(LibraryPath, SanitizeName(releaseName));
         if (!Directory.Exists(releaseDir)) return null;
 
-        return Directory.GetFiles(releaseDir, "*", SearchOption.AllDirectories)
-            .Where(f => IsVideoFile(f) || f.EndsWith(".rar", StringComparison.OrdinalIgnoreCase))
+        var files = Directory.GetFiles(releaseDir, "*", SearchOption.AllDirectories);
+
+        // Prefer extracted video files over RAR archives
+        var video = files
+            .Where(f => IsVideoFile(f) && !f.EndsWith(".partial", StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(f => new FileInfo(f).Length)
             .FirstOrDefault();
+
+        return video;
     }
 
     // ── Direct video file streaming (saves to library as it streams) ──

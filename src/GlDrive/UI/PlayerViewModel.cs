@@ -988,71 +988,52 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     private async Task PlayFromRar(MountService server, string releasePath, List<FtpListItem> files)
     {
         var releaseName = Path.GetFileName(releasePath);
-        Log.Information("RAR background download+extract for {Path}", releasePath);
+        Log.Information("RAR stream playback for {Path}", releasePath);
 
         SaveCurrentPosition();
         _currentReleaseName = releaseName;
+
+        // Check if we already have an extracted video in the library cache
+        var cached = _streamServer!.FindCachedVideo(releaseName);
+        if (cached != null && !cached.EndsWith(".rar", StringComparison.OrdinalIgnoreCase))
+        {
+            IsBuffering = false;
+            PlayerStatus = $"Playing from library: {releaseName}";
+            await PlayLocalFile(cached);
+            return;
+        }
+
+        // Use the HTTP /rar-stream endpoint — it handles downloading volumes,
+        // extracting the video with SharpCompress, and streaming decompressed
+        // video data to VLC via HTTP. VLC plays as extraction proceeds.
+        var url = $"{_streamServer.BaseUrl}rar-stream?token={_streamServer.AuthToken}" +
+            $"&server={Uri.EscapeDataString(server.ServerId)}" +
+            $"&path={Uri.EscapeDataString(releasePath)}";
+
+        Log.Information("Playing RAR stream: {Url}", url);
+
         IsBuffering = true;
-        BufferProgress = 0;
-        PlayerStatus = "Preparing RAR download...";
+        PlayerStatus = $"Downloading and extracting: {releaseName}...";
 
-        try
-        {
-            // Download volumes; VLC starts as soon as first .rar is ready
-            var playStarted = false;
-            var localVideo = await Task.Run(async () =>
-                await _streamServer!.DownloadAndExtractRar(server, releasePath, files,
-                    onProgress: (msg, pct) =>
-                    {
-                        Application.Current?.Dispatcher.BeginInvoke(() =>
-                        {
-                            PlayerStatus = msg;
-                            BufferProgress = pct;
-                        });
-                    },
-                    onPlayReady: videoPath =>
-                    {
-                        Application.Current?.Dispatcher.BeginInvoke(async () =>
-                        {
-                            if (playStarted) return;
-                            playStarted = true;
-                            IsBuffering = false;
-                            await PlayLocalFile(videoPath);
-                        });
-                    })
-            );
+        var media = new Media(_libVLC!, new Uri(url));
+        media.AddOption(":network-caching=15000");
+        media.AddOption(":file-caching=5000");
+        media.AddOption(":http-reconnect");
 
-            if (localVideo == null && !playStarted)
-            {
-                PlayerStatus = "No video found in RAR archive";
-                IsBuffering = false;
-                return;
-            }
+        await Task.Run(() =>
+        {
+            _mediaPlayer!.Stop();
+            Thread.Sleep(200);
+        });
 
-            if (playStarted)
-                PlayerStatus = "All volumes downloaded";
-            else
-            {
-                IsBuffering = false;
-                await PlayLocalFile(localVideo!);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            PlayerStatus = "Download cancelled";
-            IsBuffering = false;
-        }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "RAR download failed for {Path}", releasePath);
-            var msg = ex.Message;
-            if (msg.Contains("actively refused"))
-                msg = "Server refused connection — try again in a few minutes";
-            else if (msg.Contains("No FTP connection available"))
-                msg = "All FTP connections busy — pause other downloads and retry";
-            PlayerStatus = msg;
-            IsBuffering = false;
-        }
+        if (_activeRenderer != null)
+            _mediaPlayer!.SetRenderer(_activeRenderer);
+
+        _mediaPlayer!.Play(media);
+
+        PlayerStatus = IsCasting
+            ? $"Casting: {releaseName}..."
+            : $"Buffering: {releaseName} (downloading + extracting RAR)...";
     }
 
     private async Task PlayLocalFile(string localPath)
