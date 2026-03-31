@@ -4,6 +4,7 @@ using System.Windows.Media;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 using Serilog;
+using PresentationSource = System.Windows.PresentationSource;
 
 namespace GlDrive.UI;
 
@@ -65,6 +66,25 @@ public class WebViewHost : ContentControl
                     Log.Warning("WebView2 navigation failed: status={Status}, id={Id}",
                         args.WebErrorStatus, args.NavigationId);
             };
+            // Fix DPI double-scaling: WPF applies its own DPI transform, and WebView2 also
+            // scales for DPI, resulting in content that appears zoomed in on high-DPI displays.
+            // Counteract by setting ZoomFactor to 1/dpiScale.
+            try
+            {
+                var source = PresentationSource.FromVisual(this)
+                          ?? PresentationSource.FromVisual(Application.Current.MainWindow!);
+                if (source?.CompositionTarget != null)
+                {
+                    var dpiScale = source.CompositionTarget.TransformToDevice.M11;
+                    if (dpiScale > 1.0)
+                        _webView.ZoomFactor = 1.0 / dpiScale;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Debug(ex, "Could not adjust WebView2 DPI zoom");
+            }
+
             _webView.CoreWebView2.Navigate(url);
             return true;
         }

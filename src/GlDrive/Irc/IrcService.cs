@@ -38,6 +38,15 @@ public class IrcService : IDisposable
     private readonly Dictionary<string, Dh1080> _pendingKeyExchanges = new(StringComparer.OrdinalIgnoreCase);
     private string _currentNick = "";
     private bool _disposed;
+    private DateTime _connectedAt;
+
+    // Pending channel joins waiting for INVITE (channel → retry count)
+    private readonly Dictionary<string, int> _pendingInviteJoins = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _invitedChannels = new(StringComparer.OrdinalIgnoreCase);
+
+    // Liveness: periodic PING to detect dead connections
+    private Timer? _pingTimer;
+    private DateTime _lastPongOrMessage;
 
     public IrcServiceState State { get; private set; } = IrcServiceState.Disconnected;
     public string ServerId => _serverConfig.Id;
@@ -70,6 +79,7 @@ public class IrcService : IDisposable
 
     public async Task StopAsync()
     {
+        StopPingTimer();
         _cts?.Cancel();
         if (_client?.IsConnected == true)
         {
@@ -91,6 +101,7 @@ public class IrcService : IDisposable
         {
             try
             {
+                _connectedAt = DateTime.UtcNow;
                 await ConnectAsync(ct);
 
                 // Wait until disconnected
@@ -114,9 +125,16 @@ public class IrcService : IDisposable
                         _client.Disconnected -= disconnectHandler;
                 }
 
-                // Reset delay on successful connection that lasted a while
-                delay = _serverConfig.Pool.ReconnectInitialDelaySeconds;
-                if (delay <= 0) delay = 5;
+                StopPingTimer();
+
+                // Only reset delay if the connection was stable for at least 60 seconds
+                // This prevents rapid reconnect loops that trigger BNC rate limiting
+                var uptime = DateTime.UtcNow - _connectedAt;
+                if (uptime.TotalSeconds >= 60)
+                {
+                    delay = _serverConfig.Pool.ReconnectInitialDelaySeconds;
+                    if (delay <= 0) delay = 5;
+                }
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex)
@@ -145,6 +163,10 @@ public class IrcService : IDisposable
         SetState(IrcServiceState.Connecting);
         AddSystemMessage("*", $"Connecting to {irc.Host}:{irc.Port}...");
 
+        _channels.Clear();
+        _pendingInviteJoins.Clear();
+        _invitedChannels.Clear();
+
         _client?.Dispose();
         _client = new IrcClient();
         _client.MessageReceived += HandleMessage;
@@ -165,21 +187,64 @@ public class IrcService : IDisposable
         _currentNick = irc.Nick;
         await _client.NickAsync(irc.Nick);
         await _client.UserAsync(irc.Nick, irc.RealName);
+
+        // Start liveness ping timer (every 90s, detect dead connections)
+        _lastPongOrMessage = DateTime.UtcNow;
+        StartPingTimer();
+    }
+
+    private void StartPingTimer()
+    {
+        StopPingTimer();
+        _pingTimer = new Timer(PingTimerCallback, null, TimeSpan.FromSeconds(90), TimeSpan.FromSeconds(90));
+    }
+
+    private void StopPingTimer()
+    {
+        _pingTimer?.Dispose();
+        _pingTimer = null;
+    }
+
+    private async void PingTimerCallback(object? state)
+    {
+        try
+        {
+            if (_client == null || !_client.IsConnected) return;
+
+            // If we haven't received anything in 180s, the connection is dead
+            var silence = DateTime.UtcNow - _lastPongOrMessage;
+            if (silence.TotalSeconds > 180)
+            {
+                Log.Warning("IRC connection appears dead (no data for {Seconds}s), forcing disconnect", (int)silence.TotalSeconds);
+                try { _client?.Dispose(); } catch { }
+                return;
+            }
+
+            // Send a PING to keep the connection alive and detect issues
+            await _client.SendRawAsync($"PING :{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}");
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "IRC ping timer error");
+        }
     }
 
     private void HandleMessage(IrcMessage msg)
     {
+        // Track liveness — any message from server means connection is alive
+        _lastPongOrMessage = DateTime.UtcNow;
+
         switch (msg.Command)
         {
             case "001": // RPL_WELCOME
                 SetState(IrcServiceState.Connected);
                 _currentNick = msg.Params.FirstOrDefault() ?? _currentNick;
                 AddSystemMessage("*", $"Connected as {_currentNick}");
-                AutoJoinChannels();
+                _ = AutoJoinChannelsAsync();
                 break;
 
             case "433": // ERR_NICKNAMEINUSE
-                HandleNickInUse();
+                _ = HandleNickInUseAsync();
                 break;
 
             case "332": // RPL_TOPIC
@@ -193,6 +258,10 @@ public class IrcService : IDisposable
             case "366": // RPL_ENDOFNAMES
                 if (msg.Params.Count >= 2)
                     NamesUpdated?.Invoke(msg.Params[1]);
+                break;
+
+            case "INVITE":
+                HandleInvite(msg);
                 break;
 
             case "PRIVMSG":
@@ -231,11 +300,97 @@ public class IrcService : IDisposable
                 HandleNickChange(msg);
                 break;
 
+            // Channel join errors — retry invite-only channels
+            case "473": // ERR_INVITEONLYCHAN
+                HandleJoinError(msg, "invite-only");
+                break;
+            case "474": // ERR_BANNEDFROMCHAN
+                HandleJoinError(msg, "banned");
+                break;
+            case "475": // ERR_BADCHANNELKEY
+                HandleJoinError(msg, "bad key");
+                break;
+
+            case "PONG":
+                // Handled by liveness tracking above
+                break;
+
             default:
                 // Show unhandled server messages (MOTD, errors, info, etc.)
                 if (!string.IsNullOrEmpty(msg.Trailing))
                     AddSystemMessage("*", StripFormatting(msg.Trailing));
                 break;
+        }
+    }
+
+    private void HandleInvite(IrcMessage msg)
+    {
+        // :nick!user@host INVITE yournick :#channel
+        var channel = msg.Trailing ?? (msg.Params.Count >= 2 ? msg.Params[1] : "");
+        if (string.IsNullOrEmpty(channel)) return;
+
+        AddSystemMessage("*", $"Invited to {channel} by {msg.Nick}");
+        _invitedChannels.Add(channel);
+
+        // Auto-join if this channel is in our config
+        var configured = _serverConfig.Irc.Channels
+            .FirstOrDefault(c => c.Name.Equals(channel, StringComparison.OrdinalIgnoreCase));
+        if (configured != null)
+        {
+            Log.Information("Auto-joining invited channel {Channel}", channel);
+            _ = JoinConfiguredChannelAsync(configured);
+        }
+
+        // Also join if we were waiting for this invite after a 473
+        if (_pendingInviteJoins.Remove(channel))
+        {
+            Log.Information("Joining channel {Channel} after receiving pending invite", channel);
+            _ = JoinConfiguredChannelAsync(configured ?? new IrcChannelConfig { Name = channel, AutoJoin = true });
+        }
+    }
+
+    private void HandleJoinError(IrcMessage msg, string reason)
+    {
+        // :server 473 nick #channel :Cannot join channel (+i) - you must be invited
+        var channel = msg.Params.Count >= 2 ? msg.Params[1] : "";
+        if (string.IsNullOrEmpty(channel)) return;
+
+        AddSystemMessage("*", $"Cannot join {channel}: {reason}");
+
+        if (reason == "invite-only")
+        {
+            // Track retry count and schedule retry (SITE INVITE may still be processing)
+            var retries = _pendingInviteJoins.GetValueOrDefault(channel, 0);
+            if (retries < 3)
+            {
+                _pendingInviteJoins[channel] = retries + 1;
+                var delaySec = (retries + 1) * 5; // 5s, 10s, 15s
+                AddSystemMessage("*", $"Will retry joining {channel} in {delaySec}s (attempt {retries + 2}/4)...");
+                _ = RetryJoinAfterDelay(channel, delaySec);
+            }
+            else
+            {
+                _pendingInviteJoins.Remove(channel);
+                AddSystemMessage("*", $"Gave up joining {channel} after {retries + 1} attempts — try /join {channel} manually");
+            }
+        }
+    }
+
+    private async Task RetryJoinAfterDelay(string channel, int delaySec)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(delaySec));
+            if (_client == null || !_client.IsConnected) return;
+            if (_channels.ContainsKey(channel)) return; // Already joined
+
+            var configured = _serverConfig.Irc.Channels
+                .FirstOrDefault(c => c.Name.Equals(channel, StringComparison.OrdinalIgnoreCase));
+            await JoinConfiguredChannelAsync(configured ?? new IrcChannelConfig { Name = channel, AutoJoin = true });
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Retry join failed for {Channel}", channel);
         }
     }
 
@@ -286,7 +441,7 @@ public class IrcService : IDisposable
         // DH1080 key exchange
         if (Dh1080.TryParseInit(text, out var initPubKey))
         {
-            HandleDh1080Init(nick, initPubKey);
+            _ = HandleDh1080InitAsync(nick, initPubKey);
             return;
         }
         if (Dh1080.TryParseFinish(text, out var finishPubKey))
@@ -328,6 +483,7 @@ public class IrcService : IDisposable
         if (nick.Equals(_currentNick, StringComparison.OrdinalIgnoreCase))
         {
             EnsureChannel(channel);
+            _pendingInviteJoins.Remove(channel); // Successfully joined, stop retrying
             AddMessage(channel, new IrcMessageItem { Nick = nick, Text = $"{nick} has joined {channel}", Type = IrcMessageType.Join });
         }
         else
@@ -537,66 +693,95 @@ public class IrcService : IDisposable
         }
     }
 
-    private async void HandleNickInUse()
+    private async Task HandleNickInUseAsync()
     {
-        if (_client == null) return;
-        var altNick = _serverConfig.Irc.AltNick;
-        if (!string.IsNullOrEmpty(altNick) && !altNick.Equals(_currentNick, StringComparison.OrdinalIgnoreCase))
+        try
         {
-            _currentNick = altNick;
-            await _client.NickAsync(altNick);
-            AddSystemMessage("*", $"Nick in use, trying {altNick}");
+            if (_client == null) return;
+            var altNick = _serverConfig.Irc.AltNick;
+            if (!string.IsNullOrEmpty(altNick) && !altNick.Equals(_currentNick, StringComparison.OrdinalIgnoreCase))
+            {
+                _currentNick = altNick;
+                await _client.NickAsync(altNick);
+                AddSystemMessage("*", $"Nick in use, trying {altNick}");
+            }
+            else
+            {
+                _currentNick = _serverConfig.Irc.Nick + "_";
+                await _client.NickAsync(_currentNick);
+                AddSystemMessage("*", $"Nick in use, trying {_currentNick}");
+            }
         }
-        else
+        catch (Exception ex)
         {
-            _currentNick = _serverConfig.Irc.Nick + "_";
-            await _client.NickAsync(_currentNick);
-            AddSystemMessage("*", $"Nick in use, trying {_currentNick}");
+            Log.Warning(ex, "Failed to handle nick-in-use");
         }
     }
 
-    private async void AutoJoinChannels()
+    private async Task AutoJoinChannelsAsync()
     {
-        if (_client == null) return;
-
-        // Run SITE INVITE before joining channels
-        var inviteNick = _serverConfig.Irc.InviteNick;
-        if (!string.IsNullOrEmpty(inviteNick) && SiteInviteFunc != null)
+        try
         {
-            try
-            {
-                AddSystemMessage("*", $"Running SITE INVITE {inviteNick}...");
-                var reply = await SiteInviteFunc(inviteNick, CancellationToken.None);
-                AddSystemMessage("*", reply ?? "SITE INVITE completed (no reply)");
-            }
-            catch (Exception ex)
-            {
-                AddSystemMessage("*", $"SITE INVITE failed: {ex.Message}");
-            }
-        }
+            if (_client == null) return;
 
-        foreach (var ch in _serverConfig.Irc.Channels)
-        {
-            // Parse FiSH key from channel key field: [cbc:key] or [ecb:key]
-            string? joinKey = null;
-            if (!string.IsNullOrEmpty(ch.Key))
+            // Run SITE INVITE before joining channels
+            var inviteNick = _serverConfig.Irc.InviteNick;
+            if (!string.IsNullOrEmpty(inviteNick) && SiteInviteFunc != null)
             {
-                var fishMatch = System.Text.RegularExpressions.Regex.Match(ch.Key, @"^\[(cbc|ecb):(.+)\]$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                if (fishMatch.Success)
+                try
                 {
-                    var mode = fishMatch.Groups[1].Value.Equals("cbc", StringComparison.OrdinalIgnoreCase)
-                        ? FishMode.CBC : FishMode.ECB;
-                    _fishKeyStore.SetKey(ch.Name, fishMatch.Groups[2].Value, mode);
+                    AddSystemMessage("*", $"Running SITE INVITE {inviteNick}...");
+                    var reply = await SiteInviteFunc(inviteNick, CancellationToken.None);
+                    AddSystemMessage("*", reply ?? "SITE INVITE completed (no reply)");
+
+                    // Wait a moment for the IRC server to process the invite
+                    // glftpd SITE INVITE is async — the IRC INVITE arrives shortly after
+                    await Task.Delay(2000);
                 }
-                else
+                catch (Exception ex)
                 {
-                    joinKey = ch.Key; // Regular IRC channel key
+                    AddSystemMessage("*", $"SITE INVITE failed: {ex.Message}");
+                    // Still try to join channels — some may not need invite
                 }
             }
 
-            if (ch.AutoJoin)
-                await _client.JoinAsync(ch.Name, joinKey);
+            // Small delay between JOINs to avoid flood protection
+            foreach (var ch in _serverConfig.Irc.Channels)
+            {
+                if (!ch.AutoJoin) continue;
+                await JoinConfiguredChannelAsync(ch);
+                await Task.Delay(500); // Anti-flood delay between joins
+            }
         }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed during auto-join channels for {Server}", _serverConfig.Name);
+            AddSystemMessage("*", $"Auto-join error: {ex.Message}");
+        }
+    }
+
+    private async Task JoinConfiguredChannelAsync(IrcChannelConfig ch)
+    {
+        if (_client == null || !_client.IsConnected) return;
+
+        // Parse FiSH key from channel key field: [cbc:key] or [ecb:key]
+        string? joinKey = null;
+        if (!string.IsNullOrEmpty(ch.Key))
+        {
+            var fishMatch = Regex.Match(ch.Key, @"^\[(cbc|ecb):(.+)\]$", RegexOptions.IgnoreCase);
+            if (fishMatch.Success)
+            {
+                var mode = fishMatch.Groups[1].Value.Equals("cbc", StringComparison.OrdinalIgnoreCase)
+                    ? FishMode.CBC : FishMode.ECB;
+                _fishKeyStore.SetKey(ch.Name, fishMatch.Groups[2].Value, mode);
+            }
+            else
+            {
+                joinKey = ch.Key; // Regular IRC channel key
+            }
+        }
+
+        await _client.JoinAsync(ch.Name, joinKey);
     }
 
     // Public send methods
@@ -669,16 +854,23 @@ public class IrcService : IDisposable
         AddSystemMessage(nick, "DH1080 key exchange initiated");
     }
 
-    private async void HandleDh1080Init(string nick, string theirPubKey)
+    private async Task HandleDh1080InitAsync(string nick, string theirPubKey)
     {
-        if (_client == null) return;
+        try
+        {
+            if (_client == null) return;
 
-        var dh = new Dh1080();
-        var sharedSecret = dh.ComputeSharedSecret(theirPubKey);
-        _fishKeyStore.SetKey(nick, sharedSecret, _serverConfig.Irc.FishMode);
+            var dh = new Dh1080();
+            var sharedSecret = dh.ComputeSharedSecret(theirPubKey);
+            _fishKeyStore.SetKey(nick, sharedSecret, _serverConfig.Irc.FishMode);
 
-        await _client.NoticeAsync(nick, Dh1080.FormatFinish(dh.GetPublicKeyBase64()));
-        AddSystemMessage(nick, "DH1080 key exchange completed (initiated by peer)");
+            await _client.NoticeAsync(nick, Dh1080.FormatFinish(dh.GetPublicKeyBase64()));
+            AddSystemMessage(nick, "DH1080 key exchange completed (initiated by peer)");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "DH1080 init handling failed for {Nick}", nick);
+        }
     }
 
     private void HandleDh1080Finish(string nick, string theirPubKey)
@@ -745,6 +937,7 @@ public class IrcService : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        StopPingTimer();
         _cts?.Cancel();
         _client?.Dispose();
         GC.SuppressFinalize(this);
