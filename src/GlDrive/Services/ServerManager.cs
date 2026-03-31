@@ -144,6 +144,31 @@ public class ServerManager : IDisposable
                 Log.Error(ex, "Failed to mount server {ServerName}", server.Name);
             }
         }
+
+        // Start IRC for all enabled servers, even those whose FTP mount failed
+        await EnsureAllIrcServices();
+    }
+
+    /// <summary>
+    /// Start IRC services for all enabled servers with IRC configured,
+    /// regardless of whether their FTP connection is mounted.
+    /// </summary>
+    private async Task EnsureAllIrcServices()
+    {
+        foreach (var server in _config.Servers.Where(s => s.Enabled &&
+            s.Irc.Enabled && !string.IsNullOrEmpty(s.Irc.Host)))
+        {
+            if (_ircServices.ContainsKey(server.Id)) continue;
+            try
+            {
+                Log.Information("Starting IRC for {ServerName} (independent of FTP)", server.Name);
+                await StartIrcService(server);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to start IRC for {ServerName}", server.Name);
+            }
+        }
     }
 
     public async Task UnmountAllAsync()
@@ -223,6 +248,19 @@ public class ServerManager : IDisposable
                 Log.Information("Server {ServerName} disabled, unmounting", server.Name);
                 await UnmountServerAsync(server.Id);
             }
+            // Also stop IRC for disabled servers
+            if (_ircServices.ContainsKey(server.Id))
+                await StopIrcService(server.Id);
+        }
+
+        // Start IRC for all enabled servers, even those whose FTP mount failed
+        await EnsureAllIrcServices();
+
+        // Stop IRC for servers where it was disabled
+        foreach (var server in _config.Servers.Where(s => s.Enabled && (!s.Irc.Enabled || string.IsNullOrEmpty(s.Irc.Host))))
+        {
+            if (_ircServices.ContainsKey(server.Id))
+                await StopIrcService(server.Id);
         }
 
         // Fire a state change to refresh tray menu
