@@ -364,12 +364,12 @@ public partial class ExtractorWindow : Window
 
                 try
                 {
-                    await Task.Run(() => ExtractArchive(item, outputDir, password, overwriteIdx, ct), ct);
+                    await ExtractArchiveAsync(item, outputDir, password, overwriteIdx, ct);
                     item.Status = "Done";
                     item.Progress = 100;
 
                     if (deleteAfter)
-                        DeleteSourceFiles(item.FilePath);
+                        await Task.Run(() => DeleteSourceFiles(item.FilePath));
                 }
                 catch (OperationCanceledException)
                 {
@@ -395,11 +395,11 @@ public partial class ExtractorWindow : Window
                 }
 
                 completed++;
-                Dispatcher.Invoke(() =>
+                var totalPct = (double)completed / toExtract.Count * 100;
+                Dispatcher.BeginInvoke(() =>
                 {
-                    var pct = (double)completed / toExtract.Count * 100;
-                    TotalProgress.Value = pct;
-                    TotalProgressText.Text = $"{pct:F0}%";
+                    TotalProgress.Value = totalPct;
+                    TotalProgressText.Text = $"{totalPct:F0}%";
                     UpdateStatus();
                 });
             }
@@ -414,6 +414,38 @@ public partial class ExtractorWindow : Window
         }
     }
 
+    /// <summary>
+    /// Extract archive on a dedicated BelowNormal priority thread to avoid UI lag.
+    /// Uses BeginInvoke for progress updates and throttles to max 10 updates/sec.
+    /// </summary>
+    private Task ExtractArchiveAsync(ArchiveItem item, string outputDir, string password, int overwriteMode, CancellationToken ct)
+    {
+        var tcs = new TaskCompletionSource();
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                ExtractArchive(item, outputDir, password, overwriteMode, ct);
+                tcs.SetResult();
+            }
+            catch (OperationCanceledException)
+            {
+                tcs.SetCanceled(ct);
+            }
+            catch (Exception ex)
+            {
+                tcs.SetException(ex);
+            }
+        })
+        {
+            IsBackground = true,
+            Priority = ThreadPriority.BelowNormal,
+            Name = $"Extract-{item.FileName}"
+        };
+        thread.Start();
+        return tcs.Task;
+    }
+
     private void ExtractArchive(ArchiveItem item, string outputDir, string password, int overwriteMode, CancellationToken ct)
     {
         Directory.CreateDirectory(outputDir);
@@ -423,13 +455,15 @@ public partial class ExtractorWindow : Window
             Password = string.IsNullOrEmpty(password) ? null : password
         };
 
+        var lastProgressUpdate = DateTime.MinValue;
+
         // Try archive-based extraction first (supports random access, multi-volume)
         try
         {
             using var archive = ArchiveFactory.OpenArchive(item.FilePath, readerOptions);
 
             var entries = archive.Entries.Where(e => !e.IsDirectory).ToList();
-            Dispatcher.Invoke(() => item.EntryCount = entries.Count);
+            Dispatcher.BeginInvoke(() => item.EntryCount = entries.Count);
 
             var safeDirPath = Path.GetFullPath(outputDir);
             var processed = 0;
@@ -466,18 +500,27 @@ public partial class ExtractorWindow : Window
                 var entryDir = Path.GetDirectoryName(fullPath);
                 if (entryDir != null) Directory.CreateDirectory(entryDir);
 
-                // Extract with buffered write for network drive performance
+                // Extract with buffered write + sequential I/O hint
                 using (var entryStream = entry.OpenEntryStream())
                 using (var outStream = new FileStream(fullPath, FileMode.Create, FileAccess.Write,
-                    FileShare.None, bufferSize: 256 * 1024))
+                    FileShare.None, bufferSize: 256 * 1024, FileOptions.SequentialScan))
                 {
                     entryStream.CopyTo(outStream, 256 * 1024);
                 }
 
                 processed++;
-                var pct = entries.Count > 0 ? (double)processed / entries.Count * 100 : 100;
-                Dispatcher.Invoke(() => item.Progress = pct);
+
+                // Throttle progress updates to max ~10/sec to avoid flooding the UI
+                var now = DateTime.UtcNow;
+                if ((now - lastProgressUpdate).TotalMilliseconds >= 100)
+                {
+                    lastProgressUpdate = now;
+                    var pct = entries.Count > 0 ? (double)processed / entries.Count * 100 : 100;
+                    Dispatcher.BeginInvoke(() => item.Progress = pct);
+                }
             }
+
+            Dispatcher.BeginInvoke(() => item.Progress = 100);
         }
         catch (InvalidOperationException)
         {
@@ -493,6 +536,7 @@ public partial class ExtractorWindow : Window
     {
         var safeDirPath = Path.GetFullPath(outputDir);
         var processed = 0;
+        var lastProgressUpdate = DateTime.MinValue;
 
         using var reader = ReaderFactory.OpenReader(stream, options);
         while (reader.MoveToNextEntry())
@@ -521,18 +565,23 @@ public partial class ExtractorWindow : Window
 
             using var entryStream = reader.OpenEntryStream();
             using var outStream = new FileStream(fullPath, FileMode.Create, FileAccess.Write,
-                FileShare.None, bufferSize: 256 * 1024);
+                FileShare.None, bufferSize: 256 * 1024, FileOptions.SequentialScan);
             entryStream.CopyTo(outStream, 256 * 1024);
 
             processed++;
-            Dispatcher.Invoke(() =>
+            var now = DateTime.UtcNow;
+            if ((now - lastProgressUpdate).TotalMilliseconds >= 100)
             {
-                item.EntryCount = processed;
-                item.Progress = -1; // Indeterminate for streaming
-            });
+                lastProgressUpdate = now;
+                Dispatcher.BeginInvoke(() =>
+                {
+                    item.EntryCount = processed;
+                    item.Progress = -1; // Indeterminate for streaming
+                });
+            }
         }
 
-        Dispatcher.Invoke(() => item.Progress = 100);
+        Dispatcher.BeginInvoke(() => item.Progress = 100);
     }
 
     private static string GetUniqueFileName(string path)
@@ -885,12 +934,12 @@ public partial class ExtractorWindow : Window
 
         try
         {
-            await Task.Run(() => ExtractArchive(item, outputDir, password, overwriteIdx, CancellationToken.None));
+            await ExtractArchiveAsync(item, outputDir, password, overwriteIdx, CancellationToken.None);
             item.Status = "Done";
             item.Progress = 100;
 
             if (deleteAfter)
-                DeleteSourceFiles(item.FilePath);
+                await Task.Run(() => DeleteSourceFiles(item.FilePath));
         }
         catch (Exception ex)
         {
