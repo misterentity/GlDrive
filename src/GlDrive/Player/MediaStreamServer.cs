@@ -152,16 +152,27 @@ public class MediaStreamServer : IDisposable
         var server = _serverManager.GetServer(serverId);
         if (server?.Pool == null || !server.Pool.IsConnected)
         {
+            Log.Warning("Stream request for {Path}: server {Id} not connected", remotePath, serverId);
             ctx.Response.StatusCode = 503;
             ctx.Response.Close();
             return;
         }
 
-        // Get file size
+        // Get file size with timeout to avoid hanging
         long fileSize;
-        await using (var sizeConn = await server.Pool.Borrow(_cts.Token))
+        using var sizeCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+        sizeCts.CancelAfter(TimeSpan.FromSeconds(10));
+        try
         {
-            fileSize = await sizeConn.Client.GetFileSize(remotePath, -1, _cts.Token);
+            await using var sizeConn = await server.Pool.Borrow(sizeCts.Token);
+            fileSize = await sizeConn.Client.GetFileSize(remotePath, -1, sizeCts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            Log.Warning("Stream request timed out getting file size for {Path}", remotePath);
+            ctx.Response.StatusCode = 504;
+            ctx.Response.Close();
+            return;
         }
 
         Log.Debug("Streaming {Path} (size={Size}) from server {Server}", remotePath, fileSize, serverId);
@@ -206,7 +217,11 @@ public class MediaStreamServer : IDisposable
 
         try
         {
-            await using var conn = await server.Pool.Borrow(_cts.Token);
+            using var streamCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+            streamCts.CancelAfter(TimeSpan.FromSeconds(15)); // Timeout for connection borrow
+            await using var conn = await server.Pool.Borrow(streamCts.Token);
+            // Reset timeout — streaming can take as long as needed
+            streamCts.CancelAfter(Timeout.InfiniteTimeSpan);
             if (server.Pool.UseCpsv)
                 await StreamCpsv(conn.Client, remotePath, offset, ctx.Response.OutputStream, _cts.Token, saveStream);
             else
