@@ -211,13 +211,13 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
         foreach (var (serverId, ircService) in _serverManager.GetIrcServices())
             SubscribeToIrcService(ircService);
 
-        // Subscribe when new IRC services start
+        // Subscribe on ANY state change, not just Connected — so we see errors, reconnecting, etc.
         _ircStateHandler = (serverId, serverName, state) =>
         {
             Application.Current?.Dispatcher.Invoke(() =>
             {
                 var irc = _serverManager.GetIrcService(serverId);
-                if (irc != null && state == IrcServiceState.Connected)
+                if (irc != null)
                     SubscribeToIrcService(irc);
 
                 UpdateStatus();
@@ -230,6 +230,9 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
 
     private void SubscribeToIrcService(IrcService irc)
     {
+        // Always ensure the server window exists so users can see connection status/errors
+        EnsureChannelVm(irc.ServerId, irc.ServerName, "*");
+
         if (!_subscribedServices.Add(irc.ServerId)) return;
 
         Action<string, IrcMessageItem> msgHandler = (target, item) =>
@@ -251,7 +254,6 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
         // (Dashboard opened after IRC was up)
         if (irc.State == IrcServiceState.Connected)
         {
-            EnsureChannelVm(irc.ServerId, irc.ServerName, "*");
             foreach (var (name, ch) in irc.Channels)
             {
                 var vm = EnsureChannelVm(irc.ServerId, irc.ServerName, name);
@@ -499,14 +501,35 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
 
         var connected = services.Values.Count(s => s.State == IrcServiceState.Connected);
         var total = services.Count;
-
         IsConnected = connected > 0;
-        StatusText = connected switch
+
+        if (total == 1)
         {
-            0 => total == 1 ? "IRC disconnected" : "IRC: 0 connected",
-            _ when connected == total && total == 1 => "IRC connected",
-            _ => $"IRC: {connected}/{total} connected"
-        };
+            var svc = services.Values.First();
+            StatusText = svc.State switch
+            {
+                IrcServiceState.Connected => $"IRC connected ({svc.ServerName})",
+                IrcServiceState.Connecting => $"IRC connecting to {svc.ServerName}...",
+                IrcServiceState.Reconnecting => $"IRC reconnecting to {svc.ServerName}...",
+                _ => $"IRC disconnected ({svc.ServerName})"
+            };
+        }
+        else
+        {
+            // Show per-server breakdown
+            var parts = new List<string>();
+            foreach (var svc in services.Values.OrderBy(s => s.ServerName))
+            {
+                var icon = svc.State switch
+                {
+                    IrcServiceState.Connected => "+",
+                    IrcServiceState.Connecting or IrcServiceState.Reconnecting => "~",
+                    _ => "-"
+                };
+                parts.Add($"{icon}{svc.ServerName}");
+            }
+            StatusText = $"IRC: {connected}/{total} connected  [{string.Join("  ", parts)}]";
+        }
     }
 
     // Tab-completion state
