@@ -27,7 +27,7 @@
                     </StackPanel>
                     <DataGrid x:Name="ServerGrid"
                               AutoGenerateColumns="False" IsReadOnly="True"
-                              SelectionMode="Single" GridLinesVisibility="Horizontal"
+                              SelectionMode="Extended" GridLinesVisibility="Horizontal"
                               HeadersVisibility="Column" CanUserAddRows="False">
                         <DataGrid.Columns>
                             <DataGridCheckBoxColumn Header="Enabled" Binding="{Binding Enabled}" Width="60"/>
