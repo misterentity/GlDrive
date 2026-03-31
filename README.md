@@ -20,7 +20,8 @@ Built with WinFsp, FluentFTP, GnuTLS, and .NET 10.
 - **Download resume** — interrupted downloads resume from where they left off
 - **Auto-retry** — failed downloads retry automatically with exponential backoff (configurable max retries)
 - **Speed limiting** — global and per-server bandwidth limits
-- **Auto-extraction** — RAR archives are automatically extracted after download with SFV verification
+- **Auto-extraction** — RAR archives are automatically extracted after download with SFV verification, then archive files deleted
+- **Low-priority extraction** — extraction runs on dedicated below-normal priority threads so the UI stays responsive
 - **Category download paths** — route downloads from specific categories to custom local folders
 - **Download scheduling** — restrict downloads to specific hours (e.g., overnight only)
 - **Download history** — completed and failed downloads are recorded for review
@@ -28,6 +29,7 @@ Built with WinFsp, FluentFTP, GnuTLS, and .NET 10.
 
 ### Notifications & Wishlist
 - **New release notifications** — polls categories with configurable exclusions, shows Windows toast notifications with debounce batching
+- **Right-click actions** — download, race/spread, search on servers, or copy release name from the notifications context menu
 - **Wishlist & auto-download** — track TV shows (TVMaze/TMDB) and movies (OMDB/TMDB), auto-download matching releases from any server with quality profiles (Any/SD/720p/1080p/2160p)
 - **Rich media dashboard** — posters, ratings, genres, and plot summaries for wishlist items
 - **Wishlist import/export** — share wishlists as JSON files
@@ -37,7 +39,8 @@ Built with WinFsp, FluentFTP, GnuTLS, and .NET 10.
 ### IRC Client
 - **Built-in IRC client** — connect to IRC servers with TLS support directly from the Dashboard
 - **FiSH encryption** — Blowfish ECB/CBC message encryption with DH1080 key exchange
-- **SITE INVITE integration** — automatically runs SITE INVITE via the FTP connection before joining channels
+- **SITE INVITE integration** — automatically runs SITE INVITE via FTP, waits for invite, then joins channels with retry on invite-only errors
+- **Stable connections** — TCP keepalive, periodic PING liveness detection, smart reconnect with exponential backoff that avoids BNC rate limiting
 - **Channel management** — join, part, private messages, nick list with mode prefixes (@/+/%), Tab nick-completion
 - **Slash commands** — /join /part /msg /me /topic /notice /key /keyx /quit /help and raw IRC passthrough
 - **Per-server IRC** — each server has its own IRC connection, channels, and FiSH key store
@@ -61,17 +64,34 @@ Built with WinFsp, FluentFTP, GnuTLS, and .NET 10.
 - **Keyboard shortcuts** — Ctrl+R to start race, Escape to stop
 - **Section auto-detection** — derives section names from existing search paths
 
+### PreDB
+- **Live scene database** — real-time feed from predb.net with auto-refresh, showing latest scene releases as they're pre'd
+- **Section filtering** — filter by TV, Movies, Music, Games, Apps, Sports, Anime, Books, or XXX
+- **Relative timestamps** — "2m ago", "1h 15m ago" instead of absolute dates, updated every refresh
+- **Nuke detection** — nuked releases shown with strikethrough and red text, hover for nuke reason
+- **Right-click actions** — search release on connected servers, start race/spread, or copy release name
+- **Search** — full-text search across the entire predb.net database
+
 ### Search
 - **Cross-server search** — search all connected servers in parallel from the Dashboard with server-tagged results
 - **Per-category parallel search** — searches all categories within each server concurrently, throttled by the connection pool
+
+### Archive Extractor
+- **Standalone extractor** — drag-and-drop archive extraction tool supporting RAR, ZIP, 7z, TAR, GZ, BZ2, XZ, ISO, CAB
+- **Multi-volume RAR** — automatically handles old-style (.rar/.r00/.r01) and modern (.part01.rar/.part02.rar) multi-volume sets
+- **Watch folders** — monitor directories for new archives and auto-extract on arrival with file-readiness detection
+- **Folder cleaner** — scan a root directory (e.g. Movies/) for release folders with leftover archives alongside extracted media, review reclaimable space, and clean up in bulk
+- **Persistent settings** — output mode, overwrite behavior, watch folders, and delete-after-extract preferences saved between sessions
 
 ### UI & System
 - **Dark/Light theme** — switchable theme with live preview
 - **System tray** — per-server status and controls (connect/disconnect, open drive, refresh cache)
 - **Setup wizard** — 5-step first-run wizard walks through server configuration
+- **Live settings** — new servers are mounted, IRC started, and tray menu refreshed immediately on save (no restart needed)
 - **Auto-connect** — optionally connect each server on Windows startup
 - **Auto-update** — checks GitHub releases daily, SHA-256 integrity verification, in-app update with UAC elevation
 - **Embedded web views** — World Monitor web client in Dashboard tab
+- **Site import** — import servers from FTPRush (XML and JSON), FlashFXP (XML and DAT), including passwords, skiplists, TLS settings, and proxy config
 
 ### Security
 - **TOFU certificate pinning** — trust-on-first-use with SHA-256 fingerprint storage
@@ -179,7 +199,7 @@ All settings are stored locally on your machine:
 | Downloads (per server) | `%AppData%\GlDrive\downloads-{serverId}.json` |
 | Download history | `%AppData%\GlDrive\download-history.json` |
 | Race history | `%AppData%\GlDrive\race-history.json` |
-| Watch folders | `%AppData%\GlDrive\watch-folders.json` |
+| Extractor settings | `%AppData%\GlDrive\extractor-settings.json` |
 | Wishlist | `%AppData%\GlDrive\wishlist.json` |
 | Trusted certs | `%AppData%\GlDrive\trusted_certs.json` |
 | FiSH keys (per server) | `%AppData%\GlDrive\fish-keys-{serverId}.json` (DPAPI encrypted) |
@@ -232,7 +252,9 @@ App.xaml.cs (startup)
   +-- WishlistStore (global)
   +-- DownloadHistoryStore (global)
   +-- UpdateChecker (periodic GitHub release polling, SHA-256 verified)
-  +-- DashboardWindow (search / downloads / wishlist / IRC / spread / browse / notifications)
+  +-- PreDbClient (predb.net API, section filtering, nuke detection)
+  +-- DashboardWindow (search / downloads / wishlist / IRC / spread / browse / notifications / PreDB)
+  +-- ExtractorWindow (standalone archive extraction + folder cleaner)
   +-- TrayIcon (H.NotifyIcon, dynamic per-server menu)
 ```
 
@@ -290,7 +312,9 @@ In Settings > Downloads, you can map specific categories to custom local folders
 
 ### IRC
 
-Each server can have an associated IRC connection configured in the server edit dialog. The IRC client supports TLS, auto-reconnect with exponential backoff, and SITE INVITE integration (borrows an FTP pool connection to run `SITE INVITE {nick}` before auto-joining channels).
+Each server can have an associated IRC connection configured in the server edit dialog. The IRC client supports TLS, TCP keepalive, and periodic PING liveness detection to catch dead connections fast. Auto-reconnect uses exponential backoff that only resets after 60+ seconds of stable connection, preventing rapid reconnect loops that trigger BNC rate limiting.
+
+SITE INVITE integration borrows an FTP pool connection to run `SITE INVITE {nick}`, waits for the IRC INVITE to arrive, then joins channels. If a channel returns 473 (invite-only), the client retries up to 3 times with increasing delays. JOINs are spaced 500ms apart to avoid flood protection.
 
 FiSH encryption is supported in both ECB and CBC modes. DH1080 key exchange can be initiated from the nick context menu. Keys are stored per-server in DPAPI-encrypted files.
 
