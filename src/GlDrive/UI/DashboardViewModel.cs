@@ -531,7 +531,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                 if (server != null)
                 {
                     SubscribeToServer(server);
-                    Application.Current?.Dispatcher.Invoke(RefreshDownloads);
+                    Application.Current?.Dispatcher.BeginInvoke(RefreshDownloads);
                 }
             }
         };
@@ -540,7 +540,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         // Live notifications — add to collection when new releases arrive
         _newReleaseHandler = (serverId, serverName, category, release, remotePath) =>
         {
-            Application.Current?.Dispatcher.Invoke(() =>
+            Application.Current?.Dispatcher.BeginInvoke(() =>
             {
                 var vm = new NotificationItemVm
                 {
@@ -666,7 +666,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         SearchResults.Clear();
 
         var progress = new Progress<string>(msg =>
-            Application.Current?.Dispatcher.Invoke(() => SearchStatus = msg));
+            Application.Current?.Dispatcher.BeginInvoke(() => SearchStatus = msg));
 
         try
         {
@@ -906,8 +906,8 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                     var webTask = tvMaze.GetWebSchedule(date);
                     await Task.WhenAll(broadcastTask, webTask);
 
-                    var allEpisodes = broadcastTask.Result
-                        .Concat(webTask.Result)
+                    var allEpisodes = (await broadcastTask)
+                        .Concat(await webTask)
                         .Where(e => e.Show != null);
 
                     foreach (var ep in allEpisodes)
@@ -1314,7 +1314,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             item.MetadataLoaded = true;
 
             if (_selectedNotificationItem == item)
-                Application.Current?.Dispatcher.Invoke(NotifyNotificationDetailChanged);
+                Application.Current?.Dispatcher.BeginInvoke(NotifyNotificationDetailChanged);
         }
         catch (Exception ex)
         {

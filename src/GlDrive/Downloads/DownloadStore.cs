@@ -8,6 +8,8 @@ namespace GlDrive.Downloads;
 public class DownloadStore
 {
     private readonly string _filePath;
+    private volatile bool _savePending;
+    private readonly Timer _debounceTimer;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -22,6 +24,8 @@ public class DownloadStore
     public DownloadStore(string serverId)
     {
         _filePath = Path.Combine(ConfigManager.AppDataPath, $"downloads-{serverId}.json");
+        // Debounced save: coalesces rapid updates into a single disk write
+        _debounceTimer = new Timer(_ => FlushSave(), null, Timeout.Infinite, Timeout.Infinite);
     }
 
     public void Load()
@@ -50,8 +54,24 @@ public class DownloadStore
         }
     }
 
+    /// <summary>Schedule a debounced save (writes to disk after 2s of inactivity).</summary>
+    private void ScheduleSave()
+    {
+        _savePending = true;
+        _debounceTimer.Change(2000, Timeout.Infinite);
+    }
+
+    /// <summary>Immediate save — used for critical state changes (add, remove, complete).</summary>
     public void Save()
     {
+        _savePending = false;
+        _debounceTimer.Change(Timeout.Infinite, Timeout.Infinite);
+        FlushSave();
+    }
+
+    private void FlushSave()
+    {
+        _savePending = false;
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
@@ -69,7 +89,7 @@ public class DownloadStore
     public void Add(DownloadItem item)
     {
         _items.Add(item);
-        Save();
+        Save(); // Immediate — new item must persist
     }
 
     public void Update(DownloadItem item)
@@ -78,14 +98,18 @@ public class DownloadStore
         if (idx >= 0)
         {
             _items[idx] = item;
-            Save();
+            // Debounce progress updates; immediate save for terminal states
+            if (item.Status is DownloadStatus.Completed or DownloadStatus.Failed or DownloadStatus.Cancelled)
+                Save();
+            else
+                ScheduleSave();
         }
     }
 
     public void Remove(string id)
     {
         _items.RemoveAll(i => i.Id == id);
-        Save();
+        Save(); // Immediate — deletion must persist
     }
 
     public DownloadItem? GetById(string id) => _items.FirstOrDefault(i => i.Id == id);
@@ -94,5 +118,12 @@ public class DownloadStore
     {
         _items.RemoveAll(i => i.Status == DownloadStatus.Completed);
         Save();
+    }
+
+    /// <summary>Flush any pending save before shutdown.</summary>
+    public void Flush()
+    {
+        if (_savePending) FlushSave();
+        _debounceTimer.Dispose();
     }
 }

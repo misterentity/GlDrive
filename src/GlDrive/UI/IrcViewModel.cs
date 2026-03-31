@@ -214,7 +214,7 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
         // Subscribe on ANY state change, not just Connected — so we see errors, reconnecting, etc.
         _ircStateHandler = (serverId, serverName, state) =>
         {
-            Application.Current?.Dispatcher.Invoke(() =>
+            Application.Current?.Dispatcher.BeginInvoke(() =>
             {
                 var irc = _serverManager.GetIrcService(serverId);
                 if (irc != null)
