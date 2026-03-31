@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
 using GlDrive.Config;
@@ -25,6 +26,7 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
     public ObservableCollection<SpreadFileVm> SpreadFileTransfers { get; } = new();
     public ObservableCollection<SpreadScoreVm> SpreadScoreboard { get; } = new();
     public ObservableCollection<string> SpreadSections { get; } = new();
+    public ObservableCollection<AutoRaceLogVm> AutoRaceLog { get; } = new();
 
     public string SelectedSection
     {
@@ -65,6 +67,13 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         OpenSettingsCommand = new RelayCommand(() => _openSettingsAction?.Invoke());
 
         RefreshSections();
+
+        // Subscribe to auto-race detection events from both notification polling and IRC announces
+        _serverManager.NewReleaseDetected += (serverId, serverName, category, release, remotePath) =>
+        {
+            Application.Current?.Dispatcher.BeginInvoke(() =>
+                AddAutoRaceLog(category, release, serverName, "Detected"));
+        };
 
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _refreshTimer.Tick += (_, _) => SafeRefresh();
@@ -283,6 +292,29 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
     public void Activate() => _refreshTimer.Start();
     public void Deactivate() => _refreshTimer.Stop();
 
+    public void WireAutoRaceEvents()
+    {
+        var spread = _serverManager.Spread;
+        if (spread == null) return;
+        spread.AutoRaceAttempted += (section, release, result) =>
+            Application.Current?.Dispatcher.BeginInvoke(() =>
+                AddAutoRaceLog(section, release, "", result));
+    }
+
+    private void AddAutoRaceLog(string section, string release, string source, string result)
+    {
+        AutoRaceLog.Insert(0, new AutoRaceLogVm
+        {
+            Time = DateTime.Now.ToString("HH:mm:ss"),
+            Section = section,
+            Release = release,
+            Source = source,
+            Result = result
+        });
+        while (AutoRaceLog.Count > 200)
+            AutoRaceLog.RemoveAt(AutoRaceLog.Count - 1);
+    }
+
     public event PropertyChangedEventHandler? PropertyChanged;
     protected void OnPropertyChanged([CallerMemberName] string? name = null) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
@@ -292,4 +324,13 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         _refreshTimer.Stop();
         GC.SuppressFinalize(this);
     }
+}
+
+public class AutoRaceLogVm
+{
+    public string Time { get; set; } = "";
+    public string Section { get; set; } = "";
+    public string Release { get; set; } = "";
+    public string Source { get; set; } = "";
+    public string Result { get; set; } = "";
 }
