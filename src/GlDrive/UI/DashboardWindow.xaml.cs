@@ -175,13 +175,13 @@ public partial class DashboardWindow : Window
         if (header == "Discord" && !_discordLoaded)
         {
             _discordLoaded = true;
-            _ = DiscordHost.InitializeAsync("https://discord.com/app");
+            _ = DiscordHost.InitializeAsync("https://discord.com/app", allowCrossOrigin: true);
         }
 
         if (header == "Streems" && !_streemsLoaded)
         {
             _streemsLoaded = true;
-            _ = StreemsHost.InitializeAsync("https://streems.redactor.site/");
+            _ = StreemsHost.InitializeAsync("https://streems.redactor.site/", allowCrossOrigin: true);
         }
     }
 
