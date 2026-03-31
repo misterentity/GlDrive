@@ -1458,36 +1458,33 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private void RaceNotification()
     {
         if (SelectedNotificationItem == null) return;
+        RaceByName(SelectedNotificationItem.Category, SelectedNotificationItem.ReleaseName);
+    }
 
-        var n = SelectedNotificationItem;
-        var spread = _serverManager.Spread;
-        if (spread == null) return;
+    /// <summary>
+    /// Normalize a section name for fuzzy matching: lowercase, strip dashes/underscores/spaces.
+    /// "TV-WEB-HD-X264" → "tvwebhdx264", "TV_HD" → "tvhd", "tv-hd" → "tvhd"
+    /// </summary>
+    private static string NormalizeSection(string s) =>
+        s.ToLowerInvariant().Replace("-", "").Replace("_", "").Replace(" ", "");
 
-        // Determine section from category
-        var section = n.Category;
+    /// <summary>Find the best matching configured section key for a given hint (category name).</summary>
+    private string? FindMatchingSection(string hint, IEnumerable<string> configuredSections)
+    {
+        var normHint = NormalizeSection(hint);
 
-        // Find all servers with this section configured
-        var serverIds = _config.Servers
-            .Where(s => s.Enabled && s.SpreadSite.Sections.ContainsKey(section))
-            .Select(s => s.Id)
-            .Where(id => spread.GetConnectedServerIds().Contains(id))
-            .ToList();
+        // Exact match first
+        var exact = configuredSections.FirstOrDefault(k => k.Equals(hint, StringComparison.OrdinalIgnoreCase));
+        if (exact != null) return exact;
 
-        if (serverIds.Count < 2)
-        {
-            SearchStatus = $"Cannot race: need 2+ servers with section \"{section}\" configured";
-            return;
-        }
+        // Normalized match (tv-hd == TV_HD)
+        var normalized = configuredSections.FirstOrDefault(k => NormalizeSection(k) == normHint);
+        if (normalized != null) return normalized;
 
-        try
-        {
-            spread.StartRace(section, n.ReleaseName, serverIds, Spread.SpreadMode.Race);
-            SearchStatus = $"Race started: {n.ReleaseName} across {serverIds.Count} servers";
-        }
-        catch (Exception ex)
-        {
-            SearchStatus = $"Race failed: {ex.Message}";
-        }
+        // Substring match (TV-WEB-HD-X264 contains tvhd)
+        var substring = configuredSections.FirstOrDefault(k =>
+            normHint.Contains(NormalizeSection(k)) || NormalizeSection(k).Contains(normHint));
+        return substring;
     }
 
     /// <summary>Start a race for a release by name, auto-detecting section from configured servers.</summary>
@@ -1500,37 +1497,32 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             return;
         }
 
-        // Try exact section match first, then try matching by predb section → configured section name
         var connectedIds = spread.GetConnectedServerIds();
-        var serverIds = _config.Servers
-            .Where(s => s.Enabled && connectedIds.Contains(s.Id))
-            .Where(s => s.SpreadSite.Sections.Keys
-                .Any(k => k.Equals(sectionHint, StringComparison.OrdinalIgnoreCase) ||
-                          sectionHint.Contains(k, StringComparison.OrdinalIgnoreCase)))
-            .Select(s => s.Id)
-            .ToList();
 
-        // Determine which section key to use
-        var section = sectionHint;
-        if (serverIds.Count >= 2)
+        // Find servers that have a section matching the hint
+        var matched = new List<(string serverId, string sectionKey)>();
+        foreach (var server in _config.Servers.Where(s => s.Enabled && connectedIds.Contains(s.Id)))
         {
-            var firstServer = _config.Servers.First(s => s.Id == serverIds[0]);
-            section = firstServer.SpreadSite.Sections.Keys
-                .FirstOrDefault(k => k.Equals(sectionHint, StringComparison.OrdinalIgnoreCase) ||
-                                     sectionHint.Contains(k, StringComparison.OrdinalIgnoreCase))
-                ?? sectionHint;
+            var match = FindMatchingSection(sectionHint, server.SpreadSite.Sections.Keys);
+            if (match != null)
+                matched.Add((server.Id, match));
         }
 
-        if (serverIds.Count < 2)
+        if (matched.Count < 2)
         {
-            SearchStatus = $"Cannot race: need 2+ servers with a matching section for \"{sectionHint}\"";
+            SearchStatus = $"Cannot race: need 2+ connected servers matching \"{sectionHint}\" (found {matched.Count})";
             return;
         }
+
+        // Use the section key from the first matched server
+        var section = matched[0].sectionKey;
+        var serverIds = matched.Select(m => m.serverId).ToList();
 
         try
         {
             spread.StartRace(section, releaseName, serverIds, Spread.SpreadMode.Race);
-            SearchStatus = $"Race started: {releaseName} across {serverIds.Count} servers";
+            var names = serverIds.Select(id => _config.Servers.First(s => s.Id == id).Name);
+            SearchStatus = $"Race started: {releaseName} [{section}] on {string.Join(", ", names)}";
         }
         catch (Exception ex)
         {
