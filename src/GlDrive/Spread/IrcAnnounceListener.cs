@@ -91,8 +91,16 @@ public class IrcAnnounceListener : IDisposable
                         _recentAnnounces.Clear();
                 }
 
-                Log.Information("IRC announce detected: [{Section}] {Release} (from {Channel} on {Server})",
-                    section, release, target, _serverId);
+                // Basic validation: release names shouldn't be common words
+                if (release.Length < 5 || release is "in" or "the" or "from" or "to" or "by" or "at")
+                {
+                    Log.Debug("IRC announce skipped (invalid release name): [{Section}] {Release} from msg: {Msg}",
+                        section, release, message.Text);
+                    continue;
+                }
+
+                Log.Information("IRC announce detected: [{Section}] {Release} (from {Channel}, msg: {Msg})",
+                    section, release, target, message.Text);
 
                 ReleaseAnnounced?.Invoke(_serverId, section, release, rule.AutoRace);
             }
