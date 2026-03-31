@@ -110,62 +110,130 @@ public class SpreadJob : IDisposable
 
         try
         {
-            // Auto-discover the release path on each server:
-            // 1. Try the exact section name (case-insensitive)
-            // 2. Try ALL section paths — the release might be under a differently-named section
+            // Phase 1: Discover which servers already have the release
             var sitePaths = new Dictionary<string, string>();
+            var sourceServers = new HashSet<string>();
+
             foreach (var (serverId, config) in _serverConfigs)
             {
-                string? foundPath = null;
+                if (!_pools.TryGetValue(serverId, out var pool)) continue;
 
-                // First: try exact section match (case-insensitive)
+                // Try exact section match first
                 var exactMatch = config.SpreadSite.Sections
                     .FirstOrDefault(kvp => kvp.Key.Equals(Section, StringComparison.OrdinalIgnoreCase));
-                if (!string.IsNullOrEmpty(exactMatch.Value))
-                    foundPath = exactMatch.Value.TrimEnd('/') + "/" + ReleaseName;
 
-                // If no exact match, probe ALL section paths on this server via FTP
-                if (foundPath == null && _pools.TryGetValue(serverId, out var pool))
+                if (!string.IsNullOrEmpty(exactMatch.Value))
                 {
-                    foreach (var (sectionName, sectionPath) in config.SpreadSite.Sections)
+                    var path = exactMatch.Value.TrimEnd('/') + "/" + ReleaseName;
+                    try
+                    {
+                        await using var conn = await pool.Borrow(ct);
+                        if (await conn.Client.DirectoryExists(path, ct))
+                        {
+                            sitePaths[serverId] = path;
+                            sourceServers.Add(serverId);
+                            Log.Information("Spread: {Server} HAS release at {Path}", config.Name, path);
+                            continue;
+                        }
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch { }
+                }
+
+                // Probe all section paths
+                foreach (var (sectionName, sectionPath) in config.SpreadSite.Sections)
+                {
+                    try
+                    {
+                        var probePath = sectionPath.TrimEnd('/') + "/" + ReleaseName;
+                        await using var conn = await pool.Borrow(ct);
+                        if (await conn.Client.DirectoryExists(probePath, ct))
+                        {
+                            sitePaths[serverId] = probePath;
+                            sourceServers.Add(serverId);
+                            Log.Information("Spread: {Server} HAS release at [{Section}] {Path}",
+                                config.Name, sectionName, probePath);
+                            break;
+                        }
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch { }
+                }
+            }
+
+            if (sourceServers.Count == 0)
+            {
+                SetFailed($"Release not found on any server");
+                return;
+            }
+
+            // Phase 2: For servers that DON'T have the release, create the destination path
+            // using the section mapping (spread TO them)
+            foreach (var (serverId, config) in _serverConfigs)
+            {
+                if (sitePaths.ContainsKey(serverId)) continue; // Already has it
+                if (config.SpreadSite.DownloadOnly) continue; // Can't upload to download-only
+
+                // Find the best section path on this server
+                var sectionMatch = config.SpreadSite.Sections
+                    .FirstOrDefault(kvp => kvp.Key.Equals(Section, StringComparison.OrdinalIgnoreCase));
+
+                // If no exact match, try fuzzy
+                if (string.IsNullOrEmpty(sectionMatch.Value))
+                {
+                    var normSection = Section.ToLowerInvariant().Replace("-", "").Replace("_", "");
+                    sectionMatch = config.SpreadSite.Sections
+                        .FirstOrDefault(kvp => kvp.Key.ToLowerInvariant().Replace("-", "").Replace("_", "") == normSection);
+                }
+
+                // Last resort: try substring match
+                if (string.IsNullOrEmpty(sectionMatch.Value))
+                {
+                    var normSection = Section.ToLowerInvariant().Replace("-", "").Replace("_", "");
+                    sectionMatch = config.SpreadSite.Sections
+                        .FirstOrDefault(kvp =>
+                        {
+                            var normKey = kvp.Key.ToLowerInvariant().Replace("-", "").Replace("_", "");
+                            return normKey.Contains(normSection) || normSection.Contains(normKey);
+                        });
+                }
+
+                if (!string.IsNullOrEmpty(sectionMatch.Value))
+                {
+                    var destPath = sectionMatch.Value.TrimEnd('/') + "/" + ReleaseName;
+                    sitePaths[serverId] = destPath;
+                    Log.Information("Spread: {Server} is DESTINATION at [{Section}] {Path}",
+                        config.Name, sectionMatch.Key, destPath);
+
+                    // Create the directory on the destination server
+                    if (_pools.TryGetValue(serverId, out var pool))
                     {
                         try
                         {
-                            var probePath = sectionPath.TrimEnd('/') + "/" + ReleaseName;
                             await using var conn = await pool.Borrow(ct);
-                            var exists = await conn.Client.DirectoryExists(probePath, ct);
-                            if (exists)
-                            {
-                                foundPath = probePath;
-                                Log.Information("Spread: auto-discovered {Release} on {Server} at [{Section}] {Path}",
-                                    ReleaseName, config.Name, sectionName, probePath);
-                                break;
-                            }
+                            await conn.Client.CreateDirectory(destPath, true, ct);
+                            Log.Information("Spread: created {Path} on {Server}", destPath, config.Name);
                         }
-                        catch (OperationCanceledException) { throw; }
-                        catch { } // FTP error probing this path — try next section
+                        catch (Exception ex)
+                        {
+                            Log.Warning(ex, "Spread: failed to create {Path} on {Server}", destPath, config.Name);
+                        }
                     }
-                }
-
-                if (foundPath != null)
-                {
-                    sitePaths[serverId] = foundPath;
-                    Log.Information("Spread: {Server} → {Path}", config.Name, foundPath);
                 }
                 else
                 {
-                    Log.Debug("Spread: {Server} — release not found in any section", config.Name);
+                    Log.Debug("Spread: {Server} has no matching section for [{Section}]", config.Name, Section);
                 }
             }
 
             if (sitePaths.Count < 2)
             {
-                var serverNames = string.Join(", ", _serverConfigs.Values.Select(c => c.Name));
-                SetFailed($"Release found on {sitePaths.Count} server(s) — need 2+ (checked: {serverNames})");
+                SetFailed($"Need 2+ servers — found release on {sourceServers.Count}, " +
+                    $"no destination servers have a matching section for [{Section}]");
                 return;
             }
-            Log.Information("Spread race starting: {Release} [{Section}] on {Count} servers",
-                ReleaseName, Section, sitePaths.Count);
+            Log.Information("Spread starting: {Release} [{Section}] — {Sources} source(s), {Total} total servers",
+                ReleaseName, Section, sourceServers.Count, sitePaths.Count);
 
             using var hardTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             hardTimeout.CancelAfter(TimeSpan.FromSeconds(_spreadConfig.HardTimeoutSeconds));
