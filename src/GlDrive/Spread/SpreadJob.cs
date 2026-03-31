@@ -73,11 +73,15 @@ public class SpreadJob : IDisposable
     public event Action<SpreadJob>? Completed;
     public event Action<SpreadJob, string>? Error;
 
+    private readonly string? _knownSourceServerId;
+    private readonly string? _knownSourcePath;
+
     public SpreadJob(string section, string releaseName, SpreadMode mode,
         SpreadConfig spreadConfig,
         Dictionary<string, FtpConnectionPool> pools,
         Dictionary<string, ServerConfig> serverConfigs,
-        SpeedTracker speedTracker, SkiplistEvaluator skiplist)
+        SpeedTracker speedTracker, SkiplistEvaluator skiplist,
+        string? knownSourceServerId = null, string? knownSourcePath = null)
     {
         Section = section;
         ReleaseName = releaseName;
@@ -87,6 +91,8 @@ public class SpreadJob : IDisposable
         _serverConfigs = serverConfigs;
         _speedTracker = speedTracker;
         _skiplist = skiplist;
+        _knownSourceServerId = knownSourceServerId;
+        _knownSourcePath = knownSourcePath;
 
         foreach (var (serverId, pool) in pools)
         {
@@ -114,45 +120,44 @@ public class SpreadJob : IDisposable
             var sitePaths = new Dictionary<string, string>();
             var sourceServers = new HashSet<string>();
 
+            // If we have a known source (from notification/search), use it directly
+            if (!string.IsNullOrEmpty(_knownSourceServerId) && !string.IsNullOrEmpty(_knownSourcePath)
+                && _pools.ContainsKey(_knownSourceServerId))
+            {
+                sitePaths[_knownSourceServerId] = _knownSourcePath;
+                sourceServers.Add(_knownSourceServerId);
+                var srcName = _serverConfigs.TryGetValue(_knownSourceServerId, out var srcCfg) ? srcCfg.Name : _knownSourceServerId;
+                Log.Information("Spread: known source {Server} at {Path}", srcName, _knownSourcePath);
+            }
+
+            // Probe remaining servers for the release
             foreach (var (serverId, config) in _serverConfigs)
             {
+                if (sitePaths.ContainsKey(serverId)) continue; // Already known
                 if (!_pools.TryGetValue(serverId, out var pool)) continue;
 
-                // Try exact section match first
-                var exactMatch = config.SpreadSite.Sections
-                    .FirstOrDefault(kvp => kvp.Key.Equals(Section, StringComparison.OrdinalIgnoreCase));
-
-                if (!string.IsNullOrEmpty(exactMatch.Value))
+                // Probe all section paths AND the notification watch path
+                var pathsToProbe = config.SpreadSite.Sections.Values.ToList();
+                if (!string.IsNullOrEmpty(config.Notifications.WatchPath))
                 {
-                    var path = exactMatch.Value.TrimEnd('/') + "/" + ReleaseName;
-                    try
-                    {
-                        await using var conn = await pool.Borrow(ct);
-                        if (await conn.Client.DirectoryExists(path, ct))
-                        {
-                            sitePaths[serverId] = path;
-                            sourceServers.Add(serverId);
-                            Log.Information("Spread: {Server} HAS release at {Path}", config.Name, path);
-                            continue;
-                        }
-                    }
-                    catch (OperationCanceledException) { throw; }
-                    catch { }
+                    // Watch path categories: /recent/tv-hd, /recent/x265, etc.
+                    // Try the section hint as a subdirectory of the watch path
+                    var watchBase = config.Notifications.WatchPath.TrimEnd('/');
+                    var normSection = Section.ToLowerInvariant().Replace("_", "-");
+                    pathsToProbe.Add($"{watchBase}/{normSection}");
                 }
 
-                // Probe all section paths
-                foreach (var (sectionName, sectionPath) in config.SpreadSite.Sections)
+                foreach (var basePath in pathsToProbe.Distinct())
                 {
                     try
                     {
-                        var probePath = sectionPath.TrimEnd('/') + "/" + ReleaseName;
+                        var probePath = basePath.TrimEnd('/') + "/" + ReleaseName;
                         await using var conn = await pool.Borrow(ct);
                         if (await conn.Client.DirectoryExists(probePath, ct))
                         {
                             sitePaths[serverId] = probePath;
                             sourceServers.Add(serverId);
-                            Log.Information("Spread: {Server} HAS release at [{Section}] {Path}",
-                                config.Name, sectionName, probePath);
+                            Log.Information("Spread: {Server} HAS release at {Path}", config.Name, probePath);
                             break;
                         }
                     }
@@ -163,7 +168,7 @@ public class SpreadJob : IDisposable
 
             if (sourceServers.Count == 0)
             {
-                SetFailed($"Release not found on any server");
+                SetFailed("Release not found on any server — check release name and section paths");
                 return;
             }
 
