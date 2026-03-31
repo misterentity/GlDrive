@@ -1203,8 +1203,31 @@
                                     Padding="12,6" Style="{StaticResource SecondaryButton}"/>
                         </StackPanel>
                     </Border>
-                    <!-- Scoreboard (bottom) -->
-                    <Border DockPanel.Dock="Bottom" Height="200"
+                    <!-- Auto-Race Activity Log (bottom) -->
+                    <Border DockPanel.Dock="Bottom" Height="140"
+                            Background="{DynamicResource SurfaceBrush}"
+                            BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                            CornerRadius="6" Margin="0,10,0,0" Padding="0">
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Top" Text="Auto-Race Activity" FontSize="11"
+                                       FontWeight="SemiBold" Padding="8,4"
+                                       Foreground="{DynamicResource ForegroundDimBrush}"/>
+                            <DataGrid ItemsSource="{Binding AutoRaceLog}"
+                                      AutoGenerateColumns="False" IsReadOnly="True"
+                                      SelectionMode="Single" GridLinesVisibility="None"
+                                      HeadersVisibility="Column" CanUserAddRows="False"
+                                      FontSize="11">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Time" Binding="{Binding Time}" Width="65"/>
+                                    <DataGridTextColumn Header="Section" Binding="{Binding Section}" Width="90"/>
+                                    <DataGridTextColumn Header="Release" Binding="{Binding Release}" Width="*"/>
+                                    <DataGridTextColumn Header="Result" Binding="{Binding Result}" Width="180"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </DockPanel>
+                    </Border>
+                    <!-- Scoreboard -->
+                    <Border DockPanel.Dock="Bottom" Height="160"
                             Background="{DynamicResource SurfaceBrush}"
                             BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
                             CornerRadius="6" Margin="0,10,0,0" Padding="0">

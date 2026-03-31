@@ -18,6 +18,8 @@ public class SpreadManager : IDisposable
     private readonly Lock _lock = new();
     private bool _disposed;
 
+    public event Action<string, string, string>? AutoRaceAttempted; // section, release, result
+
     public IReadOnlyList<SpreadJob> ActiveJobs
     {
         get { lock (_lock) return _activeJobs.ToList(); }
@@ -196,7 +198,11 @@ public class SpreadManager : IDisposable
     /// </summary>
     public void TryAutoRace(string category, string releaseName)
     {
-        if (!_config.Spread.AutoRaceOnNotification) return;
+        if (!_config.Spread.AutoRaceOnNotification)
+        {
+            AutoRaceAttempted?.Invoke(category, releaseName, "Auto-race disabled");
+            return;
+        }
 
         var section = category;
         var serverIds = _config.Servers
@@ -208,6 +214,7 @@ public class SpreadManager : IDisposable
         if (serverIds.Count < 2)
         {
             Log.Debug("Auto-race skipped for {Release}: fewer than 2 servers with section {Section}", releaseName, section);
+            AutoRaceAttempted?.Invoke(section, releaseName, $"Skipped — <2 servers for [{section}]");
             return;
         }
 
@@ -216,10 +223,12 @@ public class SpreadManager : IDisposable
             StartRace(section, releaseName, serverIds, SpreadMode.Race);
             Log.Information("Auto-race started: {Release} [{Section}] across {Count} servers",
                 releaseName, section, serverIds.Count);
+            AutoRaceAttempted?.Invoke(section, releaseName, $"Racing on {serverIds.Count} servers");
         }
         catch (Exception ex)
         {
             Log.Warning(ex, "Auto-race failed for {Release}", releaseName);
+            AutoRaceAttempted?.Invoke(section, releaseName, $"Failed: {ex.Message}");
         }
     }
 

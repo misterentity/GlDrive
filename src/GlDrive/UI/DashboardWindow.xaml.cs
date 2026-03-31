@@ -163,6 +163,7 @@ public partial class DashboardWindow : Window
                 _spreadVm?.RefreshSections();
             });
             SpreadTab.DataContext = _spreadVm;
+            _spreadVm.WireAutoRaceEvents();
         }
 
         // Activate/deactivate spread timer only when tab is visible
