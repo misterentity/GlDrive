@@ -1033,14 +1033,14 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     private async Task PlayFromRar(MountService server, string releasePath, List<FtpListItem> files)
     {
         var releaseName = Path.GetFileName(releasePath);
-        Log.Information("RAR stream playback for {Path}", releasePath);
+        Log.Information("RAR download+extract playback for {Path}", releasePath);
 
         SaveCurrentPosition();
         _currentReleaseName = releaseName;
 
         // Check if we already have an extracted video in the library cache
         var cached = _streamServer!.FindCachedVideo(releaseName);
-        if (cached != null && !cached.EndsWith(".rar", StringComparison.OrdinalIgnoreCase))
+        if (cached != null)
         {
             IsBuffering = false;
             PlayerStatus = $"Playing from library: {releaseName}";
@@ -1048,37 +1048,90 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
             return;
         }
 
-        // Use the HTTP /rar-stream endpoint — it handles downloading volumes,
-        // extracting the video with SharpCompress, and streaming decompressed
-        // video data to VLC via HTTP. VLC plays as extraction proceeds.
-        var url = $"{_streamServer.BaseUrl}rar-stream?token={_streamServer.AuthToken}" +
-            $"&server={Uri.EscapeDataString(server.ServerId)}" +
-            $"&path={Uri.EscapeDataString(releasePath)}";
-
-        Log.Information("Playing RAR stream: {Url}", url);
-
         IsBuffering = true;
-        PlayerStatus = $"Downloading and extracting: {releaseName}...";
+        BufferProgress = 0;
+        PlayerStatus = "Preparing RAR download...";
 
-        var media = new Media(_libVLC!, new Uri(url));
-        media.AddOption(":network-caching=15000");
-        media.AddOption(":file-caching=5000");
-        media.AddOption(":http-reconnect");
-
-        await Task.Run(() =>
+        try
         {
-            _mediaPlayer!.Stop();
-            Thread.Sleep(200);
-        });
+            // Download all RAR volumes with progress shown in the UI
+            var localRar = await Task.Run(async () =>
+                await _streamServer.DownloadAndExtractRar(server, releasePath, files,
+                    onProgress: (msg, pct) =>
+                    {
+                        Application.Current?.Dispatcher.BeginInvoke(() =>
+                        {
+                            PlayerStatus = msg;
+                            BufferProgress = pct;
+                        });
+                    })
+            );
 
-        if (_activeRenderer != null)
-            _mediaPlayer!.SetRenderer(_activeRenderer);
+            if (localRar == null)
+            {
+                PlayerStatus = "No RAR volumes found";
+                IsBuffering = false;
+                return;
+            }
 
-        _mediaPlayer!.Play(media);
+            // Extract video from downloaded RAR volumes
+            PlayerStatus = "Extracting video from RAR...";
+            var extractedVideo = await Task.Run(() =>
+            {
+                var dir = Path.GetDirectoryName(localRar)!;
+                var firstRar = Directory.GetFiles(dir, "*.rar").OrderBy(f => f).FirstOrDefault();
+                if (firstRar == null) return null;
 
-        PlayerStatus = IsCasting
-            ? $"Casting: {releaseName}..."
-            : $"Buffering: {releaseName} (downloading + extracting RAR)...";
+                using var archive = SharpCompress.Archives.Rar.RarArchive.OpenArchive(firstRar);
+                var videoEntry = archive.Entries
+                    .Where(e => !e.IsDirectory && IsVideoFile(e.Key ?? ""))
+                    .OrderByDescending(e => e.Size)
+                    .FirstOrDefault();
+
+                if (videoEntry?.Key == null) return null;
+
+                var outPath = Path.Combine(dir, Path.GetFileName(videoEntry.Key));
+                if (File.Exists(outPath)) return outPath;
+
+                Log.Information("Extracting {Name} ({Size} bytes) from RAR", videoEntry.Key, videoEntry.Size);
+                using var entryStream = videoEntry.OpenEntryStream();
+                using var outStream = new FileStream(outPath, FileMode.Create, FileAccess.Write,
+                    FileShare.None, 256 * 1024, FileOptions.SequentialScan);
+                entryStream.CopyTo(outStream, 256 * 1024);
+
+                // Clean up RAR volumes
+                foreach (var f in Directory.GetFiles(dir)
+                    .Where(f => Downloads.ArchiveExtractor.IsArchiveFile(Path.GetFileName(f))))
+                {
+                    try { File.Delete(f); } catch { }
+                }
+
+                return outPath;
+            });
+
+            IsBuffering = false;
+
+            if (extractedVideo != null)
+            {
+                PlayerStatus = $"Playing: {releaseName}";
+                await PlayLocalFile(extractedVideo);
+            }
+            else
+            {
+                PlayerStatus = "No video found in RAR archive";
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            PlayerStatus = "Download cancelled";
+            IsBuffering = false;
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "RAR playback failed for {Path}", releasePath);
+            PlayerStatus = $"Failed: {ex.Message}";
+            IsBuffering = false;
+        }
     }
 
     private async Task PlayLocalFile(string localPath)
