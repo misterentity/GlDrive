@@ -113,15 +113,30 @@ public class SpreadJob : IDisposable
             var sitePaths = new Dictionary<string, string>();
             foreach (var (serverId, config) in _serverConfigs)
             {
-                if (config.SpreadSite.Sections.TryGetValue(Section, out var sectionPath))
+                // Case-insensitive section lookup
+                var sectionPath = config.SpreadSite.Sections
+                    .FirstOrDefault(kvp => kvp.Key.Equals(Section, StringComparison.OrdinalIgnoreCase))
+                    .Value;
+
+                if (!string.IsNullOrEmpty(sectionPath))
+                {
                     sitePaths[serverId] = sectionPath.TrimEnd('/') + "/" + ReleaseName;
+                    Log.Information("Spread: {Server} path = {Path}", config.Name, sitePaths[serverId]);
+                }
+                else
+                {
+                    Log.Warning("Spread: {Server} has no section '{Section}' (available: {Sections})",
+                        config.Name, Section, string.Join(", ", config.SpreadSite.Sections.Keys));
+                }
             }
 
             if (sitePaths.Count < 2)
             {
-                SetFailed($"Need at least 2 servers with section '{Section}' configured");
+                SetFailed($"Need at least 2 servers with section '{Section}' configured (found {sitePaths.Count})");
                 return;
             }
+            Log.Information("Spread race starting: {Release} [{Section}] on {Count} servers",
+                ReleaseName, Section, sitePaths.Count);
 
             using var hardTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             hardTimeout.CancelAfter(TimeSpan.FromSeconds(_spreadConfig.HardTimeoutSeconds));

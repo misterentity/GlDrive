@@ -115,7 +115,10 @@ public class SpreadManager : IDisposable
         }
 
         if (pools.Count < 2)
-            throw new InvalidOperationException("Need at least 2 connected servers to start a race");
+            throw new InvalidOperationException(
+                $"Need at least 2 connected spread pools (have {pools.Count}). " +
+                $"Connected pools: [{string.Join(", ", _spreadPools.Keys)}], " +
+                $"requested: [{string.Join(", ", serverIds)}]");
 
         var job = new SpreadJob(section, releaseName, mode, _config.Spread,
             pools, configs, _speedTracker, _skiplist);
@@ -139,7 +142,19 @@ public class SpreadManager : IDisposable
         lock (_lock) _activeJobs.Add(job);
         JobStarted?.Invoke(job);
 
-        _ = Task.Run(job.RunAsync);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await job.RunAsync();
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Spread job crashed: {Release} [{Section}]", job.ReleaseName, job.Section);
+                lock (_lock) _activeJobs.Remove(job);
+                DequeueNextRace();
+            }
+        });
         return job;
     }
 
