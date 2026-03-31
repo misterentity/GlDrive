@@ -241,34 +241,71 @@
                     </Canvas>
                     <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
                             CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
-                        <StackPanel Orientation="Horizontal">
+                        <WrapPanel>
                             <Button Content="Cancel" Command="{Binding CancelDownloadCommand}"
-                                    Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"/>
+                                    Padding="12,6" Margin="0,0,6,4" Style="{StaticResource SecondaryButton}"/>
                             <Button Content="Retry" Command="{Binding RetryDownloadCommand}"
-                                    Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"/>
-                            <Button Content="Clear Completed" Command="{Binding ClearCompletedCommand}"
-                                    Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"/>
+                                    Padding="12,6" Margin="0,0,6,4" Style="{StaticResource SecondaryButton}"/>
                             <Button Content="Open Folder" Command="{Binding OpenFolderCommand}"
-                                    Padding="12,6" Margin="0,0,12,0" Style="{StaticResource SecondaryButton}"
+                                    Padding="12,6" Margin="0,0,12,4" Style="{StaticResource SecondaryButton}"
                                     ToolTip="Open download folder in Explorer"/>
+                            <Button Content="Clear Completed" Command="{Binding ClearCompletedCommand}"
+                                    Padding="12,6" Margin="0,0,6,4" Style="{StaticResource SecondaryButton}"/>
+                            <Button Content="Clear Failed" Command="{Binding ClearFailedCommand}"
+                                    Padding="12,6" Margin="0,0,6,4" Style="{StaticResource SecondaryButton}"/>
+                            <Button Content="Clear Cancelled" Command="{Binding ClearCancelledCommand}"
+                                    Padding="12,6" Margin="0,0,6,4" Style="{StaticResource SecondaryButton}"/>
+                            <Button Content="Clear All Finished" Command="{Binding ClearAllFinishedCommand}"
+                                    Padding="12,6" Margin="0,0,12,4" Style="{StaticResource SecondaryButton}"
+                                    ToolTip="Clear completed, failed, and cancelled"/>
                             <Button Content="Move Up" Command="{Binding MoveUpCommand}"
-                                    Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"
-                                    ToolTip="Move selected item up in queue"/>
+                                    Padding="12,6" Margin="0,0,6,4" Style="{StaticResource SecondaryButton}"/>
                             <Button Content="Move Down" Command="{Binding MoveDownCommand}"
-                                    Padding="12,6" Style="{StaticResource SecondaryButton}"
-                                    ToolTip="Move selected item down in queue"/>
-                        </StackPanel>
+                                    Padding="12,6" Margin="0,0,0,4" Style="{StaticResource SecondaryButton}"/>
+                        </WrapPanel>
                     </Border>
                     <DataGrid ItemsSource="{Binding DownloadItems}"
                               SelectedItem="{Binding SelectedDownloadItem}"
                               AutoGenerateColumns="False" IsReadOnly="True"
-                              SelectionMode="Single" GridLinesVisibility="Horizontal"
+                              SelectionMode="Extended" GridLinesVisibility="Horizontal"
                               HeadersVisibility="Column" CanUserAddRows="False"
-                              AllowDrop="True" Drop="Downloads_Drop">
+                              AllowDrop="True" Drop="Downloads_Drop"
+                              x:Name="DownloadsGrid"
+                              SelectionChanged="DownloadsGrid_SelectionChanged">
+                        <DataGrid.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="Cancel" Command="{Binding CancelDownloadCommand}"/>
+                                <MenuItem Header="Retry" Command="{Binding RetryDownloadCommand}"/>
+                                <MenuItem Header="Open Folder" Command="{Binding OpenFolderCommand}"/>
+                                <Separator/>
+                                <MenuItem Header="Remove Selected" Command="{Binding RemoveSelectedDownloadsCommand}"/>
+                            </ContextMenu>
+                        </DataGrid.ContextMenu>
                         <DataGrid.InputBindings>
-                            <KeyBinding Key="Delete" Command="{Binding CancelDownloadCommand}"/>
+                            <KeyBinding Key="Delete" Command="{Binding RemoveSelectedDownloadsCommand}"/>
                             <KeyBinding Key="R" Command="{Binding RetryDownloadCommand}"/>
                         </DataGrid.InputBindings>
+                        <DataGrid.RowStyle>
+                            <Style TargetType="DataGridRow" BasedOn="{StaticResource {x:Type DataGridRow}}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Status}" Value="Failed">
+                                        <Setter Property="Foreground" Value="#F44336"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding Status}" Value="Cancelled">
+                                        <Setter Property="Foreground" Value="#9E9E9E"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding Status}" Value="Completed">
+                                        <Setter Property="Foreground" Value="#4CAF50"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding Status}" Value="Downloading">
+                                        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding Status}" Value="Extracting">
+                                        <Setter Property="Foreground" Value="#FF9800"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </DataGrid.RowStyle>
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="Release" Binding="{Binding ReleaseName}" Width="*"/>
                             <DataGridTextColumn Header="Server" Binding="{Binding ServerName}" Width="90"/>
