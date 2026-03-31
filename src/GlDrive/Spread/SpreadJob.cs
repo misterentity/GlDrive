@@ -367,7 +367,8 @@ public class SpreadJob : IDisposable
             }
             catch (Exception ex)
             {
-                Log.Debug(ex, "Spread scan failed for {Server} at {Path}", serverId, basePath);
+                var serverName = _serverConfigs.TryGetValue(serverId, out var c) ? c.Name : serverId;
+                Log.Warning(ex, "Spread scan FAILED for {Server} at {Path}", serverName, basePath);
             }
         });
 
@@ -377,7 +378,15 @@ public class SpreadJob : IDisposable
         lock (_ownershipLock)
         {
             foreach (var (serverId, files) in results)
+            {
+                var serverName = _serverConfigs.TryGetValue(serverId, out var cfg) ? cfg.Name : serverId;
+                Log.Information("Spread scan: {Server} found {Count} files at {Path}",
+                    serverName, files.Count, sitePaths.GetValueOrDefault(serverId, "?"));
                 ProcessFiles(serverId, files);
+            }
+
+            if (results.Count == 0)
+                Log.Warning("Spread scan: ALL scans failed or returned 0 results");
         }
     }
 
@@ -567,7 +576,11 @@ public class SpreadJob : IDisposable
 
         lock (_ownershipLock)
         {
-            if (_fileInfos.Count == 0) return null;
+            if (_fileInfos.Count == 0)
+            {
+                Log.Debug("FindBestTransfer: _fileInfos is empty — scan found no files");
+                return null;
+            }
 
             var maxFileSize = 1L;
             foreach (var fi in _fileInfos.Values)
