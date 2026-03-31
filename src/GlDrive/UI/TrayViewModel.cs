@@ -35,7 +35,7 @@ public class TrayViewModel : INotifyPropertyChanged
 
         _serverManager.ServerStateChanged += (serverId, serverName, state) =>
         {
-            Application.Current?.Dispatcher.Invoke(() =>
+            Application.Current?.Dispatcher.BeginInvoke(() =>
             {
                 UpdateStatusText();
                 OnPropertyChanged(nameof(StatusText));
@@ -48,7 +48,7 @@ public class TrayViewModel : INotifyPropertyChanged
                     if (server?.Matcher != null)
                     {
                         server.Matcher.MatchFound += (item, cat, rel) =>
-                            Application.Current?.Dispatcher.InvokeAsync(() =>
+                            Application.Current?.Dispatcher.BeginInvoke(() =>
                                 ShowNotification("Grabbed", $"{item.Title} [{cat}] ({serverName})"));
                     }
                     if (server?.Downloads != null)
@@ -67,7 +67,7 @@ public class TrayViewModel : INotifyPropertyChanged
                             var now = DateTime.UtcNow;
                             if ((now - _lastSpeedUpdate).TotalSeconds < 1) return;
                             _lastSpeedUpdate = now;
-                            Application.Current?.Dispatcher.InvokeAsync(() =>
+                            Application.Current?.Dispatcher.BeginInvoke(() =>
                             {
                                 UpdateStatusText();
                                 OnPropertyChanged(nameof(StatusText));
@@ -79,13 +79,13 @@ public class TrayViewModel : INotifyPropertyChanged
                                 .Count(i => i.Status == DownloadStatus.Downloading);
                             if (downloadItem.Status == DownloadStatus.Completed)
                             {
-                                Application.Current?.Dispatcher.Invoke(() =>
+                                Application.Current?.Dispatcher.BeginInvoke(() =>
                                     ShowNotification("Download Complete", downloadItem.ReleaseName));
                                 if (_config.Downloads.PlaySoundOnComplete)
                                     System.Media.SystemSounds.Asterisk.Play();
                             }
                             else if (downloadItem.Status == DownloadStatus.Failed)
-                                Application.Current?.Dispatcher.Invoke(() =>
+                                Application.Current?.Dispatcher.BeginInvoke(() =>
                                     ShowNotification("Download Failed",
                                         $"{downloadItem.ReleaseName}: {downloadItem.ErrorMessage ?? "Unknown error"}"));
                         };
@@ -112,7 +112,7 @@ public class TrayViewModel : INotifyPropertyChanged
 
         _serverManager.IrcStateChanged += (serverId, serverName, state) =>
         {
-            Application.Current?.Dispatcher.Invoke(() =>
+            Application.Current?.Dispatcher.BeginInvoke(() =>
             {
                 switch (state)
                 {

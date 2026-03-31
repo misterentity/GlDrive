@@ -29,7 +29,7 @@ public static class TrayIconSetup
         // Rebuild menu and update icon when server states change
         vm.ServerManager.ServerStateChanged += (_, _, _) =>
         {
-            Application.Current?.Dispatcher.Invoke(() =>
+            Application.Current?.Dispatcher.BeginInvoke(() =>
             {
                 BuildMenu(menu, vm);
 
@@ -54,14 +54,14 @@ public static class TrayIconSetup
         // Rebuild menu when IRC state changes
         vm.ServerManager.IrcStateChanged += (_, _, _) =>
         {
-            Application.Current?.Dispatcher.Invoke(() => BuildMenu(menu, vm));
+            Application.Current?.Dispatcher.BeginInvoke(() => BuildMenu(menu, vm));
         };
 
         // Rebuild menu when an update becomes available
         vm.PropertyChanged += (_, args) =>
         {
             if (args.PropertyName == nameof(vm.AvailableUpdate))
-                Application.Current?.Dispatcher.Invoke(() => BuildMenu(menu, vm));
+                Application.Current?.Dispatcher.BeginInvoke(() => BuildMenu(menu, vm));
         };
 
         // Wire balloon tip notifications
