@@ -79,6 +79,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private string _statusBarDiskSpace = "";
     private string _statusBarConnections = "";
     private DispatcherTimer? _statusTimer;
+    private DateTime _lastDiskPoll = DateTime.MinValue;
 
     // Bandwidth graph
     private readonly List<double> _speedHistory = new();
@@ -1615,19 +1616,13 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         }
         StatusBarQueueCount = $"{queued} active";
 
-        // Disk space
-        try
+        // Server disk usage — poll every 30s (uses FTP connections), show cached value otherwise
+        var now = DateTime.UtcNow;
+        if ((now - _lastDiskPoll).TotalSeconds >= 30)
         {
-            var dlPath = _config.Downloads.LocalPath;
-            var root = Path.GetPathRoot(dlPath);
-            if (!string.IsNullOrEmpty(root))
-            {
-                var drive = new DriveInfo(root);
-                if (drive.IsReady)
-                    StatusBarDiskSpace = $"{FormatSize(drive.AvailableFreeSpace)} free";
-            }
+            _lastDiskPoll = now;
+            _ = PollServerDiskUsage();
         }
-        catch { StatusBarDiskSpace = ""; }
 
         // FTP connection status per server
         var connParts = new List<string>();
@@ -1655,6 +1650,37 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
         // Update bandwidth graph points
         UpdateSpeedGraph();
+    }
+
+    private async Task PollServerDiskUsage()
+    {
+        try
+        {
+            long totalUsed = 0;
+            long totalSize = 0;
+            var parts = new List<string>();
+
+            foreach (var server in _serverManager.GetMountedServers())
+            {
+                if (server.Ftp == null || server.CurrentState != MountState.Connected) continue;
+                try
+                {
+                    var disk = await server.Ftp.GetDiskFree(CancellationToken.None);
+                    if (disk == null) continue;
+                    var used = disk.Value.totalBytes - disk.Value.freeBytes;
+                    totalUsed += used;
+                    totalSize += disk.Value.totalBytes;
+                    parts.Add($"{server.ServerName}: {FormatSize(used)}/{FormatSize(disk.Value.totalBytes)}");
+                }
+                catch { }
+            }
+
+            if (totalSize > 0)
+                StatusBarDiskSpace = $"{FormatSize(totalUsed)} / {FormatSize(totalSize)} used";
+            else
+                StatusBarDiskSpace = "";
+        }
+        catch { }
     }
 
     private void UpdateSpeedGraph()
