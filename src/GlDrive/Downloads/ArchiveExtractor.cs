@@ -16,18 +16,50 @@ public static partial class ArchiveExtractor
     // Modern RAR multi-part: name.part02.rar, name.part003.rar (non-first volumes)
     private static readonly Regex PartNonFirstRegex = PartNonFirstVolumeRegex();
 
-    public static async Task<bool> ExtractIfNeeded(string dirPath, CancellationToken ct)
+    private const int ExtractBufferSize = 256 * 1024; // 256 KB
+
+    public static Task<bool> ExtractIfNeeded(string dirPath, CancellationToken ct)
     {
         var dir = new DirectoryInfo(dirPath);
-        if (!dir.Exists) return false;
+        if (!dir.Exists) return Task.FromResult(false);
 
-        // Find .rar files only (first volume) — skip numbered volumes like .r00, .r01
-        // and non-first modern multi-part volumes like .part02.rar, .part03.rar
         var rarFiles = dir.GetFiles("*.rar")
             .Where(f => !PartNonFirstRegex.IsMatch(f.Name))
             .ToList();
 
-        if (rarFiles.Count == 0) return false;
+        if (rarFiles.Count == 0) return Task.FromResult(false);
+
+        // Run extraction on a dedicated low-priority thread to avoid starving
+        // the UI thread and thread pool. Decompression is CPU-heavy.
+        var tcs = new TaskCompletionSource<bool>();
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                ExtractOnThread(dirPath, rarFiles, ct);
+                tcs.SetResult(true);
+            }
+            catch (OperationCanceledException)
+            {
+                tcs.SetCanceled(ct);
+            }
+            catch (Exception ex)
+            {
+                tcs.SetException(ex);
+            }
+        })
+        {
+            IsBackground = true,
+            Priority = ThreadPriority.BelowNormal,
+            Name = $"Extract-{Path.GetFileName(dirPath)}"
+        };
+        thread.Start();
+        return tcs.Task;
+    }
+
+    private static void ExtractOnThread(string dirPath, List<FileInfo> rarFiles, CancellationToken ct)
+    {
+        var safeDirPath = Path.GetFullPath(dirPath);
 
         foreach (var rarFile in rarFiles)
         {
@@ -45,28 +77,30 @@ public static partial class ArchiveExtractor
                 }
 
                 Log.Information("Extracting {Count} entries from {File}", entries.Count, rarFile.Name);
-                var safeDirPath = Path.GetFullPath(dirPath);
                 foreach (var entry in entries)
                 {
                     ct.ThrowIfCancellationRequested();
 
+                    if (entry.Key == null) continue;
+
                     // Prevent path traversal (Zip Slip)
-                    if (entry.Key != null)
+                    var fullPath = Path.GetFullPath(Path.Combine(safeDirPath, entry.Key));
+                    if (!fullPath.StartsWith(safeDirPath, StringComparison.OrdinalIgnoreCase))
                     {
-                        var fullPath = Path.GetFullPath(Path.Combine(safeDirPath, entry.Key));
-                        if (!fullPath.StartsWith(safeDirPath, StringComparison.OrdinalIgnoreCase))
-                        {
-                            Log.Warning("Skipping archive entry with path traversal: {Key}", entry.Key);
-                            continue;
-                        }
+                        Log.Warning("Skipping archive entry with path traversal: {Key}", entry.Key);
+                        continue;
                     }
 
+                    // Ensure target directory exists
+                    var entryDir = Path.GetDirectoryName(fullPath);
+                    if (entryDir != null) Directory.CreateDirectory(entryDir);
+
+                    // Manual streaming extraction with large buffer and sequential I/O hints
                     Log.Debug("Extracting entry: {Key} ({Size} bytes)", entry.Key, entry.Size);
-                    await entry.WriteToDirectoryAsync(dirPath, new SharpCompress.Common.ExtractionOptions
-                    {
-                        ExtractFullPath = true,
-                        Overwrite = true,
-                    });
+                    using var entryStream = entry.OpenEntryStream();
+                    using var outStream = new FileStream(fullPath, FileMode.Create, FileAccess.Write,
+                        FileShare.None, ExtractBufferSize, FileOptions.SequentialScan);
+                    entryStream.CopyTo(outStream, ExtractBufferSize);
                 }
                 Log.Information("Extraction complete: {File} ({Count} files)", rarFile.Name, entries.Count);
             }
@@ -77,8 +111,6 @@ public static partial class ArchiveExtractor
                 throw;
             }
         }
-
-        return true;
     }
 
     public static void DeleteArchives(string dirPath)
@@ -114,8 +146,7 @@ public static partial class ArchiveExtractor
     }
 
     /// <summary>
-    /// Try to delete a file with retries to handle Windows file handle release delays
-    /// (e.g. after SharpCompress disposes archive streams).
+    /// Try to delete a file with retries to handle Windows file handle release delays.
     /// </summary>
     private static bool TryDeleteWithRetry(string path, int maxAttempts = 3, int delayMs = 500)
     {
