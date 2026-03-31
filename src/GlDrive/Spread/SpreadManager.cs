@@ -76,7 +76,8 @@ public class SpreadManager : IDisposable
     }
 
     public SpreadJob? StartRace(string section, string releaseName,
-        IReadOnlyList<string> serverIds, SpreadMode mode)
+        IReadOnlyList<string> serverIds, SpreadMode mode,
+        string? knownSourceServerId = null, string? knownSourcePath = null)
     {
         // Sanitize inputs
         releaseName = SanitizeFtpPath(releaseName);
@@ -94,11 +95,13 @@ public class SpreadManager : IDisposable
             }
         }
 
-        return StartRaceInternal(section, releaseName, serverIds, mode);
+        return StartRaceInternal(section, releaseName, serverIds, mode,
+            knownSourceServerId, knownSourcePath);
     }
 
     private SpreadJob StartRaceInternal(string section, string releaseName,
-        IReadOnlyList<string> serverIds, SpreadMode mode)
+        IReadOnlyList<string> serverIds, SpreadMode mode,
+        string? knownSourceServerId = null, string? knownSourcePath = null)
     {
         Dictionary<string, FtpConnectionPool> pools;
         Dictionary<string, ServerConfig> configs;
@@ -121,7 +124,8 @@ public class SpreadManager : IDisposable
                 $"requested: [{string.Join(", ", serverIds)}]");
 
         var job = new SpreadJob(section, releaseName, mode, _config.Spread,
-            pools, configs, _speedTracker, _skiplist);
+            pools, configs, _speedTracker, _skiplist,
+            knownSourceServerId, knownSourcePath);
 
         job.ProgressChanged += j => JobProgressChanged?.Invoke(j);
         job.Completed += j =>
