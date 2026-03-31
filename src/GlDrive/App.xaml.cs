@@ -104,7 +104,8 @@ public partial class App : Application
         // Users can clear per-server certs in Settings > Servers > Edit > Clear Certificate
         var certManager = new CertificateManager();
         var notificationStore = new NotificationStore();
-        notificationStore.Load();
+        try { notificationStore.Load(); }
+        catch (Exception ex) { Log.Warning(ex, "Failed to load notification store"); }
         _serverManager = new ServerManager(config, certManager, notificationStore);
 
         // Init tray
@@ -114,16 +115,22 @@ public partial class App : Application
         TrayIconSetup.Configure(_taskbarIcon, _trayViewModel);
         _taskbarIcon.ForceCreate(false);
 
-        // Auto-mount all enabled servers
-        try
+        // Auto-mount all enabled servers in background — don't block the UI
+        _ = Task.Run(async () =>
         {
-            await _serverManager.MountAll();
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Auto-mount failed");
-            _trayViewModel.ShowNotification("GlDrive", $"Mount failed: {ex.Message}");
-        }
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                await _serverManager.MountAll();
+                Log.Information("All servers mounted in {Elapsed}ms", sw.ElapsedMilliseconds);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Auto-mount failed after {Elapsed}ms", sw.ElapsedMilliseconds);
+                Dispatcher.BeginInvoke(() =>
+                    _trayViewModel!.ShowNotification("GlDrive", $"Mount failed: {ex.Message}"));
+            }
+        });
     }
 
     protected override void OnExit(ExitEventArgs e)
