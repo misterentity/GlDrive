@@ -1,6 +1,6 @@
 # GlDrive
 
-A Windows 11 system tray application that mounts glftpd FTPS servers as local drive letters. Browse your FTP sites in Windows Explorer like any other drive. Supports multiple servers, each on its own drive letter.
+A Windows 11 system tray application for managing glftpd FTPS servers. Mount servers as local drive letters, download and auto-extract releases, race/FXP between sites, monitor new releases with wishlist auto-download, chat on IRC with FiSH encryption, browse the PreDB, and more. Supports multiple servers with independent connections, IRC, and spread/FXP.
 
 Built with WinFsp, FluentFTP, GnuTLS, and .NET 10.
 
