@@ -19,7 +19,12 @@ public class IrcChannelVm : INotifyPropertyChanged
     public string ServerName { get; set; } = "";
     public string Name { get; set; } = "";
     public bool IsChannel => Name.StartsWith('#') || Name.StartsWith('&');
-    public bool HasFishKey { get; set; }
+    private bool _hasFishKey;
+    public bool HasFishKey
+    {
+        get => _hasFishKey;
+        set { _hasFishKey = value; OnPropertyChanged(); }
+    }
 
     public string DisplayName => IsChannel ? $"{ServerName}: {Name}" : $"{ServerName}: {Name} (PM)";
     public string SidebarDisplay => Name == "*" ? $"[{ServerName}]" : IsChannel ? Name : $"{Name} (PM)";
@@ -346,11 +351,15 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
 
         if (existing != null) return existing;
 
+        var ircService = _serverManager.GetIrcService(serverId);
+        var hasFishKey = ircService?.KeyStore.GetKey(target) != null;
+
         var vm = new IrcChannelVm
         {
             ServerId = serverId,
             ServerName = serverName,
-            Name = target
+            Name = target,
+            HasFishKey = hasFishKey
         };
         Channels.Add(vm);
         return vm;
