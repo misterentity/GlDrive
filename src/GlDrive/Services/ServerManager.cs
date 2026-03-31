@@ -133,17 +133,22 @@ public class ServerManager : IDisposable
 
     public async Task MountAll(CancellationToken ct = default)
     {
-        foreach (var server in _config.Servers.Where(s => s.Enabled && s.Mount.AutoMountOnStart))
+        // Mount all servers in parallel — don't let one slow server block the others
+        var servers = _config.Servers.Where(s => s.Enabled && s.Mount.AutoMountOnStart).ToList();
+        var tasks = servers.Select(async server =>
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 await MountServer(server.Id, ct);
+                Log.Information("Server {Name} mounted in {Elapsed}ms", server.Name, sw.ElapsedMilliseconds);
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "Failed to mount server {ServerName}", server.Name);
+                Log.Error(ex, "Failed to mount server {Name} after {Elapsed}ms", server.Name, sw.ElapsedMilliseconds);
             }
-        }
+        });
+        await Task.WhenAll(tasks);
 
         // Start IRC for all enabled servers, even those whose FTP mount failed
         await EnsureAllIrcServices();
