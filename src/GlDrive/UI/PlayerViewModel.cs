@@ -309,7 +309,17 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         if (_vlcInitialized) return;
         try
         {
-            Core.Initialize();
+            try
+            {
+                Core.Initialize();
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "LibVLC native libraries not found");
+                PlayerStatus = "LibVLC not found — install VLC media player or ensure LibVLC DLLs are present";
+                return;
+            }
+
             _libVLC = new LibVLC(
                 "--no-video-title-show",
                 "--network-caching=10000",
@@ -388,7 +398,10 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
                 {
                     IsPlaying = false;
                     IsBuffering = false;
-                    PlayerStatus = "Playback error";
+                    var errMsg = _mediaPlayer?.Media?.State.ToString() ?? "unknown";
+                    PlayerStatus = $"Playback error — {errMsg}. Check server connection and try again.";
+                    Log.Warning("VLC playback error for {Release}, media state: {State}",
+                        _currentReleaseName, errMsg);
                 });
             _mediaPlayer.Volume = (int)_volume;
 
@@ -866,11 +879,25 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
     private async Task PlaySelectedResult()
     {
-        if (_selectedFtpResult == null || _streamServer == null || _mediaPlayer == null) return;
+        if (_selectedFtpResult == null) return;
+        if (!_vlcInitialized || _streamServer == null || _mediaPlayer == null)
+        {
+            PlayerStatus = "Video player not initialized — check VLC installation";
+            return;
+        }
 
         var result = _selectedFtpResult;
         var server = _serverManager.GetServer(result.ServerId);
-        if (server?.Pool == null) return;
+        if (server == null)
+        {
+            PlayerStatus = $"Server not found: {result.ServerName}";
+            return;
+        }
+        if (server.Pool == null || !server.Pool.IsConnected)
+        {
+            PlayerStatus = $"Server not connected: {result.ServerName}";
+            return;
+        }
 
         IsLoading = true;
         _currentReleaseName = result.ReleaseName;
