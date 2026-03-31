@@ -17,6 +17,8 @@ public partial class DashboardWindow : Window
     private bool _spreadLoaded;
     private bool _browseLoaded;
     private bool _worldMonitorLoaded;
+    private bool _discordLoaded;
+    private bool _streemsLoaded;
     private bool _playerLoaded;
     private Point _dragStartPoint;
     private PlayerViewModel? _playerVm;
@@ -168,6 +170,18 @@ public partial class DashboardWindow : Window
         {
             _worldMonitorLoaded = true;
             _ = WorldMonitorHost.InitializeAsync("https://www.worldmonitor.app/");
+        }
+
+        if (header == "Discord" && !_discordLoaded)
+        {
+            _discordLoaded = true;
+            _ = DiscordHost.InitializeAsync("https://discord.com/app");
+        }
+
+        if (header == "Streems" && !_streemsLoaded)
+        {
+            _streemsLoaded = true;
+            _ = StreemsHost.InitializeAsync("https://streems.redactor.site/");
         }
     }
 
