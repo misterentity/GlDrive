@@ -143,10 +143,11 @@ public class TrayViewModel : INotifyPropertyChanged
             }
         });
 
-        SettingsCommand = new RelayCommand(() =>
+        SettingsCommand = new RelayCommand(async () =>
         {
             var window = new SettingsWindow(_config, _serverManager);
-            window.ShowDialog();
+            if (window.ShowDialog() == true)
+                await _serverManager.SyncAfterConfigChange();
         });
 
         DashboardCommand = new RelayCommand(() =>
