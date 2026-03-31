@@ -1,6 +1,8 @@
 using System.IO;
+using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Serilog;
 
@@ -172,7 +174,19 @@ public static class SiteImporter
     public static List<ServerConfig> ImportFtpRush(string xmlPath)
     {
         var results = new List<ServerConfig>();
-        var doc = XDocument.Load(xmlPath);
+
+        // Load XML with repair for malformed exports (unclosed SITE tags, etc.)
+        XDocument doc;
+        try
+        {
+            doc = XDocument.Load(xmlPath);
+        }
+        catch (System.Xml.XmlException)
+        {
+            Log.Warning("FTPRush XML is malformed, attempting repair: {File}", Path.GetFileName(xmlPath));
+            var repaired = RepairFtpRushXml(File.ReadAllText(xmlPath));
+            doc = XDocument.Parse(repaired);
+        }
 
         // FTPRush XML can nest SITE elements inside GROUP elements or under FTPRUSHSITES
         foreach (var site in doc.Descendants("SITE"))
@@ -185,8 +199,11 @@ public static class SiteImporter
                 var user = (site.Element("Username") ?? site.Element("USER"))?.Value?.Trim();
                 if (string.IsNullOrEmpty(host)) continue;
 
+                // Convert packed integer IPs (e.g. 1735868216 → dotted notation)
+                host = ResolvePackedIp(host);
+
                 var port = 21;
-                var portStr = (site.Element("Port") ?? site.Element("PORT"))?.Value;
+                var portStr = (site.Element("Port") ?? site.Element("PORT"))?.Value?.Trim();
                 if (int.TryParse(portStr, out var p) && p > 0)
                     port = p;
 
@@ -216,9 +233,13 @@ public static class SiteImporter
                 var initDir = (site.Element("DefaultRemotePath") ?? site.Element("INITDIR")
                             ?? site.Element("REMOTEPATH"))?.Value?.Trim();
 
+                // DISABLE element — skip disabled sites or import as disabled
+                var disabled = (site.Element("DISABLE") ?? site.Element("Disable"))?.Value?.Trim();
+
                 var server = new ServerConfig
                 {
                     Name = name,
+                    Enabled = !string.Equals(disabled, "True", StringComparison.OrdinalIgnoreCase),
                     Connection =
                     {
                         Host = host,
@@ -230,14 +251,19 @@ public static class SiteImporter
                 };
 
                 // TLS: FTPRush 2+ uses FTPEnryptMode (1=Implicit, 2=Explicit)
-                // Older uses SSL/SSLMODE
-                var encMode = site.Element("FTPEnryptMode")?.Value;
-                var ssl = site.Element("SSL")?.Value;
-                var sslMode = site.Element("SSLMODE")?.Value;
-                if (encMode is "1" or "2" || ssl == "True" || ssl == "1" || sslMode is "1" or "2" or "3")
+                // Older uses <SSL ONDATA="True" LIST="True">mode</SSL> where mode: 1=Auth TLS, 3=Implicit
+                var encMode = site.Element("FTPEnryptMode")?.Value?.Trim();
+                var sslEl = site.Element("SSL");
+                var sslValue = sslEl?.Value?.Trim();
+                var sslMode = site.Element("SSLMODE")?.Value?.Trim();
+                if (encMode is "1" or "2" ||
+                    sslValue is "1" or "2" or "3" || sslValue == "True" ||
+                    sslMode is "1" or "2" or "3")
+                {
                     server.Tls.PreferTls12 = true;
+                }
 
-                // Password: FTPRush 2+ stores Base64Password
+                // Password: FTPRush 2+ stores Base64Password, older stores PASS (proprietary encryption)
                 var b64pw = site.Element("Base64Password")?.Value;
                 if (!string.IsNullOrEmpty(b64pw))
                 {
@@ -248,6 +274,19 @@ public static class SiteImporter
                             CredentialStore.SavePassword(host, port, user, password);
                     }
                     catch { }
+                }
+                else
+                {
+                    // Old PASS element uses proprietary encryption — try XOR decode
+                    var passHex = (site.Element("PASS") ?? site.Element("Pass"))?.Value?.Trim();
+                    if (!string.IsNullOrEmpty(passHex))
+                    {
+                        var decoded = DecodeFtpRushPassword(passHex);
+                        if (!string.IsNullOrEmpty(decoded) && !string.IsNullOrEmpty(user))
+                            CredentialStore.SavePassword(host, port, user, decoded);
+                        else
+                            Log.Debug("FTPRush PASS could not be decoded for {Name} — re-enter password manually", name);
+                    }
                 }
 
                 // Proxy settings (FTPRush uses PROXY_HOST, PROXY_PORT, PROXY_USER, PROXY_TYPE)
@@ -273,16 +312,32 @@ public static class SiteImporter
                     Log.Debug("  with proxy: {ProxyHost}:{ProxyPort}", proxyHost, proxyPort);
                 }
 
-                // Skiplist / file filter patterns
-                var skiplistEl = site.Element("SKIPLIST") ?? site.Element("MASK");
-                if (skiplistEl != null)
+                // Skiplist: SKIP (old format with 8-digit flags), SKIPLIST, MASK, FileFilters
+                var skipEl = site.Element("SKIP") ?? site.Element("Skip");
+                if (skipEl != null)
                 {
-                    foreach (var rule in ParseSkiplistElement(skiplistEl))
+                    foreach (var rule in ParseFtpRushSkipElement(skipEl))
                         server.SpreadSite.Skiplist.Add(rule);
                 }
+                else
+                {
+                    var skiplistEl = site.Element("SKIPLIST") ?? site.Element("MASK");
+                    if (skiplistEl != null)
+                    {
+                        foreach (var rule in ParseSkiplistElement(skiplistEl))
+                            server.SpreadSite.Skiplist.Add(rule);
+                    }
+                }
+
+                // Pool size from LOGIN MAX attribute
+                var loginEl = site.Element("LOGIN") ?? site.Element("Login");
+                var maxStr = loginEl?.Attribute("MAX")?.Value ?? loginEl?.Attribute("Max")?.Value;
+                if (int.TryParse(maxStr, out var maxConn) && maxConn > 0)
+                    server.Pool.PoolSize = Math.Min(maxConn, 10);
 
                 results.Add(server);
-                Log.Debug("FTPRush import: {Name} ({Host}:{Port})", name, host, port);
+                Log.Debug("FTPRush import: {Name} ({Host}:{Port}, TLS={Tls}, skip={Skip})",
+                    name, host, port, server.Tls.PreferTls12, server.SpreadSite.Skiplist.Count);
             }
             catch (Exception ex)
             {
@@ -292,6 +347,157 @@ public static class SiteImporter
 
         Log.Information("FTPRush import: {Count} sites from {File}", results.Count, Path.GetFileName(xmlPath));
         return results;
+    }
+
+    /// <summary>
+    /// Parse FTPRush old-format SKIP element with 8-digit flag prefix per item.
+    /// Format: &lt;SKIP&gt;&lt;I&gt;10211111Proof&lt;/I&gt;...&lt;/SKIP&gt;
+    /// Flag prefix: [nameOrPath][0][action][target]1111
+    ///   pos 0: 1=match name only, 0=match full path
+    ///   pos 2: 2=deny/skip
+    ///   pos 3: 1=directories, 3=files
+    /// </summary>
+    private static List<SkiplistRule> ParseFtpRushSkipElement(XElement skipEl)
+    {
+        var rules = new List<SkiplistRule>();
+
+        foreach (var item in skipEl.Elements("I"))
+        {
+            var raw = item.Value.Trim();
+            if (raw.Length <= 8) continue;
+
+            // First 8 chars are flags, rest is the pattern
+            var flags = raw[..8];
+            var pattern = raw[8..];
+            if (string.IsNullOrEmpty(pattern)) continue;
+
+            var matchDirs = true;
+            var matchFiles = true;
+
+            // Position 3: 1=directories only, 3=files only
+            if (flags.Length > 3)
+            {
+                if (flags[3] == '1') matchFiles = false;  // dirs only
+                else if (flags[3] == '3') matchDirs = false;  // files only
+            }
+
+            rules.Add(new SkiplistRule
+            {
+                Pattern = pattern,
+                Action = SkiplistAction.Deny,
+                MatchDirectories = matchDirs,
+                MatchFiles = matchFiles
+            });
+        }
+
+        // Fallback: try as plain text if no <I> children found
+        if (rules.Count == 0 && !string.IsNullOrWhiteSpace(skipEl.Value))
+        {
+            foreach (var part in skipEl.Value.Split(['\n', '\r', ';'], StringSplitOptions.RemoveEmptyEntries))
+            {
+                var rule = ParseSkipPattern(part.Trim());
+                if (rule != null) rules.Add(rule);
+            }
+        }
+
+        return rules;
+    }
+
+    /// <summary>
+    /// Convert a packed 32-bit integer IP to dotted notation (e.g. 1735868216 → "103.110.92.72").
+    /// Returns the original string if it's already a hostname or standard IP.
+    /// </summary>
+    private static string ResolvePackedIp(string host)
+    {
+        if (!uint.TryParse(host, out var packed)) return host;
+        // Ignore small numbers that aren't valid IPs
+        if (packed < 16777216) return host; // < 1.0.0.0
+
+        try
+        {
+            // FTPRush stores IPs as 32-bit integers in network byte order
+            var bytes = BitConverter.GetBytes(packed);
+            if (BitConverter.IsLittleEndian)
+                Array.Reverse(bytes);
+            var ip = new IPAddress(bytes).ToString();
+            Log.Debug("Resolved packed IP {Packed} → {Ip}", host, ip);
+            return ip;
+        }
+        catch
+        {
+            return host;
+        }
+    }
+
+    /// <summary>
+    /// Decode FTPRush old-format password (hex-encoded XOR with fixed key "RushSite").
+    /// Returns null if decoding fails or produces non-printable characters.
+    /// </summary>
+    private static string? DecodeFtpRushPassword(string hexStr)
+    {
+        // Validate hex string
+        if (hexStr.Length % 2 != 0) return null;
+        if (!Regex.IsMatch(hexStr, @"^[0-9A-Fa-f]+$")) return null;
+
+        try
+        {
+            var key = "RushSite"u8;
+            var bytes = Convert.FromHexString(hexStr);
+            for (var i = 0; i < bytes.Length; i++)
+                bytes[i] ^= key[i % key.Length];
+
+            var result = Encoding.ASCII.GetString(bytes);
+            // Verify it's printable
+            if (result.Any(c => c < 0x20 || c > 0x7E))
+                return null;
+            return result;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Repair common FTPRush XML issues: unclosed SITE tags, missing root element.
+    /// </summary>
+    private static string RepairFtpRushXml(string xml)
+    {
+        var sb = new StringBuilder(xml.Length + 256);
+        var siteOpen = false;
+
+        foreach (var rawLine in xml.Split('\n'))
+        {
+            var trimmed = rawLine.TrimStart();
+
+            // If a new SITE or GROUP starts while a SITE is unclosed, close it first
+            if (siteOpen &&
+                (trimmed.StartsWith("<SITE ", StringComparison.OrdinalIgnoreCase) ||
+                 trimmed.StartsWith("<GROUP ", StringComparison.OrdinalIgnoreCase) ||
+                 trimmed.StartsWith("</GROUP>", StringComparison.OrdinalIgnoreCase)))
+            {
+                sb.AppendLine("    </SITE>");
+                siteOpen = false;
+            }
+
+            if (trimmed.StartsWith("<SITE ", StringComparison.OrdinalIgnoreCase) &&
+                !trimmed.Contains("/>"))
+            {
+                siteOpen = true;
+            }
+            else if (trimmed.StartsWith("</SITE>", StringComparison.OrdinalIgnoreCase))
+            {
+                siteOpen = false;
+            }
+
+            sb.Append(rawLine);
+            sb.Append('\n');
+        }
+
+        if (siteOpen)
+            sb.AppendLine("    </SITE>");
+
+        return sb.ToString();
     }
 
     /// <summary>

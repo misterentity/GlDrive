@@ -63,6 +63,9 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private DispatcherTimer? _preDbCountdownTimer;
     private int _preDbRefreshProgress;
     private DateTime _preDbNextRefresh;
+    private string _preDbSectionFilter = "All";
+    private readonly List<PreDbItemVm> _allPreDbItems = new();
+    private int _preDbHighestId;
 
     // Notification filter state
     private List<NotificationItemVm> _allNotifications = new();
@@ -329,6 +332,20 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         set { _preDbRefreshProgress = value; OnPropertyChanged(); }
     }
 
+    public string PreDbSectionFilter
+    {
+        get => _preDbSectionFilter;
+        set
+        {
+            _preDbSectionFilter = value;
+            OnPropertyChanged();
+            ApplyPreDbFilter();
+        }
+    }
+
+    public string[] PreDbSectionFilters { get; } =
+        ["All", "TV", "Movies", "Music", "Games", "Apps", "Sports", "Anime", "Books", "XXX", "Other"];
+
     public string SearchQuery
     {
         get => _searchQuery;
@@ -397,6 +414,11 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     public ICommand SearchPreDbCommand { get; }
     public ICommand CancelPreDbSearchCommand { get; }
     public ICommand LoadLatestPreDbCommand { get; }
+    public ICommand CopyPreDbReleaseCommand { get; }
+    public ICommand SearchPreDbOnServersCommand { get; }
+    public ICommand RacePreDbCommand { get; }
+    public ICommand CopyNotificationReleaseCommand { get; }
+    public ICommand SearchNotificationOnServersCommand { get; }
 
     public DashboardViewModel(ServerManager serverManager, AppConfig config, NotificationStore notificationStore)
     {
@@ -434,6 +456,33 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         SearchPreDbCommand = new RelayCommand(async () => await PerformPreDbSearch());
         CancelPreDbSearchCommand = new RelayCommand(CancelPreDbSearch);
         LoadLatestPreDbCommand = new RelayCommand(async () => await LoadLatestPreDb());
+        CopyPreDbReleaseCommand = new RelayCommand(() =>
+        {
+            if (_selectedPreDbItem != null)
+                System.Windows.Clipboard.SetText(_selectedPreDbItem.Name);
+        });
+        SearchPreDbOnServersCommand = new RelayCommand(async () =>
+        {
+            if (_selectedPreDbItem == null) return;
+            SearchQuery = _selectedPreDbItem.Name;
+            await PerformSearch();
+        });
+        RacePreDbCommand = new RelayCommand(() =>
+        {
+            if (_selectedPreDbItem == null) return;
+            RaceByName(_selectedPreDbItem.Category, _selectedPreDbItem.Name);
+        });
+        CopyNotificationReleaseCommand = new RelayCommand(() =>
+        {
+            if (SelectedNotificationItem != null)
+                System.Windows.Clipboard.SetText(SelectedNotificationItem.ReleaseName);
+        });
+        SearchNotificationOnServersCommand = new RelayCommand(async () =>
+        {
+            if (SelectedNotificationItem == null) return;
+            SearchQuery = SelectedNotificationItem.ReleaseName;
+            await PerformSearch();
+        });
 
         // Status bar timer
         _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
@@ -1357,6 +1406,54 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
+    /// <summary>Start a race for a release by name, auto-detecting section from configured servers.</summary>
+    private void RaceByName(string sectionHint, string releaseName)
+    {
+        var spread = _serverManager.Spread;
+        if (spread == null)
+        {
+            SearchStatus = "Spread engine not available";
+            return;
+        }
+
+        // Try exact section match first, then try matching by predb section → configured section name
+        var connectedIds = spread.GetConnectedServerIds();
+        var serverIds = _config.Servers
+            .Where(s => s.Enabled && connectedIds.Contains(s.Id))
+            .Where(s => s.SpreadSite.Sections.Keys
+                .Any(k => k.Equals(sectionHint, StringComparison.OrdinalIgnoreCase) ||
+                          sectionHint.Contains(k, StringComparison.OrdinalIgnoreCase)))
+            .Select(s => s.Id)
+            .ToList();
+
+        // Determine which section key to use
+        var section = sectionHint;
+        if (serverIds.Count >= 2)
+        {
+            var firstServer = _config.Servers.First(s => s.Id == serverIds[0]);
+            section = firstServer.SpreadSite.Sections.Keys
+                .FirstOrDefault(k => k.Equals(sectionHint, StringComparison.OrdinalIgnoreCase) ||
+                                     sectionHint.Contains(k, StringComparison.OrdinalIgnoreCase))
+                ?? sectionHint;
+        }
+
+        if (serverIds.Count < 2)
+        {
+            SearchStatus = $"Cannot race: need 2+ servers with a matching section for \"{sectionHint}\"";
+            return;
+        }
+
+        try
+        {
+            spread.StartRace(section, releaseName, serverIds, Spread.SpreadMode.Race);
+            SearchStatus = $"Race started: {releaseName} across {serverIds.Count} servers";
+        }
+        catch (Exception ex)
+        {
+            SearchStatus = $"Race failed: {ex.Message}";
+        }
+    }
+
     private void ClearNotifications()
     {
         _notificationStore.Clear();
@@ -1662,54 +1759,70 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         PreDbStatus = "Cancelled";
     }
 
-    /// <summary>Merge new releases into the list, prepending new ones at the top.</summary>
+    /// <summary>Merge new releases into the master list, then apply filter to display.</summary>
     private void MergePreDbItems(PreDbRelease[] releases)
     {
-        var existingIds = new HashSet<int>(PreDbItems.Select(x => x.Id));
-        int inserted = 0;
+        var existingIds = new HashSet<int>(_allPreDbItems.Select(x => x.Id));
+        var newItems = new List<PreDbItemVm>();
+
         foreach (var r in releases)
         {
             if (existingIds.Contains(r.Id)) continue;
-            PreDbItems.Insert(inserted, new PreDbItemVm
-            {
-                Id = r.Id,
-                Name = r.Release,
-                Team = r.Group,
-                Category = r.Section,
-                Size = r.SizeFormatted,
-                Files = r.Files > 0 ? r.Files.ToString() : "",
-                Time = r.PreTime.ToString("yyyy-MM-dd HH:mm"),
-                IsNuked = r.IsNuked,
-                NukeReason = r.Reason,
-                Genre = r.Genre
-            });
-            inserted++;
+            newItems.Add(ToPreDbVm(r));
+            if (r.Id > _preDbHighestId)
+                _preDbHighestId = r.Id;
         }
-        // Trim to 200 max
-        while (PreDbItems.Count > 200)
-            PreDbItems.RemoveAt(PreDbItems.Count - 1);
+
+        if (newItems.Count > 0)
+        {
+            _allPreDbItems.InsertRange(0, newItems);
+
+            // Trim master list to 500 max
+            while (_allPreDbItems.Count > 500)
+                _allPreDbItems.RemoveAt(_allPreDbItems.Count - 1);
+        }
+
+        // Update relative times for existing items
+        foreach (var item in _allPreDbItems)
+            item.Time = PreDbRelease.FormatTimeAgo(item.PreAt);
+
+        ApplyPreDbFilter();
     }
 
     private void PopulatePreDbItems(PreDbRelease[] releases)
     {
-        PreDbItems.Clear();
+        _allPreDbItems.Clear();
         foreach (var r in releases)
-        {
-            PreDbItems.Add(new PreDbItemVm
-            {
-                Id = r.Id,
-                Name = r.Release,
-                Team = r.Group,
-                Category = r.Section,
-                Genre = r.Genre,
-                Size = r.SizeFormatted,
-                Files = r.Files > 0 ? r.Files.ToString() : "",
-                Time = r.PreTime.ToString("g"),
-                IsNuked = r.IsNuked,
-                NukeReason = r.Reason
-            });
-        }
+            _allPreDbItems.Add(ToPreDbVm(r));
+        ApplyPreDbFilter();
     }
+
+    private void ApplyPreDbFilter()
+    {
+        var filtered = _preDbSectionFilter == "All"
+            ? _allPreDbItems
+            : _allPreDbItems.Where(x => x.BroadCategory == _preDbSectionFilter).ToList();
+
+        PreDbItems.Clear();
+        foreach (var item in filtered.Take(300))
+            PreDbItems.Add(item);
+    }
+
+    private static PreDbItemVm ToPreDbVm(PreDbRelease r) => new()
+    {
+        Id = r.Id,
+        PreAt = r.PreAt,
+        Name = r.Release,
+        Team = r.Group,
+        Category = r.Section,
+        BroadCategory = r.BroadCategory,
+        Size = r.SizeFormatted,
+        Files = r.Files > 0 ? r.Files.ToString() : "",
+        Time = PreDbRelease.FormatTimeAgo(r.PreAt),
+        IsNuked = r.IsNuked,
+        NukeReason = r.Reason,
+        Genre = r.Genre
+    };
 
     public void Dispose()
     {
@@ -1736,9 +1849,11 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 public class PreDbItemVm
 {
     public int Id { get; set; }
+    public long PreAt { get; set; }
     public string Name { get; set; } = "";
     public string Team { get; set; } = "";
     public string Category { get; set; } = "";
+    public string BroadCategory { get; set; } = "";
     public string Genre { get; set; } = "";
     public string Size { get; set; } = "";
     public string Files { get; set; } = "";

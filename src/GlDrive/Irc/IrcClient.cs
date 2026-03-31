@@ -30,6 +30,10 @@ public class IrcClient : IDisposable
     {
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _tcp = new TcpClient();
+        _tcp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+        _tcp.Client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveTime, 60);
+        _tcp.Client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveInterval, 15);
+        _tcp.Client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveRetryCount, 3);
 
         await _tcp.ConnectAsync(host, port, _cts.Token);
 

@@ -19,9 +19,10 @@ public class PreDbClient : IDisposable
         _http = new HttpClient { BaseAddress = new Uri("https://api.predb.net/") };
         var version = typeof(PreDbClient).Assembly.GetName().Version;
         _http.DefaultRequestHeaders.UserAgent.ParseAdd($"GlDrive/{version}");
+        _http.Timeout = TimeSpan.FromSeconds(15);
     }
 
-    public async Task<PreDbRelease[]> SearchAsync(string query, int count = 30, int page = 0, CancellationToken ct = default)
+    public async Task<PreDbRelease[]> SearchAsync(string query, int count = 100, int page = 0, CancellationToken ct = default)
     {
         try
         {
@@ -37,7 +38,7 @@ public class PreDbClient : IDisposable
         }
     }
 
-    public async Task<PreDbRelease[]> GetLatestAsync(int count = 30, CancellationToken ct = default)
+    public async Task<PreDbRelease[]> GetLatestAsync(int count = 100, CancellationToken ct = default)
     {
         try
         {
@@ -92,5 +93,38 @@ public class PreDbRelease
             double gb = mb / 1024;
             return $"{gb:F2} GB";
         }
+    }
+
+    /// <summary>
+    /// Classify section into a broad category for filtering.
+    /// </summary>
+    public string BroadCategory => Section.ToUpperInvariant() switch
+    {
+        var s when s.StartsWith("TV") => "TV",
+        var s when s.Contains("X264") || s.Contains("X265") || s.Contains("XVID") ||
+                   s.Contains("DVDR") || s.Contains("BLURAY") || s == "MBLURAY" ||
+                   s == "MDVDR" => "Movies",
+        var s when s.StartsWith("MP3") || s.StartsWith("FLAC") || s.StartsWith("MUSIC") ||
+                   s == "AUDIOBOOK" => "Music",
+        var s when s.Contains("GAME") || s == "NSW" || s == "PS4" || s == "PS5" ||
+                   s == "XBOX360" || s == "XBOXONE" => "Games",
+        var s when s.StartsWith("XXX") => "XXX",
+        var s when s == "0DAY" || s.StartsWith("APP") || s == "PDA" => "Apps",
+        var s when s == "SPORTS" => "Sports",
+        var s when s.StartsWith("EBOOK") || s.StartsWith("BOOK") => "Books",
+        var s when s.StartsWith("ANIME") => "Anime",
+        var s when s.StartsWith("DOX") || s.StartsWith("DOC") => "Docs",
+        var s when s.StartsWith("MVID") => "MusicVideo",
+        _ => "Other"
+    };
+
+    public static string FormatTimeAgo(long preAt)
+    {
+        var elapsed = DateTimeOffset.UtcNow - DateTimeOffset.FromUnixTimeSeconds(preAt);
+        if (elapsed.TotalSeconds < 60) return $"{(int)elapsed.TotalSeconds}s ago";
+        if (elapsed.TotalMinutes < 60) return $"{(int)elapsed.TotalMinutes}m ago";
+        if (elapsed.TotalHours < 24) return $"{(int)elapsed.TotalHours}h {elapsed.Minutes}m ago";
+        if (elapsed.TotalDays < 7) return $"{(int)elapsed.TotalDays}d ago";
+        return DateTimeOffset.FromUnixTimeSeconds(preAt).LocalDateTime.ToString("yyyy-MM-dd HH:mm");
     }
 }
