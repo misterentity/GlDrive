@@ -293,7 +293,19 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         RefreshTrendingCommand = new RelayCommand(async () => await LoadTrending());
         SearchCommand = new RelayCommand(async () => await SearchTmdb());
         ToggleLibraryCommand = new RelayCommand(() => ShowLibrary = !ShowLibrary);
-        PlayLibraryItemCommand = new RelayCommand<LibraryItemVm>(async item => { if (item != null) await PlayLocalFile(item.FilePath); });
+        PlayLibraryItemCommand = new RelayCommand<LibraryItemVm>(async item =>
+        {
+            if (item == null) return;
+            if (item.FilePath.EndsWith(".rar", StringComparison.OrdinalIgnoreCase))
+            {
+                // RAR item needs extraction before playback
+                await ExtractAndPlayRar(item);
+            }
+            else
+            {
+                await PlayLocalFile(item.FilePath);
+            }
+        });
         PlayEpisodeCommand = new RelayCommand<TmdbEpisode>(async ep => { if (ep != null) await PlayEpisode(ep); });
         SeekForwardCommand = new RelayCommand(() => SeekRelative(10));
         SeekBackwardCommand = new RelayCommand(() => SeekRelative(-10));
@@ -657,25 +669,50 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
         foreach (var dir in Directory.GetDirectories(libPath).OrderByDescending(d => Directory.GetLastWriteTime(d)))
         {
-            var videos = Directory.GetFiles(dir, "*", SearchOption.AllDirectories)
-                .Where(f => IsVideoFile(f) || f.EndsWith(".rar", StringComparison.OrdinalIgnoreCase))
+            var allFiles = Directory.GetFiles(dir, "*", SearchOption.AllDirectories);
+
+            // Prefer actual video files; skip .partial files
+            var videoFiles = allFiles
+                .Where(f => IsVideoFile(f) && !f.EndsWith(".partial", StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
-            if (videos.Count == 0) continue;
+            // Fall back to .rar files if no extracted video exists
+            var rarFiles = allFiles
+                .Where(f => f.EndsWith(".rar", StringComparison.OrdinalIgnoreCase))
+                .ToList();
 
-            var largest = videos.OrderByDescending(f => new FileInfo(f).Length).First();
-            var fi = new FileInfo(largest);
+            if (videoFiles.Count == 0 && rarFiles.Count == 0) continue;
+
             var releaseName = Path.GetFileName(dir);
             var resumePos = _resumeStore?.GetPosition(releaseName) ?? 0;
 
-            LibraryItems.Add(new LibraryItemVm
+            if (videoFiles.Count > 0)
             {
-                ReleaseName = releaseName,
-                FilePath = largest,
-                FileName = fi.Name,
-                SizeText = FormatSize(fi.Length),
-                ResumePercent = resumePos > 2 ? $"{resumePos:F0}%" : ""
-            });
+                var largest = videoFiles.OrderByDescending(f => new FileInfo(f).Length).First();
+                var fi = new FileInfo(largest);
+                LibraryItems.Add(new LibraryItemVm
+                {
+                    ReleaseName = releaseName,
+                    FilePath = largest,
+                    FileName = fi.Name,
+                    SizeText = FormatSize(fi.Length),
+                    ResumePercent = resumePos > 2 ? $"{resumePos:F0}%" : ""
+                });
+            }
+            else
+            {
+                // RAR-only item — show it but mark as needing extraction
+                var largest = rarFiles.OrderByDescending(f => new FileInfo(f).Length).First();
+                var totalSize = rarFiles.Sum(f => new FileInfo(f).Length);
+                LibraryItems.Add(new LibraryItemVm
+                {
+                    ReleaseName = releaseName,
+                    FilePath = largest,
+                    FileName = $"{rarFiles.Count} RAR volume(s) — needs extraction",
+                    SizeText = FormatSize(totalSize),
+                    ResumePercent = ""
+                });
+            }
         }
     }
 
@@ -1038,30 +1075,108 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
     private async Task PlayLocalFile(string localPath)
     {
+        if (_mediaPlayer == null || _libVLC == null)
+        {
+            PlayerStatus = "Video player not initialized";
+            return;
+        }
+
+        if (!File.Exists(localPath))
+        {
+            PlayerStatus = $"File not found: {Path.GetFileName(localPath)}";
+            Log.Warning("PlayLocalFile: file not found: {Path}", localPath);
+            return;
+        }
+
         Log.Information("Playing from library: {Path}", localPath);
 
         SaveCurrentPosition();
-        // Derive release name from parent directory
         _currentReleaseName = Path.GetFileName(Path.GetDirectoryName(localPath) ?? "");
 
-        // Stop current playback completely before starting new media
         await Task.Run(() =>
         {
             _mediaPlayer!.Stop();
-            // Small delay to let VLC fully release resources
             Thread.Sleep(200);
         });
 
-        // Re-apply renderer if casting (Stop clears it)
         if (_activeRenderer != null)
             _mediaPlayer!.SetRenderer(_activeRenderer);
 
-        var media = new Media(_libVLC!, new Uri($"file:///{localPath.Replace('\\', '/')}"));
+        // Use FromPath instead of URI to avoid encoding issues with special characters
+        var media = new Media(_libVLC!, localPath, FromType.FromPath);
         _mediaPlayer!.Play(media);
 
         PlayerStatus = IsCasting
             ? $"Casting: {Path.GetFileName(localPath)}"
-            : $"Playing: {Path.GetFileName(localPath)} (from library)";
+            : $"Playing: {Path.GetFileName(localPath)}";
+    }
+
+    /// <summary>Extract video from local RAR files in library and play.</summary>
+    private async Task ExtractAndPlayRar(LibraryItemVm item)
+    {
+        if (_mediaPlayer == null || _libVLC == null)
+        {
+            PlayerStatus = "Video player not initialized";
+            return;
+        }
+
+        var dir = Path.GetDirectoryName(item.FilePath);
+        if (dir == null) return;
+
+        IsBuffering = true;
+        PlayerStatus = $"Extracting: {item.ReleaseName}...";
+
+        try
+        {
+            var extracted = await Task.Run(() =>
+            {
+                var firstRar = Directory.GetFiles(dir, "*.rar").OrderBy(f => f).FirstOrDefault();
+                if (firstRar == null) return null;
+
+                using var archive = SharpCompress.Archives.Rar.RarArchive.OpenArchive(firstRar);
+                var videoEntry = archive.Entries
+                    .Where(e => !e.IsDirectory && IsVideoFile(e.Key ?? ""))
+                    .OrderByDescending(e => e.Size)
+                    .FirstOrDefault();
+
+                if (videoEntry?.Key == null) return null;
+
+                var outPath = Path.Combine(dir, Path.GetFileName(videoEntry.Key));
+                if (File.Exists(outPath)) return outPath;
+
+                using var entryStream = videoEntry.OpenEntryStream();
+                using var outStream = new FileStream(outPath, FileMode.Create, FileAccess.Write,
+                    FileShare.None, 256 * 1024, FileOptions.SequentialScan);
+                entryStream.CopyTo(outStream, 256 * 1024);
+
+                // Clean up RAR volumes
+                foreach (var f in Directory.GetFiles(dir)
+                    .Where(f => Downloads.ArchiveExtractor.IsArchiveFile(Path.GetFileName(f))))
+                {
+                    try { File.Delete(f); } catch { }
+                }
+
+                return outPath;
+            });
+
+            IsBuffering = false;
+
+            if (extracted != null)
+            {
+                LoadLibrary(); // Refresh library to show extracted file
+                await PlayLocalFile(extracted);
+            }
+            else
+            {
+                PlayerStatus = "No video found in RAR archive";
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "RAR extraction failed for library item {Release}", item.ReleaseName);
+            PlayerStatus = $"Extraction failed: {ex.Message}";
+            IsBuffering = false;
+        }
     }
 
     // ── Playback controls ──
