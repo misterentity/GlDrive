@@ -36,10 +36,9 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private DownloadItemVm? _selectedDownloadItem;
     private SearchResultVm? _selectedSearchResult;
     private NotificationItemVm? _selectedNotificationItem;
-    private string _activeDownloadName = "";
-    private string _activeDownloadSpeed = "";
-    private double _activeDownloadPercent;
+    private string _activeDownloadSummary = "";
     private bool _hasActiveDownload;
+    private readonly Dictionary<string, (string name, double speed, double pct)> _activeDownloads = new();
     private UpcomingTvEpisodeVm? _selectedTvEpisode;
     private UpcomingMovieVm? _selectedUpcomingMovie;
     private string _upcomingQualityText = "1080p";
@@ -365,22 +364,10 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         set { _isSearching = value; OnPropertyChanged(); }
     }
 
-    public string ActiveDownloadName
+    public string ActiveDownloadSummary
     {
-        get => _activeDownloadName;
-        set { _activeDownloadName = value; OnPropertyChanged(); }
-    }
-
-    public string ActiveDownloadSpeed
-    {
-        get => _activeDownloadSpeed;
-        set { _activeDownloadSpeed = value; OnPropertyChanged(); }
-    }
-
-    public double ActiveDownloadPercent
-    {
-        get => _activeDownloadPercent;
-        set { _activeDownloadPercent = value; OnPropertyChanged(); }
+        get => _activeDownloadSummary;
+        set { _activeDownloadSummary = value; OnPropertyChanged(); }
     }
 
     public bool HasActiveDownload
@@ -403,6 +390,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     public ICommand SearchCommand { get; }
     public ICommand CancelSearchCommand { get; }
     public ICommand DownloadSearchResultCommand { get; }
+    public ICommand CopySearchResultCommand { get; }
     public ICommand RefreshMetadataCommand { get; }
     public ICommand ClearNotificationsCommand { get; }
     public ICommand DownloadNotificationCommand { get; }
@@ -452,6 +440,11 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         SearchCommand = new RelayCommand(async () => await PerformSearch());
         CancelSearchCommand = new RelayCommand(CancelSearch);
         DownloadSearchResultCommand = new RelayCommand(DownloadSearchResult);
+        CopySearchResultCommand = new RelayCommand(() =>
+        {
+            if (SelectedSearchResult != null)
+                System.Windows.Clipboard.SetText(SelectedSearchResult.ReleaseName);
+        });
         RefreshMetadataCommand = new RelayCommand(async () => await RefreshAllMetadata());
         LoadUpcomingCommand = new RelayCommand(async () => await LoadUpcoming(force: true));
         AddUpcomingToWishlistCommand = new RelayCommand(async () => await AddUpcomingToWishlist());
@@ -769,49 +762,63 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     private void DownloadSearchResult()
     {
-        if (SelectedSearchResult == null) return;
+        // Multi-select: download all selected, fall back to single selection
+        var selected = (SelectedSearchItems?.ToList()) ?? [];
+        if (selected.Count == 0 && SelectedSearchResult != null)
+            selected = [SelectedSearchResult];
+        if (selected.Count == 0) return;
 
-        var result = SelectedSearchResult;
-        var server = _serverManager.GetServer(result.ServerId);
-        if (server?.Downloads == null) return;
-
-        var parsed = SceneNameParser.Parse(result.ReleaseName);
-        var localBase = _config.Downloads.GetPathForCategory(result.Category);
-        var safeRelease = PathSanitizer.Sanitize(result.ReleaseName);
-        var safeTitle = PathSanitizer.Sanitize(parsed.Title);
-
-        string localPath;
-        if (parsed.Season != null)
+        var queued = 0;
+        var skipped = 0;
+        foreach (var result in selected)
         {
-            var seasonFolder = $"Season {parsed.Season:D2}";
-            localPath = Path.Combine(localBase, "TV", safeTitle, seasonFolder, safeRelease);
+            var server = _serverManager.GetServer(result.ServerId);
+            if (server?.Downloads == null) continue;
+
+            var parsed = SceneNameParser.Parse(result.ReleaseName);
+            var localBase = _config.Downloads.GetPathForCategory(result.Category);
+            var safeRelease = PathSanitizer.Sanitize(result.ReleaseName);
+            var safeTitle = PathSanitizer.Sanitize(parsed.Title);
+
+            string localPath;
+            if (parsed.Season != null)
+            {
+                var seasonFolder = $"Season {parsed.Season:D2}";
+                localPath = Path.Combine(localBase, "TV", safeTitle, seasonFolder, safeRelease);
+            }
+            else if (parsed.Year != null)
+            {
+                localPath = Path.Combine(localBase, "Movies", $"{safeTitle} ({parsed.Year})", safeRelease);
+            }
+            else
+            {
+                localPath = Path.Combine(localBase, PathSanitizer.Sanitize(result.Category), safeRelease);
+            }
+
+            var item = new DownloadItem
+            {
+                RemotePath = result.RemotePath,
+                ReleaseName = result.ReleaseName,
+                LocalPath = localPath,
+                Category = result.Category,
+                ServerId = result.ServerId,
+                ServerName = result.ServerName
+            };
+
+            if (server.Downloads.Enqueue(item))
+                queued++;
+            else
+                skipped++;
         }
-        else if (parsed.Year != null)
-        {
-            localPath = Path.Combine(localBase, "Movies", $"{safeTitle} ({parsed.Year})", safeRelease);
-        }
-        else
-        {
-            localPath = Path.Combine(localBase, PathSanitizer.Sanitize(result.Category), safeRelease);
-        }
 
-        var item = new DownloadItem
-        {
-            RemotePath = result.RemotePath,
-            ReleaseName = result.ReleaseName,
-            LocalPath = localPath,
-            Category = result.Category,
-            ServerId = result.ServerId,
-            ServerName = result.ServerName
-        };
-
-        if (!server.Downloads.Enqueue(item))
-        {
-            SearchStatus = $"Skipped: {result.ReleaseName} (duplicate or already exists)";
-            return;
-        }
+        SearchStatus = queued > 0
+            ? $"Queued {queued} download(s)" + (skipped > 0 ? $", {skipped} skipped" : "")
+            : $"Skipped {skipped} (duplicate or already exists)";
         RefreshDownloads();
     }
+
+    // Set from code-behind on SearchGrid SelectionChanged
+    public IEnumerable<SearchResultVm>? SelectedSearchItems { get; set; }
 
     private async Task SearchAndDownloadRelease(string releaseName)
     {
@@ -892,42 +899,67 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private void OnDownloadProgress(DownloadItem item, DownloadProgress progress)
     {
         _serverSpeeds[item.ServerId] = progress.BytesPerSecond;
+
+        var pct = progress.TotalBytes > 0
+            ? (double)progress.DownloadedBytes / progress.TotalBytes * 100 : 0;
+        _activeDownloads[item.Id] = (item.ReleaseName, progress.BytesPerSecond, pct);
+
         Application.Current?.Dispatcher.InvokeAsync(() =>
         {
             HasActiveDownload = true;
-            ActiveDownloadName = item.ReleaseName;
-            ActiveDownloadSpeed = FormatSpeed(progress.BytesPerSecond);
-            ActiveDownloadPercent = progress.TotalBytes > 0
-                ? (double)progress.DownloadedBytes / progress.TotalBytes * 100
-                : 0;
+            UpdateActiveDownloadSummary();
 
             // Update the grid row's Progress column
             var vm = DownloadItems.FirstOrDefault(d => d.Id == item.Id);
             if (vm != null)
             {
-                var pct = progress.TotalBytes > 0
-                    ? (int)(progress.DownloadedBytes * 100 / progress.TotalBytes)
-                    : 0;
+                var pctInt = (int)pct;
                 var fileName = progress.CurrentFileName ?? "";
                 vm.ProgressText = string.IsNullOrEmpty(fileName)
-                    ? $"{pct}%"
-                    : $"{pct}% — {fileName}";
+                    ? $"{pctInt}%"
+                    : $"{pctInt}% — {fileName}";
             }
         });
     }
 
     private void OnDownloadStatusChanged(DownloadItem item)
     {
+        if (item.Status != DownloadStatus.Downloading && item.Status != DownloadStatus.Extracting)
+        {
+            _activeDownloads.Remove(item.Id);
+            _serverSpeeds.Remove(item.ServerId);
+        }
+
         Application.Current?.Dispatcher.InvokeAsync(() =>
         {
             RefreshDownloads();
-            if (item.Status != DownloadStatus.Downloading && item.Status != DownloadStatus.Extracting)
-            {
-                HasActiveDownload = false;
-                ActiveDownloadPercent = 0;
-                _serverSpeeds.Remove(item.ServerId);
-            }
+            HasActiveDownload = _activeDownloads.Count > 0;
+            UpdateActiveDownloadSummary();
         });
+    }
+
+    private void UpdateActiveDownloadSummary()
+    {
+        if (_activeDownloads.Count == 0)
+        {
+            ActiveDownloadSummary = "";
+            return;
+        }
+
+        if (_activeDownloads.Count == 1)
+        {
+            var dl = _activeDownloads.Values.First();
+            ActiveDownloadSummary = $"{dl.name} — {FormatSpeed(dl.speed)} ({dl.pct:F0}%)";
+            return;
+        }
+
+        // Multiple concurrent downloads: show each on summary line
+        var totalSpeed = _activeDownloads.Values.Sum(d => d.speed);
+        var lines = _activeDownloads.Values
+            .Select(d => $"{d.name}  {d.pct:F0}%  {FormatSpeed(d.speed)}")
+            .ToList();
+        lines.Add($"Total: {FormatSpeed(totalSpeed)}");
+        ActiveDownloadSummary = string.Join("  |  ", lines);
     }
 
     public async Task LoadUpcoming(bool force = false)

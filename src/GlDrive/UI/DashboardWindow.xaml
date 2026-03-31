@@ -224,15 +224,12 @@
             <!-- Downloads Tab -->
             <TabItem Header="Downloads">
                 <DockPanel Margin="12">
-                    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,10"
-                                Visibility="{Binding HasActiveDownload, Converter={StaticResource BoolToVisibility}}">
-                        <TextBlock Foreground="{DynamicResource ForegroundBrush}" Margin="0,0,0,6">
-                            <Run Text="{Binding ActiveDownloadName, Mode=OneWay}" FontWeight="SemiBold"/>
-                            <Run Text=" &#x2014; " Foreground="{DynamicResource ForegroundDimBrush}"/>
-                            <Run Text="{Binding ActiveDownloadSpeed, Mode=OneWay}" Foreground="{DynamicResource AccentBrush}"/>
-                        </TextBlock>
-                        <ProgressBar Value="{Binding ActiveDownloadPercent}" Maximum="100" Height="6" Margin="0,0,0,0"/>
-                    </StackPanel>
+                    <Border DockPanel.Dock="Top" Margin="0,0,0,8" Padding="10,6"
+                            Background="{DynamicResource SurfaceBrush}" CornerRadius="4"
+                            Visibility="{Binding HasActiveDownload, Converter={StaticResource BoolToVisibility}}">
+                        <TextBlock Text="{Binding ActiveDownloadSummary}" FontSize="12"
+                                   Foreground="{DynamicResource ForegroundBrush}" TextWrapping="Wrap"/>
+                    </Border>
                     <Canvas DockPanel.Dock="Top" Height="40" Margin="0,0,0,6" ClipToBounds="True"
                             Background="{DynamicResource SurfaceBrush}"
                             Visibility="{Binding HasActiveDownload, Converter={StaticResource BoolToVisibility}}">
@@ -337,16 +334,24 @@
                                Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"/>
                     <DockPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
                         <Button Content="Download Selected" Command="{Binding DownloadSearchResultCommand}"
-                                Padding="16,6" Style="{StaticResource PrimaryButton}"/>
+                                Padding="16,6" Style="{StaticResource PrimaryButton}"
+                                ToolTip="Download all selected results (Ctrl+click to multi-select)"/>
                     </DockPanel>
                     <DataGrid ItemsSource="{Binding SearchResults}"
                               SelectedItem="{Binding SelectedSearchResult}"
                               AutoGenerateColumns="False" IsReadOnly="True"
-                              SelectionMode="Single" GridLinesVisibility="Horizontal"
+                              SelectionMode="Extended" GridLinesVisibility="Horizontal"
                               HeadersVisibility="Column" CanUserAddRows="False"
                               x:Name="SearchGrid"
+                              SelectionChanged="SearchGrid_SelectionChanged"
                               PreviewMouseLeftButtonDown="DragSource_PreviewMouseLeftButtonDown"
                               MouseMove="DragSource_MouseMove">
+                        <DataGrid.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="Download Selected" Command="{Binding DownloadSearchResultCommand}" FontWeight="Bold"/>
+                                <MenuItem Header="Copy Release Name" Command="{Binding CopySearchResultCommand}"/>
+                            </ContextMenu>
+                        </DataGrid.ContextMenu>
                         <DataGrid.InputBindings>
                             <KeyBinding Key="Return" Command="{Binding DownloadSearchResultCommand}"/>
                         </DataGrid.InputBindings>

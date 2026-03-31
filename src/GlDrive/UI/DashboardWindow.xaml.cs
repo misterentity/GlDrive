@@ -398,6 +398,12 @@ public partial class DashboardWindow : Window
             await _serverManager.SyncAfterConfigChange();
     }
 
+    private void SearchGrid_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (DataContext is DashboardViewModel vm)
+            vm.SelectedSearchItems = SearchGrid.SelectedItems.Cast<SearchResultVm>();
+    }
+
     private void DownloadsGrid_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
         if (DataContext is DashboardViewModel vm)
