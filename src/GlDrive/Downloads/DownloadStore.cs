@@ -120,6 +120,24 @@ public class DownloadStore
         Save();
     }
 
+    public void RemoveFailed()
+    {
+        _items.RemoveAll(i => i.Status == DownloadStatus.Failed);
+        Save();
+    }
+
+    public void RemoveCancelled()
+    {
+        _items.RemoveAll(i => i.Status == DownloadStatus.Cancelled);
+        Save();
+    }
+
+    public void RemoveFinished()
+    {
+        _items.RemoveAll(i => i.Status is DownloadStatus.Completed or DownloadStatus.Failed or DownloadStatus.Cancelled);
+        Save();
+    }
+
     /// <summary>Flush any pending save before shutdown.</summary>
     public void Flush()
     {

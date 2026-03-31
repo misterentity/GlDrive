@@ -152,10 +152,10 @@ public class DownloadManager : IDisposable
         DownloadStatusChanged?.Invoke(item);
     }
 
-    public void RemoveCompleted()
-    {
-        _store.RemoveCompleted();
-    }
+    public void RemoveCompleted() => _store.RemoveCompleted();
+    public void RemoveFailed() => _store.RemoveFailed();
+    public void RemoveCancelled() => _store.RemoveCancelled();
+    public void RemoveFinished() => _store.RemoveFinished();
 
     public void MoveUp(string id)
     {

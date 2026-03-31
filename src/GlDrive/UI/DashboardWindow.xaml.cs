@@ -398,6 +398,12 @@ public partial class DashboardWindow : Window
             await _serverManager.SyncAfterConfigChange();
     }
 
+    private void DownloadsGrid_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (DataContext is DashboardViewModel vm)
+            vm.SelectedDownloadItems = DownloadsGrid.SelectedItems.Cast<DownloadItemVm>();
+    }
+
     // Drag-and-drop: handle drop on Downloads grid
     private void Downloads_Drop(object sender, DragEventArgs e)
     {

@@ -396,6 +396,10 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     public ICommand CancelDownloadCommand { get; }
     public ICommand RetryDownloadCommand { get; }
     public ICommand ClearCompletedCommand { get; }
+    public ICommand ClearFailedCommand { get; }
+    public ICommand ClearCancelledCommand { get; }
+    public ICommand ClearAllFinishedCommand { get; }
+    public ICommand RemoveSelectedDownloadsCommand { get; }
     public ICommand SearchCommand { get; }
     public ICommand CancelSearchCommand { get; }
     public ICommand DownloadSearchResultCommand { get; }
@@ -438,6 +442,10 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         CancelDownloadCommand = new RelayCommand(CancelDownload);
         RetryDownloadCommand = new RelayCommand(RetryDownload);
         ClearCompletedCommand = new RelayCommand(ClearCompleted);
+        ClearFailedCommand = new RelayCommand(ClearFailed);
+        ClearCancelledCommand = new RelayCommand(ClearCancelled);
+        ClearAllFinishedCommand = new RelayCommand(ClearAllFinished);
+        RemoveSelectedDownloadsCommand = new RelayCommand(RemoveSelectedDownloads);
         ClearNotificationsCommand = new RelayCommand(ClearNotifications);
         DownloadNotificationCommand = new RelayCommand(DownloadNotification);
         RaceNotificationCommand = new RelayCommand(RaceNotification);
@@ -623,6 +631,49 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             server.Downloads?.RemoveCompleted();
         RefreshDownloads();
     }
+
+    private void ClearFailed()
+    {
+        foreach (var server in _serverManager.GetMountedServers())
+            server.Downloads?.RemoveFailed();
+        RefreshDownloads();
+    }
+
+    private void ClearCancelled()
+    {
+        foreach (var server in _serverManager.GetMountedServers())
+            server.Downloads?.RemoveCancelled();
+        RefreshDownloads();
+    }
+
+    private void ClearAllFinished()
+    {
+        foreach (var server in _serverManager.GetMountedServers())
+            server.Downloads?.RemoveFinished();
+        RefreshDownloads();
+    }
+
+    /// <summary>Cancel/remove multiple selected downloads.</summary>
+    public void RemoveSelectedDownloads()
+    {
+        var selected = SelectedDownloadItems?.ToList();
+        if (selected == null || selected.Count == 0) return;
+
+        foreach (var item in selected)
+        {
+            var server = _serverManager.GetServer(item.ServerId);
+            if (server?.Downloads == null) continue;
+
+            if (item.Status is "Queued" or "Downloading" or "Extracting")
+                server.Downloads.Cancel(item.Id);
+            else
+                server.Downloads.Store.Remove(item.Id);
+        }
+        RefreshDownloads();
+    }
+
+    // Set from code-behind on SelectionChanged
+    public IEnumerable<DownloadItemVm>? SelectedDownloadItems { get; set; }
 
     private void MoveUpDownload()
     {
