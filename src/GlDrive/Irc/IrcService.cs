@@ -764,16 +764,28 @@ public class IrcService : IDisposable
     {
         if (_client == null || !_client.IsConnected) return;
 
-        // Parse FiSH key from channel key field: [cbc:key] or [ecb:key]
+        // Parse FiSH key from channel key field. Supported formats:
+        //   [cbc:key]  — explicit CBC mode
+        //   [ecb:key]  — explicit ECB mode
+        //   [key]      — bare brackets, use server's default FishMode
+        //   key        — plain IRC channel key (no FiSH)
         string? joinKey = null;
         if (!string.IsNullOrEmpty(ch.Key))
         {
             var fishMatch = Regex.Match(ch.Key, @"^\[(cbc|ecb):(.+)\]$", RegexOptions.IgnoreCase);
             if (fishMatch.Success)
             {
+                // Explicit mode: [cbc:key] or [ecb:key]
                 var mode = fishMatch.Groups[1].Value.Equals("cbc", StringComparison.OrdinalIgnoreCase)
                     ? FishMode.CBC : FishMode.ECB;
                 _fishKeyStore.SetKey(ch.Name, fishMatch.Groups[2].Value, mode);
+            }
+            else if (ch.Key.StartsWith('[') && ch.Key.EndsWith(']') && ch.Key.Length > 2)
+            {
+                // Bare brackets: [key] — use server's default FishMode
+                var bareKey = ch.Key[1..^1];
+                _fishKeyStore.SetKey(ch.Name, bareKey, _serverConfig.Irc.FishMode);
+                Log.Information("FiSH key set for {Channel} using default mode {Mode}", ch.Name, _serverConfig.Irc.FishMode);
             }
             else
             {
