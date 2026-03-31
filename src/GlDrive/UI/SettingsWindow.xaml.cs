@@ -82,18 +82,23 @@ public partial class SettingsWindow : Window
 
     private async void RemoveServer_Click(object sender, RoutedEventArgs e)
     {
-        if (ServerGrid.SelectedItem is not ServerListItem selected) return;
+        var selected = ServerGrid.SelectedItems.Cast<ServerListItem>().ToList();
+        if (selected.Count == 0) return;
 
-        var result = MessageBox.Show(
-            $"Remove server \"{selected.Name}\"? This will unmount the drive.",
-            "Remove Server", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+        var msg = selected.Count == 1
+            ? $"Remove server \"{selected[0].Name}\"?\nThis will unmount the drive and delete its configuration."
+            : $"Remove {selected.Count} servers?\n\n{string.Join("\n", selected.Select(s => $"  • {s.Name}"))}\n\nThis will unmount all drives and delete their configurations.";
+
+        var result = MessageBox.Show(msg, $"Remove {selected.Count} Server(s)",
+            MessageBoxButton.YesNo, MessageBoxImage.Warning);
 
         if (result != MessageBoxResult.Yes) return;
 
-        // Unmount if mounted
-        await _serverManager.UnmountServerAsync(selected.Id);
-
-        _config.Servers.RemoveAll(s => s.Id == selected.Id);
+        foreach (var server in selected)
+        {
+            await _serverManager.UnmountServerAsync(server.Id);
+            _config.Servers.RemoveAll(s => s.Id == server.Id);
+        }
         RefreshServerList();
     }
 
