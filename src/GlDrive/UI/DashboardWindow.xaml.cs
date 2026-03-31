@@ -5,6 +5,7 @@ using System.Windows.Input;
 using GlDrive.Config;
 using GlDrive.Downloads;
 using GlDrive.Services;
+using Serilog;
 
 namespace GlDrive.UI;
 
@@ -129,11 +130,22 @@ public partial class DashboardWindow : Window
                 Dispatcher.Invoke(() => NowPlayingMode.IsChecked = true);
 
             // Defer heavy VLC init so the tab appears instantly
-            _ = Task.Run(() => _playerVm.InitVLC()).ContinueWith(_ =>
+            _ = Task.Run(() =>
             {
-                Dispatcher.Invoke(() =>
+                _playerVm.InitVLC();
+            }).ContinueWith(_ =>
+            {
+                Dispatcher.BeginInvoke(() =>
                 {
-                    PlayerVideoView.MediaPlayer = _playerVm.Player;
+                    if (_playerVm.Player != null)
+                    {
+                        PlayerVideoView.MediaPlayer = _playerVm.Player;
+                        Log.Information("VLC MediaPlayer connected to VideoView");
+                    }
+                    else
+                    {
+                        Log.Warning("VLC init failed — Player is null, VideoView not connected");
+                    }
                     _ = _playerVm.LoadTrending();
                 });
             }, TaskScheduler.Default);

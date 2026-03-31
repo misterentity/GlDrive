@@ -321,9 +321,11 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         if (_vlcInitialized) return;
         try
         {
+            Log.Information("Initializing LibVLC...");
             try
             {
                 Core.Initialize();
+                Log.Information("LibVLC Core.Initialize() succeeded");
             }
             catch (Exception ex)
             {
@@ -337,8 +339,10 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
                 "--network-caching=10000",
                 "--file-caching=5000",
                 "--live-caching=5000",
-                "--http-reconnect"
+                "--http-reconnect",
+                "--verbose=2"
             );
+            Log.Information("LibVLC instance created, version: {Version}", _libVLC.Changeset);
             _mediaPlayer = new MediaPlayer(_libVLC);
             _mediaPlayer.PositionChanged += (_, e) =>
             {
@@ -419,18 +423,22 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
             _streamServer = new MediaStreamServer(_serverManager, _config);
             _streamServer.Start();
+            Log.Information("MediaStreamServer started on port {Port}", _streamServer.Port);
+
             _resumeStore = new PlayerResumeStore(_streamServer.LibraryPath);
             _torrentStream = new TorrentStreamService(_streamServer.LibraryPath);
 
             StartRendererDiscovery();
 
             _vlcInitialized = true;
+            PlayerStatus = "Player ready";
             OnPropertyChanged(nameof(Player));
+            Log.Information("LibVLC fully initialized — player ready");
         }
         catch (Exception ex)
         {
             Log.Error(ex, "Failed to initialize LibVLC");
-            PlayerStatus = "Failed to initialize video player";
+            PlayerStatus = $"Player init failed: {ex.Message}";
         }
     }
 
@@ -1103,8 +1111,11 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
             _mediaPlayer!.SetRenderer(_activeRenderer);
 
         // Use FromPath instead of URI to avoid encoding issues with special characters
+        Log.Information("Creating VLC media from path: {Path}", localPath);
         var media = new Media(_libVLC!, localPath, FromType.FromPath);
+        Log.Information("VLC Media created, calling Play()");
         _mediaPlayer!.Play(media);
+        Log.Information("VLC Play() called for {Path}", localPath);
 
         PlayerStatus = IsCasting
             ? $"Casting: {Path.GetFileName(localPath)}"
