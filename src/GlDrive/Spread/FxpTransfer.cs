@@ -30,22 +30,11 @@ public class FxpTransfer
     {
         try
         {
-            // When both servers support CPSV, try CpsvPasv first (faster than relay).
-            // Relay is only needed when NEITHER server has routable PASV ports.
-            // Most cases: one is BNC (needs CPSV), other is direct (PASV works fine).
+            // When both servers support CPSV, use CpsvPasv (source CPSV, dest PASV).
+            // Relay mode is unreliable (TYPE I response desync), and in practice one
+            // server is always direct (routable PASV). Only use Relay as absolute last resort.
             if (mode == FxpMode.Relay)
-            {
-                try
-                {
-                    return await ExecuteCpsvPasv(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct);
-                }
-                catch (IOException)
-                {
-                    // CpsvPasv failed (dest PASV might not be routable) — fall back to relay
-                    Log.Debug("CpsvPasv failed, falling back to Relay mode");
-                    return await ExecuteRelay(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct);
-                }
-            }
+                mode = FxpMode.CpsvPasv;
 
             return mode switch
             {
