@@ -768,10 +768,8 @@ public class SpreadJob : IDisposable
                 ProgressChanged?.Invoke(this);
             };
 
-            // Pipeline TYPE I commands in parallel
-            await Task.WhenAll(
-                srcConn.Client.Execute("TYPE I", ct),
-                dstConn.Client.Execute("TYPE I", ct));
+            // TYPE I is sent inside FxpTransfer — don't send it here too
+            // (double TYPE I causes response queue desync on BNC servers)
 
             var ok = await transfer.ExecuteAsync(srcConn, dstConn, srcPath, dstPath, mode,
                 _spreadConfig.TransferTimeoutSeconds, ct);
