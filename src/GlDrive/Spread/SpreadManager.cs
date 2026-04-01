@@ -18,6 +18,8 @@ public class SpreadManager : IDisposable
     private readonly Lock _lock = new();
     private bool _disposed;
 
+    public Func<string, FtpConnectionPool?>? _getMainPool;
+
     public event Action<string, string, string>? AutoRaceAttempted; // section, release, result
 
     public IReadOnlyList<SpreadJob> ActiveJobs
@@ -123,8 +125,19 @@ public class SpreadManager : IDisposable
                 $"Connected pools: [{string.Join(", ", _spreadPools.Keys)}], " +
                 $"requested: [{string.Join(", ", serverIds)}]");
 
+        // Collect main server pools for scanning (spread pools are for FXP only)
+        var mainPools = new Dictionary<string, FtpConnectionPool>();
+        if (_getMainPool != null)
+        {
+            foreach (var id in serverIds)
+            {
+                var mainPool = _getMainPool(id);
+                if (mainPool != null) mainPools[id] = mainPool;
+            }
+        }
+
         var job = new SpreadJob(section, releaseName, mode, _config.Spread,
-            pools, configs, _speedTracker, _skiplist,
+            pools, mainPools, configs, _speedTracker, _skiplist,
             knownSourceServerId, knownSourcePath);
 
         job.ProgressChanged += j => JobProgressChanged?.Invoke(j);

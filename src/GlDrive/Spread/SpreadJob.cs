@@ -75,10 +75,12 @@ public class SpreadJob : IDisposable
 
     private readonly string? _knownSourceServerId;
     private readonly string? _knownSourcePath;
+    private readonly Dictionary<string, FtpConnectionPool> _mainPools;
 
     public SpreadJob(string section, string releaseName, SpreadMode mode,
         SpreadConfig spreadConfig,
         Dictionary<string, FtpConnectionPool> pools,
+        Dictionary<string, FtpConnectionPool> mainPools,
         Dictionary<string, ServerConfig> serverConfigs,
         SpeedTracker speedTracker, SkiplistEvaluator skiplist,
         string? knownSourceServerId = null, string? knownSourcePath = null)
@@ -93,6 +95,7 @@ public class SpreadJob : IDisposable
         _skiplist = skiplist;
         _knownSourceServerId = knownSourceServerId;
         _knownSourcePath = knownSourcePath;
+        _mainPools = mainPools;
 
         foreach (var (serverId, pool) in pools)
         {
@@ -367,12 +370,21 @@ public class SpreadJob : IDisposable
             var serverName = _serverConfigs.TryGetValue(serverId, out var cfg) ? cfg.Name : serverId;
             try
             {
-                if (!_pools.TryGetValue(serverId, out var pool))
+                // Prefer main server pool for scanning (has keepalive/reconnect)
+                // Fall back to spread pool if main pool unavailable
+                FtpConnectionPool? pool = null;
+                if (_mainPools.TryGetValue(serverId, out var mainPool))
+                    pool = mainPool;
+                else if (_pools.TryGetValue(serverId, out var spreadPool))
+                    pool = spreadPool;
+
+                if (pool == null)
                 {
                     Log.Warning("Spread scan: no pool for {Server}", serverName);
                     return;
                 }
-                Log.Information("Spread scan: listing {Server} at {Path}...", serverName, basePath);
+                Log.Information("Spread scan: listing {Server} at {Path} (using {PoolType} pool)...",
+                    serverName, basePath, _mainPools.ContainsKey(serverId) ? "main" : "spread");
                 var files = new List<SpreadFileInfo>();
                 await ScanDirectoryRecursive(pool, basePath, basePath, files, 0, ct);
                 Log.Information("Spread scan: {Server} returned {Count} files", serverName, files.Count);

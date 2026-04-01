@@ -31,6 +31,8 @@ public class ServerManager : IDisposable
         _certManager = certManager;
         _notificationStore = notificationStore;
         _spreadManager = new SpreadManager(config);
+        _spreadManager._getMainPool = serverId =>
+            _servers.TryGetValue(serverId, out var svc) ? svc.Pool : null;
     }
 
     public async Task MountServer(string serverId, CancellationToken ct = default)
