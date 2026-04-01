@@ -601,12 +601,69 @@ public partial class ServerEditDialog : Window
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .ToList();
 
+            // Sample directory contents from each section so AI can see actual releases
+            TestResultText.Text = "Sampling section contents...";
+            var sectionSamples = new Dictionary<string, List<string>>();
+            try
+            {
+                var sampleClient = new AsyncFtpClient(host, username, password, port);
+                sampleClient.Config.EncryptionMode = FtpEncryptionMode.Explicit;
+                sampleClient.Config.DataConnectionEncryption = true;
+                sampleClient.Config.CustomStream = typeof(GnuTlsStream);
+                var gnuConfig2 = new GnuConfig { SecuritySuite = GnuSuite.Secure128 };
+                if (PreferTls12Box.IsChecked == true)
+                    gnuConfig2.AdvancedOptions = [GnuAdvanced.NoTickets];
+                sampleClient.Config.CustomStreamConfig = gnuConfig2;
+                sampleClient.ValidateCertificate += (_, ev) => ev.Accept = true;
+                await sampleClient.Connect();
+
+                // Also scan the notification watch path for sections
+                var watchPath = WatchPathBox.Text?.Trim() ?? "/recent";
+                var pathsToSample = new Dictionary<string, string>(currentSections);
+
+                // Add watch path subdirs if not already in sections
+                try
+                {
+                    var watchItems = await sampleClient.GetListing(watchPath);
+                    foreach (var item in watchItems.Where(i => i.Type is FtpObjectType.Directory or FtpObjectType.Link))
+                    {
+                        var sectionName = item.Name.ToUpper().Replace("-", "_").Replace(" ", "_");
+                        pathsToSample.TryAdd(sectionName, item.FullName);
+                    }
+                }
+                catch { }
+
+                foreach (var (section, path) in pathsToSample.Take(10))
+                {
+                    try
+                    {
+                        var items = await sampleClient.GetListing(path);
+                        var dirs = items
+                            .Where(i => i.Type is FtpObjectType.Directory or FtpObjectType.Link)
+                            .OrderByDescending(i => i.Modified)
+                            .Take(5)
+                            .Select(i => i.Name)
+                            .ToList();
+                        if (dirs.Count > 0)
+                            sectionSamples[section] = dirs;
+                    }
+                    catch { }
+                }
+
+                await sampleClient.Disconnect();
+                sampleClient.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Log.Debug(ex, "Failed to sample section contents for AI");
+            }
+
             var model = "gpt_oss/gpt-oss-120b";
 
             TestResultText.Text = $"Analyzing with AI ({model})...";
 
             using var aiClient = new OpenRouterClient(apiKey, model);
-            var result = await aiClient.AnalyzeSiteRules(rulesText, currentSections, currentAffils);
+            var result = await aiClient.AnalyzeSiteRules(rulesText, currentSections, currentAffils, sectionSamples);
 
             if (result == null)
             {

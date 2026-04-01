@@ -109,10 +109,25 @@ public class OpenRouterClient : IDisposable
         string siteRulesRaw,
         Dictionary<string, string> currentSections,
         List<string> currentAffils,
+        Dictionary<string, List<string>>? sectionSamples = null,
         CancellationToken ct = default)
     {
+        var samplesText = "";
+        if (sectionSamples != null && sectionSamples.Count > 0)
+        {
+            var sb = new StringBuilder("\n=== SAMPLE RELEASES PER SECTION ===\n");
+            foreach (var (section, releases) in sectionSamples)
+            {
+                sb.AppendLine($"[{section}]");
+                foreach (var r in releases)
+                    sb.AppendLine($"  {r}");
+            }
+            samplesText = sb.ToString();
+        }
+
         var userPrompt = $"""
-            Analyze this glftpd SITE RULES output and generate spread configuration:
+            Analyze this glftpd SITE RULES output and generate spread configuration.
+            Use the sample releases to verify your rules make sense for actual content on the server.
 
             === SITE RULES ===
             {siteRulesRaw[..Math.Min(siteRulesRaw.Length, 3000)]}
@@ -122,8 +137,9 @@ public class OpenRouterClient : IDisposable
 
             === CURRENT AFFILS ===
             {string.Join(", ", currentAffils)}
-
+            {samplesText}
             Generate the optimal skiplist rules, slot limits, affils, and any section suggestions.
+            Ensure suggested sections include paths discovered from the sample data.
             """;
 
         try
