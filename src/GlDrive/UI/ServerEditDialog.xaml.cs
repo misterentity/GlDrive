@@ -658,7 +658,10 @@ public partial class ServerEditDialog : Window
                 Log.Debug(ex, "Failed to sample section contents for AI");
             }
 
-            var model = "openai/gpt-oss-120b:free";
+            // Read model from saved config
+            var savedConfig = ConfigManager.Load();
+            var model = savedConfig.Downloads.OpenRouterModel;
+            if (string.IsNullOrEmpty(model)) model = "openai/gpt-oss-120b:free";
 
             TestResultText.Text = $"Analyzing with AI ({model})...";
 

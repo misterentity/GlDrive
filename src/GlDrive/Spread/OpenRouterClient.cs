@@ -98,7 +98,7 @@ public class OpenRouterClient : IDisposable
         _http = new HttpClient
         {
             BaseAddress = new Uri("https://openrouter.ai/api/v1/"),
-            Timeout = TimeSpan.FromSeconds(60)
+            Timeout = TimeSpan.FromSeconds(180)
         };
         _http.DefaultRequestHeaders.Add("Authorization", $"Bearer {apiKey}");
         _http.DefaultRequestHeaders.Add("HTTP-Referer", "https://github.com/misterentity/GlDrive");
