@@ -10,7 +10,6 @@ using GlDrive.Config;
 using GlDrive.Ftp;
 using Serilog;
 using GlDrive.Spread;
-using Serilog;
 using static GlDrive.Config.SearchMethod;
 
 namespace GlDrive.UI;
@@ -542,6 +541,148 @@ public partial class ServerEditDialog : Window
         {
             DiscoverResultText.Text = $"Discovery failed: {ex.Message}";
             Log.Warning(ex, "Path discovery failed");
+        }
+    }
+
+    private async void AiSetup_Click(object sender, RoutedEventArgs e)
+    {
+        var apiKey = CredentialStore.GetApiKey("openrouter") ?? "";
+        if (string.IsNullOrEmpty(apiKey))
+        {
+            MessageBox.Show("Set your OpenRouter API key in Settings → Downloads first.",
+                "AI Setup", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var host = HostBox.Text;
+        var port = int.TryParse(PortBox.Text, out var p) ? Math.Clamp(p, 1, 65535) : 21;
+        var username = UsernameBox.Text;
+        var password = PasswordBox.Password;
+        if (string.IsNullOrEmpty(password))
+            password = CredentialStore.GetPassword(host, port, username) ?? "";
+
+        if (string.IsNullOrEmpty(host) || string.IsNullOrEmpty(username))
+        {
+            MessageBox.Show("Enter host and username first.", "AI Setup",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        TestResultText.Text = "Connecting for AI analysis...";
+
+        try
+        {
+            // Connect and get SITE RULES
+            var client = new AsyncFtpClient(host, username, password, port);
+            client.Config.EncryptionMode = FtpEncryptionMode.Explicit;
+            client.Config.DataConnectionEncryption = true;
+            client.Config.CustomStream = typeof(GnuTlsStream);
+            var gnuConfig = new GnuConfig { SecuritySuite = GnuSuite.Secure128 };
+            if (PreferTls12Box.IsChecked == true)
+                gnuConfig.AdvancedOptions = [GnuAdvanced.NoTickets];
+            client.Config.CustomStreamConfig = gnuConfig;
+            client.ValidateCertificate += (_, ev) => ev.Accept = true;
+
+            await client.Connect();
+            var reply = await client.Execute("SITE RULES");
+            await client.Disconnect();
+            client.Dispose();
+
+            var rulesText = reply.InfoMessages ?? reply.Message ?? "";
+            if (string.IsNullOrWhiteSpace(rulesText))
+            {
+                TestResultText.Text = "SITE RULES returned empty response.";
+                return;
+            }
+
+            // Gather current config context
+            var currentSections = ParseSections(SpreadSectionsBox.Text ?? "");
+            var currentAffils = (SpreadAffilsBox.Text ?? "")
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList();
+
+            var model = "gpt_oss/gpt-oss-120b";
+
+            TestResultText.Text = $"Analyzing with AI ({model})...";
+
+            using var aiClient = new OpenRouterClient(apiKey, model);
+            var result = await aiClient.AnalyzeSiteRules(rulesText, currentSections, currentAffils);
+
+            if (result == null)
+            {
+                TestResultText.Text = "AI analysis failed — check API key and logs.";
+                return;
+            }
+
+            // Build summary and apply
+            var changes = new List<string>();
+
+            if (result.MaxUploadSlots.HasValue)
+            {
+                SpreadMaxUpBox.Text = result.MaxUploadSlots.Value.ToString();
+                changes.Add($"Max uploads: {result.MaxUploadSlots.Value}");
+            }
+            if (result.MaxDownloadSlots.HasValue)
+            {
+                SpreadMaxDownBox.Text = result.MaxDownloadSlots.Value.ToString();
+                changes.Add($"Max downloads: {result.MaxDownloadSlots.Value}");
+            }
+
+            if (result.Affils.Count > 0)
+            {
+                var existingAffils = (SpreadAffilsBox.Text ?? "")
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                foreach (var a in result.Affils) existingAffils.Add(a);
+                SpreadAffilsBox.Text = string.Join(", ", existingAffils.OrderBy(a => a));
+                changes.Add($"Affils: {result.Affils.Count} groups");
+            }
+
+            if (result.SkiplistRules.Count > 0)
+            {
+                var existingPatterns = _siteSkiplist.Select(r => r.Pattern).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var added = 0;
+                foreach (var rule in result.SkiplistRules)
+                {
+                    if (!existingPatterns.Contains(rule.Pattern))
+                    {
+                        _siteSkiplist.Add(rule.ToSkiplistRule());
+                        existingPatterns.Add(rule.Pattern);
+                        added++;
+                    }
+                }
+                if (added > 0) changes.Add($"{added} skiplist rules");
+            }
+
+            if (result.SuggestedSections.Count > 0)
+            {
+                var existing = ParseSections(SpreadSectionsBox.Text ?? "");
+                foreach (var (name, path) in result.SuggestedSections)
+                {
+                    if (!existing.ContainsKey(name))
+                        existing[name] = path;
+                }
+                SpreadSectionsBox.Text = string.Join("\n",
+                    existing.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key}={kv.Value}"));
+                changes.Add($"{result.SuggestedSections.Count} section suggestions");
+            }
+
+            TestResultText.Text = changes.Count > 0
+                ? $"AI applied: {string.Join(", ", changes)}"
+                : "AI found no additional configuration to suggest.";
+
+            MessageBox.Show(
+                $"AI Analysis Complete ({model}):\n\n" +
+                (changes.Count > 0
+                    ? string.Join("\n", changes.Select(c => $"  • {c}"))
+                    : "No new changes suggested.") +
+                $"\n\n{result.Explanation}",
+                "AI Setup", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            TestResultText.Text = $"AI Setup failed: {ex.Message}";
+            Log.Warning(ex, "AI Setup failed");
         }
     }
 
