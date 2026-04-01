@@ -92,7 +92,7 @@ public class OpenRouterClient : IDisposable
         }
         """;
 
-    public OpenRouterClient(string apiKey, string model = "gpt_oss/gpt-oss-120b")
+    public OpenRouterClient(string apiKey, string model = "nvidia/nemotron-3-super-120b-a12b")
     {
         _model = model;
         _http = new HttpClient
