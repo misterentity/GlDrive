@@ -600,6 +600,12 @@ public class SpreadJob : IDisposable
         SpreadFileInfo? bestFile = null;
         string? bestSrc = null, bestDst = null;
         int bestScore = -1;
+        var candidateCount = 0;
+        var skippedDownloadOnly = 0;
+        var skippedAffil = 0;
+        var skippedSlots = 0;
+        var skippedFailures = 0;
+        var skippedOwned = 0;
 
         lock (_ownershipLock)
         {
@@ -640,14 +646,6 @@ public class SpreadJob : IDisposable
                     }
                 }
             }
-
-            // Log once per scoring round for debugging
-            var candidateCount = 0;
-            var skippedDownloadOnly = 0;
-            var skippedAffil = 0;
-            var skippedSlots = 0;
-            var skippedFailures = 0;
-            var skippedOwned = 0;
 
             foreach (var (fileName, owners) in _fileOwnership)
             {

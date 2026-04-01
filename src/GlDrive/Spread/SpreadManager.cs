@@ -228,7 +228,8 @@ public class SpreadManager : IDisposable
     /// Called by ServerManager when a new release is detected.
     /// Starts a race if auto-race is enabled and section matches.
     /// </summary>
-    public void TryAutoRace(string category, string releaseName)
+    public void TryAutoRace(string category, string releaseName,
+        string? sourceServerId = null, string? sourcePath = null)
     {
         if (!_config.Spread.AutoRaceOnNotification)
         {
@@ -236,31 +237,30 @@ public class SpreadManager : IDisposable
             return;
         }
 
-        var section = category;
+        // Pass ALL connected servers with any sections — the job auto-discovers paths
+        var connectedIds = GetConnectedServerIds();
         var serverIds = _config.Servers
-            .Where(s => s.Enabled && s.SpreadSite.Sections.ContainsKey(section))
+            .Where(s => s.Enabled && connectedIds.Contains(s.Id) && s.SpreadSite.Sections.Count > 0)
             .Select(s => s.Id)
-            .Where(id => GetConnectedServerIds().Contains(id))
             .ToList();
 
         if (serverIds.Count < 2)
         {
-            Log.Debug("Auto-race skipped for {Release}: fewer than 2 servers with section {Section}", releaseName, section);
-            AutoRaceAttempted?.Invoke(section, releaseName, $"Skipped — <2 servers for [{section}]");
+            AutoRaceAttempted?.Invoke(category, releaseName, $"Skipped — <2 connected servers with sections");
             return;
         }
 
         try
         {
-            StartRace(section, releaseName, serverIds, SpreadMode.Race);
+            StartRace(category, releaseName, serverIds, SpreadMode.Race, sourceServerId, sourcePath);
             Log.Information("Auto-race started: {Release} [{Section}] across {Count} servers",
-                releaseName, section, serverIds.Count);
-            AutoRaceAttempted?.Invoke(section, releaseName, $"Racing on {serverIds.Count} servers");
+                releaseName, category, serverIds.Count);
+            AutoRaceAttempted?.Invoke(category, releaseName, $"Racing on {serverIds.Count} servers");
         }
         catch (Exception ex)
         {
             Log.Warning(ex, "Auto-race failed for {Release}", releaseName);
-            AutoRaceAttempted?.Invoke(section, releaseName, $"Failed: {ex.Message}");
+            AutoRaceAttempted?.Invoke(category, releaseName, $"Failed: {ex.Message}");
         }
     }
 
