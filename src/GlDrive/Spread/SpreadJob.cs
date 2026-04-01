@@ -351,23 +351,35 @@ public class SpreadJob : IDisposable
 
     private async Task ScanSites(Dictionary<string, string> sitePaths, CancellationToken ct)
     {
-        // Scan all sites in parallel with recursive directory enumeration
+        Log.Information("Spread scan starting for {Count} servers: {Paths}",
+            sitePaths.Count, string.Join(", ", sitePaths.Select(kv =>
+            {
+                var name = _serverConfigs.TryGetValue(kv.Key, out var c) ? c.Name : kv.Key;
+                return $"{name}:{kv.Value}";
+            })));
+
         var results = new List<(string serverId, List<SpreadFileInfo> files)>();
         var scanLock = new Lock();
 
         var tasks = sitePaths.Select(async kvp =>
         {
             var (serverId, basePath) = kvp;
+            var serverName = _serverConfigs.TryGetValue(serverId, out var cfg) ? cfg.Name : serverId;
             try
             {
-                if (!_pools.TryGetValue(serverId, out var pool)) return;
+                if (!_pools.TryGetValue(serverId, out var pool))
+                {
+                    Log.Warning("Spread scan: no pool for {Server}", serverName);
+                    return;
+                }
+                Log.Information("Spread scan: listing {Server} at {Path}...", serverName, basePath);
                 var files = new List<SpreadFileInfo>();
                 await ScanDirectoryRecursive(pool, basePath, basePath, files, 0, ct);
+                Log.Information("Spread scan: {Server} returned {Count} files", serverName, files.Count);
                 lock (scanLock) results.Add((serverId, files));
             }
             catch (Exception ex)
             {
-                var serverName = _serverConfigs.TryGetValue(serverId, out var c) ? c.Name : serverId;
                 Log.Warning(ex, "Spread scan FAILED for {Server} at {Path}", serverName, basePath);
             }
         });
@@ -395,7 +407,10 @@ public class SpreadJob : IDisposable
     {
         if (depth > 3) return; // Max recursion depth
 
-        await using var conn = await pool.Borrow(ct);
+        // Timeout on borrow — don't wait forever if pool is exhausted
+        using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        borrowCts.CancelAfter(TimeSpan.FromSeconds(15));
+        await using var conn = await pool.Borrow(borrowCts.Token);
 
         FtpListItem[] items;
         if (pool.UseCpsv)
