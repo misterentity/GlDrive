@@ -131,7 +131,7 @@ public class DownloadConfig
     public string ResolveTmdbKey() => CredentialStore.GetApiKey("tmdb") ?? "";
     /// <summary>Resolve OpenRouter key from Credential Manager only.</summary>
     public string ResolveOpenRouterKey() => CredentialStore.GetApiKey("openrouter") ?? "";
-    public string OpenRouterModel { get; set; } = "gpt_oss/gpt-oss-120b";
+    public string OpenRouterModel { get; set; } = "nvidia/nemotron-3-super-120b-a12b";
     public bool AutoDownloadWishlist { get; set; } = true;
     public bool AutoExtract { get; set; } = true;
     public bool DeleteArchivesAfterExtract { get; set; } = true;

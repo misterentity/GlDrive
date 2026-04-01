@@ -88,7 +88,7 @@ public class SettingsViewModel : INotifyPropertyChanged
     public string TmdbApiKey { get => _tmdbApiKey; set { _tmdbApiKey = value; OnPropertyChanged(); } }
     public string OpenRouterApiKey { get => _openRouterApiKey; set { _openRouterApiKey = value; OnPropertyChanged(); } }
     public string OpenRouterModel { get => _openRouterModel; set { _openRouterModel = value; OnPropertyChanged(); } }
-    public string[] OpenRouterModels { get; } = ["gpt_oss/gpt-oss-120b", "anthropic/claude-sonnet-4", "google/gemini-2.5-pro", "meta-llama/llama-4-maverick", "deepseek/deepseek-r1"];
+    public string[] OpenRouterModels { get; } = ["nvidia/nemotron-3-super-120b-a12b", "anthropic/claude-sonnet-4.6", "openai/gpt-5.4", "google/gemini-2.5-pro", "deepseek/deepseek-r1", "qwen/qwen3.5-397b-a17b"];
     public bool AutoDownloadWishlist { get => _autoDownloadWishlist; set { _autoDownloadWishlist = value; OnPropertyChanged(); } }
     public bool AutoExtract { get => _autoExtract; set { _autoExtract = value; OnPropertyChanged(); } }
     public bool DeleteArchivesAfterExtract { get => _deleteArchivesAfterExtract; set { _deleteArchivesAfterExtract = value; OnPropertyChanged(); } }
