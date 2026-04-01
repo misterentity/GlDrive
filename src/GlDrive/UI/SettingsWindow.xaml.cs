@@ -102,6 +102,32 @@ public partial class SettingsWindow : Window
         RefreshServerList();
     }
 
+    private void EnableServer_Click(object sender, RoutedEventArgs e)
+    {
+        var selected = ServerGrid.SelectedItems.Cast<ServerListItem>().ToList();
+        if (selected.Count == 0) return;
+
+        foreach (var item in selected)
+        {
+            var server = _config.Servers.FirstOrDefault(s => s.Id == item.Id);
+            if (server != null) server.Enabled = true;
+        }
+        RefreshServerList();
+    }
+
+    private void DisableServer_Click(object sender, RoutedEventArgs e)
+    {
+        var selected = ServerGrid.SelectedItems.Cast<ServerListItem>().ToList();
+        if (selected.Count == 0) return;
+
+        foreach (var item in selected)
+        {
+            var server = _config.Servers.FirstOrDefault(s => s.Id == item.Id);
+            if (server != null) server.Enabled = false;
+        }
+        RefreshServerList();
+    }
+
     private void ImportSites_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new Microsoft.Win32.OpenFileDialog
