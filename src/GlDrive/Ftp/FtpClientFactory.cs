@@ -90,6 +90,10 @@ public class FtpClientFactory
         // Don't attempt MLSD (glftpd doesn't support it)
         client.Config.ListingCustomParser = null;
 
+        // Disable stale data check — GnuTLS crashes during ReadStaleDataAsync
+        // when connections are in a poisoned state (e.g., after failed FXP transfers)
+        client.Config.StaleDataCheck = false;
+
         // Self-signed cert validation via TOFU
         client.ValidateCertificate += (control, e) =>
         {
