@@ -70,8 +70,8 @@ public class ServerManager : IDisposable
             });
             NewReleaseDetected?.Invoke(serverId, serverConfig.Name, category, release, remotePath);
 
-            // Auto-race if enabled
-            _spreadManager?.TryAutoRace(category, release);
+            // Auto-race if enabled — pass known source server and path
+            _spreadManager?.TryAutoRace(category, release, serverId, remotePath);
         };
 
         _servers[serverId] = service;
