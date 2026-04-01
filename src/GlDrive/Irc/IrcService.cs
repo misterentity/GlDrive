@@ -426,6 +426,16 @@ public class IrcService : IDisposable
                 {
                     text = decrypted;
                     wasEncrypted = true;
+
+                    // Auto-detect peer's encryption mode and update stored key to match
+                    // This ensures our outgoing messages use the same mode they use
+                    var peerMode = msg.Trailing!.StartsWith("+OK *") ? FishMode.CBC : FishMode.ECB;
+                    if (keyEntry.Mode != peerMode)
+                    {
+                        _fishKeyStore.SetKey(effectiveTarget, keyEntry.Key, peerMode);
+                        Log.Information("FiSH mode updated for {Target}: {OldMode} → {NewMode}",
+                            effectiveTarget, keyEntry.Mode, peerMode);
+                    }
                 }
             }
         }
@@ -464,6 +474,11 @@ public class IrcService : IDisposable
                 {
                     text = decrypted;
                     wasEncrypted = true;
+
+                    // Auto-detect peer's mode and update
+                    var peerMode = msg.Trailing!.StartsWith("+OK *") ? FishMode.CBC : FishMode.ECB;
+                    if (keyEntry.Mode != peerMode)
+                        _fishKeyStore.SetKey(effectiveTarget, keyEntry.Key, peerMode);
                 }
             }
         }
@@ -874,10 +889,11 @@ public class IrcService : IDisposable
 
             var dh = new Dh1080();
             var sharedSecret = dh.ComputeSharedSecret(theirPubKey);
-            _fishKeyStore.SetKey(nick, sharedSecret, _serverConfig.Irc.FishMode);
+            // DH1080 FiSH standard uses CBC mode
+            _fishKeyStore.SetKey(nick, sharedSecret, FishMode.CBC);
 
             await _client.NoticeAsync(nick, Dh1080.FormatFinish(dh.GetPublicKeyBase64()));
-            AddSystemMessage(nick, "DH1080 key exchange completed (initiated by peer)");
+            AddSystemMessage(nick, $"DH1080 key exchange completed (initiated by {nick}) — CBC mode");
         }
         catch (Exception ex)
         {
@@ -890,10 +906,11 @@ public class IrcService : IDisposable
         if (!_pendingKeyExchanges.TryGetValue(nick, out var dh)) return;
 
         var sharedSecret = dh.ComputeSharedSecret(theirPubKey);
-        _fishKeyStore.SetKey(nick, sharedSecret, _serverConfig.Irc.FishMode);
+        // DH1080 FiSH standard uses CBC mode
+        _fishKeyStore.SetKey(nick, sharedSecret, FishMode.CBC);
         _pendingKeyExchanges.Remove(nick);
 
-        AddSystemMessage(nick, "DH1080 key exchange completed");
+        AddSystemMessage(nick, "DH1080 key exchange completed — CBC mode");
     }
 
     public void SetFishKey(string target, string key, FishMode mode)
