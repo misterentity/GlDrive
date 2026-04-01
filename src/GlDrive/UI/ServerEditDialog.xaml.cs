@@ -8,6 +8,7 @@ using FluentFTP.Proxy.AsyncProxy;
 using System.Collections.ObjectModel;
 using GlDrive.Config;
 using GlDrive.Ftp;
+using Serilog;
 using GlDrive.Spread;
 using Serilog;
 using static GlDrive.Config.SearchMethod;
@@ -997,7 +998,11 @@ public partial class ServerEditDialog : Window
                 return;
             }
 
+            Log.Information("SITE RULES raw response ({Length} chars):\n{Response}", fullResponse.Length, fullResponse);
             var parsed = SiteRulesParser.Parse(fullResponse);
+            Log.Information("SITE RULES parsed: {RuleCount} rules, {SkipCount} skiplist, {AffilCount} affils, maxUp={Up} maxDown={Down}",
+                parsed.RawRules.Count, SiteRulesParser.ToSkiplistRules(parsed).Count,
+                parsed.Affils.Count, parsed.MaxUploads, parsed.MaxDownloads);
             var changes = new List<string>();
 
             // Apply max upload/download slots
