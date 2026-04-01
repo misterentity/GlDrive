@@ -658,7 +658,7 @@ public partial class ServerEditDialog : Window
                 Log.Debug(ex, "Failed to sample section contents for AI");
             }
 
-            var model = "nvidia/nemotron-3-super-120b-a12b";
+            var model = "openai/gpt-oss-120b:free";
 
             TestResultText.Text = $"Analyzing with AI ({model})...";
 
