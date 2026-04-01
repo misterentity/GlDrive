@@ -544,6 +544,60 @@ public partial class ServerEditDialog : Window
         }
     }
 
+    private async void QuickSetup_Click(object sender, RoutedEventArgs e)
+    {
+        var results = new List<string>();
+
+        // 1. Auto-detect sections
+        try
+        {
+            AutoDetectSections_Click(sender, e);
+            // Wait for it to finish (it's async void, track via the TextBox)
+            await Task.Delay(500);
+            while (!SpreadSectionsBox.IsEnabled) await Task.Delay(500);
+            var sectionCount = SpreadSectionsBox.Text.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
+            results.Add($"Sections: {sectionCount} detected");
+        }
+        catch { results.Add("Sections: detection failed"); }
+
+        // 2. Add default skiplist rules (if none exist)
+        if (_siteSkiplist.Count == 0)
+        {
+            AddDefaultSkiplistRules_Click(sender, e);
+            results.Add($"Skiplist: {_siteSkiplist.Count} default rules added");
+        }
+        else
+        {
+            results.Add($"Skiplist: {_siteSkiplist.Count} existing rules kept");
+        }
+
+        // 3. Detect site rules (slots, affils, denied patterns)
+        try
+        {
+            DetectSiteRules_Click(sender, e);
+            await Task.Delay(500);
+            results.Add("Site rules: detection started");
+        }
+        catch { results.Add("Site rules: detection failed"); }
+
+        // 4. Add common IRC announce patterns if none configured
+        var existingRules = (IrcAnnounceRulesBox.Text ?? "").Trim();
+        if (string.IsNullOrEmpty(existingRules))
+        {
+            AddCommonAnnouncePatterns_Click(sender, e);
+            var ruleCount = (IrcAnnounceRulesBox.Text ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
+            results.Add($"IRC patterns: {ruleCount} common patterns added");
+        }
+        else
+        {
+            var ruleCount = existingRules.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
+            results.Add($"IRC patterns: {ruleCount} existing rules kept");
+        }
+
+        MessageBox.Show(string.Join("\n", results), "Quick Setup Complete",
+            MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
     private async void AutoDetectSections_Click(object sender, RoutedEventArgs e)
     {
         SpreadSectionsBox.IsEnabled = false;
@@ -637,7 +691,7 @@ public partial class ServerEditDialog : Window
                 (i.Type == FtpObjectType.Directory || i.Type == FtpObjectType.Link)
                 && !NonContentDirs.Contains(i.Name);
 
-            // List directories under scan root — each with 2+ subdirs is a section
+            // Scan primary root (e.g., /incoming/ or /)
             FtpListItem[] rootItems;
             try { rootItems = await ListDir(rootPath); }
             catch { rootItems = []; }
@@ -657,6 +711,27 @@ public partial class ServerEditDialog : Window
                         var sectionName = dir.Name.ToUpper()
                             .Replace(" ", "_").Replace("-", "_");
                         sections.TryAdd(sectionName, dir.FullName);
+                    }
+                }
+                catch { }
+            }
+
+            // Also scan the notification watch path (e.g., /recent/)
+            // Each subdirectory there is typically a section category
+            var watchPath = WatchPathBox.Text?.Trim();
+            if (!string.IsNullOrEmpty(watchPath) && watchPath != rootPath)
+            {
+                try
+                {
+                    SpreadSectionsBox.Text = $"Scanning {watchPath}...";
+                    var watchItems = await ListDir(watchPath);
+                    foreach (var dir2 in watchItems.Where(IsDirOrLink))
+                    {
+                        var sectionName = dir2.Name.ToUpper()
+                            .Replace(" ", "_").Replace("-", "_");
+                        // Use the watch path subdirectory as the section path
+                        // (e.g., /recent/tv-hd → TV_HD=/recent/tv-hd)
+                        sections.TryAdd(sectionName, dir2.FullName);
                     }
                 }
                 catch { }
