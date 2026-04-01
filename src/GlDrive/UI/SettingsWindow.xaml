@@ -103,9 +103,9 @@
                         <DockPanel Margin="0,0,0,8">
                             <TextBlock Text="AI Model:" VerticalAlignment="Center" Margin="0,0,6,0"/>
                             <ComboBox ItemsSource="{Binding OpenRouterModels}"
-                                      SelectedItem="{Binding OpenRouterModel}"
-                                      IsEditable="True" Text="{Binding OpenRouterModel}"
-                                      Width="250" HorizontalAlignment="Left"/>
+                                      IsEditable="True"
+                                      Text="{Binding OpenRouterModel, UpdateSourceTrigger=LostFocus}"
+                                      Width="300" HorizontalAlignment="Left"/>
                         </DockPanel>
 
                         <CheckBox Content="Auto-download wishlist matches"
