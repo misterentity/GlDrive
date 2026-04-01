@@ -22,6 +22,12 @@
                                 Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"/>
                         <Button Content="Remove" Click="RemoveServer_Click"
                                 Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"/>
+                        <Button Content="Enable" Click="EnableServer_Click"
+                                Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"
+                                ToolTip="Enable selected server(s)"/>
+                        <Button Content="Disable" Click="DisableServer_Click"
+                                Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"
+                                ToolTip="Disable selected server(s)"/>
                         <Button Content="Import Sites..." Click="ImportSites_Click"
                                 Padding="12,6" Style="{StaticResource SecondaryButton}"/>
                     </StackPanel>
