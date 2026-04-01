@@ -98,6 +98,16 @@
                         <TextBlock Text="TMDb API Key (for upcoming releases):" Margin="0,0,0,4"/>
                         <TextBox Text="{Binding TmdbApiKey, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
 
+                        <TextBlock Text="OpenRouter API Key (for AI Setup):" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding OpenRouterApiKey, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,4"/>
+                        <DockPanel Margin="0,0,0,8">
+                            <TextBlock Text="AI Model:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <ComboBox ItemsSource="{Binding OpenRouterModels}"
+                                      SelectedItem="{Binding OpenRouterModel}"
+                                      IsEditable="True" Text="{Binding OpenRouterModel}"
+                                      Width="250" HorizontalAlignment="Left"/>
+                        </DockPanel>
+
                         <CheckBox Content="Auto-download wishlist matches"
                                   IsChecked="{Binding AutoDownloadWishlist}" Margin="0,8,0,4"/>
                         <CheckBox Content="Auto-extract RAR archives after download"

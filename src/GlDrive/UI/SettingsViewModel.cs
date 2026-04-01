@@ -18,6 +18,8 @@ public class SettingsViewModel : INotifyPropertyChanged
     private string _qualityDefault;
     private string _omdbApiKey;
     private string _tmdbApiKey;
+    private string _openRouterApiKey;
+    private string _openRouterModel;
     private bool _autoDownloadWishlist;
     private bool _autoExtract;
     private bool _deleteArchivesAfterExtract;
@@ -50,6 +52,8 @@ public class SettingsViewModel : INotifyPropertyChanged
         // Prefer Credential Manager, fall back to config (migration)
         _omdbApiKey = CredentialStore.GetApiKey("omdb") ?? config.Downloads.OmdbApiKey;
         _tmdbApiKey = CredentialStore.GetApiKey("tmdb") ?? config.Downloads.TmdbApiKey;
+        _openRouterApiKey = CredentialStore.GetApiKey("openrouter") ?? "";
+        _openRouterModel = config.Downloads.OpenRouterModel;
         _autoDownloadWishlist = config.Downloads.AutoDownloadWishlist;
         _autoExtract = config.Downloads.AutoExtract;
         _deleteArchivesAfterExtract = config.Downloads.DeleteArchivesAfterExtract;
@@ -82,6 +86,9 @@ public class SettingsViewModel : INotifyPropertyChanged
     public string QualityDefault { get => _qualityDefault; set { _qualityDefault = value; OnPropertyChanged(); } }
     public string OmdbApiKey { get => _omdbApiKey; set { _omdbApiKey = value; OnPropertyChanged(); } }
     public string TmdbApiKey { get => _tmdbApiKey; set { _tmdbApiKey = value; OnPropertyChanged(); } }
+    public string OpenRouterApiKey { get => _openRouterApiKey; set { _openRouterApiKey = value; OnPropertyChanged(); } }
+    public string OpenRouterModel { get => _openRouterModel; set { _openRouterModel = value; OnPropertyChanged(); } }
+    public string[] OpenRouterModels { get; } = ["gpt_oss/gpt-oss-120b", "anthropic/claude-sonnet-4", "google/gemini-2.5-pro", "meta-llama/llama-4-maverick", "deepseek/deepseek-r1"];
     public bool AutoDownloadWishlist { get => _autoDownloadWishlist; set { _autoDownloadWishlist = value; OnPropertyChanged(); } }
     public bool AutoExtract { get => _autoExtract; set { _autoExtract = value; OnPropertyChanged(); } }
     public bool DeleteArchivesAfterExtract { get => _deleteArchivesAfterExtract; set { _deleteArchivesAfterExtract = value; OnPropertyChanged(); } }
@@ -118,8 +125,10 @@ public class SettingsViewModel : INotifyPropertyChanged
         // Store API keys in Credential Manager, clear from plaintext config
         SaveApiKey("omdb", OmdbApiKey);
         SaveApiKey("tmdb", TmdbApiKey);
+        SaveApiKey("openrouter", OpenRouterApiKey);
         config.Downloads.OmdbApiKey = "";
         config.Downloads.TmdbApiKey = "";
+        config.Downloads.OpenRouterModel = OpenRouterModel;
         config.Downloads.AutoDownloadWishlist = AutoDownloadWishlist;
         config.Downloads.AutoExtract = AutoExtract;
         config.Downloads.DeleteArchivesAfterExtract = DeleteArchivesAfterExtract;

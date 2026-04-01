@@ -254,9 +254,14 @@
 
                 <!-- Spread/FXP Settings -->
                 <DockPanel Margin="0,0,0,8">
-                    <Button DockPanel.Dock="Right" Content="Quick Setup" Click="QuickSetup_Click"
-                            Padding="12,4" Style="{StaticResource PrimaryButton}"
-                            ToolTip="Auto-detect sections, site rules, skiplist, and slots — all in one click"/>
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                        <Button Content="AI Setup" Click="AiSetup_Click"
+                                Padding="12,4" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"
+                                ToolTip="Use AI (OpenRouter) to analyze SITE RULES and suggest optimal spread configuration"/>
+                        <Button Content="Quick Setup" Click="QuickSetup_Click"
+                                Padding="12,4" Style="{StaticResource PrimaryButton}"
+                                ToolTip="Auto-detect sections, site rules, skiplist, and slots — all in one click"/>
+                    </StackPanel>
                     <TextBlock Text="Spread / FXP" FontWeight="SemiBold" VerticalAlignment="Center"/>
                 </DockPanel>
                 <DockPanel Margin="0,0,0,2">

@@ -129,6 +129,9 @@ public class DownloadConfig
     public string ResolveOmdbKey() => CredentialStore.GetApiKey("omdb") ?? "";
     /// <summary>Resolve TMDB key from Credential Manager only.</summary>
     public string ResolveTmdbKey() => CredentialStore.GetApiKey("tmdb") ?? "";
+    /// <summary>Resolve OpenRouter key from Credential Manager only.</summary>
+    public string ResolveOpenRouterKey() => CredentialStore.GetApiKey("openrouter") ?? "";
+    public string OpenRouterModel { get; set; } = "gpt_oss/gpt-oss-120b";
     public bool AutoDownloadWishlist { get; set; } = true;
     public bool AutoExtract { get; set; } = true;
     public bool DeleteArchivesAfterExtract { get; set; } = true;
