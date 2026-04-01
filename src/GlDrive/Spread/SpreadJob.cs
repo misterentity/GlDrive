@@ -823,8 +823,8 @@ public class SpreadJob : IDisposable
         {
             Log.Warning(ex, "FXP transfer error: {File} ({Src} -> {Dst})", file.Name, srcId, dstId);
 
-            // After a failed transfer, disconnect the connections instead of returning them
-            // to the pool — their command/response state may be desynced
+            // Mark connections as dead so pool discards them instead of reusing
+            // (command/response state may be desynced after failed transfer)
             try { srcConn?.Client.Disconnect(); } catch { }
             try { dstConn?.Client.Disconnect(); } catch { }
         }

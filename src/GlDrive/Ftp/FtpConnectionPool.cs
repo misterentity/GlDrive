@@ -142,7 +142,8 @@ public class FtpConnectionPool : IAsyncDisposable
                 await client.Disconnect(cts.Token);
             }
             catch { }
-            client.Dispose();
+            try { client.Dispose(); }
+            catch { } // GnuTLS can crash during disposal of poisoned streams
         });
     }
 
