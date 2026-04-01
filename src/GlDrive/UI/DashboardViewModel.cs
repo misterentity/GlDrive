@@ -495,9 +495,17 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         _preDbRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(15) };
         _preDbRefreshTimer.Tick += async (_, _) =>
         {
-            if (!_isPreDbTabActive) return;
-            if (!_isPreDbSearching && string.IsNullOrWhiteSpace(_preDbQuery))
+            // Always refresh regardless of which tab is active
+            if (_isPreDbSearching) return;
+            if (!string.IsNullOrWhiteSpace(_preDbQuery)) return;
+            try
+            {
                 await LoadLatestPreDb();
+            }
+            catch (Exception ex)
+            {
+                Log.Debug(ex, "PreDB auto-refresh failed");
+            }
         };
         _preDbRefreshTimer.Start();
         _preDbNextRefresh = DateTime.Now.AddSeconds(15);
