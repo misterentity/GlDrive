@@ -239,6 +239,12 @@ public partial class SettingsWindow : Window
             _categoryPaths.Remove(selected);
     }
 
+    private void ModelPreset_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button btn && btn.Content is string model)
+            _vm.OpenRouterModel = model;
+    }
+
     private void AddGlobalSkiplistRule_Click(object sender, RoutedEventArgs e)
     {
         _vm.GlobalSkiplist.Add(new SkiplistRule());

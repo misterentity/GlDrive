@@ -102,10 +102,20 @@
                         <TextBox Text="{Binding OpenRouterApiKey, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,4"/>
                         <DockPanel Margin="0,0,0,8">
                             <TextBlock Text="AI Model:" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                            <ComboBox ItemsSource="{Binding OpenRouterModels}"
-                                      IsEditable="True"
-                                      Text="{Binding OpenRouterModel, UpdateSourceTrigger=LostFocus}"
-                                      Width="300" HorizontalAlignment="Left"/>
+                            <TextBox Text="{Binding OpenRouterModel, UpdateSourceTrigger=PropertyChanged}"
+                                     Width="300" HorizontalAlignment="Left" Margin="0,0,0,2"/>
+                            <ItemsControl ItemsSource="{Binding OpenRouterModels}" Margin="0,0,0,0">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Button Content="{Binding}" Padding="6,2" Margin="0,0,4,2"
+                                                FontSize="10" Cursor="Hand"
+                                                Click="ModelPreset_Click"/>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
                         </DockPanel>
 
                         <CheckBox Content="Auto-download wishlist matches"
