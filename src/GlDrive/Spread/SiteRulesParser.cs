@@ -125,7 +125,17 @@ public static partial class SiteRulesParser
             if (nukeMatch.Success)
             {
                 var nukePattern = nukeMatch.Groups[1].Value.Trim();
-                if (!string.IsNullOrEmpty(nukePattern) &&
+
+                // "Nuke 3x|Disallowed Groups: -GRP1, -GRP2" → extract as affils
+                var groupsInNuke = DisallowedGroupsRegex().Match(nukePattern);
+                if (groupsInNuke.Success)
+                {
+                    var groups = Regex.Split(groupsInNuke.Groups[1].Value, @"[,\s]+")
+                        .Select(g => g.Trim().TrimStart('-').Trim())
+                        .Where(g => g.Length > 1 && g.Length < 30 && !IsCommonWord(g));
+                    affils.AddRange(groups);
+                }
+                else if (!string.IsNullOrEmpty(nukePattern) &&
                     !nukePattern.Equals("Anything else", StringComparison.OrdinalIgnoreCase))
                 {
                     // Split comma-separated nuke targets: "720P, 2160p" → ["720P", "2160p"]
@@ -280,7 +290,7 @@ public static partial class SiteRulesParser
     [GeneratedRegex(@"(?:disallowed|banned|denied|blacklisted)\s+groups?\s*[:=\-]\s*(.+)", RegexOptions.IgnoreCase)]
     private static partial Regex DisallowedGroupsRegex();
 
-    [GeneratedRegex(@"nuke\s+\d+x?\s*@\s*(.+)", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"nuke\s+\d+x?\s*[@|]\s*(.+)", RegexOptions.IgnoreCase)]
     private static partial Regex NukeRuleRegex();
 
     [GeneratedRegex(@"min(?:imum)?\s+(?:file\s*)?size\s*[:=]?\s*(\d+(?:\.\d+)?)\s*(kb|mb|gb|tb|k|m|g|t)\b", RegexOptions.IgnoreCase)]
