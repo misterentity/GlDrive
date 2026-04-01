@@ -641,6 +641,14 @@ public class SpreadJob : IDisposable
                 }
             }
 
+            // Log once per scoring round for debugging
+            var candidateCount = 0;
+            var skippedDownloadOnly = 0;
+            var skippedAffil = 0;
+            var skippedSlots = 0;
+            var skippedFailures = 0;
+            var skippedOwned = 0;
+
             foreach (var (fileName, owners) in _fileOwnership)
             {
                 if (!_fileInfos.TryGetValue(fileName, out var fileInfo)) continue;
@@ -650,18 +658,18 @@ public class SpreadJob : IDisposable
                     foreach (var (dstId, _) in sitePaths)
                     {
                         if (srcId == dstId) continue;
-                        if (owners.Contains(dstId)) continue;
+                        if (owners.Contains(dstId)) { skippedOwned++; continue; }
 
                         var dstConfig = _serverConfigs[dstId];
-                        if (dstConfig.SpreadSite.DownloadOnly) continue;
-                        if (_affilCache.GetValueOrDefault(dstId)) continue;
+                        if (dstConfig.SpreadSite.DownloadOnly) { skippedDownloadOnly++; continue; }
+                        if (_affilCache.GetValueOrDefault(dstId)) { skippedAffil++; continue; }
 
                         // Check slots from snapshot (no nested lock)
                         var dstActive = activeTransferSnapshot.GetValueOrDefault(dstId);
                         var srcActive = activeTransferSnapshot.GetValueOrDefault(srcId);
                         if (dstActive >= dstConfig.SpreadSite.MaxUploadSlots ||
                             srcActive >= _serverConfigs[srcId].SpreadSite.MaxDownloadSlots)
-                            continue;
+                        { skippedSlots++; continue; }
 
                         // Check Unique/Similar skiplist actions (O(1) via pre-built sets)
                         if (_fileActions.TryGetValue(fileName, out var skipAction))
@@ -682,7 +690,9 @@ public class SpreadJob : IDisposable
 
                         // Check failure backoff from snapshot (no nested lock)
                         if (failureSnapshot.TryGetValue((fileName, srcId, dstId), out var fails) && fails >= 5)
-                            continue;
+                        { skippedFailures++; continue; }
+
+                        candidateCount++;
 
                         var ownedPercent = _pools.Count > 0
                             ? owners.Count / (double)_pools.Count
@@ -705,7 +715,13 @@ public class SpreadJob : IDisposable
             }
         }
 
-        if (bestFile == null || bestSrc == null || bestDst == null) return null;
+        if (bestFile == null || bestSrc == null || bestDst == null)
+        {
+            if (_fileInfos.Count > 0 && candidateCount == 0)
+                Log.Warning("FindBestTransfer: {Files} files, 0 candidates. Skipped: owned={Owned} downloadOnly={DL} affil={Affil} slots={Slots} failures={Fail}",
+                    _fileInfos.Count, skippedOwned, skippedDownloadOnly, skippedAffil, skippedSlots, skippedFailures);
+            return null;
+        }
         return (bestFile, bestSrc, bestDst);
     }
 
@@ -808,6 +824,11 @@ public class SpreadJob : IDisposable
         catch (Exception ex)
         {
             Log.Warning(ex, "FXP transfer error: {File} ({Src} -> {Dst})", file.Name, srcId, dstId);
+
+            // After a failed transfer, disconnect the connections instead of returning them
+            // to the pool — their command/response state may be desynced
+            try { srcConn?.Client.Disconnect(); } catch { }
+            try { dstConn?.Client.Disconnect(); } catch { }
         }
         finally
         {
