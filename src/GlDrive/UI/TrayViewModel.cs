@@ -191,20 +191,28 @@ public class TrayViewModel : INotifyPropertyChanged
 
         UpdateCommand = new RelayCommand(async () =>
         {
-            // Always re-check — don't trust stale _availableUpdate
-            var release = await _updateChecker.CheckForUpdateAsync();
-            if (release != null)
+            try
             {
-                AvailableUpdate = release;
-                ShowNotification("GlDrive", $"Downloading {release.TagName}...");
-                // Clear so we don't re-download if something goes wrong
-                AvailableUpdate = null;
-                await Task.Run(() => _updateChecker.DownloadAndInstallAsync(release));
+                // Always re-check — don't trust stale _availableUpdate
+                var release = await _updateChecker.CheckForUpdateAsync();
+                if (release != null)
+                {
+                    AvailableUpdate = release;
+                    ShowNotification("GlDrive", $"Downloading {release.TagName}...");
+                    // Clear so we don't re-download if something goes wrong
+                    AvailableUpdate = null;
+                    await Task.Run(() => _updateChecker.DownloadAndInstallAsync(release));
+                }
+                else
+                {
+                    AvailableUpdate = null;
+                    ShowNotification("GlDrive", $"Already up to date (v{UpdateChecker.CurrentVersion.Major}.{UpdateChecker.CurrentVersion.Minor}.{UpdateChecker.CurrentVersion.Build})");
+                }
             }
-            else
+            catch (Exception ex)
             {
-                AvailableUpdate = null;
-                ShowNotification("GlDrive", $"Already up to date (v{UpdateChecker.CurrentVersion.Major}.{UpdateChecker.CurrentVersion.Minor}.{UpdateChecker.CurrentVersion.Build})");
+                Log.Warning(ex, "Update failed");
+                ShowNotification("GlDrive", $"Update failed: {ex.Message}");
             }
         });
 
