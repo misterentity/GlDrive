@@ -212,21 +212,8 @@ public class SpreadJob : IDisposable
                     sitePaths[serverId] = destPath;
                     Log.Information("Spread: {Server} is DESTINATION at [{Section}] {Path}",
                         config.Name, sectionMatch.Key, destPath);
-
-                    // Create the directory on the destination server
-                    if (_pools.TryGetValue(serverId, out var pool))
-                    {
-                        try
-                        {
-                            await using var conn = await pool.Borrow(ct);
-                            await conn.Client.CreateDirectory(destPath, true, ct);
-                            Log.Information("Spread: created {Path} on {Server}", destPath, config.Name);
-                        }
-                        catch (Exception ex)
-                        {
-                            Log.Warning(ex, "Spread: failed to create {Path} on {Server}", destPath, config.Name);
-                        }
-                    }
+                    // Directory is created lazily in ExecuteTransfer → EnsureDirectoryExists
+                    // only when we actually have a file to transfer
                 }
                 else
                 {
@@ -716,8 +703,17 @@ public class SpreadJob : IDisposable
         if (bestFile == null || bestSrc == null || bestDst == null)
         {
             if (_fileInfos.Count > 0 && candidateCount == 0)
+            {
                 Log.Warning("FindBestTransfer: {Files} files, 0 candidates. Skipped: owned={Owned} downloadOnly={DL} affil={Affil} slots={Slots} failures={Fail}",
                     _fileInfos.Count, skippedOwned, skippedDownloadOnly, skippedAffil, skippedSlots, skippedFailures);
+                if (skippedSlots > 0 && skippedOwned == 0)
+                    Log.Warning("FindBestTransfer slot details: {SlotInfo}",
+                        string.Join(", ", activeTransferSnapshot.Select(kv =>
+                        {
+                            var cfg = _serverConfigs.GetValueOrDefault(kv.Key);
+                            return $"{cfg?.Name ?? kv.Key}: active={kv.Value} up={cfg?.SpreadSite.MaxUploadSlots} down={cfg?.SpreadSite.MaxDownloadSlots}";
+                        })));
+            }
             return null;
         }
         return (bestFile, bestSrc, bestDst);
