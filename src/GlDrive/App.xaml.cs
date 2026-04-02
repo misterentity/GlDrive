@@ -103,6 +103,20 @@ public partial class App : Application
         // Init services — certificates auto-trusted on first connect (TOFU model)
         // Users can clear per-server certs in Settings > Servers > Edit > Clear Certificate
         var certManager = new CertificateManager();
+        certManager.CertificatePrompt += (key, message) =>
+        {
+            var tcs = new TaskCompletionSource<bool>();
+            Dispatcher.Invoke(() =>
+            {
+                var result = System.Windows.MessageBox.Show(
+                    message,
+                    "GlDrive — Certificate Changed",
+                    System.Windows.MessageBoxButton.YesNo,
+                    System.Windows.MessageBoxImage.Warning);
+                tcs.SetResult(result == System.Windows.MessageBoxResult.Yes);
+            });
+            return tcs.Task;
+        };
         var notificationStore = new NotificationStore();
         try { notificationStore.Load(); }
         catch (Exception ex) { Log.Warning(ex, "Failed to load notification store"); }

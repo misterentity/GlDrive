@@ -325,7 +325,7 @@ public class SpreadManager : IDisposable
 
         // Create dest base directory
         await using var mkdConn = await dstPool.Borrow(ct);
-        await mkdConn.Client.Execute($"MKD {dstPath}", ct);
+        await mkdConn.Client.Execute($"MKD {Ftp.CpsvDataHelper.SanitizeFtpPath(dstPath)}", ct);
 
         var mode = FxpModeDetector.Detect(srcPool, dstPool);
 
@@ -342,7 +342,7 @@ public class SpreadManager : IDisposable
                 foreach (var part in dirPart.Split('/', StringSplitOptions.RemoveEmptyEntries))
                 {
                     current += "/" + part;
-                    await dirConn.Client.Execute($"MKD {current}", ct);
+                    await dirConn.Client.Execute($"MKD {Ftp.CpsvDataHelper.SanitizeFtpPath(current)}", ct);
                 }
             }
 

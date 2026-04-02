@@ -38,14 +38,14 @@ public class TorrentStreamService : IDisposable
             MaximumHalfOpenConnections = 16,
             MaximumUploadRate = 100 * 1024, // 100 KB/s upload
             AllowLocalPeerDiscovery = true,
-            AllowPortForwarding = true,
+            AllowPortForwarding = false,
             AutoSaveLoadDhtCache = true,
             AutoSaveLoadFastResume = true,
             AutoSaveLoadMagnetLinkMetadata = true,
-            DhtEndPoint = new IPEndPoint(IPAddress.Any, dhtPort),
+            DhtEndPoint = new IPEndPoint(IPAddress.Loopback, dhtPort),
             ListenEndPoints = new Dictionary<string, IPEndPoint>
             {
-                { "ipv4", new IPEndPoint(IPAddress.Any, listenPort) }
+                { "ipv4", new IPEndPoint(IPAddress.Loopback, listenPort) }
             },
             HttpStreamingPrefix = $"http://127.0.0.1:{httpPort}/",
         }.ToSettings();

@@ -88,11 +88,11 @@ public class FxpTransfer
             throw new IOException($"PORT failed on source: {portReply.Code} {portReply.Message}");
 
         // Start STOR on dest, then RETR on source
-        var storReply = await dst.Execute($"STOR {dstPath}", ct);
+        var storReply = await dst.Execute($"STOR {Ftp.CpsvDataHelper.SanitizeFtpPath(dstPath)}", ct);
         if (storReply.Code != "150" && storReply.Code != "125")
             throw new IOException($"STOR failed: {storReply.Code} {storReply.Message}");
 
-        var retrReply = await src.Execute($"RETR {srcPath}", ct);
+        var retrReply = await src.Execute($"RETR {Ftp.CpsvDataHelper.SanitizeFtpPath(srcPath)}", ct);
         if (retrReply.Code != "150" && retrReply.Code != "125")
             throw new IOException($"RETR failed: {retrReply.Code} {retrReply.Message}");
 
@@ -125,11 +125,11 @@ public class FxpTransfer
         if (!portReply.Success)
             throw new IOException($"PORT failed on source: {portReply.Code} {portReply.Message}");
 
-        var storReply = await dst.Execute($"STOR {dstPath}", ct);
+        var storReply = await dst.Execute($"STOR {Ftp.CpsvDataHelper.SanitizeFtpPath(dstPath)}", ct);
         if (storReply.Code != "150" && storReply.Code != "125")
             throw new IOException($"STOR failed: {storReply.Code} {storReply.Message}");
 
-        var retrReply = await src.Execute($"RETR {srcPath}", ct);
+        var retrReply = await src.Execute($"RETR {Ftp.CpsvDataHelper.SanitizeFtpPath(srcPath)}", ct);
         if (retrReply.Code != "150" && retrReply.Code != "125")
             throw new IOException($"RETR failed: {retrReply.Code} {retrReply.Message}");
 
@@ -160,11 +160,11 @@ public class FxpTransfer
         if (!portReply.Success)
             throw new IOException($"PORT failed on dest: {portReply.Code} {portReply.Message}");
 
-        var storReply = await dst.Execute($"STOR {dstPath}", ct);
+        var storReply = await dst.Execute($"STOR {Ftp.CpsvDataHelper.SanitizeFtpPath(dstPath)}", ct);
         if (storReply.Code != "150" && storReply.Code != "125")
             throw new IOException($"STOR failed: {storReply.Code} {storReply.Message}");
 
-        var retrReply = await src.Execute($"RETR {srcPath}", ct);
+        var retrReply = await src.Execute($"RETR {Ftp.CpsvDataHelper.SanitizeFtpPath(srcPath)}", ct);
         if (retrReply.Code != "150" && retrReply.Code != "125")
             throw new IOException($"RETR failed: {retrReply.Code} {retrReply.Message}");
 
@@ -196,11 +196,11 @@ public class FxpTransfer
             SetState(TransferState.NegotiatingActive);
 
             // Send data commands
-            var retrReply = await src.Execute($"RETR {srcPath}", ct);
+            var retrReply = await src.Execute($"RETR {Ftp.CpsvDataHelper.SanitizeFtpPath(srcPath)}", ct);
             if (retrReply.Code != "150" && retrReply.Code != "125")
                 throw new IOException($"RETR failed: {retrReply.Code} {retrReply.Message}");
 
-            var storReply = await dst.Execute($"STOR {dstPath}", ct);
+            var storReply = await dst.Execute($"STOR {Ftp.CpsvDataHelper.SanitizeFtpPath(dstPath)}", ct);
             if (storReply.Code != "150" && storReply.Code != "125")
                 throw new IOException($"STOR failed: {storReply.Code} {storReply.Message}");
 

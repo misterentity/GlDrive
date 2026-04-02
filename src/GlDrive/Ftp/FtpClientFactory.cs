@@ -95,13 +95,21 @@ public class FtpClientFactory
         client.Config.StaleDataCheck = false;
 
         // Self-signed cert validation via TOFU
+        // Run on a thread pool thread with no sync context to avoid deadlocks
+        // when this callback fires on the WPF dispatcher thread
         client.ValidateCertificate += (control, e) =>
         {
-            var result = Task.Run(async () =>
-                await _certManager.ValidateCertificate(conn.Host, conn.Port, e.Certificate)
-                    .ConfigureAwait(false)
-            ).GetAwaiter().GetResult();
-            e.Accept = result;
+            var prevCtx = SynchronizationContext.Current;
+            SynchronizationContext.SetSynchronizationContext(null);
+            try
+            {
+                e.Accept = _certManager.ValidateCertificate(conn.Host, conn.Port, e.Certificate)
+                    .ConfigureAwait(false).GetAwaiter().GetResult();
+            }
+            finally
+            {
+                SynchronizationContext.SetSynchronizationContext(prevCtx);
+            }
         };
 
         // Log FTP commands to Serilog

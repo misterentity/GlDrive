@@ -65,7 +65,7 @@ public class StreamingDownloader
         AsyncFtpClient client, string remotePath, string localPath,
         long resumeOffset, IProgress<DownloadProgress>? progress, CancellationToken ct)
     {
-        var sizeReply = await client.Execute($"SIZE {remotePath}", ct);
+        var sizeReply = await client.Execute($"SIZE {CpsvDataHelper.SanitizeFtpPath(remotePath)}", ct);
         long size = -1;
         if (sizeReply.Success && long.TryParse(sizeReply.Message.Trim(), out var parsed))
             size = parsed;
@@ -82,7 +82,7 @@ public class StreamingDownloader
         var tcp = await CpsvDataHelper.OpenDataTcp(client, ct);
         try
         {
-            var retrReply = await client.Execute($"RETR {remotePath}", ct);
+            var retrReply = await client.Execute($"RETR {CpsvDataHelper.SanitizeFtpPath(remotePath)}", ct);
             if (retrReply.Code != "150" && retrReply.Code != "125")
                 throw new IOException($"RETR failed: {retrReply.Code} {retrReply.Message}");
 
