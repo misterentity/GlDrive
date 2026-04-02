@@ -117,6 +117,11 @@ public class UpdateChecker : IDisposable
         }
 
         var tempZip = Path.Combine(Path.GetTempPath(), $"GlDrive-{release.TagName}.zip");
+
+        // Clean up stale temp file from a previous failed download attempt
+        try { if (File.Exists(tempZip)) File.Delete(tempZip); }
+        catch (IOException ex) { Log.Warning("Cannot remove stale update file {Path}: {Msg}", tempZip, ex.Message); }
+
         Log.Information("Downloading update: {Url} → {Path}", asset.BrowserDownloadUrl, tempZip);
 
         // Stream download to disk to avoid buffering 150MB+ in memory
