@@ -903,14 +903,23 @@ public class IrcService : IDisposable
 
     private void HandleDh1080Finish(string nick, string theirPubKey)
     {
-        if (!_pendingKeyExchanges.TryGetValue(nick, out var dh)) return;
+        try
+        {
+            if (!_pendingKeyExchanges.TryGetValue(nick, out var dh)) return;
 
-        var sharedSecret = dh.ComputeSharedSecret(theirPubKey);
-        // DH1080 FiSH standard uses CBC mode
-        _fishKeyStore.SetKey(nick, sharedSecret, FishMode.CBC);
-        _pendingKeyExchanges.Remove(nick);
+            var sharedSecret = dh.ComputeSharedSecret(theirPubKey);
+            // DH1080 FiSH standard uses CBC mode
+            _fishKeyStore.SetKey(nick, sharedSecret, FishMode.CBC);
+            _pendingKeyExchanges.Remove(nick);
 
-        AddSystemMessage(nick, "DH1080 key exchange completed — CBC mode");
+            AddSystemMessage(nick, "DH1080 key exchange completed — CBC mode");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "DH1080 finish handling failed for {Nick}", nick);
+            _pendingKeyExchanges.Remove(nick);
+            AddSystemMessage(nick, $"DH1080 key exchange failed: {ex.Message}");
+        }
     }
 
     public void SetFishKey(string target, string key, FishMode mode)

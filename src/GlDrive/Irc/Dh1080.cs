@@ -65,7 +65,7 @@ public class Dh1080
     {
         pubKey = "";
         if (!message.StartsWith("DH1080_INIT ")) return false;
-        pubKey = message[12..].Trim();
+        pubKey = StripDhPayload(message[12..]);
         return pubKey.Length > 0;
     }
 
@@ -73,7 +73,18 @@ public class Dh1080
     {
         pubKey = "";
         if (!message.StartsWith("DH1080_FINISH ")) return false;
-        pubKey = message[14..].Trim();
+        pubKey = StripDhPayload(message[14..]);
         return pubKey.Length > 0;
+    }
+
+    /// <summary>
+    /// Strips trailing mode suffix (e.g. " CBC") that some FiSH clients append to DH1080 messages.
+    /// </summary>
+    private static string StripDhPayload(string raw)
+    {
+        raw = raw.Trim();
+        // Some clients send "DH1080_INIT <key> CBC" or "DH1080_FINISH <key> CBC"
+        var spaceIdx = raw.IndexOf(' ');
+        return spaceIdx > 0 ? raw[..spaceIdx] : raw;
     }
 }
