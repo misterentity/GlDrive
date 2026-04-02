@@ -864,7 +864,7 @@ public class SpreadJob : IDisposable
         string basePath, string relativePath, CancellationToken ct)
     {
         // MKD the base release directory
-        await client.Execute($"MKD {basePath}", ct);
+        await client.Execute($"MKD {Ftp.CpsvDataHelper.SanitizeFtpPath(basePath)}", ct);
 
         // If file is in a subdirectory (e.g. "CD1/file.rar"), create nested dirs
         var dirPart = Path.GetDirectoryName(relativePath)?.Replace('\\', '/');
@@ -875,7 +875,7 @@ public class SpreadJob : IDisposable
         foreach (var part in parts)
         {
             current += "/" + part;
-            await client.Execute($"MKD {current}", ct);
+            await client.Execute($"MKD {Ftp.CpsvDataHelper.SanitizeFtpPath(current)}", ct);
         }
     }
 

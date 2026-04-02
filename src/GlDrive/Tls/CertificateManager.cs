@@ -1,6 +1,8 @@
 using System.IO;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Security.Principal;
 using System.Text.Json;
 using GlDrive.Config;
 using Serilog;
@@ -48,11 +50,27 @@ public class CertificateManager
                 return true;
             }
 
-            // Certificate changed — auto-accept and log a warning (TOFU model)
-            Log.Warning("Certificate fingerprint changed for {Key} — old: {Old}, new: {New}. Auto-accepting.",
+            // Certificate changed — possible MitM. Prompt user or reject.
+            Log.Warning("Certificate fingerprint changed for {Key} — old: {Old}, new: {New}",
                 key, trusted.Fingerprint[..16] + "...", fingerprint[..16] + "...");
-            TrustCertificate(key, fingerprint);
-            return true;
+
+            if (CertificatePrompt != null)
+            {
+                var accepted = await CertificatePrompt(key,
+                    $"⚠ Certificate changed for {key}!\n\n" +
+                    $"Old fingerprint: {trusted.Fingerprint[..16]}...\n" +
+                    $"New fingerprint: {fingerprint[..16]}...\n\n" +
+                    "This could indicate a man-in-the-middle attack.\n" +
+                    "Accept the new certificate?");
+                if (accepted)
+                {
+                    TrustCertificate(key, fingerprint);
+                    return true;
+                }
+            }
+
+            Log.Error("Certificate change rejected for {Key} — fingerprint mismatch", key);
+            return false;
         }
 
         // TOFU: first time seeing this cert — auto-trust
@@ -108,6 +126,30 @@ public class CertificateManager
         var tempPath = _fingerprintFile + ".tmp";
         File.WriteAllText(tempPath, json);
         File.Move(tempPath, _fingerprintFile, overwrite: true);
+        RestrictFilePermissions(_fingerprintFile);
+    }
+
+    private static void RestrictFilePermissions(string filePath)
+    {
+        try
+        {
+            var fileInfo = new System.IO.FileInfo(filePath);
+            var security = fileInfo.GetAccessControl();
+            security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+            // Remove all existing rules
+            var rules = security.GetAccessRules(true, true, typeof(SecurityIdentifier));
+            foreach (FileSystemAccessRule rule in rules)
+                security.RemoveAccessRule(rule);
+            // Grant full control only to current user
+            var currentUser = WindowsIdentity.GetCurrent().User!;
+            security.AddAccessRule(new FileSystemAccessRule(
+                currentUser, FileSystemRights.FullControl, AccessControlType.Allow));
+            fileInfo.SetAccessControl(security);
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Failed to restrict file permissions on {File}", filePath);
+        }
     }
 }
 

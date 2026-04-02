@@ -20,6 +20,12 @@ namespace GlDrive.Ftp;
 /// </summary>
 public static class CpsvDataHelper
 {
+    /// <summary>
+    /// Strips CRLF and null bytes from FTP paths to prevent command injection.
+    /// </summary>
+    internal static string SanitizeFtpPath(string path)
+        => path.Replace("\r", "").Replace("\n", "").Replace("\0", "");
+
     private static readonly Regex PasvRegex = new(@"\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)\)", RegexOptions.Compiled);
     private static readonly Regex UnixListRegex = new(@"^([dlcbps-])[rwxsStT-]{9}\s+\d+\s+\S+\s+\S+\s+(\d+)\s+(\w{3}\s+\d+\s+[\d:]+)\s+(.+)$", RegexOptions.Compiled);
 
@@ -101,7 +107,7 @@ public static class CpsvDataHelper
         try
         {
             // Send LIST command BEFORE TLS — server initiates SSL_connect after this
-            var listReply = await client.Execute($"LIST -a {remotePath}", ct);
+            var listReply = await client.Execute($"LIST -a {SanitizeFtpPath(remotePath)}", ct);
             if (listReply.Code != "150" && listReply.Code != "125")
                 throw new IOException($"LIST failed: {listReply.Code} {listReply.Message}");
 
@@ -143,7 +149,7 @@ public static class CpsvDataHelper
 
         try
         {
-            var retrReply = await client.Execute($"RETR {remotePath}", ct);
+            var retrReply = await client.Execute($"RETR {SanitizeFtpPath(remotePath)}", ct);
             if (retrReply.Code != "150" && retrReply.Code != "125")
                 throw new IOException($"RETR failed: {retrReply.Code} {retrReply.Message}");
 
@@ -192,7 +198,7 @@ public static class CpsvDataHelper
 
         try
         {
-            var retrReply = await client.Execute($"RETR {remotePath}", ct);
+            var retrReply = await client.Execute($"RETR {SanitizeFtpPath(remotePath)}", ct);
             if (retrReply.Code != "150" && retrReply.Code != "125")
                 throw new IOException($"RETR failed: {retrReply.Code} {retrReply.Message}");
 
@@ -238,7 +244,7 @@ public static class CpsvDataHelper
 
         try
         {
-            var storReply = await client.Execute($"STOR {remotePath}", ct);
+            var storReply = await client.Execute($"STOR {SanitizeFtpPath(remotePath)}", ct);
             if (storReply.Code != "150" && storReply.Code != "125")
                 throw new IOException($"STOR failed: {storReply.Code} {storReply.Message}");
 
@@ -282,7 +288,7 @@ public static class CpsvDataHelper
         var tcp = await OpenDataTcp(client, ct);
         try
         {
-            var storReply = await client.Execute($"STOR {remotePath}", ct);
+            var storReply = await client.Execute($"STOR {SanitizeFtpPath(remotePath)}", ct);
             if (storReply.Code != "150" && storReply.Code != "125")
                 throw new IOException($"STOR failed: {storReply.Code} {storReply.Message}");
 

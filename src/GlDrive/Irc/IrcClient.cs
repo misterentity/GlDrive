@@ -43,10 +43,20 @@ public class IrcClient : IDisposable
             {
                 if (cert == null) return false;
                 if (certManager != null)
-                    return Task.Run(async () =>
-                        await certManager.ValidateCertificate(host, port, cert)
-                            .ConfigureAwait(false)
-                    ).GetAwaiter().GetResult();
+                {
+                    // Clear sync context to avoid deadlock when blocking on async TOFU validation
+                    var prevCtx = SynchronizationContext.Current;
+                    SynchronizationContext.SetSynchronizationContext(null);
+                    try
+                    {
+                        return certManager.ValidateCertificate(host, port, cert)
+                            .ConfigureAwait(false).GetAwaiter().GetResult();
+                    }
+                    finally
+                    {
+                        SynchronizationContext.SetSynchronizationContext(prevCtx);
+                    }
+                }
                 return false;
             });
 
