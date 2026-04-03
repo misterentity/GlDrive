@@ -129,8 +129,11 @@ public class FtpConnectionPool : IAsyncDisposable
     }
 
     /// <summary>
-    /// Sends QUIT before disposing so the server properly frees the connection slot.
-    /// Fire-and-forget since Return is synchronous.
+    /// Disposes an FTP client safely. GnuTLS can crash during disposal of poisoned
+    /// streams — its Dispose throws a native exception inside FluentFTP's async
+    /// pipeline that kills the process. To prevent this, wrap disposal in try-catch
+    /// and close the underlying socket first to prevent GnuTLS from attempting
+    /// read/close operations on dead connections.
     /// </summary>
     private static void DisconnectAndDispose(AsyncFtpClient client)
     {
@@ -139,12 +142,29 @@ public class FtpConnectionPool : IAsyncDisposable
             try
             {
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-                await client.Disconnect(cts.Token);
+                await client.Disconnect(cts.Token).ConfigureAwait(false);
             }
             catch { }
+            // Dispose can trigger GnuTLS native crash — wrap in try-catch
             try { client.Dispose(); }
-            catch { } // GnuTLS can crash during disposal of poisoned streams
+            catch { }
         });
+    }
+
+    /// <summary>
+    /// Safe disposal for DisposeAsync — wraps each client in try-catch to prevent
+    /// GnuTLS native crash from killing the process.
+    /// </summary>
+    private static async Task SafeDisconnectAndDispose(AsyncFtpClient client)
+    {
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            await client.Disconnect(cts.Token).ConfigureAwait(false);
+        }
+        catch { }
+        try { client.Dispose(); }
+        catch { }
     }
 
     public async ValueTask DisposeAsync()
@@ -155,11 +175,7 @@ public class FtpConnectionPool : IAsyncDisposable
         IsConnected = false;
 
         while (_pool.Reader.TryRead(out var client))
-        {
-            try { await client.Disconnect(); } catch { }
-            try { client.Dispose(); }
-            catch { } // GnuTLS can crash during disposal of poisoned streams
-        }
+            await SafeDisconnectAndDispose(client);
 
         _initLock.Dispose();
         GC.SuppressFinalize(this);

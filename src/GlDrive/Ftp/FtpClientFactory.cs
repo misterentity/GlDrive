@@ -94,6 +94,10 @@ public class FtpClientFactory
         // when connections are in a poisoned state (e.g., after failed FXP transfers)
         client.Config.StaleDataCheck = false;
 
+        // Skip QUIT+read cycle during Disconnect — prevents GnuTLS from attempting
+        // to read from poisoned streams during disposal, which crashes the process
+        client.Config.DisconnectWithQuit = false;
+
         // Self-signed cert validation via TOFU
         // Run on a thread pool thread with no sync context to avoid deadlocks
         // when this callback fires on the WPF dispatcher thread
