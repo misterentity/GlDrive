@@ -443,7 +443,10 @@ public class UpdateChecker : IDisposable
             LogUpdate($"Update FAILED: {ex}");
         }
 
-        Environment.Exit(0);
+        // Force-kill instead of Environment.Exit to prevent GnuTLS native DLL
+        // teardown crash (DllNotFoundException in __scrt_uninitialize_type_info)
+        // when running from the temp update directory
+        Process.GetCurrentProcess().Kill();
     }
 
     public static void CleanupOldUpdateFiles()
