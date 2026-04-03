@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Windows;
 using GlDrive.Config;
 using GlDrive.Downloads;
@@ -20,15 +21,18 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
-        // Update applicator mode — runs elevated, replaces files, relaunches, then exits
+        // Update applicator mode — runs elevated, replaces files, relaunches, then exits.
+        // Must force-kill the process after ApplyUpdate to prevent GnuTLS native DLL
+        // teardown crash (DllNotFoundException in __scrt_uninitialize_type_info) when
+        // running from the temp update directory.
         var applyIdx = Array.IndexOf(e.Args, "--apply-update");
         if (applyIdx >= 0 && e.Args.Length >= applyIdx + 4)
         {
             if (int.TryParse(e.Args[applyIdx + 1], out var pid))
             {
                 UpdateChecker.ApplyUpdate(pid, e.Args[applyIdx + 2], e.Args[applyIdx + 3]);
-                // ApplyUpdate calls Environment.Exit, but just in case:
-                Shutdown();
+                // Force-kill to skip native module teardown that crashes
+                Process.GetCurrentProcess().Kill();
                 return;
             }
         }
