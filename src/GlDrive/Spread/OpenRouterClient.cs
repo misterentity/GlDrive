@@ -61,34 +61,41 @@ public class OpenRouterClient : IDisposable
     };
 
     private const string SystemPrompt = """
-        You are an expert on glftpd FTP server configuration and scene release distribution.
-        You analyze SITE RULES output and generate optimal spread/FXP configuration.
+        You are an expert on glftpd FTP server configuration and scene release distribution rules.
+        You analyze SITE RULES output and generate spread/FXP skiplist configuration that prevents
+        uploading content that would get nuked.
 
-        When analyzing rules, extract:
-        1. Max upload/download slot limits
-        2. Disallowed/nuked release groups → affils list
-        3. Denied patterns (dubs, wrong resolution, banned content) → skiplist deny rules
-        4. Section-specific rules (TV sections only allow 1080p, etc.)
-        5. Any other restrictions that should prevent spreading
+        CRITICAL INSTRUCTIONS:
+        1. Read EVERY section rule carefully. Rules like "English Only" mean deny non-english releases.
+        2. "No X" rules mean create a deny pattern for X. Be specific with glob patterns.
+        3. Section-specific rules MUST include the "section" field matching the FTP section name.
+        4. Map rule section names to FTP sections: "0Day" → 0DAY, "Apps" → APPS, "Games" → GAMES,
+           "TV" → TV_HD/TV_SD, etc. Use the CURRENT SECTIONS provided to match names exactly.
+        5. Extract nuke-worthy restrictions only — ignore informational/social rules.
 
-        For skiplist rules:
-        - Use glob patterns (*, ?) not regex unless necessary
-        - Set match_dirs=true for directory-level patterns (release names)
-        - Set match_files=true for file-level patterns (extensions)
-        - Action should be "Deny" for blocked content
-        - Include the section name if the rule only applies to a specific section
+        PATTERN GUIDELINES:
+        - Use case-insensitive glob patterns: *DUBS*, *SUBBED*, *.GERMAN.*, *READNFO*
+        - For "No X" rules: *X* as a directory pattern (match_dirs=true, match_files=false)
+        - For "English Only": create deny patterns for common non-English tags: *GERMAN*, *FRENCH*,
+          *SPANISH*, *ITALIAN*, *DUTCH*, *SWEDISH*, *DANISH*, *NORWEGIAN*, *POLISH*, *RUSSIAN*,
+          *PORTUGUESE*, *CHINESE*, *JAPANESE*, *KOREAN*, *ARABIC*, *TURKISH*, *HINDI*, *THAI*,
+          *CZECH*, *HUNGARIAN*, *ROMANIAN*, *FINNISH*, *SUBBED*, *DUBBED*, *MULTi*
+        - For "Current year only" (games): use deny pattern for prior year tags if detectable
+        - For category bans like "No CADCAM": *CADCAM*, *CAD.CAM*, *CAD-CAM*
+        - For "No Hardware Specific": *HARDWARE*, *DRIVER*, *FIRMWARE*
 
-        Respond with ONLY a JSON object (no markdown, no explanation outside the JSON):
+        Respond with ONLY a JSON object (no markdown fences, no text outside the JSON):
         {
-            "max_upload_slots": <number or null>,
-            "max_download_slots": <number or null>,
+            "max_upload_slots": <number or null if not mentioned>,
+            "max_download_slots": <number or null if not mentioned>,
             "affils": ["GROUP1", "GROUP2"],
             "skiplist": [
-                {"pattern": "*dubs*", "is_regex": false, "action": "Deny", "match_dirs": true, "match_files": false, "section": "TV_1080"},
+                {"pattern": "*GERMAN*", "is_regex": false, "action": "Deny", "match_dirs": true, "match_files": false, "section": "0DAY"},
+                {"pattern": "*CADCAM*", "is_regex": false, "action": "Deny", "match_dirs": true, "match_files": false, "section": "APPS"},
                 {"pattern": "*.jpg", "is_regex": false, "action": "Deny", "match_dirs": false, "match_files": true, "section": null}
             ],
             "sections": {"TV_HD": "/incoming/tv-hd"},
-            "explanation": "Brief explanation of what was detected and applied"
+            "explanation": "Brief summary: what rules were found and what deny patterns were generated"
         }
         """;
 
@@ -126,20 +133,23 @@ public class OpenRouterClient : IDisposable
         }
 
         var userPrompt = $"""
-            Analyze this glftpd SITE RULES output and generate spread configuration.
-            Use the sample releases to verify your rules make sense for actual content on the server.
+            Analyze this glftpd SITE RULES and generate deny patterns for EVERY restriction.
+            Be thorough — a missed rule means content gets nuked.
 
             === SITE RULES ===
-            {siteRulesRaw[..Math.Min(siteRulesRaw.Length, 3000)]}
+            {siteRulesRaw[..Math.Min(siteRulesRaw.Length, 8000)]}
 
-            === CURRENT SECTIONS ===
-            {string.Join("\n", currentSections.Select(kv => $"{kv.Key}={kv.Value}"))}
+            === FTP SECTIONS (use these exact names in skiplist "section" field) ===
+            {string.Join("\n", currentSections.Select(kv => $"{kv.Key} = {kv.Value}"))}
 
-            === CURRENT AFFILS ===
-            {string.Join(", ", currentAffils)}
+            === CURRENT AFFILS (already configured, add any new ones) ===
+            {(currentAffils.Count > 0 ? string.Join(", ", currentAffils) : "(none)")}
             {samplesText}
-            Generate the optimal skiplist rules, slot limits, affils, and any section suggestions.
-            Ensure suggested sections include paths discovered from the sample data.
+            For EACH section rule (0Day, Apps, Games, TV, etc.):
+            1. Map it to the matching FTP section name from the list above
+            2. Create deny patterns for every "No X" and "X Only" restriction
+            3. "English Only" → deny all common non-English language tags
+            4. Include slot limits if the rules mention upload/download limits
             """;
 
         try
@@ -153,7 +163,7 @@ public class OpenRouterClient : IDisposable
                     new { role = "user", content = userPrompt }
                 },
                 temperature = 0.1,
-                max_tokens = 2000
+                max_tokens = 4000
             };
 
             var json = JsonSerializer.Serialize(request, JsonOptions);
@@ -195,6 +205,93 @@ public class OpenRouterClient : IDisposable
             Log.Warning(ex, "OpenRouter API call failed");
             return null;
         }
+    }
+
+    /// <summary>
+    /// Deterministic fallback: scan SITE RULES text for common restriction patterns
+    /// and generate skiplist rules without needing an LLM. Called when AI fails or
+    /// to supplement AI results with patterns it may have missed.
+    /// </summary>
+    public static List<AiSkiplistRule> ParseRulesFallback(string rulesText, IReadOnlyDictionary<string, string> sections)
+    {
+        var rules = new List<AiSkiplistRule>();
+        var lines = rulesText.Split('\n').Select(l => l.Trim()).ToList();
+
+        // Detect which section context we're in by scanning headers
+        string? currentSection = null;
+        var sectionNames = sections.Keys.ToList();
+
+        foreach (var line in lines)
+        {
+            var lower = line.ToLowerInvariant();
+
+            // Detect section headers like "0Day Section Rules", "Apps Section Rules"
+            if (lower.Contains("section rules") || lower.Contains("section rule"))
+            {
+                currentSection = DetectSectionFromHeader(line, sectionNames);
+            }
+
+            // "English Only" → deny non-English language tags
+            if (lower.Contains("english only"))
+            {
+                var langs = new[] { "GERMAN", "FRENCH", "SPANISH", "ITALIAN", "DUTCH", "SWEDISH",
+                    "DANISH", "NORWEGIAN", "POLISH", "RUSSIAN", "PORTUGUESE", "CHINESE", "JAPANESE",
+                    "KOREAN", "ARABIC", "TURKISH", "HINDI", "THAI", "CZECH", "HUNGARIAN", "ROMANIAN",
+                    "FINNISH", "SUBBED", "DUBBED", "MULTi" };
+                foreach (var lang in langs)
+                    rules.Add(new AiSkiplistRule { Pattern = $"*{lang}*", MatchDirectories = true, MatchFiles = false, Section = currentSection });
+            }
+
+            // "No X" patterns
+            var noPatterns = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["driverware"] = ["*DRIVERWARE*", "*DRIVER.WARE*"],
+                ["deviceware"] = ["*DEVICEWARE*", "*DEVICE.WARE*"],
+                ["themeware"] = ["*THEMEWARE*", "*THEME.WARE*"],
+                ["cadcam"] = ["*CADCAM*", "*CAD.CAM*", "*CAD-CAM*"],
+                ["carcad"] = ["*CARCAD*", "*CAR.CAD*"],
+                ["hardware specific"] = ["*HARDWARE*"],
+                ["religious"] = ["*RELIGIOUS*", "*BIBLE*"],
+                ["crap"] = ["*CRAP*"],
+            };
+
+            foreach (var (keyword, patterns) in noPatterns)
+            {
+                if (lower.Contains($"no {keyword}") || lower.Contains($"no {keyword.Replace(" ", "")}"))
+                {
+                    foreach (var pattern in patterns)
+                        rules.Add(new AiSkiplistRule { Pattern = pattern, MatchDirectories = true, MatchFiles = false, Section = currentSection });
+                }
+            }
+
+            // "Windows only" → deny Linux/Mac-specific
+            if (lower.Contains("windows only"))
+            {
+                rules.Add(new AiSkiplistRule { Pattern = "*LINUX*", MatchDirectories = true, MatchFiles = false, Section = currentSection });
+                rules.Add(new AiSkiplistRule { Pattern = "*MACOS*", MatchDirectories = true, MatchFiles = false, Section = currentSection });
+                rules.Add(new AiSkiplistRule { Pattern = "*MAC.OSX*", MatchDirectories = true, MatchFiles = false, Section = currentSection });
+            }
+        }
+
+        // Deduplicate
+        return rules.DistinctBy(r => $"{r.Pattern}|{r.Section}").ToList();
+    }
+
+    private static string? DetectSectionFromHeader(string header, List<string> sectionNames)
+    {
+        var lower = header.ToLowerInvariant();
+        // Try to match "0Day Section Rules" → find "0DAY" in section names
+        foreach (var name in sectionNames)
+        {
+            var normName = name.ToLowerInvariant().Replace("_", "").Replace("-", "");
+            if (lower.Contains(normName)) return name;
+            // Also try common aliases
+            if (normName.Contains("0day") && lower.Contains("0day")) return name;
+            if (normName.Contains("app") && lower.Contains("app")) return name;
+            if (normName.Contains("game") && lower.Contains("game")) return name;
+            if ((normName.Contains("tv") || normName.Contains("tvsport")) && lower.Contains("tv")) return name;
+        }
+        return null;
     }
 
     public void Dispose() => _http.Dispose();

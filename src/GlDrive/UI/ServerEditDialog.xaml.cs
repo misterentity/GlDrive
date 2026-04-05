@@ -670,8 +670,20 @@ public partial class ServerEditDialog : Window
 
             if (result == null)
             {
-                TestResultText.Text = "AI analysis failed — check API key and logs.";
-                return;
+                // AI failed — use deterministic fallback parser
+                result = new AiSetupResult { Explanation = "AI unavailable — used rule-text parser" };
+            }
+
+            // Always supplement with deterministic parser to catch patterns AI may have missed
+            var fallbackRules = OpenRouterClient.ParseRulesFallback(rulesText, currentSections);
+            var existingAiPatterns = result.SkiplistRules.Select(r => r.Pattern).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var rule in fallbackRules)
+            {
+                if (!existingAiPatterns.Contains(rule.Pattern))
+                {
+                    result.SkiplistRules.Add(rule);
+                    existingAiPatterns.Add(rule.Pattern);
+                }
             }
 
             // Build summary and apply
