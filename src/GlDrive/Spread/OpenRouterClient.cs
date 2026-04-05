@@ -210,89 +210,177 @@ public class OpenRouterClient : IDisposable
     }
 
     /// <summary>
-    /// Deterministic fallback: scan SITE RULES text for common restriction patterns
-    /// and generate skiplist rules without needing an LLM. Called when AI fails or
-    /// to supplement AI results with patterns it may have missed.
+    /// Deterministic parser: scans SITE RULES text for restriction patterns and generates
+    /// skiplist deny rules. Runs after AI to supplement, or standalone if AI fails.
+    /// Handles glftpd rule formats: "No X/Y/Z", "X Only", slash-separated ban lists,
+    /// and section-scoped rules.
     /// </summary>
     public static List<AiSkiplistRule> ParseRulesFallback(string rulesText, IReadOnlyDictionary<string, string> sections)
     {
         var rules = new List<AiSkiplistRule>();
-        var lines = rulesText.Split('\n').Select(l => l.Trim()).ToList();
-
-        // Detect which section context we're in by scanning headers
-        string? currentSection = null;
+        var lines = rulesText.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
         var sectionNames = sections.Keys.ToList();
+        string? currentSection = null;
+
+        // Keywords that map to deny patterns (case-insensitive matching in rule text)
+        // Each keyword can have multiple glob patterns to generate
+        var denyKeywords = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            // Software categories
+            ["driverware"] = ["*DRIVERWARE*"],
+            ["deviceware"] = ["*DEVICEWARE*"],
+            ["themeware"] = ["*THEMEWARE*"],
+            ["cadcam"] = ["*CADCAM*", "*CAD.CAM*", "*CAD-CAM*"],
+            ["carcad"] = ["*CARCAD*", "*CAR.CAD*", "*CAR-CAD*"],
+            ["cae"] = ["*CAE*"],
+            ["casing"] = ["*CASING*"],
+            ["casino"] = ["*CASINO*"],
+            ["csy"] = ["*CSY*"],
+            // Content types
+            ["pop"] = ["*POP*"],
+            ["fortune"] = ["*FORTUNE*"],
+            ["monthly"] = ["*MONTHLY*"],
+            ["beta"] = ["*BETA*"],
+            ["abandoned"] = ["*ABANDONED*"],
+            ["vanity"] = ["*VANITY*"],
+            ["demo"] = ["*DEMO*"],
+            // Hardware/religious
+            ["hardware"] = ["*HARDWARE*", "*FIRMWARE*"],
+            ["religious"] = ["*RELIGIOUS*", "*BIBLE*", "*CHRISTIAN*"],
+            ["rpc"] = ["*RPC*"],
+            // Quality
+            ["crap"] = ["*CRAP*"],
+            // Apps-specific
+            ["basicapps"] = ["*BASICAPPS*", "*BASIC.APPS*"],
+            ["courseware"] = ["*COURSEWARE*"],
+            ["examware"] = ["*EXAMWARE*"],
+            // OVA etc (0day specific)
+            ["ova"] = ["*OVA*"],
+            ["svamhapics"] = ["*SVAMHAPICS*"],
+        };
+
+        var languageTags = new[] {
+            "GERMAN", "FRENCH", "SPANISH", "ITALIAN", "DUTCH", "SWEDISH", "DANISH",
+            "NORWEGIAN", "POLISH", "RUSSIAN", "PORTUGUESE", "CHINESE", "JAPANESE",
+            "KOREAN", "ARABIC", "TURKISH", "HINDI", "THAI", "CZECH", "HUNGARIAN",
+            "ROMANIAN", "FINNISH", "HEBREW", "GREEK", "CROATIAN", "SERBIAN",
+            "SUBBED", "DUBBED", "MULTi", "MULTiLANGUAGE"
+        };
+
+        void AddRule(string pattern, string? section) =>
+            rules.Add(new AiSkiplistRule { Pattern = pattern, MatchDirectories = true, MatchFiles = false, Section = section });
 
         foreach (var line in lines)
         {
             var lower = line.ToLowerInvariant();
 
-            // Detect section headers like "0Day Section Rules", "Apps Section Rules"
+            // Detect section headers: "0Day Section Rules", "Apps Section Rules", etc.
             if (lower.Contains("section rules") || lower.Contains("section rule"))
             {
                 currentSection = DetectSectionFromHeader(line, sectionNames);
+                continue;
             }
 
-            // "English Only" → deny non-English language tags
+            // "General Upload Rules" / "General Site Rules" → no section scope
+            if (lower.Contains("general") && (lower.Contains("upload") || lower.Contains("site")) && lower.Contains("rule"))
+            {
+                currentSection = null;
+                continue;
+            }
+
+            // === Language restrictions ===
             if (lower.Contains("english only"))
             {
-                var langs = new[] { "GERMAN", "FRENCH", "SPANISH", "ITALIAN", "DUTCH", "SWEDISH",
-                    "DANISH", "NORWEGIAN", "POLISH", "RUSSIAN", "PORTUGUESE", "CHINESE", "JAPANESE",
-                    "KOREAN", "ARABIC", "TURKISH", "HINDI", "THAI", "CZECH", "HUNGARIAN", "ROMANIAN",
-                    "FINNISH", "SUBBED", "DUBBED", "MULTi" };
-                foreach (var lang in langs)
-                    rules.Add(new AiSkiplistRule { Pattern = $"*{lang}*", MatchDirectories = true, MatchFiles = false, Section = currentSection });
+                foreach (var lang in languageTags)
+                    AddRule($"*{lang}*", currentSection);
             }
 
-            // "No X" patterns
-            var noPatterns = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+            // === Platform restrictions ===
+            if (lower.Contains("windows only"))
             {
-                ["driverware"] = ["*DRIVERWARE*", "*DRIVER.WARE*"],
-                ["deviceware"] = ["*DEVICEWARE*", "*DEVICE.WARE*"],
-                ["themeware"] = ["*THEMEWARE*", "*THEME.WARE*"],
-                ["cadcam"] = ["*CADCAM*", "*CAD.CAM*", "*CAD-CAM*"],
-                ["carcad"] = ["*CARCAD*", "*CAR.CAD*"],
-                ["hardware specific"] = ["*HARDWARE*"],
-                ["religious"] = ["*RELIGIOUS*", "*BIBLE*"],
-                ["crap"] = ["*CRAP*"],
-            };
+                AddRule("*LINUX*", currentSection);
+                AddRule("*MACOS*", currentSection);
+                AddRule("*MAC.OSX*", currentSection);
+                AddRule("*MacOSX*", currentSection);
+            }
 
-            foreach (var (keyword, patterns) in noPatterns)
+            // === "No X" and "No X/Y/Z" patterns ===
+            // Match lines containing "No" followed by keywords, handling slash-separated lists
+            // e.g. "No Driverware/Deviceware/Themeware" → deny each
+            // e.g. "No BETA/ABANDONED/Vanity/Demo" → deny each
+            // e.g. "CADCAM/CARCAD Computer-Aided" → deny each (no "No" prefix needed)
+            foreach (var (keyword, patterns) in denyKeywords)
             {
-                if (lower.Contains($"no {keyword}") || lower.Contains($"no {keyword.Replace(" ", "")}"))
+                // Check if this keyword appears in the line (as part of a ban rule)
+                if (!lower.Contains(keyword.ToLowerInvariant())) continue;
+
+                // Only generate deny if the line looks like a restriction:
+                // starts with "no", contains nuke penalty, or is in a numbered rule list
+                var isRestriction = lower.Contains("no ") || lower.Contains("nuke") ||
+                    lower.Contains("| ") || System.Text.RegularExpressions.Regex.IsMatch(line, @"^\(\d+\)") ||
+                    lower.Contains("not allowed") || lower.Contains("banned");
+
+                // Also match standalone category mentions in section rules (e.g. "CADCAM/CARCAD Computer-Aided")
+                if (!isRestriction && currentSection != null)
+                    isRestriction = true; // In a section context, any keyword mention is likely a restriction
+
+                if (isRestriction)
                 {
                     foreach (var pattern in patterns)
-                        rules.Add(new AiSkiplistRule { Pattern = pattern, MatchDirectories = true, MatchFiles = false, Section = currentSection });
+                        AddRule(pattern, currentSection);
                 }
             }
 
-            // "Windows only" → deny Linux/Mac-specific
-            if (lower.Contains("windows only"))
+            // === "Current year only" (games) ===
+            if (lower.Contains("current year only"))
             {
-                rules.Add(new AiSkiplistRule { Pattern = "*LINUX*", MatchDirectories = true, MatchFiles = false, Section = currentSection });
-                rules.Add(new AiSkiplistRule { Pattern = "*MACOS*", MatchDirectories = true, MatchFiles = false, Section = currentSection });
-                rules.Add(new AiSkiplistRule { Pattern = "*MAC.OSX*", MatchDirectories = true, MatchFiles = false, Section = currentSection });
+                // Deny prior year tags in release names
+                var currentYear = DateTime.Now.Year;
+                for (var y = currentYear - 3; y < currentYear; y++)
+                    AddRule($"*{y}*", currentSection);
             }
         }
 
-        // Deduplicate
-        return rules.DistinctBy(r => $"{r.Pattern}|{r.Section}").ToList();
+        // Deduplicate by pattern+section
+        return rules.DistinctBy(r => $"{r.Pattern?.ToUpperInvariant()}|{r.Section}").ToList();
     }
 
     private static string? DetectSectionFromHeader(string header, List<string> sectionNames)
     {
         var lower = header.ToLowerInvariant();
-        // Try to match "0Day Section Rules" → find "0DAY" in section names
+
+        // Direct section name matching: "0Day" → "0DAY", "Apps" → "APPS", "Games" → "GAMES"
+        var headerAliases = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["0day"] = ["0DAY", "0DAY_INT"],
+            ["apps"] = ["APPS", "APPS_INT"],
+            ["games"] = ["GAMES", "GAMES_INT", "NSW"],
+            ["tv"] = ["TV_HD", "TV", "TV_SPORTS", "X264_HD"],
+            ["flac"] = ["FLAC"],
+            ["mp3"] = ["MP3"],
+            ["mvid"] = ["MVID"],
+            ["bookware"] = ["BOOKWARE"],
+            ["x265"] = ["X265"],
+            ["bluray"] = ["BLURAY", "BLURAY_UHD"],
+        };
+
+        foreach (var (alias, candidates) in headerAliases)
+        {
+            if (!lower.Contains(alias)) continue;
+            foreach (var candidate in candidates)
+            {
+                if (sectionNames.Contains(candidate, StringComparer.OrdinalIgnoreCase))
+                    return candidate;
+            }
+        }
+
+        // Fuzzy: try normalizing both sides
         foreach (var name in sectionNames)
         {
             var normName = name.ToLowerInvariant().Replace("_", "").Replace("-", "");
             if (lower.Contains(normName)) return name;
-            // Also try common aliases
-            if (normName.Contains("0day") && lower.Contains("0day")) return name;
-            if (normName.Contains("app") && lower.Contains("app")) return name;
-            if (normName.Contains("game") && lower.Contains("game")) return name;
-            if ((normName.Contains("tv") || normName.Contains("tvsport")) && lower.Contains("tv")) return name;
         }
+
         return null;
     }
 
