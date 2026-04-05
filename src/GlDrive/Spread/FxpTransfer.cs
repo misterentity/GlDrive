@@ -22,6 +22,12 @@ public class FxpTransfer
     public long TotalBytes { get; private set; }
     public string? ErrorMessage { get; private set; }
 
+    /// <summary>
+    /// Optional callback invoked just before STOR to create destination directories.
+    /// Only called after PASV/PORT negotiation succeeds, preventing empty dir creation on failure.
+    /// </summary>
+    public Func<CancellationToken, Task>? BeforeStore { get; set; }
+
     public async Task<bool> ExecuteAsync(
         PooledConnection source, PooledConnection dest,
         string srcPath, string dstPath,
@@ -87,6 +93,9 @@ public class FxpTransfer
         if (!portReply.Success)
             throw new IOException($"PORT failed on source: {portReply.Code} {portReply.Message}");
 
+        // Create dest directory now that connection is established (prevents empty dirs on failure)
+        if (BeforeStore != null) await BeforeStore(ct);
+
         // Start STOR on dest, then RETR on source
         var storReply = await dst.Execute($"STOR {Ftp.CpsvDataHelper.SanitizeFtpPath(dstPath)}", ct);
         if (storReply.Code != "150" && storReply.Code != "125")
@@ -125,6 +134,8 @@ public class FxpTransfer
         if (!portReply.Success)
             throw new IOException($"PORT failed on source: {portReply.Code} {portReply.Message}");
 
+        if (BeforeStore != null) await BeforeStore(ct);
+
         var storReply = await dst.Execute($"STOR {Ftp.CpsvDataHelper.SanitizeFtpPath(dstPath)}", ct);
         if (storReply.Code != "150" && storReply.Code != "125")
             throw new IOException($"STOR failed: {storReply.Code} {storReply.Message}");
@@ -160,6 +171,8 @@ public class FxpTransfer
         if (!portReply.Success)
             throw new IOException($"PORT failed on dest: {portReply.Code} {portReply.Message}");
 
+        if (BeforeStore != null) await BeforeStore(ct);
+
         var storReply = await dst.Execute($"STOR {Ftp.CpsvDataHelper.SanitizeFtpPath(dstPath)}", ct);
         if (storReply.Code != "150" && storReply.Code != "125")
             throw new IOException($"STOR failed: {storReply.Code} {storReply.Message}");
@@ -194,6 +207,8 @@ public class FxpTransfer
             dstTcp = await CpsvDataHelper.OpenDataTcp(dst, ct);
 
             SetState(TransferState.NegotiatingActive);
+
+            if (BeforeStore != null) await BeforeStore(ct);
 
             // Send data commands
             var retrReply = await src.Execute($"RETR {Ftp.CpsvDataHelper.SanitizeFtpPath(srcPath)}", ct);

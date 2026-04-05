@@ -753,13 +753,16 @@ public class SpreadJob : IDisposable
             srcConn = await srcTask;
             dstConn = await dstTask;
 
-            // Ensure dest directory tree exists (handles subdirs like CD1/, Sample/)
-            await EnsureDirectoryExists(dstConn.Client, dstBasePath, file.Name, ct);
-
             var dstPath = dstBasePath.TrimEnd('/') + "/" + file.Name;
             var srcPath = file.FullPath;
 
             var transfer = new FxpTransfer();
+            // Defer directory creation until just before STOR — prevents empty dirs
+            // when PASV/PORT negotiation or connection setup fails
+            var dstClient = dstConn.Client;
+            var fileName = file.Name;
+            transfer.BeforeStore = async storeCt =>
+                await EnsureDirectoryExists(dstClient, dstBasePath, fileName, storeCt);
             var startTime = DateTime.UtcNow;
             var transferKey = $"{file.Name}|{srcId}->{dstId}";
 
