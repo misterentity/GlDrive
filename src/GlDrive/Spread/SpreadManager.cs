@@ -323,33 +323,33 @@ public class SpreadManager : IDisposable
         var files = new List<(string relativePath, string fullPath)>();
         await EnumerateDirectoryRecursive(srcPool, srcPath, srcPath, files, 0, ct);
 
-        // Create dest base directory
-        await using var mkdConn = await dstPool.Borrow(ct);
-        await mkdConn.Client.Execute($"MKD {Ftp.CpsvDataHelper.SanitizeFtpPath(dstPath)}", ct);
-
         var mode = FxpModeDetector.Detect(srcPool, dstPool);
 
         foreach (var (relativePath, fullPath) in files)
         {
             var destFile = dstPath.TrimEnd('/') + "/" + relativePath;
 
-            // Create parent dirs
-            var dirPart = Path.GetDirectoryName(relativePath)?.Replace('\\', '/');
-            if (!string.IsNullOrEmpty(dirPart))
-            {
-                await using var dirConn = await dstPool.Borrow(ct);
-                var current = dstPath.TrimEnd('/');
-                foreach (var part in dirPart.Split('/', StringSplitOptions.RemoveEmptyEntries))
-                {
-                    current += "/" + part;
-                    await dirConn.Client.Execute($"MKD {Ftp.CpsvDataHelper.SanitizeFtpPath(current)}", ct);
-                }
-            }
-
             await using var srcConn = await srcPool.Borrow(ct);
             await using var dstConn = await dstPool.Borrow(ct);
 
             var transfer = new FxpTransfer();
+            // Defer directory creation until just before STOR
+            var dstClient = dstConn.Client;
+            var relPath = relativePath;
+            transfer.BeforeStore = async storeCt =>
+            {
+                await dstClient.Execute($"MKD {Ftp.CpsvDataHelper.SanitizeFtpPath(dstPath)}", storeCt);
+                var dirPart = Path.GetDirectoryName(relPath)?.Replace('\\', '/');
+                if (!string.IsNullOrEmpty(dirPart))
+                {
+                    var current = dstPath.TrimEnd('/');
+                    foreach (var part in dirPart.Split('/', StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        current += "/" + part;
+                        await dstClient.Execute($"MKD {Ftp.CpsvDataHelper.SanitizeFtpPath(current)}", storeCt);
+                    }
+                }
+            };
             await transfer.ExecuteAsync(srcConn, dstConn, fullPath, destFile, mode,
                 _config.Spread.TransferTimeoutSeconds, ct);
         }
