@@ -712,6 +712,12 @@ public partial class ServerEditDialog : Window
 
             if (result.SkiplistRules.Count > 0)
             {
+                // Remove old AI-generated section-scoped rules (keep user's manual global rules)
+                // This prevents accumulation of garbage rules from previous AI runs
+                var toRemove = _siteSkiplist.Where(r => r.Section != null).ToList();
+                var removedCount = toRemove.Count;
+                foreach (var r in toRemove) _siteSkiplist.Remove(r);
+
                 var existingPatterns = _siteSkiplist.Select(r => r.Pattern).ToHashSet(StringComparer.OrdinalIgnoreCase);
                 var added = 0;
                 foreach (var rule in result.SkiplistRules)
@@ -723,7 +729,8 @@ public partial class ServerEditDialog : Window
                         added++;
                     }
                 }
-                if (added > 0) changes.Add($"{added} skiplist rules");
+                if (added > 0 || removedCount > 0)
+                    changes.Add($"{added} skiplist rules (replaced {removedCount} old section rules)");
             }
 
             if (result.SuggestedSections.Count > 0)
