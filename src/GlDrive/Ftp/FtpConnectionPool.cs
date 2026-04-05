@@ -129,6 +129,18 @@ public class FtpConnectionPool : IAsyncDisposable
     }
 
     /// <summary>
+    /// Discard a poisoned connection — dispose it without returning to the pool.
+    /// Used when a cancellation or error may have left the GnuTLS stream corrupt.
+    /// </summary>
+    internal void Discard(AsyncFtpClient client)
+    {
+        Interlocked.Decrement(ref _active);
+        Interlocked.Decrement(ref _created);
+        DisconnectAndDispose(client);
+        Log.Debug("Pool: discarded poisoned connection (created={Created})", _created);
+    }
+
+    /// <summary>
     /// Disposes an FTP client safely. GnuTLS can crash during disposal of poisoned
     /// streams — its Dispose throws a native exception inside FluentFTP's async
     /// pipeline that kills the process. To prevent this, wrap disposal in try-catch
@@ -195,11 +207,23 @@ public class PooledConnection : IAsyncDisposable
 
     public AsyncFtpClient Client => _client ?? throw new ObjectDisposedException(nameof(PooledConnection));
 
+    /// <summary>
+    /// Mark this connection as poisoned so it will be discarded instead of returned
+    /// to the pool. Call this after a cancellation or error that may have left the
+    /// GnuTLS stream in a corrupt state.
+    /// </summary>
+    public bool Poisoned { get; set; }
+
     public ValueTask DisposeAsync()
     {
         var client = Interlocked.Exchange(ref _client, null);
         if (client != null)
-            _pool.Return(client);
+        {
+            if (Poisoned)
+                _pool.Discard(client);
+            else
+                _pool.Return(client);
+        }
         return ValueTask.CompletedTask;
     }
 }

@@ -412,10 +412,24 @@ public class SpreadJob : IDisposable
         await using var conn = await pool.Borrow(borrowCts.Token);
 
         FtpListItem[] items;
-        if (pool.UseCpsv)
-            items = await CpsvDataHelper.ListDirectory(conn.Client, currentPath, pool.ControlHost, ct);
-        else
-            items = await conn.Client.GetListing(currentPath, FtpListOption.AllFiles, ct);
+        try
+        {
+            if (pool.UseCpsv)
+                items = await CpsvDataHelper.ListDirectory(conn.Client, currentPath, pool.ControlHost, ct);
+            else
+                items = await conn.Client.GetListing(currentPath, FtpListOption.AllFiles, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancellation mid-read poisons the GnuTLS stream — discard this connection
+            conn.Poisoned = true;
+            throw;
+        }
+        catch (IOException)
+        {
+            conn.Poisoned = true;
+            throw;
+        }
 
         foreach (var item in items)
         {
@@ -819,10 +833,10 @@ public class SpreadJob : IDisposable
         {
             Log.Warning(ex, "FXP transfer error: {File} ({Src} -> {Dst})", file.Name, srcId, dstId);
 
-            // Mark connections as dead so pool discards them instead of reusing
-            // (command/response state may be desynced after failed transfer)
-            try { srcConn?.Client.Disconnect(); } catch { }
-            try { dstConn?.Client.Disconnect(); } catch { }
+            // Mark connections as poisoned so pool discards them instead of reusing
+            // (GnuTLS stream may be corrupt after failed/cancelled transfer)
+            if (srcConn != null) srcConn.Poisoned = true;
+            if (dstConn != null) dstConn.Poisoned = true;
         }
         finally
         {
