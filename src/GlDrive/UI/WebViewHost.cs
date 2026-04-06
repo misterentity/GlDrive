@@ -37,6 +37,23 @@ public class WebViewHost : ContentControl
         {
             _webView = new WebView2();
             Content = _webView;
+
+            // WebView2 requires a valid HWND parent. In WPF, controls only get an HWND
+            // after being loaded into the visual tree. Wait for the Loaded event if
+            // the control isn't loaded yet (e.g. tab content not yet rendered).
+            if (!_webView.IsLoaded)
+            {
+                var tcs = new TaskCompletionSource();
+                _webView.Loaded += (_, _) => tcs.TrySetResult();
+                // Safety timeout — if Loaded never fires, don't hang forever
+                if (await Task.WhenAny(tcs.Task, Task.Delay(5000)) != tcs.Task)
+                {
+                    Log.Warning("WebView2: Loaded event timed out — control may not be in visual tree");
+                    ShowFallback();
+                    return false;
+                }
+            }
+
             var dataDir = System.IO.Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "GlDrive", "WebView2");
