@@ -62,8 +62,9 @@ public partial class App
         }
         try { File.WriteAllText(crashMarker, DateTime.UtcNow.ToString("O")); } catch { }
 
-        // Clean up .old files from a previous update
+        // Clean up .old files and stale update marker from a previous update
         UpdateChecker.CleanupOldUpdateFiles();
+        try { File.Delete(Path.Combine(ConfigManager.AppDataPath, ".updating")); } catch { }
 
         // Screenshot mode — capture all UI windows to PNGs and exit
         if (e.Args.Contains("--screenshots", StringComparer.OrdinalIgnoreCase))

@@ -81,7 +81,17 @@ public static class Program
         // Give the OS a moment to release the mutex and flush file handles
         Thread.Sleep(3000);
 
-        var crashMarker = Path.Combine(ConfigManager.AppDataPath, ".running");
+        var appData = ConfigManager.AppDataPath;
+        var crashMarker = Path.Combine(appData, ".running");
+        var updateMarker = Path.Combine(appData, ".updating");
+
+        // If an update is in progress, the updater handles restarting — stand down
+        if (File.Exists(updateMarker))
+        {
+            try { File.Delete(updateMarker); } catch { }
+            return 0;
+        }
+
         if (!File.Exists(crashMarker))
         {
             // Clean exit — marker was deleted by OnExit. Nothing to do.
