@@ -11,6 +11,7 @@ namespace GlDrive.UI;
 public class WebViewHost : ContentControl
 {
     private WebView2? _webView;
+    private static readonly SemaphoreSlim _initLock = new(1, 1);
 
     public static bool IsRuntimeAvailable()
     {
@@ -37,11 +38,22 @@ public class WebViewHost : ContentControl
         {
             _webView = new WebView2();
             Content = _webView;
-            var dataDir = System.IO.Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "GlDrive", "WebView2");
-            var env = await CoreWebView2Environment.CreateAsync(userDataFolder: dataDir);
-            await _webView.EnsureCoreWebView2Async(env);
+
+            // Serialize WebView2 initialization — multiple instances sharing the same
+            // browser process can deadlock if they call EnsureCoreWebView2Async concurrently
+            await _initLock.WaitAsync();
+            try
+            {
+                var dataDir = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "GlDrive", "WebView2");
+                var env = await CoreWebView2Environment.CreateAsync(userDataFolder: dataDir);
+                await _webView.EnsureCoreWebView2Async(env);
+            }
+            finally
+            {
+                _initLock.Release();
+            }
             var settings = _webView.CoreWebView2.Settings;
             settings.UserAgent =
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
