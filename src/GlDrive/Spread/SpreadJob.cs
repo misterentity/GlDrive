@@ -315,7 +315,21 @@ public class SpreadJob : IDisposable
 
                     if (activeCount == 0 && (DateTime.UtcNow - lastActivity).TotalSeconds > 60)
                     {
-                        SetFailed("No activity for 60 seconds, no viable transfers");
+                        // If we transferred any files, this is a partial completion, not a failure
+                        bool hadTransfers;
+                        lock (_ownershipLock)
+                            hadTransfers = _serversWithSuccessfulTransfer.Count > 0;
+
+                        if (hadTransfers)
+                        {
+                            State = SpreadJobState.Completed;
+                            Completed?.Invoke(this);
+                            Log.Information("Spread completed (partial): {Release} — no more viable transfers", ReleaseName);
+                        }
+                        else
+                        {
+                            SetFailed("No activity for 60 seconds, no viable transfers");
+                        }
                         return;
                     }
 
