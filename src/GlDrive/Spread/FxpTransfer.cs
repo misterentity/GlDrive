@@ -38,6 +38,9 @@ public class FxpTransfer
         {
             // When both support CPSV, try CpsvPasv first (source CPSV, dest regular PASV).
             // If that fails (BNC backend can't reach dest), fall back to Relay (pipe through local).
+            // IMPORTANT: After CpsvPasv fails, the GnuTLS session may be corrupted internally
+            // (FluentFTP bug: negative error codes used as array indices in Write).
+            // Poison both connections so they're discarded after this transfer attempt.
             if (mode == FxpMode.Relay)
             {
                 try
@@ -46,7 +49,9 @@ public class FxpTransfer
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    Log.Debug("CpsvPasv failed ({Error}), trying Relay mode", ex.Message);
+                    Log.Debug("CpsvPasv failed ({Error}), trying Relay mode — connections will be poisoned", ex.Message);
+                    source.Poisoned = true;
+                    dest.Poisoned = true;
                 }
                 return await ExecuteRelay(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct);
             }

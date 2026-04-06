@@ -314,7 +314,12 @@ public class SpreadManager : IDisposable
             _config.Spread.TransferTimeoutSeconds, ct);
 
         if (!ok)
+        {
+            // Poison connections after failed transfer — GnuTLS session may be corrupt
+            srcConn.Poisoned = true;
+            dstConn.Poisoned = true;
             throw new IOException($"FXP transfer failed: {transfer.ErrorMessage}");
+        }
     }
 
     /// <summary>
@@ -366,8 +371,13 @@ public class SpreadManager : IDisposable
                     }
                 }
             };
-            await transfer.ExecuteAsync(srcConn, dstConn, fullPath, destFile, mode,
+            var ok = await transfer.ExecuteAsync(srcConn, dstConn, fullPath, destFile, mode,
                 _config.Spread.TransferTimeoutSeconds, ct);
+            if (!ok)
+            {
+                srcConn.Poisoned = true;
+                dstConn.Poisoned = true;
+            }
         }
     }
 
