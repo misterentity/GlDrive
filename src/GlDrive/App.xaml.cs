@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
 using GlDrive.Config;
 using GlDrive.Downloads;
@@ -10,7 +12,7 @@ using Serilog;
 
 namespace GlDrive;
 
-public partial class App : Application
+public partial class App
 {
     private SingleInstanceGuard? _guard;
     private ServerManager? _serverManager;
@@ -36,6 +38,21 @@ public partial class App : Application
                 return;
             }
         }
+
+        // Register with Windows Application Restart Manager — if the process crashes
+        // (including native GnuTLS crashes), Windows will automatically restart it.
+        // This is the only reliable way to survive native crashes that bypass all
+        // managed exception handlers.
+        RegisterApplicationRestart(null, 0);
+
+        // Crash recovery: if we detect an unclean shutdown (crash marker exists),
+        // log the restart. The marker is created on startup and deleted on clean exit.
+        var crashMarker = Path.Combine(ConfigManager.AppDataPath, ".running");
+        if (File.Exists(crashMarker))
+        {
+            Log.Warning("GlDrive: detected crash recovery — previous session did not exit cleanly");
+        }
+        try { File.WriteAllText(crashMarker, DateTime.UtcNow.ToString("O")); } catch { }
 
         // Clean up .old files from a previous update
         UpdateChecker.CleanupOldUpdateFiles();
@@ -151,12 +168,19 @@ public partial class App : Application
         });
     }
 
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern int RegisterApplicationRestart(string? commandLine, int flags);
+
     protected override void OnExit(ExitEventArgs e)
     {
         Log.Information("GlDrive shutting down...");
         _serverManager?.Dispose();
         _taskbarIcon?.Dispose();
         _guard?.Dispose();
+
+        // Remove crash marker — clean exit
+        try { File.Delete(Path.Combine(ConfigManager.AppDataPath, ".running")); } catch { }
+
         Log.CloseAndFlush();
         base.OnExit(e);
     }
