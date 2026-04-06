@@ -52,6 +52,10 @@ public class SpreadJob : IDisposable
     private readonly HashSet<string> _dirsCreated = new(); // serverId values that got MKD
     private readonly HashSet<string> _serversWithSuccessfulTransfer = new();
 
+    // Skiplist evaluation trace (captured in Phase 0 for history popup)
+    public List<SkiplistTraceEntry>? SkiplistTrace { get; private set; }
+    public string SkiplistResult { get; private set; } = "Allowed";
+
     // Scan debouncing
     private DateTime _lastScanTime = DateTime.MinValue;
     private Task? _backgroundScan;
@@ -126,18 +130,28 @@ public class SpreadJob : IDisposable
         {
             // Phase 0: Check release name against directory-level skiplist rules
             // This prevents spreading releases that match deny patterns like *GERMAN*, *CADCAM*, etc.
+            // Capture the full evaluation trace for the history detail popup.
+            var allTrace = new List<SkiplistTraceEntry>();
             foreach (var (serverId, config) in _serverConfigs)
             {
                 var siteRules = config.SpreadSite.Skiplist;
                 var globalRules = _spreadConfig.GlobalSkiplist;
-                var action = _skiplist.Evaluate(ReleaseName, true, false,
-                    serverId, Section, siteRules, globalRules);
+                var (action, trace) = _skiplist.EvaluateWithTrace(ReleaseName, true, false,
+                    Section, siteRules, globalRules);
+                foreach (var t in trace)
+                    t.Source = $"{config.Name}/{t.Source}";
+                allTrace.AddRange(trace);
                 if (action == SkiplistAction.Deny)
                 {
+                    SkiplistTrace = allTrace;
+                    var matchedRule = trace.FirstOrDefault(t => t.IsMatch);
+                    SkiplistResult = $"Denied by: {matchedRule?.Pattern} (on {config.Name})";
                     SetFailed($"Release denied by skiplist on {config.Name}: {ReleaseName}");
                     return;
                 }
             }
+            SkiplistTrace = allTrace;
+            SkiplistResult = "Allowed";
 
             // Phase 1: Discover which servers already have the release
             var sourceServers = new HashSet<string>();

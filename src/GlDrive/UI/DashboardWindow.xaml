@@ -1211,28 +1211,51 @@
                     <TextBlock DockPanel.Dock="Top" Text="{Binding SpreadStatus}" FontSize="12"
                                Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,8"
                                TextWrapping="Wrap"/>
-                    <!-- Auto-Race Activity Log (bottom) -->
-                    <Border DockPanel.Dock="Bottom" Height="140"
+                    <!-- Activity & History (bottom) -->
+                    <Border DockPanel.Dock="Bottom" Height="180"
                             Background="{DynamicResource SurfaceBrush}"
                             BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
                             CornerRadius="6" Margin="0,10,0,0" Padding="0">
-                        <DockPanel>
-                            <TextBlock DockPanel.Dock="Top" Text="Auto-Race Activity" FontSize="11"
-                                       FontWeight="SemiBold" Padding="8,4"
-                                       Foreground="{DynamicResource ForegroundDimBrush}"/>
-                            <DataGrid ItemsSource="{Binding AutoRaceLog}"
-                                      AutoGenerateColumns="False" IsReadOnly="True"
-                                      SelectionMode="Single" GridLinesVisibility="None"
-                                      HeadersVisibility="Column" CanUserAddRows="False"
-                                      FontSize="11">
-                                <DataGrid.Columns>
-                                    <DataGridTextColumn Header="Time" Binding="{Binding Time}" Width="65"/>
-                                    <DataGridTextColumn Header="Section" Binding="{Binding Section}" Width="90"/>
-                                    <DataGridTextColumn Header="Release" Binding="{Binding Release}" Width="*"/>
-                                    <DataGridTextColumn Header="Result" Binding="{Binding Result}" Width="180"/>
-                                </DataGrid.Columns>
-                            </DataGrid>
-                        </DockPanel>
+                        <TabControl>
+                            <TabItem Header="Activity">
+                                <DataGrid ItemsSource="{Binding AutoRaceLog}"
+                                          AutoGenerateColumns="False" IsReadOnly="True"
+                                          SelectionMode="Single" GridLinesVisibility="None"
+                                          HeadersVisibility="Column" CanUserAddRows="False"
+                                          FontSize="11">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Time" Binding="{Binding Time}" Width="65"/>
+                                        <DataGridTextColumn Header="Section" Binding="{Binding Section}" Width="90"/>
+                                        <DataGridTextColumn Header="Release" Binding="{Binding Release}" Width="*"/>
+                                        <DataGridTextColumn Header="Result" Binding="{Binding Result}" Width="180"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </TabItem>
+                            <TabItem Header="History">
+                                <DataGrid ItemsSource="{Binding RaceHistory}"
+                                          AutoGenerateColumns="False" IsReadOnly="True"
+                                          SelectionMode="Single" GridLinesVisibility="None"
+                                          HeadersVisibility="Column" CanUserAddRows="False"
+                                          FontSize="11">
+                                    <DataGrid.InputBindings>
+                                        <MouseBinding Gesture="LeftDoubleClick"
+                                                      Command="{Binding ShowRaceDetailCommand}"
+                                                      CommandParameter="{Binding SelectedItem, RelativeSource={RelativeSource AncestorType=DataGrid}}"/>
+                                    </DataGrid.InputBindings>
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Time" Binding="{Binding Time}" Width="90"/>
+                                        <DataGridTextColumn Header="Release" Binding="{Binding Release}" Width="*"/>
+                                        <DataGridTextColumn Header="Section" Binding="{Binding Section}" Width="70"/>
+                                        <DataGridTextColumn Header="Result" Binding="{Binding Result}" Width="70"/>
+                                        <DataGridTextColumn Header="Skiplist" Binding="{Binding SkiplistResult}" Width="140"/>
+                                        <DataGridTextColumn Header="Files" Binding="{Binding Files}" Width="45"/>
+                                        <DataGridTextColumn Header="Size" Binding="{Binding Size}" Width="70"/>
+                                        <DataGridTextColumn Header="Duration" Binding="{Binding Duration}" Width="65"/>
+                                        <DataGridTextColumn Header="Sites" Binding="{Binding Sites}" Width="140"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </TabItem>
+                        </TabControl>
                     </Border>
                     <!-- Scoreboard -->
                     <Border DockPanel.Dock="Bottom" Height="160"

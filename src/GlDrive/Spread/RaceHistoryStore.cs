@@ -18,6 +18,8 @@ public class RaceHistoryItem
     public int FilesTransferred { get; set; }
     public long BytesTransferred { get; set; }
     public string SiteNames { get; set; } = "";
+    public string SkiplistResult { get; set; } = ""; // "Allowed" or "Denied by: *PATTERN*"
+    public List<SkiplistTraceEntry>? SkiplistTrace { get; set; }
 }
 
 public class RaceHistoryStore
