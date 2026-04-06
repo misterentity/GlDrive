@@ -46,11 +46,19 @@ public partial class App
         RegisterApplicationRestart(null, 0);
 
         // Crash recovery: if we detect an unclean shutdown (crash marker exists),
-        // log the restart. The marker is created on startup and deleted on clean exit.
+        // log the restart. The watchdog writes "CRASH:<timestamp>" when it restarts us.
         var crashMarker = Path.Combine(ConfigManager.AppDataPath, ".running");
         if (File.Exists(crashMarker))
         {
-            Log.Warning("GlDrive: detected crash recovery — previous session did not exit cleanly");
+            try
+            {
+                var markerContent = File.ReadAllText(crashMarker).Trim();
+                if (markerContent.StartsWith("CRASH:"))
+                    Log.Warning("GlDrive: restarted by watchdog after crash at {CrashTime}", markerContent[6..]);
+                else
+                    Log.Warning("GlDrive: detected unclean shutdown (previous session did not exit cleanly)");
+            }
+            catch { Log.Warning("GlDrive: detected unclean shutdown"); }
         }
         try { File.WriteAllText(crashMarker, DateTime.UtcNow.ToString("O")); } catch { }
 
