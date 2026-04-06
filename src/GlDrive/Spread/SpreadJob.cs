@@ -124,6 +124,21 @@ public class SpreadJob : IDisposable
 
         try
         {
+            // Phase 0: Check release name against directory-level skiplist rules
+            // This prevents spreading releases that match deny patterns like *GERMAN*, *CADCAM*, etc.
+            foreach (var (serverId, config) in _serverConfigs)
+            {
+                var siteRules = config.SpreadSite.Skiplist;
+                var globalRules = _spreadConfig.GlobalSkiplist;
+                var action = _skiplist.Evaluate(ReleaseName, true, false,
+                    serverId, Section, siteRules, globalRules);
+                if (action == SkiplistAction.Deny)
+                {
+                    SetFailed($"Release denied by skiplist on {config.Name}: {ReleaseName}");
+                    return;
+                }
+            }
+
             // Phase 1: Discover which servers already have the release
             var sourceServers = new HashSet<string>();
 

@@ -165,7 +165,7 @@ public class OpenRouterClient : IDisposable
                     new { role = "user", content = userPrompt }
                 },
                 temperature = 0.1,
-                max_tokens = 4000
+                max_tokens = 8000
             };
 
             var json = JsonSerializer.Serialize(request, JsonOptions);
@@ -196,7 +196,17 @@ public class OpenRouterClient : IDisposable
             if (jsonStart >= 0 && jsonEnd > jsonStart)
             {
                 var resultJson = messageContent[jsonStart..(jsonEnd + 1)];
-                return JsonSerializer.Deserialize<AiSetupResult>(resultJson, JsonOptions);
+                try
+                {
+                    return JsonSerializer.Deserialize<AiSetupResult>(resultJson, JsonOptions);
+                }
+                catch (JsonException ex)
+                {
+                    Log.Warning("AI JSON parse failed, attempting repair: {Error}", ex.Message);
+                    var repaired = RepairTruncatedJson(resultJson);
+                    if (repaired != null)
+                        return JsonSerializer.Deserialize<AiSetupResult>(repaired, JsonOptions);
+                }
             }
 
             Log.Warning("AI response did not contain valid JSON: {Response}", messageContent[..Math.Min(200, messageContent.Length)]);
@@ -205,6 +215,79 @@ public class OpenRouterClient : IDisposable
         catch (Exception ex)
         {
             Log.Warning(ex, "OpenRouter API call failed");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Attempts to repair truncated JSON from LLM responses that hit the token limit.
+    /// Removes the last incomplete element and closes all open brackets/braces.
+    /// </summary>
+    private static string? RepairTruncatedJson(string json)
+    {
+        try
+        {
+            // Find the last complete object/value by looking for the last complete }, or ]
+            // then close any remaining open structures
+            var lastComplete = -1;
+            var depth = 0;
+            var inString = false;
+            var escape = false;
+
+            for (var i = 0; i < json.Length; i++)
+            {
+                var c = json[i];
+                if (escape) { escape = false; continue; }
+                if (c == '\\' && inString) { escape = true; continue; }
+                if (c == '"') { inString = !inString; continue; }
+                if (inString) continue;
+
+                if (c is '{' or '[') depth++;
+                else if (c is '}' or ']') { depth--; lastComplete = i; }
+            }
+
+            if (depth <= 0) return null; // Not truncated, parse error is something else
+
+            // Truncate at the last complete element boundary
+            // Find the last comma before the incomplete element
+            var truncateAt = json.Length;
+            for (var i = json.Length - 1; i > lastComplete; i--)
+            {
+                if (json[i] == ',') { truncateAt = i; break; }
+            }
+            if (truncateAt == json.Length) truncateAt = lastComplete + 1;
+
+            var repaired = json[..truncateAt];
+
+            // Count remaining open brackets/braces and close them
+            var openBraces = 0;
+            var openBrackets = 0;
+            inString = false;
+            escape = false;
+            for (var i = 0; i < repaired.Length; i++)
+            {
+                var c = repaired[i];
+                if (escape) { escape = false; continue; }
+                if (c == '\\' && inString) { escape = true; continue; }
+                if (c == '"') { inString = !inString; continue; }
+                if (inString) continue;
+                if (c == '{') openBraces++;
+                else if (c == '}') openBraces--;
+                else if (c == '[') openBrackets++;
+                else if (c == ']') openBrackets--;
+            }
+
+            // Close open structures
+            for (var i = 0; i < openBrackets; i++) repaired += "]";
+            for (var i = 0; i < openBraces; i++) repaired += "}";
+
+            Log.Information("Repaired truncated AI JSON: {OrigLen} -> {RepairedLen} chars, closed {Brackets} brackets + {Braces} braces",
+                json.Length, repaired.Length, openBrackets, openBraces);
+            return repaired;
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "JSON repair failed");
             return null;
         }
     }
