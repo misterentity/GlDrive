@@ -250,6 +250,20 @@ public class SpreadManager : IDisposable
             return;
         }
 
+        // Pre-check: evaluate release name against directory-level skiplist rules
+        foreach (var serverId in serverIds)
+        {
+            var serverConfig = _config.Servers.First(s => s.Id == serverId);
+            var action = _skiplist.Evaluate(releaseName, true, false,
+                serverId, category, serverConfig.SpreadSite.Skiplist, _config.Spread.GlobalSkiplist);
+            if (action == SkiplistAction.Deny)
+            {
+                Log.Debug("Auto-race skipped by skiplist on {Server}: {Release}", serverConfig.Name, releaseName);
+                AutoRaceAttempted?.Invoke(category, releaseName, $"Denied by skiplist on {serverConfig.Name}");
+                return;
+            }
+        }
+
         try
         {
             StartRace(category, releaseName, serverIds, SpreadMode.Race, sourceServerId, sourcePath);
