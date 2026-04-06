@@ -88,10 +88,10 @@ public class FtpConnectionPool : IAsyncDisposable
             catch (Exception ex)
             {
                 Interlocked.Decrement(ref _created);
-                Log.Debug(ex, "Pool: new connection failed — server may have ghost connections");
+                Log.Warning(ex, "Pool: new connection failed (created={Created}, max={Max})", _created, _maxSize);
 
-                // Kill ghost connections and retry once (throttle to once per 60s)
-                if ((DateTime.UtcNow - _lastGhostKill).TotalSeconds > 60)
+                // Kill ghost connections and retry once (throttle to once per 30s)
+                if ((DateTime.UtcNow - _lastGhostKill).TotalSeconds > 30)
                 {
                     _lastGhostKill = DateTime.UtcNow;
                     try
@@ -128,7 +128,11 @@ public class FtpConnectionPool : IAsyncDisposable
             Interlocked.Decrement(ref _created);
         }
 
-        // At capacity or new connection failed — wait for one to be returned
+        // If no connections exist at all (all discarded), don't wait — nothing will be returned
+        if (_created <= 0)
+            throw new InvalidOperationException("Pool exhausted: all connections discarded and new connections failed");
+
+        // At capacity — wait for one to be returned
         client = await _pool.Reader.ReadAsync(ct);
         if (client.IsConnected)
         {
