@@ -28,6 +28,7 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
     public ObservableCollection<SpreadScoreVm> SpreadScoreboard { get; } = new();
     public ObservableCollection<string> SpreadSections { get; } = new();
     public ObservableCollection<AutoRaceLogVm> AutoRaceLog { get; } = new();
+    public ObservableCollection<RaceHistoryVm> RaceHistory { get; } = new();
 
     public string SelectedSection
     {
@@ -60,6 +61,7 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
     public ICommand StartRaceCommand { get; }
     public ICommand StopJobCommand { get; }
     public ICommand OpenSettingsCommand { get; }
+    public ICommand ShowRaceDetailCommand { get; }
 
     public bool HasSections => SpreadSections.Count > 0;
     public bool NeedSetup => SpreadSections.Count == 0;
@@ -72,8 +74,10 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         StartRaceCommand = new RelayCommand(StartRace);
         StopJobCommand = new RelayCommand(StopJob);
         OpenSettingsCommand = new RelayCommand(() => _openSettingsAction?.Invoke());
+        ShowRaceDetailCommand = new RelayCommand<RaceHistoryVm>(ShowRaceDetail);
 
         RefreshSections();
+        LoadHistory();
 
         // Subscribe to auto-race detection events from both notification polling and IRC announces
         _serverManager.NewReleaseDetected += (serverId, serverName, category, release, remotePath) =>
@@ -335,6 +339,8 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         spread.AutoRaceAttempted += (section, release, result) =>
             Application.Current?.Dispatcher.BeginInvoke(() =>
                 AddAutoRaceLog(section, release, "", result));
+        spread.JobCompleted += _ =>
+            Application.Current?.Dispatcher.BeginInvoke(RefreshHistory);
     }
 
     private void AddAutoRaceLog(string section, string release, string source, string result)
@@ -350,6 +356,80 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         while (AutoRaceLog.Count > 200)
             AutoRaceLog.RemoveAt(AutoRaceLog.Count - 1);
     }
+
+    private void LoadHistory()
+    {
+        var spread = _serverManager.Spread;
+        if (spread == null) return;
+        foreach (var item in spread.History.Items.Take(100))
+        {
+            RaceHistory.Add(new RaceHistoryVm
+            {
+                Id = item.Id,
+                Time = item.StartedAt.ToLocalTime().ToString("MM-dd HH:mm"),
+                Release = item.ReleaseName,
+                Section = item.Section,
+                Result = item.Result.ToString(),
+                Sites = item.SiteNames,
+                Files = item.FilesTransferred,
+                Size = FormatSize(item.BytesTransferred),
+                SkiplistResult = item.SkiplistResult,
+                Duration = FormatDuration(item.CompletedAt - item.StartedAt),
+                SkiplistTrace = item.SkiplistTrace
+            });
+        }
+    }
+
+    public void RefreshHistory()
+    {
+        RaceHistory.Clear();
+        LoadHistory();
+    }
+
+    private static void ShowRaceDetail(RaceHistoryVm? item)
+    {
+        if (item == null) return;
+
+        var trace = item.SkiplistTrace;
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"Release: {item.Release}");
+        sb.AppendLine($"Section: {item.Section}");
+        sb.AppendLine($"Result: {item.Result}");
+        sb.AppendLine($"Skiplist: {item.SkiplistResult}");
+        sb.AppendLine($"Sites: {item.Sites}");
+        sb.AppendLine($"Files: {item.Files}  Size: {item.Size}  Duration: {item.Duration}");
+        sb.AppendLine();
+
+        if (trace != null && trace.Count > 0)
+        {
+            sb.AppendLine("=== Skiplist Rule Evaluation ===");
+            sb.AppendLine();
+            foreach (var t in trace)
+            {
+                var icon = t.IsMatch ? ">> " : "   ";
+                sb.AppendLine($"{icon}[{t.Source}] {t.Action}: {t.Pattern} → {t.Result}");
+            }
+        }
+        else
+        {
+            sb.AppendLine("(No skiplist trace available for this race)");
+        }
+
+        MessageBox.Show(sb.ToString(), $"Race Detail — {item.Release}",
+            MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private static string FormatSize(long bytes) => bytes switch
+    {
+        < 1024 => $"{bytes} B",
+        < 1024 * 1024 => $"{bytes / 1024.0:F1} KB",
+        < 1024L * 1024 * 1024 => $"{bytes / (1024.0 * 1024):F1} MB",
+        _ => $"{bytes / (1024.0 * 1024 * 1024):F2} GB"
+    };
+
+    private static string FormatDuration(TimeSpan ts) => ts.TotalMinutes >= 1
+        ? $"{(int)ts.TotalMinutes}m {ts.Seconds}s"
+        : $"{ts.TotalSeconds:F0}s";
 
     public event PropertyChangedEventHandler? PropertyChanged;
     protected void OnPropertyChanged([CallerMemberName] string? name = null) =>
@@ -369,4 +449,19 @@ public class AutoRaceLogVm
     public string Release { get; set; } = "";
     public string Source { get; set; } = "";
     public string Result { get; set; } = "";
+}
+
+public class RaceHistoryVm
+{
+    public string Id { get; set; } = "";
+    public string Time { get; set; } = "";
+    public string Release { get; set; } = "";
+    public string Section { get; set; } = "";
+    public string Result { get; set; } = "";
+    public string Sites { get; set; } = "";
+    public int Files { get; set; }
+    public string Size { get; set; } = "";
+    public string Duration { get; set; } = "";
+    public string SkiplistResult { get; set; } = "";
+    public List<SkiplistTraceEntry>? SkiplistTrace { get; set; }
 }

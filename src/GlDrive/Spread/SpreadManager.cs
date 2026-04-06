@@ -195,7 +195,9 @@ public class SpreadManager : IDisposable
                 SiteCount = job.Sites.Count,
                 FilesTransferred = totalFiles,
                 BytesTransferred = totalBytes,
-                SiteNames = siteNames
+                SiteNames = siteNames,
+                SkiplistResult = job.SkiplistResult,
+                SkiplistTrace = job.SkiplistTrace
             });
         }
         catch (Exception ex)
