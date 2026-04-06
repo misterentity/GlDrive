@@ -9,15 +9,21 @@ public class SingleInstanceGuard : IDisposable
 
     public bool TryAcquire()
     {
-        _mutex = new Mutex(true, MutexName, out var createdNew);
-        if (!createdNew)
+        // Retry a few times — after a crash, the OS may take a moment to release the mutex
+        for (var attempt = 0; attempt < 3; attempt++)
         {
-            Log.Information("Another instance of GlDrive is already running");
+            _mutex = new Mutex(true, MutexName, out var createdNew);
+            if (createdNew) return true;
+
             _mutex.Dispose();
             _mutex = null;
-            return false;
+
+            if (attempt < 2)
+                Thread.Sleep(2000);
         }
-        return true;
+
+        Log.Information("Another instance of GlDrive is already running");
+        return false;
     }
 
     public void Dispose()
