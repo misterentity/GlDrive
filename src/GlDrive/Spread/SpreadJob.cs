@@ -832,9 +832,14 @@ public class SpreadJob : IDisposable
 
         try
         {
-            // Borrow both connections in parallel
-            var srcTask = srcPool.Borrow(ct);
-            var dstTask = dstPool.Borrow(ct);
+            // Borrow with timeout — if pool is exhausted (all connections poisoned,
+            // server refusing new ones due to ghost connections), Borrow blocks forever
+            // on ReadAsync. Without a timeout, ActiveTransfers never decrements and
+            // all slots appear permanently exhausted.
+            using var borrowTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            borrowTimeout.CancelAfter(TimeSpan.FromSeconds(30));
+            var srcTask = srcPool.Borrow(borrowTimeout.Token);
+            var dstTask = dstPool.Borrow(borrowTimeout.Token);
             srcConn = await srcTask;
             dstConn = await dstTask;
 
@@ -929,6 +934,21 @@ public class SpreadJob : IDisposable
                 Log.Warning("FXP failed: {File} ({Src} -> {Dst}): {Error}", file.Name,
                     _serverConfigs[srcId].Name, _serverConfigs[dstId].Name, transfer.ErrorMessage);
             }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Job cancelled — don't log as error
+            if (srcConn != null) srcConn.Poisoned = true;
+            if (dstConn != null) dstConn.Poisoned = true;
+        }
+        catch (OperationCanceledException)
+        {
+            // Borrow timeout — pool exhausted, likely ghost connections on server
+            Log.Warning("FXP borrow timeout: {File} ({Src} -> {Dst}) — pool exhausted, " +
+                "server may have ghost connections (try !username login to kill them)",
+                file.Name, _serverConfigs[srcId].Name, _serverConfigs[dstId].Name);
+            if (srcConn != null) srcConn.Poisoned = true;
+            if (dstConn != null) dstConn.Poisoned = true;
         }
         catch (Exception ex)
         {

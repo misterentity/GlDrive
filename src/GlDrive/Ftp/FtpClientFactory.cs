@@ -153,4 +153,45 @@ public class FtpClientFactory
             throw;
         }
     }
+
+    /// <summary>
+    /// Kill ghost connections on the server by connecting with !username.
+    /// glftpd BNC convention: login with ! prefix kills stale sessions for that user.
+    /// The ghost-kill connection is immediately disconnected after login.
+    /// </summary>
+    public async Task KillGhosts(CancellationToken ct = default)
+    {
+        var conn = _serverConfig.Connection;
+        var password = CredentialStore.GetPassword(conn.Host, conn.Port, conn.Username) ?? "";
+        var ghostUser = "!" + conn.Username;
+
+        // Create a minimal client with same TLS config but !username
+        var client = new AsyncFtpClient(conn.Host, ghostUser, password, conn.Port);
+        client.Config.EncryptionMode = FtpEncryptionMode.Explicit;
+        client.Config.DataConnectionEncryption = true;
+        client.Config.CustomStream = typeof(GnuTlsStream);
+        var gnuConfig = new GnuConfig { SecuritySuite = GnuSuite.Secure128 };
+        if (_serverConfig.Tls.PreferTls12)
+            gnuConfig.AdvancedOptions = [GnuAdvanced.NoTickets];
+        client.Config.CustomStreamConfig = gnuConfig;
+        client.Config.ConnectTimeout = 15000;
+        client.Config.StaleDataCheck = false;
+        client.Config.DisconnectWithQuit = false;
+        client.ValidateCertificate += (_, e) => { e.Accept = true; }; // Trust — we already verified this host
+
+        try
+        {
+            await client.Connect(ct);
+            Log.Information("Ghost kill: connected as {User} to clear stale sessions", ghostUser);
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Ghost kill: login as {User} failed (may not be supported)", ghostUser);
+        }
+        finally
+        {
+            try { await client.Disconnect(ct); } catch { }
+            try { client.Dispose(); } catch { }
+        }
+    }
 }

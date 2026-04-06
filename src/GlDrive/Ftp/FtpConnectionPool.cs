@@ -13,6 +13,7 @@ public class FtpConnectionPool : IAsyncDisposable
     private int _created;
     private int _active;
     private bool _disposed;
+    private DateTime _lastGhostKill;
 
     public FtpConnectionPool(FtpClientFactory factory, int maxSize = 3)
     {
@@ -87,8 +88,39 @@ public class FtpConnectionPool : IAsyncDisposable
             catch (Exception ex)
             {
                 Interlocked.Decrement(ref _created);
-                // Server refused new connection — fall through to wait for an existing one
-                Log.Debug(ex, "Pool: new connection failed, waiting for existing one to be returned");
+                Log.Debug(ex, "Pool: new connection failed — server may have ghost connections");
+
+                // Kill ghost connections and retry once (throttle to once per 60s)
+                if ((DateTime.UtcNow - _lastGhostKill).TotalSeconds > 60)
+                {
+                    _lastGhostKill = DateTime.UtcNow;
+                    try
+                    {
+                        await _factory.KillGhosts(ct);
+                        // Retry connection after ghost kill
+                        if (Interlocked.Increment(ref _created) <= _maxSize)
+                        {
+                            try
+                            {
+                                client = await _factory.CreateAndConnect(ct);
+                                Interlocked.Increment(ref _active);
+                                return new PooledConnection(client, this);
+                            }
+                            catch
+                            {
+                                Interlocked.Decrement(ref _created);
+                            }
+                        }
+                        else
+                        {
+                            Interlocked.Decrement(ref _created);
+                        }
+                    }
+                    catch (Exception ghostEx)
+                    {
+                        Log.Debug(ghostEx, "Pool: ghost kill failed");
+                    }
+                }
             }
         }
         else
