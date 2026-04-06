@@ -48,6 +48,10 @@ public class SpreadJob : IDisposable
     private readonly Dictionary<(string file, string src, string dst), int> _failureCounts = new();
     private readonly Dictionary<string, ActiveTransferInfo> _activeTransfers = new();
 
+    // Directory cleanup: track created dirs and successful transfers per destination
+    private readonly HashSet<string> _dirsCreated = new(); // serverId values that got MKD
+    private readonly HashSet<string> _serversWithSuccessfulTransfer = new();
+
     // Scan debouncing
     private DateTime _lastScanTime = DateTime.MinValue;
     private Task? _backgroundScan;
@@ -116,11 +120,11 @@ public class SpreadJob : IDisposable
     public async Task RunAsync()
     {
         var ct = _cts.Token;
+        var sitePaths = new Dictionary<string, string>();
 
         try
         {
             // Phase 1: Discover which servers already have the release
-            var sitePaths = new Dictionary<string, string>();
             var sourceServers = new HashSet<string>();
 
             // If we have a known source (from notification/search), use it directly
@@ -318,6 +322,44 @@ public class SpreadJob : IDisposable
         catch (Exception ex)
         {
             SetFailed(ex.Message);
+        }
+        finally
+        {
+            // Clean up empty directories on destinations where no files were transferred
+            _ = CleanupEmptyDirs(sitePaths);
+        }
+    }
+
+    /// <summary>
+    /// Remove release directories on destinations where we created them (MKD) but
+    /// never successfully transferred any files. Prevents empty folder litter.
+    /// </summary>
+    private async Task CleanupEmptyDirs(Dictionary<string, string> sitePaths)
+    {
+        HashSet<string> created, succeeded;
+        lock (_ownershipLock)
+        {
+            created = [.._dirsCreated];
+            succeeded = [.._serversWithSuccessfulTransfer];
+        }
+
+        foreach (var serverId in created)
+        {
+            if (succeeded.Contains(serverId)) continue; // Had successful transfers — keep dir
+            if (!sitePaths.TryGetValue(serverId, out var path)) continue;
+            if (!_pools.TryGetValue(serverId, out var pool)) continue;
+
+            var serverName = _serverConfigs.TryGetValue(serverId, out var cfg) ? cfg.Name : serverId;
+            try
+            {
+                await using var conn = await pool.Borrow(CancellationToken.None);
+                await conn.Client.Execute($"RMD {Ftp.CpsvDataHelper.SanitizeFtpPath(path)}", CancellationToken.None);
+                Log.Information("Spread cleanup: removed empty dir {Path} on {Server}", path, serverName);
+            }
+            catch (Exception ex)
+            {
+                Log.Debug(ex, "Spread cleanup: failed to remove {Path} on {Server}", path, serverName);
+            }
         }
     }
 
@@ -762,7 +804,10 @@ public class SpreadJob : IDisposable
             var dstClient = dstConn.Client;
             var fileName = file.Name;
             transfer.BeforeStore = async storeCt =>
+            {
                 await EnsureDirectoryExists(dstClient, dstBasePath, fileName, storeCt);
+                lock (_ownershipLock) _dirsCreated.Add(dstId);
+            };
             var startTime = DateTime.UtcNow;
             var transferKey = $"{file.Name}|{srcId}->{dstId}";
 
@@ -817,6 +862,7 @@ public class SpreadJob : IDisposable
                     }
                 }
 
+                lock (_ownershipLock) _serversWithSuccessfulTransfer.Add(dstId);
                 Log.Information("FXP complete: {File} ({Src} -> {Dst})", file.Name,
                     _serverConfigs[srcId].Name, _serverConfigs[dstId].Name);
             }
