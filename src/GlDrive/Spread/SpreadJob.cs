@@ -911,6 +911,15 @@ public class SpreadJob : IDisposable
             }
             else
             {
+                // Poison connections after failed transfer — FluentFTP.GnuTLS has a bug
+                // where GnuTlsRecordSend error codes (-10 etc.) corrupt the session state
+                // internally. The managed ArgumentOutOfRangeException is caught, but the
+                // native GnuTLS session is left in an invalid state. If these connections
+                // are returned to the pool, the next borrower will crash in Read() with an
+                // unrecoverable native exception that kills the process.
+                if (srcConn != null) srcConn.Poisoned = true;
+                if (dstConn != null) dstConn.Poisoned = true;
+
                 lock (_failureLock)
                 {
                     var failKey = (file.Name, srcId, dstId);
