@@ -431,12 +431,27 @@ public class UpdateChecker : IDisposable
                 return;
             }
 
+            // Clean up the update marker so the watchdog doesn't interfere on next run
+            try { File.Delete(Path.Combine(installDir, "..", "GlDrive", ".updating")); } catch { }
+            var appDataUpdating = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "GlDrive", ".updating");
+            try { File.Delete(appDataUpdating); } catch { }
+
             LogUpdate($"Update complete, launching {newExe}");
-            Process.Start(new ProcessStartInfo
+            var child = Process.Start(new ProcessStartInfo
             {
                 FileName = newExe,
                 UseShellExecute = true
             });
+
+            if (child != null)
+            {
+                // Wait for the child to actually start before we exit —
+                // Process.Kill() is instant and could race with process creation
+                try { child.WaitForInputIdle(5000); } catch { }
+                LogUpdate($"Child process started: PID={child.Id}");
+            }
         }
         catch (Exception ex)
         {
@@ -446,6 +461,7 @@ public class UpdateChecker : IDisposable
         // Force-kill instead of Environment.Exit to prevent GnuTLS native DLL
         // teardown crash (DllNotFoundException in __scrt_uninitialize_type_info)
         // when running from the temp update directory
+        Thread.Sleep(2000);
         Process.GetCurrentProcess().Kill();
     }
 

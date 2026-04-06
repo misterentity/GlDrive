@@ -241,11 +241,24 @@ public class TrayViewModel : INotifyPropertyChanged
 
         _updateChecker.RestartRequested += () =>
         {
-            // Updater is running and waiting for our PID to exit — shut down fast
+            // Updater is running and waiting for our PID to exit — shut down fast.
+            // Delete the crash marker BEFORE exiting so the watchdog doesn't
+            // interfere by restarting the old app while the updater replaces files.
+            // Also write an update marker so the watchdog knows to stand down.
+            try
+            {
+                var appData = GlDrive.Config.ConfigManager.AppDataPath;
+                File.Delete(Path.Combine(appData, ".running"));
+                File.WriteAllText(Path.Combine(appData, ".updating"), DateTime.UtcNow.ToString("O"));
+            }
+            catch { }
+
             Application.Current?.Dispatcher.Invoke(() =>
             {
                 try { _serverManager.UnmountAll(); } catch { }
-                Environment.Exit(0);
+                // Use Process.Kill instead of Environment.Exit to ensure immediate
+                // termination — Environment.Exit can hang on finalizers/GnuTLS teardown
+                Process.GetCurrentProcess().Kill();
             });
         };
 
