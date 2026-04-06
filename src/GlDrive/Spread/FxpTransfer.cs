@@ -74,6 +74,35 @@ public class FxpTransfer
         }
     }
 
+    /// <summary>
+    /// Send TYPE I and verify the response before proceeding.
+    /// FluentFTP's Execute() reads the next response from the wire — if we don't
+    /// verify, a stale/delayed response can desync the entire command queue.
+    /// </summary>
+    private static async Task SendTypeI(AsyncFtpClient client, string label, CancellationToken ct)
+    {
+        var reply = await client.Execute("TYPE I", ct);
+        if (!reply.Success)
+            Log.Warning("TYPE I unexpected response on {Label}: {Code} {Msg}", label, reply.Code, reply.Message);
+    }
+
+    /// <summary>
+    /// Enable Secure Server-to-Server Connection Negotiation (SSCN ON) for secure FXP.
+    /// Required by most glftpd sites — without this, the data channel between servers
+    /// is unencrypted and will be rejected by sites requiring secure transfers.
+    /// SSCN ON tells the server to negotiate TLS on the FXP data channel.
+    /// Only needs to be sent once per session but is safe to re-send.
+    /// </summary>
+    private static async Task EnableSscn(AsyncFtpClient client, string label, CancellationToken ct)
+    {
+        var reply = await client.Execute("SSCN ON", ct);
+        if (reply.Code == "200")
+            Log.Debug("SSCN ON enabled on {Label}", label);
+        else
+            Log.Debug("SSCN ON response on {Label}: {Code} {Msg} (may not be supported)",
+                label, reply.Code, reply.Message);
+    }
+
     private async Task<bool> ExecutePasvPasv(
         AsyncFtpClient src, AsyncFtpClient dst,
         string srcPath, string dstPath,
@@ -81,8 +110,12 @@ public class FxpTransfer
     {
         SetState(TransferState.NegotiatingPassive);
 
-        await src.Execute("TYPE I", ct);
-        await dst.Execute("TYPE I", ct);
+        await SendTypeI(src, "source", ct);
+        await SendTypeI(dst, "dest", ct);
+
+        // Enable secure FXP (SSCN) — passive side accepts TLS, active side initiates
+        await EnableSscn(dst, "dest-passive", ct);
+        await EnableSscn(src, "source-active", ct);
 
         // Dest enters PASV
         var pasvReply = await dst.Execute("PASV", ct);
@@ -124,8 +157,10 @@ public class FxpTransfer
         // Source is CPSV (behind BNC, can't PASV). Dest does PASV, source PORTs to it.
         SetState(TransferState.NegotiatingPassive);
 
-        await src.Execute("TYPE I", ct);
-        await dst.Execute("TYPE I", ct);
+        await SendTypeI(src, "source", ct);
+        await SendTypeI(dst, "dest", ct);
+        await EnableSscn(dst, "dest-passive", ct);
+        await EnableSscn(src, "source-active", ct);
 
         var pasvReply = await dst.Execute("PASV", ct);
         if (!pasvReply.Success)
@@ -161,8 +196,10 @@ public class FxpTransfer
         // Dest is CPSV. Source does PASV, dest PORTs to source.
         SetState(TransferState.NegotiatingPassive);
 
-        await src.Execute("TYPE I", ct);
-        await dst.Execute("TYPE I", ct);
+        await SendTypeI(src, "source", ct);
+        await SendTypeI(dst, "dest", ct);
+        await EnableSscn(src, "source-passive", ct);
+        await EnableSscn(dst, "dest-active", ct);
 
         var pasvReply = await src.Execute("PASV", ct);
         if (!pasvReply.Success)
@@ -198,8 +235,8 @@ public class FxpTransfer
         // Both CPSV — neither backend IP is routable. Relay through local memory.
         SetState(TransferState.NegotiatingPassive);
 
-        await src.Execute("TYPE I", ct);
-        await dst.Execute("TYPE I", ct);
+        await SendTypeI(src, "source", ct);
+        await SendTypeI(dst, "dest", ct);
 
         // Open CPSV data connections to both
         var srcTcp = await CpsvDataHelper.OpenDataTcp(src, ct);

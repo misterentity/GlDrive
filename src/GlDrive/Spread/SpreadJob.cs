@@ -310,8 +310,24 @@ public class SpreadJob : IDisposable
                     }
 
                     int activeCount;
+                    int trackedTransfers;
                     lock (_progressLock)
+                    {
                         activeCount = _siteProgress.Values.Sum(s => s.ActiveTransfers);
+                        trackedTransfers = _activeTransfers.Count;
+
+                        // Stale slot detection: if ActiveTransfers claims slots are used
+                        // but no actual transfers are tracked, the counts are leaked
+                        if (activeCount > 0 && trackedTransfers == 0 &&
+                            (DateTime.UtcNow - lastActivity).TotalSeconds > 120)
+                        {
+                            Log.Warning("Stale slots detected: {Active} claimed but {Tracked} tracked — resetting",
+                                activeCount, trackedTransfers);
+                            foreach (var progress in _siteProgress.Values)
+                                progress.ActiveTransfers = 0;
+                            activeCount = 0;
+                        }
+                    }
 
                     if (activeCount == 0 && (DateTime.UtcNow - lastActivity).TotalSeconds > 60)
                     {
@@ -347,7 +363,16 @@ public class SpreadJob : IDisposable
                 var (file, srcId, dstId) = transfer.Value;
                 if (TryClaimSlots(srcId, dstId))
                 {
-                    _ = ExecuteTransfer(file, srcId, dstId, sitePaths[dstId], token);
+                    // Wrap with per-transfer hard timeout to prevent indefinite hangs
+                    _ = Task.Run(async () =>
+                    {
+                        using var xferTimeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+                        xferTimeout.CancelAfter(TimeSpan.FromSeconds(
+                            _spreadConfig.TransferTimeoutSeconds > 0
+                                ? _spreadConfig.TransferTimeoutSeconds * 3  // 3x the normal timeout
+                                : 180));
+                        await ExecuteTransfer(file, srcId, dstId, sitePaths[dstId], xferTimeout.Token);
+                    }, token);
                 }
 
                 // Brief pause between scheduling — enough time for next score round
@@ -994,8 +1019,25 @@ public class SpreadJob : IDisposable
     private static async Task EnsureDirectoryExists(FluentFTP.AsyncFtpClient client,
         string basePath, string relativePath, CancellationToken ct)
     {
-        // MKD the base release directory
-        await client.Execute($"MKD {Ftp.CpsvDataHelper.SanitizeFtpPath(basePath)}", ct);
+        // MKD the base release directory — 257 = created, 550 = exists (both OK)
+        // Anything else (e.g., 550 No such directory = parent missing) is a real error
+        var mkdReply = await client.Execute($"MKD {Ftp.CpsvDataHelper.SanitizeFtpPath(basePath)}", ct);
+        if (!mkdReply.Success && !mkdReply.Message.Contains("exists", StringComparison.OrdinalIgnoreCase))
+        {
+            // Try creating parent directory first (section dir might not exist yet)
+            var parentPath = basePath.TrimEnd('/');
+            var lastSlash = parentPath.LastIndexOf('/');
+            if (lastSlash > 0)
+            {
+                var parent = parentPath[..lastSlash];
+                var parentReply = await client.Execute($"MKD {Ftp.CpsvDataHelper.SanitizeFtpPath(parent)}", ct);
+                Log.Debug("MKD parent {Path}: {Code} {Msg}", parent, parentReply.Code, parentReply.Message);
+                // Retry the base path
+                mkdReply = await client.Execute($"MKD {Ftp.CpsvDataHelper.SanitizeFtpPath(basePath)}", ct);
+            }
+            if (!mkdReply.Success && !mkdReply.Message.Contains("exists", StringComparison.OrdinalIgnoreCase))
+                throw new IOException($"MKD failed for {basePath}: {mkdReply.Code} {mkdReply.Message}");
+        }
 
         // If file is in a subdirectory (e.g. "CD1/file.rar"), create nested dirs
         var dirPart = Path.GetDirectoryName(relativePath)?.Replace('\\', '/');
@@ -1006,7 +1048,9 @@ public class SpreadJob : IDisposable
         foreach (var part in parts)
         {
             current += "/" + part;
-            await client.Execute($"MKD {Ftp.CpsvDataHelper.SanitizeFtpPath(current)}", ct);
+            var reply = await client.Execute($"MKD {Ftp.CpsvDataHelper.SanitizeFtpPath(current)}", ct);
+            if (!reply.Success && !reply.Message.Contains("exists", StringComparison.OrdinalIgnoreCase))
+                throw new IOException($"MKD failed for {current}: {reply.Code} {reply.Message}");
         }
     }
 
