@@ -159,10 +159,15 @@ public class SpreadManager : IDisposable
         lock (_lock) _activeJobs.Add(job);
         JobStarted?.Invoke(job);
 
+        var sids = serverIds;
         _ = Task.Run(async () =>
         {
             try
             {
+                // Re-initialize dead spread pools before running.
+                // Pools die when all connections are poisoned/discarded (GnuTLS crashes,
+                // network errors) and there's no keepalive/reconnect for spread pools.
+                await ReinitDeadPools(sids);
                 await job.RunAsync();
             }
             catch (Exception ex)
@@ -203,6 +208,35 @@ public class SpreadManager : IDisposable
         catch (Exception ex)
         {
             Log.Debug(ex, "Failed to record race history");
+        }
+    }
+
+    /// <summary>
+    /// Re-initialize spread pools that have died (all connections poisoned/discarded).
+    /// Without this, dead pools stay dead forever since spread pools have no keepalive.
+    /// </summary>
+    private async Task ReinitDeadPools(IEnumerable<string> serverIds)
+    {
+        foreach (var id in serverIds)
+        {
+            FtpConnectionPool? pool;
+            lock (_lock)
+            {
+                if (!_spreadPools.TryGetValue(id, out pool)) continue;
+            }
+
+            if (!pool.IsExhausted) continue;
+
+            var serverName = _config.Servers.FirstOrDefault(s => s.Id == id)?.Name ?? id;
+            Log.Warning("Spread pool exhausted for {Server} — reinitializing", serverName);
+            try
+            {
+                await pool.Reinitialize(CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to reinitialize spread pool for {Server}", serverName);
+            }
         }
     }
 

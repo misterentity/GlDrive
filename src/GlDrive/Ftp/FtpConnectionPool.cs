@@ -26,6 +26,8 @@ public class FtpConnectionPool : IAsyncDisposable
     public int TotalCreated => _created;
     public int MaxSize => _maxSize;
     public bool IsConnected { get; private set; }
+    /// <summary>True when all connections have been discarded and the pool can't serve requests.</summary>
+    public bool IsExhausted => IsConnected && _created <= 0 && _active <= 0;
     public bool UseCpsv { get; private set; }
     public string ControlHost { get; private set; } = "";
 
@@ -51,6 +53,36 @@ public class FtpConnectionPool : IAsyncDisposable
             _created = 1;
             IsConnected = true;
             Log.Information("Connection pool initialized with 1 connection (max {Max})", _maxSize);
+        }
+        finally
+        {
+            _initLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Re-initialize a pool that has been fully exhausted (all connections poisoned/discarded).
+    /// Creates a fresh connection and puts it back in the pool.
+    /// </summary>
+    public async Task Reinitialize(CancellationToken ct = default)
+    {
+        if (_disposed) return;
+        if (_created > 0 || _active > 0) return; // Pool still has connections
+
+        await _initLock.WaitAsync(ct);
+        try
+        {
+            if (_created > 0 || _active > 0) return; // Double-check under lock
+
+            var client = await _factory.CreateAndConnect(ct);
+            ControlHost = _factory.Host;
+            if (client.Capabilities.Contains(FtpCapability.CPSV))
+                UseCpsv = true;
+
+            await _pool.Writer.WriteAsync(client, ct);
+            _created = 1;
+            IsConnected = true;
+            Log.Information("Connection pool reinitialized with 1 connection (max {Max})", _maxSize);
         }
         finally
         {
