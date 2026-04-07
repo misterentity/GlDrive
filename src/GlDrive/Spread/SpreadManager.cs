@@ -43,7 +43,13 @@ public class SpreadManager : IDisposable
     {
         if (_disposed) return;
 
-        var poolSize = _config.Spread.SpreadPoolSize;
+        // Pool size must be at least as large as the max concurrent slots for this server,
+        // otherwise borrows will always timeout when slots are fully utilized
+        var serverConfig = _config.Servers.FirstOrDefault(s => s.Id == serverId);
+        var maxSlots = Math.Max(
+            serverConfig?.SpreadSite.MaxUploadSlots ?? 3,
+            serverConfig?.SpreadSite.MaxDownloadSlots ?? 3);
+        var poolSize = Math.Max(_config.Spread.SpreadPoolSize, maxSlots);
         if (poolSize <= 0) return;
 
         var pool = new FtpConnectionPool(factory, poolSize);
@@ -231,6 +237,30 @@ public class SpreadManager : IDisposable
             Log.Warning("Spread pool exhausted for {Server} — reinitializing", serverName);
             try
             {
+                // If pool max size is too small for configured slots, recreate with correct size
+                var serverCfg = _config.Servers.FirstOrDefault(s => s.Id == id);
+                var neededSlots = Math.Max(
+                    serverCfg?.SpreadSite.MaxUploadSlots ?? 3,
+                    serverCfg?.SpreadSite.MaxDownloadSlots ?? 3);
+                var neededSize = Math.Max(_config.Spread.SpreadPoolSize, neededSlots);
+
+                if (pool.MaxSize < neededSize)
+                {
+                    // Pool is undersized — replace it entirely
+                    FtpClientFactory? factory;
+                    lock (_lock) _factories.TryGetValue(id, out factory);
+                    if (factory != null)
+                    {
+                        await pool.DisposeAsync();
+                        var newPool = new FtpConnectionPool(factory, neededSize);
+                        await newPool.Initialize(CancellationToken.None);
+                        lock (_lock) _spreadPools[id] = newPool;
+                        Log.Information("Spread pool replaced for {Server} (old size={Old}, new size={New})",
+                            serverName, pool.MaxSize, neededSize);
+                        continue;
+                    }
+                }
+
                 await pool.Reinitialize(CancellationToken.None);
             }
             catch (Exception ex)
