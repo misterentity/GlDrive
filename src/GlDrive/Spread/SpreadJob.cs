@@ -49,6 +49,11 @@ public class SpreadJob : IDisposable
     private readonly Dictionary<string, ActiveTransferInfo> _activeTransfers = new();
     private readonly HashSet<(string fileName, string dstId)> _inFlightFiles = new();
 
+    // Chain mode: only one route (src→dst) active per release at a time.
+    // Prevents connection exhaustion from parallel multi-site transfers.
+    // Once current route has no more files to send, picks next hop.
+    private (string srcId, string dstId)? _activeRoute;
+
     // Directory cleanup: track created dirs and successful transfers per destination
     private readonly HashSet<string> _dirsCreated = new(); // serverId values that got MKD
     private readonly HashSet<string> _serversWithSuccessfulTransfer = new();
@@ -303,6 +308,24 @@ public class SpreadJob : IDisposable
 
                 if (transfer == null)
                 {
+                    // Chain mode: clear route if no more files for it, so next
+                    // iteration can pick a new route (e.g. B->C after A->B done)
+                    if (_activeRoute is { } ar)
+                    {
+                        bool hasInFlight;
+                        lock (_ownershipLock)
+                            hasInFlight = _inFlightFiles.Any(f => f.dstId == ar.dstId);
+                        if (!hasInFlight)
+                        {
+                            var srcName = _serverConfigs.TryGetValue(ar.srcId, out var sc) ? sc.Name : ar.srcId;
+                            var dstName = _serverConfigs.TryGetValue(ar.dstId, out var dc) ? dc.Name : ar.dstId;
+                            Log.Information("Spread chain: route {Src} -> {Dst} finished, picking next hop",
+                                srcName, dstName);
+                            _activeRoute = null;
+                            continue; // Re-evaluate immediately with no route lock
+                        }
+                    }
+
                     if (IsJobComplete())
                     {
                         State = SpreadJobState.Completed;
@@ -362,6 +385,17 @@ public class SpreadJob : IDisposable
 
                 // 4. Claim slots atomically before starting transfer
                 var (file, srcId, dstId) = transfer.Value;
+
+                // Chain mode: lock onto this route if none active
+                if (_activeRoute == null)
+                {
+                    _activeRoute = (srcId, dstId);
+                    var srcName = _serverConfigs.TryGetValue(srcId, out var sc) ? sc.Name : srcId;
+                    var dstName = _serverConfigs.TryGetValue(dstId, out var dc) ? dc.Name : dstId;
+                    Log.Information("Spread chain: locked route {Src} -> {Dst} for {Release}",
+                        srcName, dstName, ReleaseName);
+                }
+
                 if (TryClaimSlots(srcId, dstId))
                 {
                     // Mark file as in-flight to prevent duplicate transfers to same dest
@@ -774,6 +808,12 @@ public class SpreadJob : IDisposable
                         if (owners.Contains(dstId)) { skippedOwned++; continue; }
                         if (_inFlightFiles.Contains((fileName, dstId))) { skippedOwned++; continue; }
 
+                        // Chain mode: if a route is active with in-flight transfers, only
+                        // consider that route. Prevents multi-site connection exhaustion.
+                        if (_activeRoute is { } route &&
+                            (srcId != route.srcId || dstId != route.dstId))
+                            continue;
+
                         var dstConfig = _serverConfigs[dstId];
                         if (dstConfig.SpreadSite.DownloadOnly) { skippedDownloadOnly++; continue; }
                         if (_affilCache.GetValueOrDefault(dstId)) { skippedAffil++; continue; }
@@ -994,7 +1034,15 @@ public class SpreadJob : IDisposable
             if (srcConn != null) await srcConn.DisposeAsync();
             if (dstConn != null) await dstConn.DisposeAsync();
 
-            lock (_ownershipLock) _inFlightFiles.Remove((file.Name, dstId));
+            lock (_ownershipLock)
+            {
+                _inFlightFiles.Remove((file.Name, dstId));
+
+                // Chain mode: clear route when last in-flight transfer on it completes
+                if (_activeRoute is { } ar && ar.dstId == dstId &&
+                    !_inFlightFiles.Any(f => f.dstId == dstId))
+                    _activeRoute = null;
+            }
             lock (_progressLock)
             {
                 _siteProgress[srcId].ActiveTransfers--;
