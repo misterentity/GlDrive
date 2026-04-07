@@ -1005,15 +1005,16 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                     foreach (var ep in allEpisodes)
                     {
                         // Deduplicate by show+season+episode
-                        var key = $"{ep.Show!.Id}:S{ep.Season}E{ep.Number}";
+                        var key = $"{ep.Show!.Id}:S{ep.Season}E{ep.Number ?? 0}";
                         if (!seenShowEps.Add(key)) continue;
 
+                        var epNum = ep.Number.HasValue ? $"E{ep.Number.Value:D2}" : "";
                         episodes.Add(new UpcomingTvEpisodeVm
                         {
                             ShowId = ep.Show.Id,
                             ShowName = ep.Show.Name,
                             ShowType = ep.Show.Type ?? "",
-                            EpisodeInfo = $"S{ep.Season:D2}E{ep.Number:D2} — {ep.Name}",
+                            EpisodeInfo = $"S{ep.Season:D2}{epNum} — {ep.Name}",
                             TimeDisplay = ep.Airtime ?? "",
                             NetworkDisplay = ep.Show.NetworkName,
                             DateDisplay = date.ToString("ddd M/d"),
@@ -1099,7 +1100,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                     ShowId = result.Show.Id,
                     ShowName = result.Show.Name,
                     EpisodeInfo = ep != null
-                        ? $"S{ep.Season:D2}E{ep.Number:D2} — {ep.Name}"
+                        ? $"S{ep.Season:D2}{(ep.Number.HasValue ? $"E{ep.Number.Value:D2}" : "")} — {ep.Name}"
                         : "No upcoming episodes",
                     TimeDisplay = ep?.Airtime ?? "",
                     NetworkDisplay = result.Show.NetworkName,

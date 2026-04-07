@@ -47,6 +47,7 @@ public class SpreadJob : IDisposable
     // Transfer tracking
     private readonly Dictionary<(string file, string src, string dst), int> _failureCounts = new();
     private readonly Dictionary<string, ActiveTransferInfo> _activeTransfers = new();
+    private readonly HashSet<(string fileName, string dstId)> _inFlightFiles = new();
 
     // Directory cleanup: track created dirs and successful transfers per destination
     private readonly HashSet<string> _dirsCreated = new(); // serverId values that got MKD
@@ -363,6 +364,9 @@ public class SpreadJob : IDisposable
                 var (file, srcId, dstId) = transfer.Value;
                 if (TryClaimSlots(srcId, dstId))
                 {
+                    // Mark file as in-flight to prevent duplicate transfers to same dest
+                    lock (_ownershipLock) _inFlightFiles.Add((file.Name, dstId));
+
                     // Wrap with per-transfer hard timeout to prevent indefinite hangs
                     _ = Task.Run(async () =>
                     {
@@ -768,6 +772,7 @@ public class SpreadJob : IDisposable
                     {
                         if (srcId == dstId) continue;
                         if (owners.Contains(dstId)) { skippedOwned++; continue; }
+                        if (_inFlightFiles.Contains((fileName, dstId))) { skippedOwned++; continue; }
 
                         var dstConfig = _serverConfigs[dstId];
                         if (dstConfig.SpreadSite.DownloadOnly) { skippedDownloadOnly++; continue; }
@@ -989,6 +994,7 @@ public class SpreadJob : IDisposable
             if (srcConn != null) await srcConn.DisposeAsync();
             if (dstConn != null) await dstConn.DisposeAsync();
 
+            lock (_ownershipLock) _inFlightFiles.Remove((file.Name, dstId));
             lock (_progressLock)
             {
                 _siteProgress[srcId].ActiveTransfers--;

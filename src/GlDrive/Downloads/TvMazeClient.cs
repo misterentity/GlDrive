@@ -181,7 +181,7 @@ public class TvMazeScheduleEpisode
     public int Id { get; set; }
     public string Name { get; set; } = "";
     public int Season { get; set; }
-    public int Number { get; set; }
+    public int? Number { get; set; }
     public string? Airdate { get; set; }
     public string? Airtime { get; set; }
     public int? Runtime { get; set; }
@@ -194,7 +194,7 @@ public class TvMazeWebScheduleEpisode
     public int Id { get; set; }
     public string Name { get; set; } = "";
     public int Season { get; set; }
-    public int Number { get; set; }
+    public int? Number { get; set; }
     public string? Airdate { get; set; }
     public string? Airtime { get; set; }
     public int? Runtime { get; set; }
