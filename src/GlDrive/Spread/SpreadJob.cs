@@ -65,7 +65,7 @@ public class SpreadJob : IDisposable
     // Scan debouncing
     private DateTime _lastScanTime = DateTime.MinValue;
     private Task? _backgroundScan;
-    private const double ScanIntervalSeconds = 5.0;
+    private volatile bool _forceScan;
     private bool _isNuked;
 
     // Pre-computed affil checks (computed once per job)
@@ -279,11 +279,18 @@ public class SpreadJob : IDisposable
 
             while (!token.IsCancellationRequested && State == SpreadJobState.Running)
             {
-                // 1. Background scan with debounce — don't block the scoring loop
+                // 1. Background scan with adaptive debounce — faster during active racing
                 if (_backgroundScan == null || _backgroundScan.IsCompleted)
                 {
-                    if ((DateTime.UtcNow - _lastScanTime).TotalSeconds >= ScanIntervalSeconds)
+                    // Adaptive interval: 2s during active transfers, 5s when idle
+                    int activeCount;
+                    lock (_progressLock)
+                        activeCount = _siteProgress.Values.Sum(s => s.ActiveTransfers);
+                    var scanInterval = activeCount > 0 ? 2.0 : 5.0;
+
+                    if (_forceScan || (DateTime.UtcNow - _lastScanTime).TotalSeconds >= scanInterval)
                     {
+                        _forceScan = false;
                         _lastScanTime = DateTime.UtcNow;
                         _backgroundScan = ScanSites(sitePaths, token);
                     }
@@ -322,6 +329,7 @@ public class SpreadJob : IDisposable
                             Log.Information("Spread chain: route {Src} -> {Dst} finished, picking next hop",
                                 srcName, dstName);
                             _activeRoute = null;
+                            _forceScan = true; // Rescan immediately — new files may have appeared
                             continue; // Re-evaluate immediately with no route lock
                         }
                     }
@@ -981,6 +989,7 @@ public class SpreadJob : IDisposable
                 }
 
                 lock (_ownershipLock) _serversWithSuccessfulTransfer.Add(dstId);
+                _forceScan = true; // Rescan — new files likely appeared on source from other racers
                 Log.Information("FXP complete: {File} ({Src} -> {Dst})", file.Name,
                     _serverConfigs[srcId].Name, _serverConfigs[dstId].Name);
             }
@@ -1041,7 +1050,10 @@ public class SpreadJob : IDisposable
                 // Chain mode: clear route when last in-flight transfer on it completes
                 if (_activeRoute is { } ar && ar.dstId == dstId &&
                     !_inFlightFiles.Any(f => f.dstId == dstId))
+                {
                     _activeRoute = null;
+                    _forceScan = true; // Rescan for next hop
+                }
             }
             lock (_progressLock)
             {
