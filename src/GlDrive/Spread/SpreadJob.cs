@@ -1082,13 +1082,31 @@ public class SpreadJob : IDisposable
         }
     }
 
+    /// <summary>
+    /// Try MKD first, then SITE MKD as fallback (glftpd often blocks MKD in section dirs
+    /// but allows SITE MKD). Returns true if dir was created or already exists.
+    /// </summary>
+    private static async Task<bool> TryMakeDir(FluentFTP.AsyncFtpClient client, string path, CancellationToken ct)
+    {
+        var sanitized = Ftp.CpsvDataHelper.SanitizeFtpPath(path);
+        var reply = await client.Execute($"MKD {sanitized}", ct);
+        if (reply.Success || reply.Message.Contains("exists", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // Fallback: SITE MKD (glftpd allows this when MKD is blocked)
+        reply = await client.Execute($"SITE MKD {sanitized}", ct);
+        if (reply.Success || reply.Message.Contains("exists", StringComparison.OrdinalIgnoreCase)
+                          || reply.Message.Contains("created", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        Log.Debug("MKD + SITE MKD both failed for {Path}: {Code} {Msg}", path, reply.Code, reply.Message);
+        return false;
+    }
+
     private static async Task EnsureDirectoryExists(FluentFTP.AsyncFtpClient client,
         string basePath, string relativePath, CancellationToken ct)
     {
-        // MKD the base release directory — 257 = created, 550 = exists (both OK)
-        // Anything else (e.g., 550 No such directory = parent missing) is a real error
-        var mkdReply = await client.Execute($"MKD {Ftp.CpsvDataHelper.SanitizeFtpPath(basePath)}", ct);
-        if (!mkdReply.Success && !mkdReply.Message.Contains("exists", StringComparison.OrdinalIgnoreCase))
+        if (!await TryMakeDir(client, basePath, ct))
         {
             // Try creating parent directory first (section dir might not exist yet)
             var parentPath = basePath.TrimEnd('/');
@@ -1096,13 +1114,15 @@ public class SpreadJob : IDisposable
             if (lastSlash > 0)
             {
                 var parent = parentPath[..lastSlash];
-                var parentReply = await client.Execute($"MKD {Ftp.CpsvDataHelper.SanitizeFtpPath(parent)}", ct);
-                Log.Debug("MKD parent {Path}: {Code} {Msg}", parent, parentReply.Code, parentReply.Message);
-                // Retry the base path
-                mkdReply = await client.Execute($"MKD {Ftp.CpsvDataHelper.SanitizeFtpPath(basePath)}", ct);
+                await TryMakeDir(client, parent, ct);
+                // Retry the base path after parent created
+                if (!await TryMakeDir(client, basePath, ct))
+                    throw new IOException($"MKD failed for {basePath} (tried MKD + SITE MKD)");
             }
-            if (!mkdReply.Success && !mkdReply.Message.Contains("exists", StringComparison.OrdinalIgnoreCase))
-                throw new IOException($"MKD failed for {basePath}: {mkdReply.Code} {mkdReply.Message}");
+            else
+            {
+                throw new IOException($"MKD failed for {basePath} (tried MKD + SITE MKD)");
+            }
         }
 
         // If file is in a subdirectory (e.g. "CD1/file.rar"), create nested dirs
@@ -1114,9 +1134,8 @@ public class SpreadJob : IDisposable
         foreach (var part in parts)
         {
             current += "/" + part;
-            var reply = await client.Execute($"MKD {Ftp.CpsvDataHelper.SanitizeFtpPath(current)}", ct);
-            if (!reply.Success && !reply.Message.Contains("exists", StringComparison.OrdinalIgnoreCase))
-                throw new IOException($"MKD failed for {current}: {reply.Code} {reply.Message}");
+            if (!await TryMakeDir(client, current, ct))
+                throw new IOException($"MKD failed for {current} (tried MKD + SITE MKD)");
         }
     }
 
