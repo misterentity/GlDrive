@@ -60,7 +60,12 @@ public class MountService : IDisposable
         try
         {
             _factory = new FtpClientFactory(_serverConfig, _certManager);
-            _pool = new FtpConnectionPool(_factory, _serverConfig.Pool.PoolSize);
+            // If spread is configured, reduce main pool to leave room for spread connections
+            // within the server's login limit (typically 4 simultaneous logins)
+            var mainPoolSize = _serverConfig.Pool.PoolSize;
+            if (_serverConfig.SpreadSite?.Sections.Count > 0)
+                mainPoolSize = Math.Min(mainPoolSize, 2);
+            _pool = new FtpConnectionPool(_factory, mainPoolSize);
             await _pool.Initialize(ct);
 
             _ftp = new FtpOperations(_pool);
