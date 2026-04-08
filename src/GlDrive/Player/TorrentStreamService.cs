@@ -42,10 +42,10 @@ public class TorrentStreamService : IDisposable
             AutoSaveLoadDhtCache = true,
             AutoSaveLoadFastResume = true,
             AutoSaveLoadMagnetLinkMetadata = true,
-            DhtEndPoint = new IPEndPoint(IPAddress.Loopback, dhtPort),
+            DhtEndPoint = new IPEndPoint(IPAddress.Any, dhtPort),
             ListenEndPoints = new Dictionary<string, IPEndPoint>
             {
-                { "ipv4", new IPEndPoint(IPAddress.Loopback, listenPort) }
+                { "ipv4", new IPEndPoint(IPAddress.Any, listenPort) }
             },
             HttpStreamingPrefix = $"http://127.0.0.1:{httpPort}/",
         }.ToSettings();
@@ -114,7 +114,7 @@ public class TorrentStreamService : IDisposable
 
                 // Log every 10 seconds
                 if ((int)sw.Elapsed.TotalSeconds % 10 == 0 && sw.Elapsed.TotalSeconds > 1)
-                    Log.Debug("Metadata wait: {Elapsed}s, Seeds={Seeds}, Leechs={Leechs}, Available={Available}",
+                    Log.Information("Metadata wait: {Elapsed}s, Seeds={Seeds}, Leechs={Leechs}, Available={Available}",
                         (int)sw.Elapsed.TotalSeconds, p.Seeds, p.Leechs, p.Available);
             }
 
