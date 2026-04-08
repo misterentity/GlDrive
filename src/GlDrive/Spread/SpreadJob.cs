@@ -821,6 +821,21 @@ public class SpreadJob : IDisposable
             foreach (var fi in _fileInfos.Values)
                 if (fi.Size > maxFileSize) maxFileSize = fi.Size;
 
+            // SFV-first enforcement: find destinations that still need their SFV
+            // glftpd requires the SFV before any rar/data files for zipscript tracking
+            var sfvFile = _fileInfos.Keys.FirstOrDefault(f =>
+                f.EndsWith(".sfv", StringComparison.OrdinalIgnoreCase));
+            HashSet<string>? destsNeedingSfv = null;
+            if (sfvFile != null && _fileOwnership.TryGetValue(sfvFile, out var sfvOwners))
+            {
+                destsNeedingSfv = new(StringComparer.Ordinal);
+                foreach (var (dstId, _) in sitePaths)
+                {
+                    if (!sfvOwners.Contains(dstId))
+                        destsNeedingSfv.Add(dstId);
+                }
+            }
+
             // Pre-build per-dest extension/basename sets for Unique/Similar checks
             Dictionary<string, HashSet<string>>? destExtensions = null;
             Dictionary<string, HashSet<string>>? destBaseNames = null;
@@ -865,6 +880,12 @@ public class SpreadJob : IDisposable
                         // consider that route. Prevents multi-site connection exhaustion.
                         if (_activeRoute is { } route &&
                             (srcId != route.srcId || dstId != route.dstId))
+                            continue;
+
+                        // SFV-first: block non-SFV files until SFV is delivered to this dest
+                        if (destsNeedingSfv != null && destsNeedingSfv.Contains(dstId) &&
+                            !fileName.EndsWith(".sfv", StringComparison.OrdinalIgnoreCase) &&
+                            !fileName.EndsWith(".nfo", StringComparison.OrdinalIgnoreCase))
                             continue;
 
                         var dstConfig = _serverConfigs[dstId];
