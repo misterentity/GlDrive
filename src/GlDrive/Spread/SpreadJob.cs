@@ -35,19 +35,21 @@ public class SpreadJob : IDisposable
     private readonly Lock _progressLock = new();    // _siteProgress, _activeTransfers
     private readonly Lock _failureLock = new();     // _failureCounts
 
-    // File tracking
-    private readonly Dictionary<string, HashSet<string>> _fileOwnership = new();
-    private readonly Dictionary<string, SpreadFileInfo> _fileInfos = new();
-    private readonly Dictionary<string, SkiplistAction> _fileActions = new(); // per-file skiplist action
+    // File tracking (OrdinalIgnoreCase: FTP servers may return different casing)
+    private readonly Dictionary<string, HashSet<string>> _fileOwnership = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, SpreadFileInfo> _fileInfos = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, SkiplistAction> _fileActions = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int> _serverFileCount = new(); // per-server owned file count
     private readonly Dictionary<string, SiteProgress> _siteProgress = new();
     private int _expectedFileCount;
     private (string serverId, string path)? _pendingSfv;
 
-    // Transfer tracking
-    private readonly Dictionary<(string file, string src, string dst), int> _failureCounts = new();
+    // Transfer tracking (file name component uses OrdinalIgnoreCase)
+    private readonly Dictionary<(string file, string src, string dst), int> _failureCounts =
+        new(new FileRouteTupleComparer());
     private readonly Dictionary<string, ActiveTransferInfo> _activeTransfers = new();
-    private readonly HashSet<(string fileName, string dstId)> _inFlightFiles = new();
+    private readonly HashSet<(string fileName, string dstId)> _inFlightFiles =
+        new(new FileDstTupleComparer());
 
     // Chain mode: only one route (src→dst) active per release at a time.
     // Prevents connection exhaustion from parallel multi-site transfers.
@@ -1290,4 +1292,32 @@ public class ActiveTransferInfo
     public long BytesTransferred { get; set; }
     public double SpeedBps { get; set; }
     public double ProgressPercent => FileSize > 0 ? BytesTransferred * 100.0 / FileSize : 0;
+}
+
+/// <summary>Case-insensitive comparer for (fileName, dstId) tuples.</summary>
+internal sealed class FileDstTupleComparer : IEqualityComparer<(string fileName, string dstId)>
+{
+    public bool Equals((string fileName, string dstId) x, (string fileName, string dstId) y) =>
+        string.Equals(x.fileName, y.fileName, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(x.dstId, y.dstId, StringComparison.Ordinal);
+
+    public int GetHashCode((string fileName, string dstId) obj) =>
+        HashCode.Combine(
+            StringComparer.OrdinalIgnoreCase.GetHashCode(obj.fileName),
+            StringComparer.Ordinal.GetHashCode(obj.dstId));
+}
+
+/// <summary>Case-insensitive comparer for (file, src, dst) tuples.</summary>
+internal sealed class FileRouteTupleComparer : IEqualityComparer<(string file, string src, string dst)>
+{
+    public bool Equals((string file, string src, string dst) x, (string file, string src, string dst) y) =>
+        string.Equals(x.file, y.file, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(x.src, y.src, StringComparison.Ordinal) &&
+        string.Equals(x.dst, y.dst, StringComparison.Ordinal);
+
+    public int GetHashCode((string file, string src, string dst) obj) =>
+        HashCode.Combine(
+            StringComparer.OrdinalIgnoreCase.GetHashCode(obj.file),
+            StringComparer.Ordinal.GetHashCode(obj.src),
+            StringComparer.Ordinal.GetHashCode(obj.dst));
 }
