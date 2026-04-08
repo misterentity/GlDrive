@@ -43,13 +43,11 @@ public class SpreadManager : IDisposable
     {
         if (_disposed) return;
 
-        // Pool size must be at least as large as the max concurrent slots for this server,
-        // otherwise borrows will always timeout when slots are fully utilized
-        var serverConfig = _config.Servers.FirstOrDefault(s => s.Id == serverId);
-        var maxSlots = Math.Max(
-            serverConfig?.SpreadSite.MaxUploadSlots ?? 3,
-            serverConfig?.SpreadSite.MaxDownloadSlots ?? 3);
-        var poolSize = Math.Max(_config.Spread.SpreadPoolSize, maxSlots);
+        // Chain mode: only 1 transfer at a time per route, so we only need 1 connection
+        // per server at a time. Keep pool small to avoid hitting server login limits
+        // (main pool already uses up to 3 of the server's allowed logins).
+        var poolSize = Math.Max(_config.Spread.SpreadPoolSize, 1);
+        poolSize = Math.Min(poolSize, 2); // Cap at 2 to leave room for main pool
         if (poolSize <= 0) return;
 
         var pool = new FtpConnectionPool(factory, poolSize);
@@ -91,10 +89,12 @@ public class SpreadManager : IDisposable
         releaseName = SanitizeFtpPath(releaseName);
         section = SanitizeFtpPath(section);
 
-        // Check concurrent race limit
+        // Check concurrent race limit — cap at 1 since chain mode means one route
+        // at a time per race, and multiple races exhaust server login limits
+        var maxRaces = Math.Min(_config.Spread.MaxConcurrentRaces, 1);
         lock (_lock)
         {
-            if (_activeJobs.Count >= _config.Spread.MaxConcurrentRaces)
+            if (_activeJobs.Count >= maxRaces)
             {
                 _raceQueue.Enqueue(new PendingRace(section, releaseName, serverIds.ToList(), mode));
                 Log.Information("Race queued (max concurrent {Max}): {Release}",
@@ -275,7 +275,8 @@ public class SpreadManager : IDisposable
         PendingRace? next;
         lock (_lock)
         {
-            if (_raceQueue.Count == 0 || _activeJobs.Count >= _config.Spread.MaxConcurrentRaces)
+            var maxRaces = Math.Min(_config.Spread.MaxConcurrentRaces, 1);
+            if (_raceQueue.Count == 0 || _activeJobs.Count >= maxRaces)
                 return;
             next = _raceQueue.Dequeue();
         }

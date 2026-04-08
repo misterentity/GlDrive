@@ -5,7 +5,7 @@ public class SpreadConfig
     public int SpreadPoolSize { get; set; } = 2;
     public int TransferTimeoutSeconds { get; set; } = 60;
     public int HardTimeoutSeconds { get; set; } = 1200;
-    public int MaxConcurrentRaces { get; set; } = 3;
+    public int MaxConcurrentRaces { get; set; } = 1;
     public bool AutoRaceOnNotification { get; set; }
     public bool NotifyOnRaceComplete { get; set; } = true;
     public List<string> NukeMarkers { get; set; } = [".nuke", "NUKED-"];
@@ -16,8 +16,8 @@ public class SiteSpreadConfig
 {
     public Dictionary<string, string> Sections { get; set; } = new();
     public SitePriority Priority { get; set; } = SitePriority.Normal;
-    public int MaxUploadSlots { get; set; } = 3;
-    public int MaxDownloadSlots { get; set; } = 3;
+    public int MaxUploadSlots { get; set; } = 1;
+    public int MaxDownloadSlots { get; set; } = 1;
     public bool DownloadOnly { get; set; }
     public List<SkiplistRule> Skiplist { get; set; } = [];
     public List<string> Affils { get; set; } = [];
