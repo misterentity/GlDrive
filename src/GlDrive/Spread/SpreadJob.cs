@@ -267,6 +267,25 @@ public class SpreadJob : IDisposable
                     $"no destination servers have a matching section for [{Section}]");
                 return;
             }
+
+            // Phase 2b: Check if any destination is actually reachable (not blocked by affil)
+            // A server is a viable destination if it doesn't already have the release,
+            // isn't downloadOnly, and isn't affil-blocked for this release.
+            var viableDestinations = sitePaths.Keys
+                .Where(id => !sourceServers.Contains(id))
+                .Where(id => !_serverConfigs[id].SpreadSite.DownloadOnly)
+                .Where(id => !_affilCache.GetValueOrDefault(id))
+                .ToList();
+
+            if (viableDestinations.Count == 0)
+            {
+                var affilBlocked = sitePaths.Keys
+                    .Where(id => !sourceServers.Contains(id) && _affilCache.GetValueOrDefault(id))
+                    .Select(id => _serverConfigs[id].Name);
+                SetFailed($"No viable destinations — all targets are affil-blocked ({string.Join(", ", affilBlocked)}) for [{Section}] {ReleaseName}");
+                return;
+            }
+
             Log.Information("Spread starting: {Release} [{Section}] — {Sources} source(s), {Total} total servers",
                 ReleaseName, Section, sourceServers.Count, sitePaths.Count);
 
