@@ -387,8 +387,22 @@ public class SpreadJob : IDisposable
                             _activeRoute = null;
                             lastActivity = DateTime.UtcNow;
                             consecutiveEmpty = 0;
+
+                            // Reinitialize exhausted spread pools — kill ghosts and get fresh connections
+                            foreach (var (serverId, pool) in _pools)
+                            {
+                                try
+                                {
+                                    await pool.Reinitialize(token);
+                                }
+                                catch (Exception ex)
+                                {
+                                    Log.Debug(ex, "Completion sweep: pool reinit failed for {Server}", serverId);
+                                }
+                            }
+
                             Log.Information("Spread completion sweep {Retry}/3: {Missing} files still missing on destinations, " +
-                                "resetting failures and retrying — {Release}",
+                                "resetting failures and reinitializing pools — {Release}",
                                 _completionRetries, missingFiles, ReleaseName);
                             continue;
                         }
@@ -1059,6 +1073,13 @@ public class SpreadJob : IDisposable
                 file.Name, _serverConfigs[srcId].Name, _serverConfigs[dstId].Name);
             if (srcConn != null) srcConn.Poisoned = true;
             if (dstConn != null) dstConn.Poisoned = true;
+
+            lock (_failureLock)
+            {
+                var failKey = (file.Name, srcId, dstId);
+                _failureCounts.TryGetValue(failKey, out var count);
+                _failureCounts[failKey] = count + 1;
+            }
         }
         catch (Exception ex)
         {
