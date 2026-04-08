@@ -54,10 +54,20 @@ public class IrcAnnounceListener : IDisposable
         }
     }
 
+    private int _traceCount;
+
     private void OnMessage(string target, IrcMessageItem message)
     {
         if (message.Type != IrcMessageType.Normal && message.Type != IrcMessageType.Notice)
             return;
+
+        // Trace first 5 messages per channel to diagnose matching issues
+        if (_traceCount < 20 && target.StartsWith('#'))
+        {
+            _traceCount++;
+            Log.Information("Announce trace [{Channel}] nick={Nick} text={Text}",
+                target, message.Nick, message.Text[..Math.Min(150, message.Text.Length)]);
+        }
 
         foreach (var rule in _rules.Where(r => r.Enabled))
         {

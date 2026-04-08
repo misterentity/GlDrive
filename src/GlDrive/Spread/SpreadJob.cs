@@ -67,6 +67,7 @@ public class SpreadJob : IDisposable
     private Task? _backgroundScan;
     private volatile bool _forceScan;
     private bool _isNuked;
+    private int _completionRetries;
 
     // Pre-computed affil checks (computed once per job)
     private readonly Dictionary<string, bool> _affilCache = new();
@@ -363,6 +364,35 @@ public class SpreadJob : IDisposable
 
                     if (activeCount == 0 && (DateTime.UtcNow - lastActivity).TotalSeconds > 60)
                     {
+                        // Completion sweep: if destinations are still missing files,
+                        // reset failure counters and try again (up to 3 retries)
+                        int missingFiles;
+                        lock (_ownershipLock)
+                        {
+                            missingFiles = 0;
+                            foreach (var (serverId, _) in _siteProgress)
+                            {
+                                if (_serverConfigs[serverId].SpreadSite.DownloadOnly) continue;
+                                var owned = _serverFileCount.GetValueOrDefault(serverId);
+                                var total = _fileInfos.Count;
+                                if (owned < total) missingFiles += total - owned;
+                            }
+                        }
+
+                        if (missingFiles > 0 && _completionRetries < 3)
+                        {
+                            _completionRetries++;
+                            lock (_failureLock) _failureCounts.Clear();
+                            _forceScan = true;
+                            _activeRoute = null;
+                            lastActivity = DateTime.UtcNow;
+                            consecutiveEmpty = 0;
+                            Log.Information("Spread completion sweep {Retry}/3: {Missing} files still missing on destinations, " +
+                                "resetting failures and retrying — {Release}",
+                                _completionRetries, missingFiles, ReleaseName);
+                            continue;
+                        }
+
                         // If we transferred any files, this is a partial completion, not a failure
                         bool hadTransfers;
                         lock (_ownershipLock)
@@ -372,7 +402,8 @@ public class SpreadJob : IDisposable
                         {
                             State = SpreadJobState.Completed;
                             Completed?.Invoke(this);
-                            Log.Information("Spread completed (partial): {Release} — no more viable transfers", ReleaseName);
+                            Log.Information("Spread completed{Partial}: {Release} — {Missing} files undelivered",
+                                missingFiles > 0 ? " (partial)" : "", ReleaseName, missingFiles);
                         }
                         else
                         {
