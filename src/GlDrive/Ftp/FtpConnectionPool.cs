@@ -1,5 +1,8 @@
+using System.Net.Sockets;
+using System.Reflection;
 using System.Threading.Channels;
 using FluentFTP;
+using FluentFTP.Client.BaseClient;
 using Serilog;
 
 namespace GlDrive.Ftp;
@@ -209,14 +212,70 @@ public class FtpConnectionPool : IAsyncDisposable
     }
 
     /// <summary>
-    /// Disposes an FTP client safely. GnuTLS can crash during disposal of poisoned
-    /// streams — its Dispose throws a native exception inside FluentFTP's async
-    /// pipeline that kills the process. To prevent this, wrap disposal in try-catch
-    /// and close the underlying socket first to prevent GnuTLS from attempting
-    /// read/close operations on dead connections.
+    /// Neutralize GnuTLS before disposal to prevent native crashes.
+    /// GnuTLS calls gnutls_bye() during stream Dispose, which can crash the process
+    /// with a native access violation if the underlying socket is dead or the TLS
+    /// session is corrupt. This method:
+    /// 1. Sets IsSessionUsable=false on GnuTlsInternalStream to skip gnutls_bye()
+    /// 2. Closes the raw socket so any remaining native I/O fails cleanly
+    /// </summary>
+    private static void NeutralizeGnuTls(AsyncFtpClient client)
+    {
+        try
+        {
+            // Get the FtpSocketStream via the public IInternalFtpClient interface
+            var stream = ((IInternalFtpClient)client).GetBaseStream();
+            if (stream == null) return;
+
+            // Get m_customStream (the GnuTLS wrapper) via reflection
+            var customStreamField = stream.GetType().GetField("m_customStream",
+                BindingFlags.NonPublic | BindingFlags.Instance);
+            var customStream = customStreamField?.GetValue(stream);
+            if (customStream != null)
+            {
+                // The custom stream wraps GnuTlsInternalStream as its BaseStream.
+                // Set IsSessionUsable = false to prevent gnutls_bye() in Dispose.
+                var baseStreamProp = customStream.GetType().GetProperty("BaseStream");
+                var gnuTlsInternal = baseStreamProp?.GetValue(customStream);
+                if (gnuTlsInternal != null)
+                {
+                    var usableProp = gnuTlsInternal.GetType().GetProperty("IsSessionUsable");
+                    if (usableProp?.CanWrite == true)
+                    {
+                        usableProp.SetValue(gnuTlsInternal, false);
+                    }
+                    else
+                    {
+                        // Fallback: use backing field if setter is private
+                        var backingField = gnuTlsInternal.GetType().GetField("<IsSessionUsable>k__BackingField",
+                            BindingFlags.NonPublic | BindingFlags.Instance);
+                        backingField?.SetValue(gnuTlsInternal, false);
+                    }
+                }
+            }
+
+            // Also close the raw socket to prevent any stray native I/O
+            var socketField = stream.GetType().GetField("m_socket",
+                BindingFlags.NonPublic | BindingFlags.Instance);
+            var socket = socketField?.GetValue(stream) as Socket;
+            if (socket != null)
+            {
+                try { socket.Close(0); } catch { }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "NeutralizeGnuTls: failed (non-fatal)");
+        }
+    }
+
+    /// <summary>
+    /// Disposes an FTP client safely by first neutralizing GnuTLS to prevent
+    /// native crashes, then disposing in a fire-and-forget task with timeout.
     /// </summary>
     private static void DisconnectAndDispose(AsyncFtpClient client)
     {
+        NeutralizeGnuTls(client);
         _ = Task.Run(async () =>
         {
             try
@@ -225,18 +284,17 @@ public class FtpConnectionPool : IAsyncDisposable
                 await client.Disconnect(cts.Token).ConfigureAwait(false);
             }
             catch { }
-            // Dispose can trigger GnuTLS native crash — wrap in try-catch
             try { client.Dispose(); }
             catch { }
         });
     }
 
     /// <summary>
-    /// Safe disposal for DisposeAsync — wraps each client in try-catch to prevent
-    /// GnuTLS native crash from killing the process.
+    /// Safe disposal for DisposeAsync — neutralizes GnuTLS then disconnects.
     /// </summary>
     private static async Task SafeDisconnectAndDispose(AsyncFtpClient client)
     {
+        NeutralizeGnuTls(client);
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
