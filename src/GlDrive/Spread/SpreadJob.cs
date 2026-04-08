@@ -1120,6 +1120,12 @@ public class SpreadJob : IDisposable
     private static async Task<bool> TryMakeDir(FluentFTP.AsyncFtpClient client, string path, CancellationToken ct)
     {
         var sanitized = Ftp.CpsvDataHelper.SanitizeFtpPath(path);
+
+        // First check if directory already exists via CWD
+        var cwdReply = await client.Execute($"CWD {sanitized}", ct);
+        if (cwdReply.Success)
+            return true;
+
         var reply = await client.Execute($"MKD {sanitized}", ct);
         if (reply.Success || reply.Message.Contains("exists", StringComparison.OrdinalIgnoreCase))
             return true;
@@ -1130,7 +1136,29 @@ public class SpreadJob : IDisposable
                           || reply.Message.Contains("created", StringComparison.OrdinalIgnoreCase))
             return true;
 
-        Log.Debug("MKD + SITE MKD both failed for {Path}: {Code} {Msg}", path, reply.Code, reply.Message);
+        // Fallback: CWD to parent + relative MKD (some glftpd configs only allow relative paths)
+        var trimmed = sanitized.TrimEnd('/');
+        var lastSlash = trimmed.LastIndexOf('/');
+        if (lastSlash > 0)
+        {
+            var parent = trimmed[..lastSlash];
+            var dirName = trimmed[(lastSlash + 1)..];
+            var cwdParent = await client.Execute($"CWD {parent}", ct);
+            if (cwdParent.Success)
+            {
+                reply = await client.Execute($"MKD {dirName}", ct);
+                if (reply.Success || reply.Message.Contains("exists", StringComparison.OrdinalIgnoreCase))
+                    return true;
+
+                reply = await client.Execute($"SITE MKD {dirName}", ct);
+                if (reply.Success || reply.Message.Contains("exists", StringComparison.OrdinalIgnoreCase)
+                                  || reply.Message.Contains("created", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+        }
+
+        Log.Warning("MKD failed for {Path}: all methods tried (MKD, SITE MKD, relative MKD). Last reply: {Code} {Msg}",
+            path, reply.Code, reply.Message);
         return false;
     }
 
