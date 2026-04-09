@@ -224,7 +224,7 @@ public static class TrayIconSetup
         extractor.Click += (_, _) =>
         {
             var win = Application.Current.Windows.OfType<ExtractorWindow>().FirstOrDefault();
-            if (win != null) { win.Activate(); }
+            if (win != null) { win.Show(); win.WindowState = WindowState.Normal; win.Activate(); }
             else { new ExtractorWindow().Show(); }
         };
         menu.Items.Add(extractor);

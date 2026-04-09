@@ -902,15 +902,51 @@ public partial class ExtractorWindow : Window
     private void ScanAndAutoExtract(string folder)
     {
         var existing = new HashSet<string>(Archives.Select(a => a.FilePath), StringComparer.OrdinalIgnoreCase);
-        var found = new List<ArchiveItem>();
 
         ScanDirectory(folder, ChkRecursive.IsChecked == true, existing);
 
-        // Auto-extract any newly added queued items
+        // Mark already-extracted archives so we don't re-extract them.
+        // An archive is "already extracted" if a non-archive file exists in the same
+        // directory that was produced by a previous extraction (i.e. the archive's
+        // content is already on disk).
         foreach (var item in Archives.Where(a => a.Status == "Queued").ToList())
         {
+            if (IsAlreadyExtracted(item))
+            {
+                item.Status = "Done";
+                item.Progress = 100;
+                lock (_watchLock) _watchProcessed.Add(item.FilePath);
+                continue;
+            }
+
+            // Track in _watchProcessed to prevent re-extraction on next scan
+            lock (_watchLock) _watchProcessed.Add(item.FilePath);
             _ = AutoExtractItem(item);
         }
+    }
+
+    /// <summary>
+    /// Check if an archive has already been extracted by looking for non-archive
+    /// content files in the output directory. Opens the archive to read entry names
+    /// and checks if any exist on disk.
+    /// </summary>
+    private bool IsAlreadyExtracted(ArchiveItem item)
+    {
+        try
+        {
+            var outputDir = GetOutputDir(item);
+            if (!Directory.Exists(outputDir)) return false;
+
+            using var archive = SharpCompress.Archives.Rar.RarArchive.OpenArchive(item.FilePath);
+            var entries = archive.Entries.Where(e => !e.IsDirectory && e.Key != null).Take(3);
+            foreach (var entry in entries)
+            {
+                var outPath = Path.Combine(outputDir, entry.Key!);
+                if (File.Exists(outPath)) return true;
+            }
+        }
+        catch { }
+        return false;
     }
 
     private async Task AutoExtractItem(ArchiveItem item)
