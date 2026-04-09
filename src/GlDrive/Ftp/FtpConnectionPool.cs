@@ -100,13 +100,13 @@ public class FtpConnectionPool : IAsyncDisposable
         // Try to get from pool first
         if (_pool.Reader.TryRead(out var client))
         {
-            if (client.IsConnected)
+            if (client.IsConnected && IsGnuTlsHealthy(client))
             {
                 Interlocked.Increment(ref _active);
                 return new PooledConnection(client, this);
             }
 
-            // Stale connection, properly disconnect and create new
+            // Stale or corrupt connection, properly disconnect and create new
             DisconnectAndDispose(client);
             Interlocked.Decrement(ref _created);
         }
@@ -169,7 +169,7 @@ public class FtpConnectionPool : IAsyncDisposable
 
         // At capacity — wait for one to be returned
         client = await _pool.Reader.ReadAsync(ct);
-        if (client.IsConnected)
+        if (client.IsConnected && IsGnuTlsHealthy(client))
         {
             Interlocked.Increment(ref _active);
             return new PooledConnection(client, this);
@@ -209,6 +209,64 @@ public class FtpConnectionPool : IAsyncDisposable
         Interlocked.Decrement(ref _created);
         DisconnectAndDispose(client);
         Log.Debug("Pool: discarded poisoned connection (created={Created})", _created);
+    }
+
+    /// <summary>
+    /// Check if the GnuTLS native session is still healthy before using a connection.
+    /// A corrupt session will crash the process on the next Read/Write with an
+    /// AccessViolationException that can't be caught in .NET. This pre-flight check
+    /// inspects the native session state via reflection to prevent that.
+    /// </summary>
+    private static bool IsGnuTlsHealthy(AsyncFtpClient client)
+    {
+        try
+        {
+            var stream = ((IInternalFtpClient)client).GetBaseStream();
+            if (stream == null) return true; // No stream = not TLS, skip check
+
+            var customStreamField = stream.GetType().GetField("m_customStream",
+                BindingFlags.NonPublic | BindingFlags.Instance);
+            var customStream = customStreamField?.GetValue(stream);
+            if (customStream == null) return true; // Not using GnuTLS
+
+            var baseStreamProp = customStream.GetType().GetProperty("BaseStream");
+            var gnuTlsInternal = baseStreamProp?.GetValue(customStream);
+            if (gnuTlsInternal == null) return true;
+
+            // Check IsSessionUsable flag
+            var usableProp = gnuTlsInternal.GetType().GetProperty("IsSessionUsable");
+            if (usableProp != null)
+            {
+                var usable = (bool?)usableProp.GetValue(gnuTlsInternal);
+                if (usable == false)
+                {
+                    Log.Warning("Pool: GnuTLS session marked unusable — discarding connection");
+                    return false;
+                }
+            }
+
+            // Check that the native session handle is non-zero (not freed/corrupted)
+            var sessionField = gnuTlsInternal.GetType().GetField("_session",
+                BindingFlags.NonPublic | BindingFlags.Instance)
+                ?? gnuTlsInternal.GetType().GetField("session",
+                    BindingFlags.NonPublic | BindingFlags.Instance);
+            if (sessionField != null)
+            {
+                var sessionValue = sessionField.GetValue(gnuTlsInternal);
+                if (sessionValue is IntPtr ptr && ptr == IntPtr.Zero)
+                {
+                    Log.Warning("Pool: GnuTLS native session handle is null — discarding connection");
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Pool: GnuTLS health check failed — discarding connection");
+            return false;
+        }
     }
 
     /// <summary>
