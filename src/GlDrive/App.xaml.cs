@@ -159,6 +159,9 @@ public partial class App
         TrayIconSetup.Configure(_taskbarIcon, _trayViewModel);
         _taskbarIcon.ForceCreate(false);
 
+        // Auto-start extractor watch folders if enabled (hidden window)
+        AutoStartExtractorWatch();
+
         // Auto-mount all enabled servers in background — don't block the UI
         _ = Task.Run(async () =>
         {
@@ -175,6 +178,35 @@ public partial class App
                     _trayViewModel!.ShowNotification("GlDrive", $"Mount failed: {ex.Message}"));
             }
         });
+    }
+
+    /// <summary>
+    /// If extractor watch folders are enabled in settings, open the ExtractorWindow
+    /// hidden so the FileSystemWatchers start monitoring immediately on app launch.
+    /// </summary>
+    private void AutoStartExtractorWatch()
+    {
+        try
+        {
+            var settingsPath = Path.Combine(ConfigManager.AppDataPath, "extractor-settings.json");
+            if (!File.Exists(settingsPath)) return;
+
+            var json = File.ReadAllText(settingsPath);
+            var settings = System.Text.Json.JsonSerializer.Deserialize<ExtractorSettings>(json,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+            if (settings is { WatchEnabled: true, WatchFolders.Count: > 0 })
+            {
+                Log.Information("Auto-starting extractor watch folders ({Count} folders)", settings.WatchFolders.Count);
+                var win = new ExtractorWindow { ShowInTaskbar = false, WindowState = WindowState.Minimized };
+                win.Show();
+                win.Hide(); // Hidden but alive — watchers are running from LoadSettings
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Failed to auto-start extractor watch");
+        }
     }
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
