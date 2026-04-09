@@ -250,12 +250,18 @@ public class SpreadJob : IDisposable
 
                 if (!string.IsNullOrEmpty(sectionMatch.Value))
                 {
-                    var destPath = sectionMatch.Value.TrimEnd('/') + "/" + ReleaseName;
+                    var sectionBase = sectionMatch.Value.TrimEnd('/');
+
+                    // Probe for glftpd dated directory (MMDD format, e.g. /mp3/0409/)
+                    // If the section root has a dated subfolder for today, use it.
+                    var destPath = await ProbeDatedDirectory(serverId, sectionBase, ct)
+                        is { } datedBase
+                            ? datedBase + "/" + ReleaseName
+                            : sectionBase + "/" + ReleaseName;
+
                     sitePaths[serverId] = destPath;
                     Log.Information("Spread: {Server} is DESTINATION at [{Section}] {Path}",
                         config.Name, sectionMatch.Key, destPath);
-                    // Directory is created lazily in ExecuteTransfer → EnsureDirectoryExists
-                    // only when we actually have a file to transfer
                 }
                 else
                 {
@@ -1223,6 +1229,44 @@ public class SpreadJob : IDisposable
         Log.Warning("MKD failed for {Path}: all methods tried (MKD, SITE MKD, relative MKD). Last reply: {Code} {Msg}",
             path, reply.Code, reply.Message);
         return false;
+    }
+
+    /// <summary>
+    /// Probe for a glftpd dated subdirectory (MMDD format) under the section root.
+    /// Sections like 0DAY and MP3 use dated dirs (e.g. /mp3/0409/).
+    /// Returns the dated path if found, null otherwise.
+    /// </summary>
+    private async Task<string?> ProbeDatedDirectory(string serverId, string sectionBase, CancellationToken ct)
+    {
+        // Only probe sections that commonly use dated dirs
+        var sectionName = sectionBase.TrimStart('/').Split('/')[0];
+        if (!sectionName.Equals("mp3", StringComparison.OrdinalIgnoreCase) &&
+            !sectionName.Equals("0day", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        FtpConnectionPool? pool = null;
+        if (_mainPools.TryGetValue(serverId, out var mainPool)) pool = mainPool;
+        else if (_pools.TryGetValue(serverId, out var spreadPool)) pool = spreadPool;
+        if (pool == null) return null;
+
+        var datePath = sectionBase + "/" + DateTime.UtcNow.ToString("MMdd");
+        try
+        {
+            using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            borrowCts.CancelAfter(TimeSpan.FromSeconds(10));
+            await using var conn = await pool.Borrow(borrowCts.Token);
+            if (await conn.Client.DirectoryExists(datePath, ct))
+            {
+                Log.Information("Spread: dated directory found: {Path}", datePath);
+                return datePath;
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Spread: dated dir probe failed for {Path}", datePath);
+        }
+        return null;
     }
 
     private static async Task EnsureDirectoryExists(FluentFTP.AsyncFtpClient client,
