@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
-using GlDrive.Config;
 
 namespace GlDrive;
 
@@ -81,7 +80,12 @@ public static class Program
         // Give the OS a moment to release the mutex and flush file handles
         Thread.Sleep(3000);
 
-        var appData = ConfigManager.AppDataPath;
+        // Compute AppData path directly — do NOT use ConfigManager here.
+        // The watchdog may run from a temp update directory that doesn't have
+        // System.Text.Json.dll, so touching ConfigManager (which deserializes
+        // JSON in its static constructor) would crash with FileNotFoundException.
+        var appData = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GlDrive");
         var crashMarker = Path.Combine(appData, ".running");
         var updateMarker = Path.Combine(appData, ".updating");
 
