@@ -19,14 +19,29 @@ public class FtpOperations
 
     public async Task<FtpListItem[]> ListDirectory(string remotePath, CancellationToken ct = default)
     {
-        await using var conn = await _pool.Borrow(ct);
-        Log.Debug("LIST {Path}", remotePath);
+        var conn = await _pool.Borrow(ct);
+        try
+        {
+            Log.Debug("LIST {Path}", remotePath);
 
-        if (_pool.UseCpsv)
-            return await CpsvDataHelper.ListDirectory(conn.Client, remotePath, _pool.ControlHost, ct);
+            if (_pool.UseCpsv)
+                return await CpsvDataHelper.ListDirectory(conn.Client, remotePath, _pool.ControlHost, ct);
 
-        var items = await conn.Client.GetListing(remotePath, FtpListOption.AllFiles, ct);
-        return items;
+            return await conn.Client.GetListing(remotePath, FtpListOption.AllFiles, ct);
+        }
+        catch
+        {
+            // Data-channel failure (TLS error, cancellation, IOException, etc.) may leave
+            // the control channel with an unread completion reply. Returning this connection
+            // to the pool would desync subsequent ops (e.g., CPSV reply reading TYPE A's
+            // stale response). Poison so the pool discards it.
+            conn.Poisoned = true;
+            throw;
+        }
+        finally
+        {
+            await conn.DisposeAsync();
+        }
     }
 
     public async Task<bool> FileExists(string remotePath, CancellationToken ct = default)
@@ -45,17 +60,29 @@ public class FtpOperations
 
     public async Task<byte[]> DownloadFile(string remotePath, CancellationToken ct = default)
     {
-        await using var conn = await _pool.Borrow(ct);
-        Log.Debug("RETR {Path}", remotePath);
+        var conn = await _pool.Borrow(ct);
+        try
+        {
+            Log.Debug("RETR {Path}", remotePath);
 
-        if (_pool.UseCpsv)
-            return await CpsvDataHelper.DownloadFile(conn.Client, remotePath, _pool.ControlHost, ct);
+            if (_pool.UseCpsv)
+                return await CpsvDataHelper.DownloadFile(conn.Client, remotePath, _pool.ControlHost, ct);
 
-        using var ms = new MemoryStream();
-        var ok = await conn.Client.DownloadStream(ms, remotePath, token: ct);
-        if (!ok)
-            throw new IOException($"Failed to download {remotePath}");
-        return ms.ToArray();
+            using var ms = new MemoryStream();
+            var ok = await conn.Client.DownloadStream(ms, remotePath, token: ct);
+            if (!ok)
+                throw new IOException($"Failed to download {remotePath}");
+            return ms.ToArray();
+        }
+        catch
+        {
+            conn.Poisoned = true;
+            throw;
+        }
+        finally
+        {
+            await conn.DisposeAsync();
+        }
     }
 
     public async Task<Stream> DownloadFileStream(string remotePath, CancellationToken ct = default)
@@ -66,48 +93,72 @@ public class FtpOperations
 
     public async Task UploadFile(string remotePath, byte[] data, CancellationToken ct = default)
     {
-        await using var conn = await _pool.Borrow(ct);
-        Log.Debug("STOR {Path} ({Bytes} bytes)", remotePath, data.Length);
-
-        if (_pool.UseCpsv)
+        var conn = await _pool.Borrow(ct);
+        try
         {
-            await CpsvDataHelper.UploadFile(conn.Client, remotePath, data, _pool.ControlHost, ct);
-            return;
-        }
+            Log.Debug("STOR {Path} ({Bytes} bytes)", remotePath, data.Length);
 
-        using var ms = new MemoryStream(data);
-        var status = await conn.Client.UploadStream(ms, remotePath, FtpRemoteExists.Overwrite, true, null, ct);
-        if (status != FtpStatus.Success)
-            throw new IOException($"Failed to upload {remotePath}: {status}");
-    }
+            if (_pool.UseCpsv)
+            {
+                await CpsvDataHelper.UploadFile(conn.Client, remotePath, data, _pool.ControlHost, ct);
+                return;
+            }
 
-    public async Task UploadFile(string remotePath, Stream stream, CancellationToken ct = default)
-    {
-        await using var conn = await _pool.Borrow(ct);
-        Log.Debug("STOR {Path} (stream)", remotePath);
-
-        if (_pool.UseCpsv)
-        {
-            await CpsvDataHelper.UploadFileStream(conn.Client, remotePath, stream, _pool.ControlHost, ct);
-            return;
-        }
-
-        if (!stream.CanSeek)
-        {
-            // FluentFTP needs seekable stream — buffer only if necessary
-            using var ms = new MemoryStream();
-            await stream.CopyToAsync(ms, ct);
-            ms.Position = 0;
+            using var ms = new MemoryStream(data);
             var status = await conn.Client.UploadStream(ms, remotePath, FtpRemoteExists.Overwrite, true, null, ct);
             if (status != FtpStatus.Success)
                 throw new IOException($"Failed to upload {remotePath}: {status}");
         }
-        else
+        catch
         {
-            stream.Position = 0;
-            var status = await conn.Client.UploadStream(stream, remotePath, FtpRemoteExists.Overwrite, true, null, ct);
-            if (status != FtpStatus.Success)
-                throw new IOException($"Failed to upload {remotePath}: {status}");
+            conn.Poisoned = true;
+            throw;
+        }
+        finally
+        {
+            await conn.DisposeAsync();
+        }
+    }
+
+    public async Task UploadFile(string remotePath, Stream stream, CancellationToken ct = default)
+    {
+        var conn = await _pool.Borrow(ct);
+        try
+        {
+            Log.Debug("STOR {Path} (stream)", remotePath);
+
+            if (_pool.UseCpsv)
+            {
+                await CpsvDataHelper.UploadFileStream(conn.Client, remotePath, stream, _pool.ControlHost, ct);
+                return;
+            }
+
+            if (!stream.CanSeek)
+            {
+                // FluentFTP needs seekable stream — buffer only if necessary
+                using var ms = new MemoryStream();
+                await stream.CopyToAsync(ms, ct);
+                ms.Position = 0;
+                var status = await conn.Client.UploadStream(ms, remotePath, FtpRemoteExists.Overwrite, true, null, ct);
+                if (status != FtpStatus.Success)
+                    throw new IOException($"Failed to upload {remotePath}: {status}");
+            }
+            else
+            {
+                stream.Position = 0;
+                var status = await conn.Client.UploadStream(stream, remotePath, FtpRemoteExists.Overwrite, true, null, ct);
+                if (status != FtpStatus.Success)
+                    throw new IOException($"Failed to upload {remotePath}: {status}");
+            }
+        }
+        catch
+        {
+            conn.Poisoned = true;
+            throw;
+        }
+        finally
+        {
+            await conn.DisposeAsync();
         }
     }
 

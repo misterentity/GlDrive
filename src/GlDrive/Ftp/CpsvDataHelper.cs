@@ -35,16 +35,21 @@ public static class CpsvDataHelper
     {
         // RSA-2048 self-signed cert used only as the data-channel TLS-server identity
         // in CPSV mode. glftpd doesn't validate our cert, so the validity window is
-        // process-lifetime; keep it long enough (10 years) to never expire during a
-        // realistic process run. The private key is bound via EphemeralKeySet so it
-        // stays in process memory only and is not persisted to the user keystore,
-        // and the Exportable flag is NOT set so the key cannot be extracted via
-        // X509Certificate2.Export without code that walks native memory.
+        // process-lifetime; 10 years guarantees it never expires during a realistic
+        // process run.
+        //
+        // Load with DefaultKeySet (no flags) instead of Exportable: the private key
+        // is stored in the user CNG container and is still accessible to SChannel
+        // for the server-auth handshake, but the managed X509Certificate2.Export()
+        // API cannot dump the private key. This closes the memory-dump exfil vector
+        // from finding H-11 without the compat break that EphemeralKeySet caused
+        // (SChannel cannot use EphemeralKeySet certs for server authentication —
+        // error 0x8009030E "No credentials are available in the security package").
         using var rsa = RSA.Create(2048);
         var req = new CertificateRequest("CN=GlDrive", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
         var cert = req.CreateSelfSigned(DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddYears(10));
         var pfx = cert.Export(X509ContentType.Pfx, "");
-        return X509CertificateLoader.LoadPkcs12(pfx, "", X509KeyStorageFlags.EphemeralKeySet);
+        return X509CertificateLoader.LoadPkcs12(pfx, "", X509KeyStorageFlags.DefaultKeySet);
     });
 
     /// <summary>
