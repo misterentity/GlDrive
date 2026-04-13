@@ -33,12 +33,18 @@ public static class CpsvDataHelper
 
     private static readonly Lazy<X509Certificate2> SelfSignedCert = new(() =>
     {
+        // RSA-2048 self-signed cert used only as the data-channel TLS-server identity
+        // in CPSV mode. glftpd doesn't validate our cert, so the validity window is
+        // process-lifetime; keep it long enough (10 years) to never expire during a
+        // realistic process run. The private key is bound via EphemeralKeySet so it
+        // stays in process memory only and is not persisted to the user keystore,
+        // and the Exportable flag is NOT set so the key cannot be extracted via
+        // X509Certificate2.Export without code that walks native memory.
         using var rsa = RSA.Create(2048);
         var req = new CertificateRequest("CN=GlDrive", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
-        var cert = req.CreateSelfSigned(DateTimeOffset.Now, DateTimeOffset.Now.AddYears(10));
-        // Export/re-import to ensure private key is available for SslStream on Windows
+        var cert = req.CreateSelfSigned(DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddYears(10));
         var pfx = cert.Export(X509ContentType.Pfx, "");
-        return X509CertificateLoader.LoadPkcs12(pfx, "", X509KeyStorageFlags.Exportable);
+        return X509CertificateLoader.LoadPkcs12(pfx, "", X509KeyStorageFlags.EphemeralKeySet);
     });
 
     /// <summary>
