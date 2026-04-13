@@ -560,7 +560,7 @@ public class MediaStreamServer : IDisposable
         var tcp = await CpsvDataHelper.OpenDataTcp(client, ct);
         try
         {
-            var retrReply = await client.Execute($"RETR {remotePath}", ct);
+            var retrReply = await client.Execute($"RETR {CpsvDataHelper.SanitizeFtpPath(remotePath)}", ct);
             if (retrReply.Code != "150" && retrReply.Code != "125")
                 throw new IOException($"RETR failed: {retrReply.Code} {retrReply.Message}");
 
