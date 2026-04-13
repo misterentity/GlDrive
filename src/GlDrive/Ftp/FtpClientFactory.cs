@@ -127,13 +127,34 @@ public class FtpClientFactory
     {
         private static readonly Regex IpRegex = new(@"\d+\.\d+\.\d+\.\d+", RegexOptions.Compiled);
 
-        private static readonly Regex PassRegex = new(@"(?<=^>?\s*)PASS\s+\S+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        // IPv6 literal — brackets optional, two or more hex groups separated by ':', at least one '::'
+        // or four-plus groups. Deliberately conservative to avoid catching FTP control chatter.
+        private static readonly Regex Ipv6Regex = new(
+            @"\[?(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{1,4}\]?|::[0-9a-fA-F:]+|\[::\]",
+            RegexOptions.Compiled);
+
+        private static readonly Regex PassRegex = new(
+            @"(?<=(^>?|\s)\s*)PASS\s+\S+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        private static readonly Regex UserRegex = new(
+            @"(?<=(^>?|\s)\s*)USER\s+\S+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // glftpd admin commands that accept passwords as arguments.
+        // SITE ADDUSER <nick> <password> [other args]
+        // SITE CHPASS <nick> <password>
+        // SITE CHANGE <nick> <setting> <password>
+        private static readonly Regex SiteAdminRegex = new(
+            @"(?<=SITE\s+)(ADDUSER|CHPASS|GADDUSER|CHANGE)\s+\S+\s+\S+",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         public void Log(FtpLogEntry entry)
         {
             var msg = entry.Message;
             msg = PassRegex.Replace(msg, "PASS [REDACTED]");
+            msg = UserRegex.Replace(msg, "USER [REDACTED]");
+            msg = SiteAdminRegex.Replace(msg, m => m.Groups[1].Value + " [REDACTED]");
             msg = IpRegex.Replace(msg, "*.*.*.*");
+            msg = Ipv6Regex.Replace(msg, "[*:*]");
             Serilog.Log.Debug("[FTP] {Message}", msg);
         }
     }
