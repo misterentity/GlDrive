@@ -123,10 +123,12 @@ public class SpreadJob : IDisposable
                 ServerName = config.Name
             };
 
-            // Pre-compute affil check once
+            // Pre-compute affil check once — match group name at end of release
+            // (scene releases end with -GROUPNAME). Contains() caused false positives
+            // where short group names like "NOMA" matched inside "Narco.Menomanites".
             _affilCache[serverId] = config.SpreadSite.Affils.Count > 0 &&
                 config.SpreadSite.Affils.Any(g =>
-                    releaseName.Contains(g, StringComparison.OrdinalIgnoreCase));
+                    releaseName.EndsWith($"-{g}", StringComparison.OrdinalIgnoreCase));
         }
     }
 

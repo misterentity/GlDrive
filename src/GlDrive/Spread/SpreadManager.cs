@@ -191,7 +191,7 @@ public class SpreadManager : IDisposable
         try
         {
             var totalBytes = job.Sites.Values.Sum(s => s.BytesTransferred);
-            var totalFiles = job.Sites.Values.Max(s => s.FilesOwned);
+            var totalFiles = job.Sites.Values.Any() ? job.Sites.Values.Max(s => s.FilesOwned) : 0;
             var siteNames = string.Join(", ", job.Sites.Values.Select(s => s.ServerName));
 
             _history.Add(new RaceHistoryItem

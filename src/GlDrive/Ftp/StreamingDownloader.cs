@@ -76,7 +76,10 @@ public class StreamingDownloader
         {
             var restReply = await client.Execute($"REST {resumeOffset}", ct);
             if (!restReply.Success)
+            {
                 Log.Warning("REST command failed: {Code} {Message} — downloading from start", restReply.Code, restReply.Message);
+                resumeOffset = 0; // Reset so FileMode.Create is used instead of Append
+            }
         }
 
         var tcp = await CpsvDataHelper.OpenDataTcp(client, ct);

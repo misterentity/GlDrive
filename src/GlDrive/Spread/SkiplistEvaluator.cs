@@ -97,7 +97,7 @@ public class SkiplistEvaluator
             if (isDir && !rule.MatchDirectories) continue;
             if (!isDir && !rule.MatchFiles) continue;
             if (rule.Scope == SkiplistScope.InRace && !inRace) continue;
-            if (rule.Section != null && rule.Section != section) continue;
+            if (rule.Section != null && !rule.Section.Equals(section, StringComparison.OrdinalIgnoreCase)) continue;
 
             if (Matches(fileName, rule.Pattern, rule.IsRegex))
                 return rule.Action;
