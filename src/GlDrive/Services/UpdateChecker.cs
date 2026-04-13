@@ -284,6 +284,11 @@ public class UpdateChecker : IDisposable
             {
                 FileName = exePath,
                 Arguments = $"--apply-update {pid} \"{extractDir}\" \"{installDir}\"",
+                // Pin the updater's CWD to the install directory. Without this, the
+                // UAC-elevated process inherits the caller's CWD and becomes vulnerable
+                // to DLL hijacking via side-by-side loads from whatever directory the
+                // caller was in. The install dir is a trusted location so this is safe.
+                WorkingDirectory = installDir,
                 Verb = "runas",
                 UseShellExecute = true
             });
@@ -431,22 +436,48 @@ public class UpdateChecker : IDisposable
             }
             LogUpdate($"Renamed {renamed} files, {failed} failed");
 
-            // Copy new files
+            // Copy new files — with symlink / reparse-point defense and path-escape check
             LogUpdate("Copying new files from extract dir");
             var copied = 0;
+            var skippedReparse = 0;
+            var installDirCanonical = Path.GetFullPath(installDir);
+            if (!installDirCanonical.EndsWith(Path.DirectorySeparatorChar))
+                installDirCanonical += Path.DirectorySeparatorChar;
+
             foreach (var sourceFile in Directory.EnumerateFiles(extractDir, "*", SearchOption.AllDirectories))
             {
+                // Skip any file or directory traversed via a reparse point (symlink, junction).
+                // An attacker who can drop a directory symlink into the extract dir between
+                // extraction and copy would otherwise pull system files into the copy loop.
+                var sourceAttrs = File.GetAttributes(sourceFile);
+                if ((sourceAttrs & FileAttributes.ReparsePoint) != 0)
+                {
+                    LogUpdate($"  Skipping reparse-point entry: {sourceFile}");
+                    skippedReparse++;
+                    continue;
+                }
+
                 var relativePath = Path.GetRelativePath(extractDir, sourceFile);
                 var destFile = Path.Combine(installDir, relativePath);
 
-                var destDir = Path.GetDirectoryName(destFile)!;
+                // Canonicalize the destination and verify it stays within installDir.
+                // Defends against .. components and symlink tricks in relativePath.
+                var destCanonical = Path.GetFullPath(destFile);
+                if (!destCanonical.StartsWith(installDirCanonical, StringComparison.OrdinalIgnoreCase))
+                {
+                    LogUpdate($"  SECURITY: refusing to write outside installDir: {destCanonical}");
+                    skippedReparse++;
+                    continue;
+                }
+
+                var destDir = Path.GetDirectoryName(destCanonical)!;
                 if (!Directory.Exists(destDir))
                     Directory.CreateDirectory(destDir);
 
-                File.Copy(sourceFile, destFile, overwrite: true);
+                File.Copy(sourceFile, destCanonical, overwrite: true);
                 copied++;
             }
-            LogUpdate($"Copied {copied} files");
+            LogUpdate($"Copied {copied} files (skipped {skippedReparse} reparse/escape entries)");
 
             // Clean up
             LogUpdate("Cleaning up extract directory");
