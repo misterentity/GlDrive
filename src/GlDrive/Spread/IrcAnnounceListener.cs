@@ -20,6 +20,7 @@ public class IrcAnnounceListener : IDisposable
     private readonly IrcService _ircService;
     private readonly List<IrcAnnounceRule> _rules;
     private readonly Dictionary<string, Regex> _compiledRules = new();
+    private readonly LinkedList<string> _recentAnnounceOrder = new();
     private readonly HashSet<string> _recentAnnounces = new(StringComparer.OrdinalIgnoreCase);
     private readonly Lock _lock = new();
 
@@ -142,8 +143,12 @@ public class IrcAnnounceListener : IDisposable
         lock (_lock)
         {
             if (!_recentAnnounces.Add(dedupeKey)) return false;
-            if (_recentAnnounces.Count > 500)
-                _recentAnnounces.Clear();
+            _recentAnnounceOrder.AddLast(dedupeKey);
+            while (_recentAnnounces.Count > 500 && _recentAnnounceOrder.First != null)
+            {
+                _recentAnnounces.Remove(_recentAnnounceOrder.First.Value);
+                _recentAnnounceOrder.RemoveFirst();
+            }
         }
 
         Log.Information("IRC announce detected: [{Section}] {Release} (from {Channel}, msg: {Msg})",

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using GlDrive.Config;
 using GlDrive.Downloads;
 using GlDrive.Irc;
@@ -12,8 +13,8 @@ public class ServerManager : IDisposable
     private readonly AppConfig _config;
     private readonly CertificateManager _certManager;
     private readonly NotificationStore _notificationStore;
-    private readonly Dictionary<string, MountService> _servers = new();
-    private readonly Dictionary<string, IrcService> _ircServices = new();
+    private readonly ConcurrentDictionary<string, MountService> _servers = new();
+    private readonly ConcurrentDictionary<string, IrcService> _ircServices = new();
     private readonly Dictionary<string, IrcAnnounceListener> _announceListeners = new();
     private readonly Dictionary<string, IrcPatternDetector> _patternDetectors = new();
     private SpreadManager? _spreadManager;
@@ -117,7 +118,7 @@ public class ServerManager : IDisposable
 
         await service.UnmountAsync();
         service.Dispose();
-        _servers.Remove(serverId);
+        _servers.TryRemove(serverId, out _);
     }
 
     public void UnmountServer(string serverId)
@@ -130,7 +131,7 @@ public class ServerManager : IDisposable
 
         service.Unmount();
         service.Dispose();
-        _servers.Remove(serverId);
+        _servers.TryRemove(serverId, out _);
     }
 
     public async Task MountAll(CancellationToken ct = default)
@@ -288,7 +289,7 @@ public class ServerManager : IDisposable
         return service;
     }
 
-    public IReadOnlyDictionary<string, IrcService> GetIrcServices() => _ircServices;
+    public IDictionary<string, IrcService> GetIrcServices() => _ircServices;
 
     /// <summary>
     /// Analyze buffered IRC messages for a server and return detected announce patterns.
@@ -353,7 +354,7 @@ public class ServerManager : IDisposable
         if (!_ircServices.TryGetValue(serverId, out var ircService)) return;
         await ircService.StopAsync();
         ircService.Dispose();
-        _ircServices.Remove(serverId);
+        _ircServices.TryRemove(serverId, out _);
     }
 
     public void Dispose()

@@ -177,9 +177,23 @@ public class FtpConnectionPool : IAsyncDisposable
 
         // Stale, replace it
         DisconnectAndDispose(client);
-        client = await _factory.CreateAndConnect(ct);
-        Interlocked.Increment(ref _active);
-        return new PooledConnection(client, this);
+        Interlocked.Decrement(ref _created); // Account for disposed connection
+        if (Interlocked.Increment(ref _created) <= _maxSize)
+        {
+            try
+            {
+                client = await _factory.CreateAndConnect(ct);
+                Interlocked.Increment(ref _active);
+                return new PooledConnection(client, this);
+            }
+            catch
+            {
+                Interlocked.Decrement(ref _created);
+                throw;
+            }
+        }
+        Interlocked.Decrement(ref _created);
+        throw new InvalidOperationException("Pool exhausted after stale connection replacement");
     }
 
     internal void Return(AsyncFtpClient client)
