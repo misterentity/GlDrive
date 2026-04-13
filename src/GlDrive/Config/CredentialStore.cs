@@ -31,7 +31,7 @@ public static class CredentialStore
         var target = GetProxyTargetName(host, port, username);
         try
         {
-            CredentialManager.WriteCredential(target, username, password, CredentialPersistence.LocalMachine);
+            CredentialManager.WriteCredential(target, username, password, CredentialPersistence.Enterprise);
         }
         catch (Exception ex)
         {
@@ -64,7 +64,7 @@ public static class CredentialStore
                 target,
                 username,
                 password,
-                CredentialPersistence.LocalMachine);
+                CredentialPersistence.Enterprise);
         }
         catch (Exception ex)
         {
@@ -109,7 +109,7 @@ public static class CredentialStore
         var target = GetIrcTargetName(host, port, nick);
         try
         {
-            CredentialManager.WriteCredential(target, nick, password, CredentialPersistence.LocalMachine);
+            CredentialManager.WriteCredential(target, nick, password, CredentialPersistence.Enterprise);
         }
         catch (Exception ex)
         {
@@ -156,7 +156,7 @@ public static class CredentialStore
         var target = GetSshTargetName(host, port, username);
         try
         {
-            CredentialManager.WriteCredential(target, username, password, CredentialPersistence.LocalMachine);
+            CredentialManager.WriteCredential(target, username, password, CredentialPersistence.Enterprise);
         }
         catch (Exception ex)
         {
@@ -182,7 +182,7 @@ public static class CredentialStore
         if (string.IsNullOrEmpty(key)) return;
         try
         {
-            CredentialManager.WriteCredential($"GlDrive:api:{service}", service, key, CredentialPersistence.LocalMachine);
+            CredentialManager.WriteCredential($"GlDrive:api:{service}", service, key, CredentialPersistence.Enterprise);
         }
         catch (Exception ex)
         {
