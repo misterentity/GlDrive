@@ -35,7 +35,15 @@ public class IrcService : IDisposable
     private CancellationTokenSource? _cts;
     private Task? _serviceTask;
     private readonly Dictionary<string, IrcChannel> _channels = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, Dh1080> _pendingKeyExchanges = new(StringComparer.OrdinalIgnoreCase);
+    // Pending DH1080 exchanges. Bounded to prevent memory exhaustion via NOTICE floods.
+    // Entries carry a timestamp so we can LRU-evict and TTL-expire.
+    private readonly Dictionary<string, (Dh1080 dh, DateTime createdAt)> _pendingKeyExchanges =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, DateTime> _lastDhInitByNick =
+        new(StringComparer.OrdinalIgnoreCase);
+    private const int MaxPendingKeyExchanges = 32;
+    private static readonly TimeSpan PendingKeyExchangeTtl = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan DhInitRateLimit = TimeSpan.FromSeconds(10);
     private string _currentNick = "";
     private bool _disposed;
     private DateTime _connectedAt;
@@ -879,12 +887,50 @@ public class IrcService : IDisposable
         await _client.SendRawAsync(line);
     }
 
+    /// <summary>
+    /// Evicts expired or surplus entries from _pendingKeyExchanges. Called before every insert.
+    /// Prevents memory growth under NOTICE flood attacks.
+    /// </summary>
+    private void PruneKeyExchanges()
+    {
+        var now = DateTime.UtcNow;
+
+        // TTL eviction
+        var expired = _pendingKeyExchanges
+            .Where(kv => now - kv.Value.createdAt > PendingKeyExchangeTtl)
+            .Select(kv => kv.Key)
+            .ToList();
+        foreach (var nick in expired)
+            _pendingKeyExchanges.Remove(nick);
+
+        // Capacity LRU eviction
+        while (_pendingKeyExchanges.Count >= MaxPendingKeyExchanges)
+        {
+            var oldest = _pendingKeyExchanges.OrderBy(kv => kv.Value.createdAt).First().Key;
+            _pendingKeyExchanges.Remove(oldest);
+            Log.Debug("DH1080 pending map at capacity — evicting {Nick}", oldest);
+        }
+
+        // Also prune rate-limit table periodically
+        if (_lastDhInitByNick.Count > MaxPendingKeyExchanges * 2)
+        {
+            var stale = _lastDhInitByNick
+                .Where(kv => now - kv.Value > DhInitRateLimit)
+                .Select(kv => kv.Key)
+                .ToList();
+            foreach (var nick in stale)
+                _lastDhInitByNick.Remove(nick);
+        }
+    }
+
     public async Task InitiateKeyExchange(string nick)
     {
         if (_client == null || !_client.IsConnected) return;
 
+        PruneKeyExchanges();
+
         var dh = new Dh1080();
-        _pendingKeyExchanges[nick] = dh;
+        _pendingKeyExchanges[nick] = (dh, DateTime.UtcNow);
         await _client.NoticeAsync(nick, Dh1080.FormatInit(dh.GetPublicKeyBase64()));
         AddSystemMessage(nick, "DH1080 key exchange initiated");
     }
@@ -895,7 +941,23 @@ public class IrcService : IDisposable
         {
             if (_client == null) return;
 
-            var dh = new Dh1080();
+            // Per-nick rate limit — 1 INIT per 10s to blunt CPU amplification from BigInteger.ModPow floods
+            var now = DateTime.UtcNow;
+            if (_lastDhInitByNick.TryGetValue(nick, out var last) && now - last < DhInitRateLimit)
+            {
+                Log.Debug("DH1080 init from {Nick} rate-limited", nick);
+                return;
+            }
+            _lastDhInitByNick[nick] = now;
+
+            // Offload ModPow to ThreadPool so the IRC read loop isn't blocked by ~10ms of crypto
+            var dh = await Task.Run(() =>
+            {
+                var d = new Dh1080();
+                _ = d.ComputeSharedSecret(theirPubKey); // validates peer key early, throws on bad key
+                return d;
+            });
+
             var sharedSecret = dh.ComputeSharedSecret(theirPubKey);
             // DH1080 FiSH standard uses CBC mode
             _fishKeyStore.SetKey(nick, sharedSecret, FishMode.CBC);
@@ -913,9 +975,9 @@ public class IrcService : IDisposable
     {
         try
         {
-            if (!_pendingKeyExchanges.TryGetValue(nick, out var dh)) return;
+            if (!_pendingKeyExchanges.TryGetValue(nick, out var entry)) return;
 
-            var sharedSecret = dh.ComputeSharedSecret(theirPubKey);
+            var sharedSecret = entry.dh.ComputeSharedSecret(theirPubKey);
             // DH1080 FiSH standard uses CBC mode
             _fishKeyStore.SetKey(nick, sharedSecret, FishMode.CBC);
             _pendingKeyExchanges.Remove(nick);
