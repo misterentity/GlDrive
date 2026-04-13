@@ -81,13 +81,17 @@ public class IrcClient : IDisposable
         _readTask = Task.Run(() => ReadLoop(_cts.Token), _cts.Token);
     }
 
+    // RFC 1459 is 512 bytes; IRCv3 message tags extend modestly. Nothing legitimate exceeds 16 KB.
+    private const int MaxLineLength = 16 * 1024;
+
     private async Task ReadLoop(CancellationToken ct)
     {
         try
         {
+            var buffer = new char[MaxLineLength];
             while (!ct.IsCancellationRequested && _reader != null)
             {
-                var line = await _reader.ReadLineAsync(ct);
+                var line = await ReadLineBoundedAsync(_reader, buffer, ct);
                 if (line == null) break;
 
                 Log.Verbose("[IRC <] {Line}", line);
@@ -117,6 +121,32 @@ public class IrcClient : IDisposable
             IsConnected = false;
             Disconnected?.Invoke("Connection closed");
         }
+    }
+
+    /// <summary>
+    /// Reads a single line from the reader, bounded to MaxLineLength characters.
+    /// Hostile IRC servers could stream unterminated lines; this prevents memory exhaustion.
+    /// Throws IOException if a line exceeds the bound.
+    /// </summary>
+    private static async Task<string?> ReadLineBoundedAsync(StreamReader reader, char[] buffer, CancellationToken ct)
+    {
+        var pos = 0;
+        while (pos < buffer.Length)
+        {
+            var read = await reader.ReadAsync(buffer.AsMemory(pos, 1), ct);
+            if (read == 0)
+                return pos == 0 ? null : new string(buffer, 0, pos);
+
+            var c = buffer[pos];
+            if (c == '\n')
+            {
+                var end = pos;
+                if (end > 0 && buffer[end - 1] == '\r') end--;
+                return new string(buffer, 0, end);
+            }
+            pos++;
+        }
+        throw new IOException($"IRC line exceeds {MaxLineLength} bytes — possible hostile server");
     }
 
     public async Task SendRawAsync(string line)
