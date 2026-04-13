@@ -743,15 +743,23 @@ public class IrcService : IDisposable
             var inviteNick = _serverConfig.Irc.InviteNick;
             if (!string.IsNullOrEmpty(inviteNick) && SiteInviteFunc != null)
             {
+                // Bound the call: a hung FTP pool must not block the entire IRC auto-join loop.
+                // 30 seconds covers realistic glftpd → IRC propagation while catching stalls.
+                using var inviteCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
                 try
                 {
                     AddSystemMessage("*", $"Running SITE INVITE {inviteNick}...");
-                    var reply = await SiteInviteFunc(inviteNick, CancellationToken.None);
+                    var reply = await SiteInviteFunc(inviteNick, inviteCts.Token);
                     AddSystemMessage("*", reply ?? "SITE INVITE completed (no reply)");
 
                     // Wait a moment for the IRC server to process the invite
                     // glftpd SITE INVITE is async — the IRC INVITE arrives shortly after
                     await Task.Delay(2000);
+                }
+                catch (OperationCanceledException) when (inviteCts.IsCancellationRequested)
+                {
+                    AddSystemMessage("*", "SITE INVITE timed out after 30s — continuing with channel joins");
+                    Log.Warning("SITE INVITE timed out for {Server}", _serverConfig.Name);
                 }
                 catch (Exception ex)
                 {
