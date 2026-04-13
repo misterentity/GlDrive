@@ -68,6 +68,17 @@ public class Dh1080
 
     public string ComputeSharedSecret(string theirPubKeyBase64)
     {
+        // Normalize incoming pubkey length. A DH1080 pubkey is exactly 1080 bits
+        // = 180 FiSH base64 chars. Several popular implementations pad to 181 with
+        // a trailing 'A' (a historical mIRC FiSH quirk, carried over by HexChat
+        // FiSH, KVIrc FiSH, and others). fish-irssi's decoder strips the trailing
+        // 'A' if length is 181 — we do the same, plus a generic truncate-to-180
+        // for any other implementation that might pad further.
+        if (theirPubKeyBase64.Length == 181 && theirPubKeyBase64[180] == 'A')
+            theirPubKeyBase64 = theirPubKeyBase64[..180];
+        else if (theirPubKeyBase64.Length > 180)
+            theirPubKeyBase64 = theirPubKeyBase64[..180];
+
         byte[] theirBytes;
         try
         {
