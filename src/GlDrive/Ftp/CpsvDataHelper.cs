@@ -44,6 +44,8 @@ public static class CpsvDataHelper
     /// <summary>
     /// Sends CPSV and establishes a TCP connection to the data port.
     /// Does NOT negotiate TLS — that happens after the data command is sent.
+    /// The CPSV reply contains a server-controlled IP; we refuse loopback,
+    /// link-local, and unroutable ranges to block SSRF-like redirection attempts.
     /// </summary>
     internal static async Task<TcpClient> OpenDataTcp(
         AsyncFtpClient client, CancellationToken ct)
@@ -54,6 +56,15 @@ public static class CpsvDataHelper
 
         var (cpsvIp, port) = ParsePasvResponse(cpsvReply.Message);
         Log.Debug("CPSV -> data endpoint parsed");
+
+        // Reject unsafe target IPs (loopback, link-local, RFC 5735 unroutable)
+        // before TCP connect. A hostile BNC cannot redirect our data channel
+        // to internal-network addresses we wouldn't otherwise reach.
+        if (!IsSafeDataTarget(cpsvIp))
+        {
+            Log.Warning("CPSV returned unsafe target {Ip}:{Port} — refusing data connection", cpsvIp, port);
+            throw new IOException($"CPSV returned unsafe target address — refusing connection");
+        }
 
         // Connect to the CPSV-returned IP:port directly.
         // With BNCs, the CPSV IP is the backend data address.
@@ -71,6 +82,34 @@ public static class CpsvDataHelper
             tcp.Dispose();
             throw;
         }
+    }
+
+    /// <summary>
+    /// Returns true if the CPSV-returned IP is acceptable as a data-connection target.
+    /// Rejects loopback (127.0.0.0/8), link-local (169.254.0.0/16), "this-network"
+    /// (0.0.0.0/8), and multicast/broadcast ranges. Private RFC 1918 ranges are
+    /// permitted because BNCs on the same LAN are a legitimate deployment.
+    /// </summary>
+    private static bool IsSafeDataTarget(string ipString)
+    {
+        if (!System.Net.IPAddress.TryParse(ipString, out var ip))
+            return false;
+
+        if (ip.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+            return false; // IPv6 not currently produced by CPSV; reject defensively
+
+        var bytes = ip.GetAddressBytes();
+        // 0.0.0.0/8 — "this network"
+        if (bytes[0] == 0) return false;
+        // 127.0.0.0/8 — loopback
+        if (bytes[0] == 127) return false;
+        // 169.254.0.0/16 — link-local (AWS metadata lives at 169.254.169.254)
+        if (bytes[0] == 169 && bytes[1] == 254) return false;
+        // 224.0.0.0/4 — multicast
+        if (bytes[0] >= 224 && bytes[0] <= 239) return false;
+        // 240.0.0.0/4 — reserved / future use
+        if (bytes[0] >= 240) return false;
+        return true;
     }
 
     /// <summary>
