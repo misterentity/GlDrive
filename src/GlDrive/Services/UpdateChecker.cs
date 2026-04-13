@@ -35,6 +35,28 @@ public class UpdateChecker : IDisposable
     private const string RepoApiUrl = "https://api.github.com/repos/misterentity/GlDrive/releases/latest";
     private static readonly TimeSpan CheckInterval = TimeSpan.FromHours(24);
 
+    /// <summary>
+    /// Host allowlist for update-artifact downloads. Even though GitHub's JSON response
+    /// carries a browser_download_url over TLS, a compromised API response (MitM at a
+    /// CDN/proxy, or a maintainer account takeover) could redirect the URL to an attacker
+    /// host. Pin the allowed hosts so any such tampering fails closed.
+    /// </summary>
+    private static readonly HashSet<string> AllowedDownloadHosts = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "github.com",
+        "api.github.com",
+        "objects.githubusercontent.com",
+        "github-releases.githubusercontent.com",
+        "release-assets.githubusercontent.com",
+    };
+
+    private static bool IsAllowedDownloadUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return false;
+        if (uri.Scheme != Uri.UriSchemeHttps) return false;
+        return AllowedDownloadHosts.Contains(uri.Host);
+    }
+
     private readonly HttpClient _http;
     private readonly string _installPath;
     private CancellationTokenSource? _periodicCts;
@@ -116,6 +138,14 @@ public class UpdateChecker : IDisposable
             return;
         }
 
+        // Refuse to download from hosts not in the GitHub allowlist — defense against
+        // a tampered or redirected GitHub API response.
+        if (!IsAllowedDownloadUrl(asset.BrowserDownloadUrl))
+        {
+            Log.Error("Update asset URL not in allowed host list — rejecting. Url={Url}", asset.BrowserDownloadUrl);
+            return;
+        }
+
         var tempZip = Path.Combine(Path.GetTempPath(), $"GlDrive-{release.TagName}.zip");
 
         // Clean up stale temp file from a previous failed download attempt
@@ -156,6 +186,12 @@ public class UpdateChecker : IDisposable
         if (checksumAsset == null)
         {
             Log.Warning("No checksums.sha256 asset found — rejecting update");
+            return false;
+        }
+
+        if (!IsAllowedDownloadUrl(checksumAsset.BrowserDownloadUrl))
+        {
+            Log.Error("Checksum asset URL not in allowed host list — rejecting. Url={Url}", checksumAsset.BrowserDownloadUrl);
             return false;
         }
 
