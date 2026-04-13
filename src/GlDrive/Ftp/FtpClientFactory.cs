@@ -177,7 +177,14 @@ public class FtpClientFactory
         client.Config.ConnectTimeout = 15000;
         client.Config.StaleDataCheck = false;
         client.Config.DisconnectWithQuit = false;
-        client.ValidateCertificate += (_, e) => { e.Accept = true; }; // Trust — we already verified this host
+        // Use proper TOFU validation — ghost-kill sends the real password,
+        // so a MitM with a fake cert could intercept credentials.
+        client.ValidateCertificate += (control, e) =>
+        {
+            var conn = (AsyncFtpClient)control;
+            e.Accept = _certManager.ValidateCertificate(conn.Host, conn.Port, e.Certificate)
+                .ConfigureAwait(false).GetAwaiter().GetResult();
+        };
 
         try
         {
