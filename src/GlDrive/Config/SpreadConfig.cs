@@ -34,6 +34,13 @@ public class SkiplistRule
     public bool MatchDirectories { get; set; } = true;
     public bool MatchFiles { get; set; } = true;
     public string? Section { get; set; }
+
+    /// <summary>
+    /// Optional RaceTrade-style rich expression: [key] operator value.
+    /// When set, takes precedence over Pattern-based matching.
+    /// Null/empty means "use Pattern".
+    /// </summary>
+    public string? Expression { get; set; }
 }
 
 public enum SkiplistAction { Allow, Deny, Unique, Similar }

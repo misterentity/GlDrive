@@ -10,6 +10,7 @@ public static partial class SceneNameParser
     private static readonly Regex GroupRegex = MyGroupRegex();
 
     private static readonly string[] CommonTags = ["BluRay", "BDRip", "WEB-DL", "WEBRip", "HDTV", "DVDRip", "PROPER", "REPACK", "REMUX"];
+    private static readonly string[] SourceTokens = ["BluRay", "BDRip", "BRRip", "WEB-DL", "WEBRip", "WEB", "HDTV", "PDTV", "DVDRip", "DVD", "HDRip", "CAM", "TS", "TC", "SCREENER", "DVDScr", "REMUX"];
     private static readonly Regex NonAlphanumRegex = new(@"[^a-z0-9\s]", RegexOptions.Compiled);
     private static readonly Regex MultiSpaceRegex = new(@"\s+", RegexOptions.Compiled);
 
@@ -72,10 +73,21 @@ public static partial class SceneNameParser
             }
         }
 
+        // Extract source (first token match wins — ordered longest-first)
+        string? source = null;
+        foreach (var token in SourceTokens)
+        {
+            if (Regex.IsMatch(name, $@"\b{Regex.Escape(token)}\b", RegexOptions.IgnoreCase))
+            {
+                source = token;
+                break;
+            }
+        }
+
         // Extract title: everything before the first recognized token
         var title = ExtractTitle(name, year, season, seMatch, yearMatch);
 
-        return new ParsedRelease(title, year, season, episode, quality, group, isSeasonPack);
+        return new ParsedRelease(title, year, season, episode, quality, group, isSeasonPack, source);
     }
 
     public static bool MatchesMovie(string releaseName, string title, int? year, QualityProfile quality)

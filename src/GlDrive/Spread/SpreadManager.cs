@@ -1,5 +1,6 @@
 using System.IO;
 using GlDrive.Config;
+using GlDrive.Downloads;
 using GlDrive.Ftp;
 using Serilog;
 
@@ -318,11 +319,12 @@ public class SpreadManager : IDisposable
         }
 
         // Pre-check: evaluate release name against directory-level skiplist rules
+        var parsed = SceneNameParser.Parse(releaseName);
         foreach (var serverId in serverIds)
         {
             var serverConfig = _config.Servers.First(s => s.Id == serverId);
             var action = _skiplist.Evaluate(releaseName, true, false,
-                serverId, category, serverConfig.SpreadSite.Skiplist, _config.Spread.GlobalSkiplist);
+                serverId, category, serverConfig.SpreadSite.Skiplist, _config.Spread.GlobalSkiplist, parsed);
             if (action == SkiplistAction.Deny)
             {
                 Log.Debug("Auto-race skipped by skiplist on {Server}: {Release}", serverConfig.Name, releaseName);

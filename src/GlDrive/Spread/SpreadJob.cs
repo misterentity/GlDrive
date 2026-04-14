@@ -1,6 +1,7 @@
 using System.IO;
 using FluentFTP;
 using GlDrive.Config;
+using GlDrive.Downloads;
 using GlDrive.Ftp;
 using Serilog;
 
@@ -143,12 +144,13 @@ public class SpreadJob : IDisposable
             // This prevents spreading releases that match deny patterns like *GERMAN*, *CADCAM*, etc.
             // Capture the full evaluation trace for the history detail popup.
             var allTrace = new List<SkiplistTraceEntry>();
+            var parsed = SceneNameParser.Parse(ReleaseName);
             foreach (var (serverId, config) in _serverConfigs)
             {
                 var siteRules = config.SpreadSite.Skiplist;
                 var globalRules = _spreadConfig.GlobalSkiplist;
                 var (action, trace) = _skiplist.EvaluateWithTrace(ReleaseName, true, false,
-                    Section, siteRules, globalRules);
+                    Section, siteRules, globalRules, parsed);
                 foreach (var t in trace)
                     t.Source = $"{config.Name}/{t.Source}";
                 allTrace.AddRange(trace);

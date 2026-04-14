@@ -62,7 +62,8 @@ public record ParsedRelease(
     int? Episode,
     QualityProfile Quality,
     string? Group,
-    bool IsSeasonPack);
+    bool IsSeasonPack,
+    string? Source = null);
 
 public record DownloadProgress(long DownloadedBytes, long TotalBytes, double BytesPerSecond, string? CurrentFileName = null);
 
