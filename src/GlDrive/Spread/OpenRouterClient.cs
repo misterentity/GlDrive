@@ -19,8 +19,40 @@ public class AiSetupResult
     public List<AiSkiplistRule> SkiplistRules { get; set; } = [];
     [JsonPropertyName("sections")]
     public Dictionary<string, string> SuggestedSections { get; set; } = new();
+    [JsonPropertyName("section_mappings")]
+    public List<AiSectionMapping> SectionMappings { get; set; } = [];
+    [JsonPropertyName("announce_rules")]
+    public List<AiAnnounceRule> AnnounceRules { get; set; } = [];
+    [JsonPropertyName("priority")]
+    public string? Priority { get; set; } // VeryLow | Low | Normal | High | VeryHigh
+    [JsonPropertyName("download_only")]
+    public bool? DownloadOnly { get; set; }
+    [JsonPropertyName("excluded_notification_categories")]
+    public List<string> ExcludedNotificationCategories { get; set; } = [];
+    [JsonPropertyName("request_filler_pattern")]
+    public string? RequestFillerPattern { get; set; }
+    [JsonPropertyName("request_filler_channel")]
+    public string? RequestFillerChannel { get; set; }
     [JsonPropertyName("explanation")]
     public string Explanation { get; set; } = "";
+}
+
+public class AiSectionMapping
+{
+    [JsonPropertyName("irc_section")]
+    public string IrcSection { get; set; } = "";
+    [JsonPropertyName("remote_section")]
+    public string RemoteSection { get; set; } = "";
+    [JsonPropertyName("trigger")]
+    public string Trigger { get; set; } = ".*";
+}
+
+public class AiAnnounceRule
+{
+    [JsonPropertyName("channel")]
+    public string Channel { get; set; } = "";
+    [JsonPropertyName("pattern")]
+    public string Pattern { get; set; } = "";
 }
 
 public class AiSkiplistRule
@@ -97,8 +129,36 @@ public class OpenRouterClient : IDisposable
                 {"pattern": "*.jpg", "is_regex": false, "action": "Deny", "match_dirs": false, "match_files": true, "section": null}
             ],
             "sections": {"TV_HD": "/incoming/tv-hd"},
+            "section_mappings": [
+                {"irc_section": "TV-1080P", "remote_section": "TV_HD", "trigger": ".*"},
+                {"irc_section": "X264-HD", "remote_section": "TV_HD", "trigger": ".*"}
+            ],
+            "announce_rules": [
+                {"channel": "#announce", "pattern": "\\[(?<section>[^\\]]+)\\]\\s*(?<release>\\S+)"}
+            ],
+            "priority": "Normal",
+            "download_only": false,
+            "excluded_notification_categories": ["xxx-paysite", "0day-xxx"],
+            "request_filler_pattern": "!request\\s+(?<release>\\S+)",
+            "request_filler_channel": "#requests",
             "explanation": "Brief summary: what rules were found and what deny patterns were generated"
         }
+
+        FIELD RULES:
+        - "section_mappings" and "announce_rules": ONLY populate if IRC data is
+          provided. If no IRC data, return empty arrays. "section_mappings"
+          entries should only be created when IRC announces reference a section
+          name that does NOT exist in the FTP sections list.
+        - "priority": infer site tier from rules — use "High" or "VeryHigh" for
+          top-tier / pre-sites, "Normal" for standard sites, "Low" / "VeryLow"
+          for dump sites. If unclear, use "Normal". Omit if no signal.
+        - "download_only": true if SITE RULES explicitly says this is a
+          leech/download-only account or user. Default false.
+        - "excluded_notification_categories": FTP section keys to exclude from
+          new-release notifications — typically adult/paysite/spam sections.
+          Match exact keys from the FTP sections list (lowercase is fine).
+        - "request_filler_*": ONLY populate if IRC data shows a request channel
+          with !request or similar commands. Leave null otherwise.
         """;
 
     public OpenRouterClient(string apiKey, string model = "openai/gpt-oss-120b:free")
@@ -119,12 +179,14 @@ public class OpenRouterClient : IDisposable
         Dictionary<string, string> currentSections,
         List<string> currentAffils,
         Dictionary<string, List<string>>? sectionSamples = null,
+        List<string>? ircMessages = null,
+        List<DetectedPattern>? ircPatterns = null,
         CancellationToken ct = default)
     {
         var samplesText = "";
         if (sectionSamples != null && sectionSamples.Count > 0)
         {
-            var sb = new StringBuilder("\n=== SAMPLE RELEASES PER SECTION ===\n");
+            var sb = new StringBuilder("\n=== SAMPLE RELEASES PER SECTION (from FTP listing) ===\n");
             foreach (var (section, releases) in sectionSamples)
             {
                 sb.AppendLine($"[{section}]");
@@ -132,6 +194,27 @@ public class OpenRouterClient : IDisposable
                     sb.AppendLine($"  {r}");
             }
             samplesText = sb.ToString();
+        }
+
+        var ircText = "";
+        if (ircPatterns != null && ircPatterns.Count > 0)
+        {
+            var sb = new StringBuilder("\n=== DETECTED IRC ANNOUNCE PATTERNS ===\n");
+            foreach (var p in ircPatterns.Take(10))
+            {
+                sb.AppendLine($"Channel: {p.Channel}  Bot: {p.BotNick}  Confidence: {p.Confidence:F2}");
+                sb.AppendLine($"  Pattern: {p.SuggestedPattern}");
+                sb.AppendLine($"  Sample: {p.SampleMessages.FirstOrDefault() ?? "(none)"}");
+            }
+            ircText += sb.ToString();
+        }
+
+        if (ircMessages != null && ircMessages.Count > 0)
+        {
+            var sb = new StringBuilder("\n=== RECENT IRC CHANNEL MESSAGES (last ~60) ===\n");
+            foreach (var m in ircMessages.Take(60))
+                sb.AppendLine(m.Length > 300 ? m[..300] : m);
+            ircText += sb.ToString();
         }
 
         var userPrompt = $"""
@@ -146,12 +229,22 @@ public class OpenRouterClient : IDisposable
 
             === CURRENT AFFILS (already configured, add any new ones) ===
             {(currentAffils.Count > 0 ? string.Join(", ", currentAffils) : "(none)")}
-            {samplesText}
+            {samplesText}{ircText}
             For EACH section rule (0Day, Apps, Games, TV, etc.):
             1. Map it to the matching FTP section name from the list above
             2. Create deny patterns for every "No X" and "X Only" restriction
             3. "English Only" → deny all common non-English language tags
             4. Include slot limits if the rules mention upload/download limits
+
+            If IRC data is present:
+            5. Identify the announce-bot nick and channel; suggest an IrcAnnounceRule
+               regex with named groups (?<section>...) (?<release>...) that matches
+               the bot's actual announce format.
+            6. Extract any section names that appear in IRC announces but NOT in the
+               FTP section list — these are candidates for SectionMapping entries
+               (IRC name → internal name).
+            7. Spot any release groups shown as "pre'd by" or "aff" in IRC — add
+               them to the affils list if not already present.
             """;
 
         try

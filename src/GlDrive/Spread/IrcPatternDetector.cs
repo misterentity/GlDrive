@@ -84,6 +84,31 @@ public class IrcPatternDetector : IDisposable
     /// Analyze buffered messages and return detected announce patterns.
     /// Call this after the bot has been in channels for a while (e.g. 5-10 minutes).
     /// </summary>
+    /// <summary>
+    /// Returns up to <paramref name="maxMessages"/> recent raw channel messages,
+    /// flattened across all channels and nicks. Used by AI Setup to give the
+    /// model context when pattern detection hasn't run yet.
+    /// </summary>
+    public List<string> GetRecentMessages(int maxMessages = 60)
+    {
+        var results = new List<string>();
+        lock (_lock)
+        {
+            foreach (var (channel, nicks) in _buffer)
+            {
+                foreach (var (nick, msgs) in nicks)
+                {
+                    foreach (var m in msgs.TakeLast(5))
+                    {
+                        results.Add($"{channel} <{nick}> {m}");
+                        if (results.Count >= maxMessages) return results;
+                    }
+                }
+            }
+        }
+        return results;
+    }
+
     public List<DetectedPattern> Analyze()
     {
         var results = new List<DetectedPattern>();

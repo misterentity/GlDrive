@@ -305,6 +305,17 @@ public class ServerManager : IDisposable
         return [];
     }
 
+    /// <summary>
+    /// Returns recent raw IRC channel messages captured for a server. Used by
+    /// AI Setup to give the model IRC context alongside SITE RULES.
+    /// </summary>
+    public List<string> GetRecentIrcMessages(string serverId, int maxMessages = 60)
+    {
+        if (_patternDetectors.TryGetValue(serverId, out var detector))
+            return detector.GetRecentMessages(maxMessages);
+        return [];
+    }
+
     private async Task StartIrcService(ServerConfig serverConfig)
     {
         if (_ircServices.ContainsKey(serverConfig.Id)) return;
