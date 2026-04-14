@@ -92,16 +92,25 @@ public class SpreadManager : IDisposable
         releaseName = SanitizeFtpPath(releaseName);
         section = SanitizeFtpPath(section);
 
-        // Check concurrent race limit — cap at 1 since chain mode means one route
-        // at a time per race, and multiple races exhaust server login limits
-        var maxRaces = Math.Min(_config.Spread.MaxConcurrentRaces, 1);
+        var maxRaces = Math.Max(_config.Spread.MaxConcurrentRaces, 1);
         lock (_lock)
         {
+            // Dedup: skip if this release is already racing or queued.
+            if (_activeJobs.Any(j => IsSameRace(j.Section, j.ReleaseName, section, releaseName)))
+            {
+                Log.Information("Race already active, skipping duplicate: {Release}", releaseName);
+                return null;
+            }
+            if (_raceQueue.Any(q => IsSameRace(q.Section, q.ReleaseName, section, releaseName)))
+            {
+                Log.Information("Race already queued, skipping duplicate: {Release}", releaseName);
+                return null;
+            }
+
             if (_activeJobs.Count >= maxRaces)
             {
                 _raceQueue.Enqueue(new PendingRace(section, releaseName, serverIds.ToList(), mode));
-                Log.Information("Race queued (max concurrent {Max}): {Release}",
-                    _config.Spread.MaxConcurrentRaces, releaseName);
+                Log.Information("Race queued (max concurrent {Max}): {Release}", maxRaces, releaseName);
                 return null;
             }
         }
@@ -278,7 +287,7 @@ public class SpreadManager : IDisposable
         PendingRace? next;
         lock (_lock)
         {
-            var maxRaces = Math.Min(_config.Spread.MaxConcurrentRaces, 1);
+            var maxRaces = Math.Max(_config.Spread.MaxConcurrentRaces, 1);
             if (_raceQueue.Count == 0 || _activeJobs.Count >= maxRaces)
                 return;
             next = _raceQueue.Dequeue();
@@ -343,6 +352,8 @@ public class SpreadManager : IDisposable
     {
         var parsed = SceneNameParser.Parse(releaseName);
         var debug = _config.Spread.DebugMode;
+        var allowed = new List<string>();
+        var denials = new List<string>();
 
         foreach (var serverId in serverIds)
         {
@@ -373,8 +384,8 @@ public class SpreadManager : IDisposable
             if (action == SkiplistAction.Deny)
             {
                 Log.Debug("Auto-race denied by rules on {Server}: {Release}", serverConfig.Name, releaseName);
-                AutoRaceAttempted?.Invoke(category, releaseName, $"Denied by rules on {serverConfig.Name}");
-                return;
+                denials.Add($"{serverConfig.Name}: rules");
+                continue;
             }
 
             // Metadata filter (per-site) — fails OPEN on error/timeout
@@ -389,19 +400,38 @@ public class SpreadManager : IDisposable
                 {
                     Log.Debug("Auto-race denied by metadata filter on {Server}: {Release} ({Reason})",
                         serverConfig.Name, releaseName, verdict.Reason);
-                    AutoRaceAttempted?.Invoke(category, releaseName,
-                        $"Metadata filter denied on {serverConfig.Name}: {verdict.Reason}");
-                    return;
+                    denials.Add($"{serverConfig.Name}: {verdict.Reason}");
+                    continue;
                 }
             }
+
+            allowed.Add(serverId);
+        }
+
+        // Need at least 2 participating servers for a race — source + dest.
+        if (allowed.Count < 2)
+        {
+            var reason = denials.Count > 0
+                ? $"Only {allowed.Count} server(s) allowed (denied: {string.Join(", ", denials)})"
+                : $"Only {allowed.Count} server(s) allowed";
+            AutoRaceAttempted?.Invoke(category, releaseName, reason);
+            return;
+        }
+
+        // If the hinted source was filtered out, drop it so the job re-probes.
+        if (sourceServerId != null && !allowed.Contains(sourceServerId))
+        {
+            sourceServerId = null;
+            sourcePath = null;
         }
 
         try
         {
-            StartRace(category, releaseName, serverIds, SpreadMode.Race, sourceServerId, sourcePath);
+            StartRace(category, releaseName, allowed, SpreadMode.Race, sourceServerId, sourcePath);
             Log.Information("Auto-race started: {Release} [{Section}] across {Count} servers",
-                releaseName, category, serverIds.Count);
-            AutoRaceAttempted?.Invoke(category, releaseName, $"Racing on {serverIds.Count} servers");
+                releaseName, category, allowed.Count);
+            var suffix = denials.Count > 0 ? $" (skipped: {string.Join(", ", denials)})" : "";
+            AutoRaceAttempted?.Invoke(category, releaseName, $"Racing on {allowed.Count} servers{suffix}");
         }
         catch (Exception ex)
         {
@@ -577,6 +607,10 @@ public class SpreadManager : IDisposable
 
     private static string SanitizeFtpPath(string path) =>
         path.Replace("\r", "").Replace("\n", "").Replace("\0", "");
+
+    private static bool IsSameRace(string sectionA, string releaseA, string sectionB, string releaseB) =>
+        string.Equals(releaseA, releaseB, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(sectionA, sectionB, StringComparison.OrdinalIgnoreCase);
 
     private record PendingRace(string Section, string ReleaseName, List<string> ServerIds, SpreadMode Mode);
 }
