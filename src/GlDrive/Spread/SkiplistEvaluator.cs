@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 using GlDrive.Config;
+using GlDrive.Downloads;
 
 namespace GlDrive.Spread;
 
@@ -22,12 +23,13 @@ public class SkiplistEvaluator
     public SkiplistAction Evaluate(string fileName, bool isDir, bool inRace,
         string serverId, string? section,
         IReadOnlyList<SkiplistRule> siteRules,
-        IReadOnlyList<SkiplistRule> globalRules)
+        IReadOnlyList<SkiplistRule> globalRules,
+        ParsedRelease? parsed = null)
     {
-        var result = EvaluateRules(fileName, isDir, inRace, section, siteRules);
+        var result = EvaluateRules(fileName, isDir, inRace, section, siteRules, parsed);
         if (result.HasValue) return result.Value;
 
-        result = EvaluateRules(fileName, isDir, inRace, section, globalRules);
+        result = EvaluateRules(fileName, isDir, inRace, section, globalRules, parsed);
         if (result.HasValue) return result.Value;
 
         return SkiplistAction.Allow;
@@ -40,7 +42,8 @@ public class SkiplistEvaluator
     public (SkiplistAction action, List<SkiplistTraceEntry> trace) EvaluateWithTrace(
         string name, bool isDir, bool inRace, string? section,
         IReadOnlyList<SkiplistRule> siteRules,
-        IReadOnlyList<SkiplistRule> globalRules)
+        IReadOnlyList<SkiplistRule> globalRules,
+        ParsedRelease? parsed = null)
     {
         var trace = new List<SkiplistTraceEntry>();
         SkiplistAction finalAction = SkiplistAction.Allow;
@@ -49,9 +52,10 @@ public class SkiplistEvaluator
         {
             foreach (var rule in rules)
             {
+                var displayPattern = !string.IsNullOrWhiteSpace(rule.Expression) ? rule.Expression : rule.Pattern;
                 var entry = new SkiplistTraceEntry
                 {
-                    Pattern = rule.Pattern,
+                    Pattern = displayPattern,
                     Section = rule.Section,
                     Action = rule.Action.ToString(),
                     Source = source
@@ -67,7 +71,11 @@ public class SkiplistEvaluator
                     continue;
                 }
 
-                if (Matches(name, rule.Pattern, rule.IsRegex))
+                var matched = !string.IsNullOrWhiteSpace(rule.Expression)
+                    ? RuleExpressionEvaluator.Matches(rule.Expression, name, section, parsed)
+                    : Matches(name, rule.Pattern, rule.IsRegex);
+
+                if (matched)
                 {
                     entry.IsMatch = true;
                     entry.Result = $"MATCHED → {rule.Action}";
@@ -90,7 +98,7 @@ public class SkiplistEvaluator
     }
 
     private SkiplistAction? EvaluateRules(string fileName, bool isDir, bool inRace,
-        string? section, IReadOnlyList<SkiplistRule> rules)
+        string? section, IReadOnlyList<SkiplistRule> rules, ParsedRelease? parsed)
     {
         foreach (var rule in rules)
         {
@@ -99,7 +107,11 @@ public class SkiplistEvaluator
             if (rule.Scope == SkiplistScope.InRace && !inRace) continue;
             if (rule.Section != null && !rule.Section.Equals(section, StringComparison.OrdinalIgnoreCase)) continue;
 
-            if (Matches(fileName, rule.Pattern, rule.IsRegex))
+            var matched = !string.IsNullOrWhiteSpace(rule.Expression)
+                ? RuleExpressionEvaluator.Matches(rule.Expression, fileName, section, parsed)
+                : Matches(fileName, rule.Pattern, rule.IsRegex);
+
+            if (matched)
                 return rule.Action;
         }
         return null;
