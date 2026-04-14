@@ -186,6 +186,19 @@ public class SpreadManager : IDisposable
                 // Pools die when all connections are poisoned/discarded (GnuTLS crashes,
                 // network errors) and there's no keepalive/reconnect for spread pools.
                 await ReinitDeadPools(sids);
+
+                // Re-capture pool snapshot AFTER reinit — ReinitDeadPools may have
+                // replaced an exhausted undersized pool with a brand new instance,
+                // and the job's original snapshot would point at the disposed pool.
+                Dictionary<string, FtpConnectionPool> fresh;
+                lock (_lock)
+                {
+                    fresh = sids
+                        .Where(id => _spreadPools.ContainsKey(id))
+                        .ToDictionary(id => id, id => _spreadPools[id]);
+                }
+                job.UpdatePools(fresh);
+
                 await job.RunAsync();
             }
             catch (Exception ex)
