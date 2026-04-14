@@ -361,6 +361,46 @@
                             ToolTip="Test how current rules evaluate against a sample release name"/>
                 </StackPanel>
 
+                <!-- Metadata Filter (IMDb/TVMaze) -->
+                <Expander Header="Metadata Filter (IMDb/TVMaze — no API key required)" Margin="0,0,0,8">
+                    <StackPanel Margin="0,6,0,0">
+                        <TextBlock FontSize="11" Foreground="{DynamicResource ForegroundDimBrush}"
+                                   TextWrapping="Wrap" Margin="0,0,0,6"
+                                   Text="Filters releases by IMDb rating (movies via imdbapi.dev free fallback) and TVMaze data (TV). Fails OPEN on lookup error so flaky APIs don't block races."/>
+                        <CheckBox x:Name="MetaFilterEnabledBox" Content="Enable metadata filter for auto-race"
+                                  Margin="0,0,0,6"/>
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                                <TextBlock Text="Min IMDb Rating:" Margin="0,0,0,2"/>
+                                <TextBox x:Name="MetaMinRatingBox" Text="0" Width="60" HorizontalAlignment="Left"
+                                         ToolTip="0-10. 0 = no threshold"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Margin="0,0,8,0">
+                                <TextBlock Text="Min Votes:" Margin="0,0,0,2"/>
+                                <TextBox x:Name="MetaMinVotesBox" Text="0" Width="60" HorizontalAlignment="Left"
+                                         ToolTip="0 = no threshold"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="Timeout (sec):" Margin="0,0,0,2"/>
+                                <TextBox x:Name="MetaTimeoutBox" Text="5" Width="60" HorizontalAlignment="Left"/>
+                            </StackPanel>
+                        </Grid>
+                        <TextBlock Text="Allow Genres (comma-separated, empty = all):" Margin="0,0,0,2"/>
+                        <TextBox x:Name="MetaAllowGenresBox" Margin="0,0,0,6"
+                                 ToolTip="e.g. Action, Drama, Sci-Fi"/>
+                        <TextBlock Text="Deny Genres (takes precedence over allow):" Margin="0,0,0,2"/>
+                        <TextBox x:Name="MetaDenyGenresBox" Margin="0,0,0,6"
+                                 ToolTip="e.g. Documentary, Reality-TV"/>
+                        <CheckBox x:Name="MetaSkipEndedBox" Content="Skip ended/cancelled TV shows"
+                                  Margin="0,0,0,4"/>
+                    </StackPanel>
+                </Expander>
+
                 <!-- Section Mappings (RaceTrade-style IRC → internal section mapping) -->
                 <Expander Header="Section Mappings (IRC → internal section with tag rules)" Margin="0,0,0,12">
                     <StackPanel Margin="0,6,0,0">

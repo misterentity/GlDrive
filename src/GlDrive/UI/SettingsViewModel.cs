@@ -39,6 +39,7 @@ public class SettingsViewModel : INotifyPropertyChanged
     private string _spreadMaxConcurrent;
     private bool _spreadAutoRace;
     private bool _spreadNotifyComplete;
+    private bool _spreadDebugMode;
 
     public SettingsViewModel(AppConfig config)
     {
@@ -73,6 +74,7 @@ public class SettingsViewModel : INotifyPropertyChanged
         _spreadMaxConcurrent = config.Spread.MaxConcurrentRaces.ToString();
         _spreadAutoRace = config.Spread.AutoRaceOnNotification;
         _spreadNotifyComplete = config.Spread.NotifyOnRaceComplete;
+        _spreadDebugMode = config.Spread.DebugMode;
 
         GlobalSkiplist = new ObservableCollection<SkiplistRule>(config.Spread.GlobalSkiplist);
     }
@@ -108,6 +110,7 @@ public class SettingsViewModel : INotifyPropertyChanged
     public string SpreadMaxConcurrent { get => _spreadMaxConcurrent; set { _spreadMaxConcurrent = value; OnPropertyChanged(); } }
     public bool SpreadAutoRace { get => _spreadAutoRace; set { _spreadAutoRace = value; OnPropertyChanged(); } }
     public bool SpreadNotifyComplete { get => _spreadNotifyComplete; set { _spreadNotifyComplete = value; OnPropertyChanged(); } }
+    public bool SpreadDebugMode { get => _spreadDebugMode; set { _spreadDebugMode = value; OnPropertyChanged(); } }
     public ObservableCollection<SkiplistRule> GlobalSkiplist { get; set; } = new();
 
     public string[] LogLevels { get; } = ["Verbose", "Debug", "Information", "Warning", "Error"];
@@ -149,6 +152,7 @@ public class SettingsViewModel : INotifyPropertyChanged
         config.Spread.MaxConcurrentRaces = int.TryParse(SpreadMaxConcurrent, out var smc) ? Math.Clamp(smc, 1, 10) : 3;
         config.Spread.AutoRaceOnNotification = SpreadAutoRace;
         config.Spread.NotifyOnRaceComplete = SpreadNotifyComplete;
+        config.Spread.DebugMode = SpreadDebugMode;
         config.Spread.GlobalSkiplist = GlobalSkiplist.ToList();
     }
 
