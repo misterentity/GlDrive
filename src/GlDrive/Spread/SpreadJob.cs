@@ -1026,8 +1026,22 @@ public class SpreadJob : IDisposable
             borrowTimeout.CancelAfter(TimeSpan.FromSeconds(30));
             var srcTask = srcPool.Borrow(borrowTimeout.Token);
             var dstTask = dstPool.Borrow(borrowTimeout.Token);
-            srcConn = await srcTask;
-            dstConn = await dstTask;
+
+            // Wait for both — if either throws we still want to extract the one that
+            // succeeded so the finally block can dispose it and return it to the pool.
+            // Previously `srcConn = await srcTask; dstConn = await dstTask;` would
+            // orphan dstConn when srcTask threw, leaking a pool slot.
+            try { await Task.WhenAll(srcTask, dstTask); }
+            catch { /* fall through — extract via IsCompletedSuccessfully */ }
+
+            if (srcTask.IsCompletedSuccessfully) srcConn = srcTask.Result;
+            if (dstTask.IsCompletedSuccessfully) dstConn = dstTask.Result;
+
+            // If either side failed, rethrow its exception so the catch blocks below
+            // run their failure bookkeeping. The succeeded side (if any) is now held
+            // on srcConn/dstConn and will be disposed by the finally block.
+            if (!srcTask.IsCompletedSuccessfully) await srcTask;
+            if (!dstTask.IsCompletedSuccessfully) await dstTask;
 
             var dstPath = dstBasePath.TrimEnd('/') + "/" + file.Name;
             var srcPath = file.FullPath;
@@ -1035,7 +1049,7 @@ public class SpreadJob : IDisposable
             var transfer = new FxpTransfer();
             // Defer directory creation until just before STOR — prevents empty dirs
             // when PASV/PORT negotiation or connection setup fails
-            var dstClient = dstConn.Client;
+            var dstClient = dstConn!.Client;
             var fileName = file.Name;
             transfer.BeforeStore = async storeCt =>
             {
@@ -1077,7 +1091,7 @@ public class SpreadJob : IDisposable
             // TYPE I is sent inside FxpTransfer — don't send it here too
             // (double TYPE I causes response queue desync on BNC servers)
 
-            var ok = await transfer.ExecuteAsync(srcConn, dstConn, srcPath, dstPath, mode,
+            var ok = await transfer.ExecuteAsync(srcConn!, dstConn, srcPath, dstPath, mode,
                 _spreadConfig.TransferTimeoutSeconds, ct);
 
             lock (_progressLock) _activeTransfers.Remove(transferKey);
