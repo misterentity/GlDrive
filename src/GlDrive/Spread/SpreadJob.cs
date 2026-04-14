@@ -642,6 +642,47 @@ public class SpreadJob : IDisposable
             if (results.Count == 0)
                 Log.Warning("Spread scan: ALL scans failed or returned 0 results");
         }
+
+        // Reconcile FilesTotal across ALL sites after the scan cycle. ProcessFiles
+        // stamps each site with `_fileInfos.Count` as it observed it — so sites
+        // processed first in the loop see a smaller count than sites processed
+        // later. Without this pass, the first-processed site could flip to
+        // IsComplete=true just because its own tiny file set matched the
+        // partial _fileInfos snapshot.
+        int finalTotal;
+        lock (_ownershipLock)
+        {
+            finalTotal = _expectedFileCount > 0 ? _expectedFileCount : _fileInfos.Count;
+        }
+        lock (_progressLock)
+        {
+            foreach (var progress in _siteProgress.Values)
+            {
+                progress.FilesTotal = finalTotal;
+                progress.IsComplete = progress.FilesOwned >= finalTotal && finalTotal > 0;
+            }
+        }
+        ProgressChanged?.Invoke(this);
+    }
+
+    /// <summary>
+    /// Detects glftpd zipscript "-MISSING-*" placeholder files. Zipscript drops
+    /// a tiny stub with this prefix when the SFV declares a file that the site
+    /// does not actually hold. These are inverse signals — the site LACKS the
+    /// real file — and must never be counted as owned.
+    /// </summary>
+    private static bool IsMissingPlaceholder(string name, long size)
+    {
+        if (string.IsNullOrEmpty(name)) return false;
+        // Common forms: "-missing-foo.rar", "-MISSING-foo.rar". Some configs also
+        // use a ".missing" suffix on the real filename.
+        if (name.StartsWith("-missing-", StringComparison.OrdinalIgnoreCase)) return true;
+        if (name.EndsWith(".missing", StringComparison.OrdinalIgnoreCase)) return true;
+        // Belt-and-suspenders: the stub is always tiny. Real release files are
+        // always multi-KB. A 0-byte file whose name starts with "-" is almost
+        // certainly a zipscript marker.
+        if (size == 0 && name.StartsWith('-')) return true;
+        return false;
     }
 
     private async Task ScanDirectoryRecursive(FtpConnectionPool pool, string basePath,
@@ -702,6 +743,13 @@ public class SpreadJob : IDisposable
                         return;
                     }
                 }
+
+                // Skip glftpd zipscript -MISSING placeholders. When zipscript validates
+                // an SFV and finds a declared file absent, it drops a 0-byte
+                // "-MISSING-<filename>" stub in its place. These are not real files —
+                // counting them as "owned" makes destinations falsely show 100%
+                // complete when they in fact hold no real data.
+                if (IsMissingPlaceholder(item.Name, item.Size)) continue;
 
                 // Store relative path from release root for subdir support
                 var relativePath = item.FullName;
