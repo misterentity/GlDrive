@@ -203,6 +203,19 @@ public class SpreadManager : IDisposable
                         .Where(id => _spreadPools.ContainsKey(id))
                         .ToDictionary(id => id, id => _spreadPools[id]);
                 }
+
+                if (fresh.Count < 2)
+                {
+                    // A participating server was unmounted between StartRace() and here —
+                    // not enough pools to race. Fail the job cleanly instead of running
+                    // with stale references.
+                    Log.Warning("Spread job {Release}: only {Count} pools available after reinit, aborting",
+                        job.ReleaseName, fresh.Count);
+                    lock (_lock) _activeJobs.Remove(job);
+                    DequeueNextRace();
+                    return;
+                }
+
                 job.UpdatePools(fresh);
 
                 await job.RunAsync();
