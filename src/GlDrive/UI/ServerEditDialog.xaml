@@ -250,6 +250,35 @@
                             ToolTip="Analyze buffered IRC messages to auto-detect announce patterns (requires IRC to be connected for a few minutes first)"/>
                 </StackPanel>
 
+                <!-- Auto Request Filler -->
+                <Expander Header="Auto Request Filler (RaceTrade-style)" Margin="0,0,0,8">
+                    <StackPanel Margin="0,6,0,0">
+                        <CheckBox x:Name="RequestFillerEnabledBox" Content="Enable auto request filler"
+                                  Margin="0,0,0,6"
+                                  ToolTip="Detect !request announces on IRC and auto-fill from other connected servers"/>
+                        <TextBlock Text="Request Pattern (regex with named group 'release'):" Margin="0,0,0,2"/>
+                        <TextBox x:Name="RequestFillerPatternBox" Margin="0,0,0,6"
+                                 ToolTip="Default: !request\s+(?&lt;release&gt;\S+)"/>
+                        <TextBlock Text="Channel (empty = all):" Margin="0,0,0,2"/>
+                        <TextBox x:Name="RequestFillerChannelBox" Margin="0,0,0,6"
+                                 ToolTip="Only watch this channel for requests. Leave empty to watch all joined channels."/>
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                                <TextBlock Text="Max Fills/Hour:" Margin="0,0,0,2"/>
+                                <TextBox x:Name="RequestFillerMaxPerHourBox" Text="10" Width="60" HorizontalAlignment="Left"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Text="Cooldown (sec):" Margin="0,0,0,2"/>
+                                <TextBox x:Name="RequestFillerCooldownBox" Text="60" Width="60" HorizontalAlignment="Left"/>
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </Expander>
+
                 <Separator Margin="0,4,0,12"/>
 
                 <!-- Spread/FXP Settings -->
@@ -316,7 +345,7 @@
                         <DataGridTextColumn Header="Section" Binding="{Binding Section}" Width="70"/>
                     </DataGrid.Columns>
                 </DataGrid>
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
                     <Button Content="Add Rule" Click="AddSiteSkiplistRule_Click" Padding="12,4" Margin="0,0,6,0"/>
                     <Button Content="Remove" Click="RemoveSiteSkiplistRule_Click" Padding="12,4" Margin="0,0,6,0"/>
                     <Button Content="Add Defaults" Click="AddDefaultSkiplistRules_Click" Padding="12,4"
@@ -326,6 +355,37 @@
                     <Button Content="Detect Rules" Click="DetectSiteRules_Click" Padding="12,4" Margin="6,0,0,0"
                             ToolTip="Run SITE RULES on the server and auto-configure slots, skiplist, and affils"/>
                 </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                    <Button Content="Test Rules..." Click="TestRules_Click" Padding="12,4"
+                            Style="{StaticResource SecondaryButton}"
+                            ToolTip="Test how current rules evaluate against a sample release name"/>
+                </StackPanel>
+
+                <!-- Section Mappings (RaceTrade-style IRC → internal section mapping) -->
+                <Expander Header="Section Mappings (IRC → internal section with tag rules)" Margin="0,0,0,12">
+                    <StackPanel Margin="0,6,0,0">
+                        <TextBlock FontSize="11" Foreground="{DynamicResource ForegroundDimBrush}"
+                                   TextWrapping="Wrap" Margin="0,0,0,6"
+                                   Text="Map IRC-announced section names to this site's internal section keys. First enabled mapping whose IrcSection and TriggerRegex both match wins. Tag rules apply only to the matched mapping."/>
+                        <DataGrid x:Name="SectionMappingsGrid"
+                                  AutoGenerateColumns="False" CanUserAddRows="False"
+                                  SelectionMode="Single" GridLinesVisibility="Horizontal"
+                                  HeadersVisibility="Column" Height="100" Margin="0,0,0,6">
+                            <DataGrid.Columns>
+                                <DataGridCheckBoxColumn Header="On" Binding="{Binding Enabled}" Width="35"/>
+                                <DataGridTextColumn Header="IRC Section" Binding="{Binding IrcSection}" Width="110"/>
+                                <DataGridTextColumn Header="Remote Section" Binding="{Binding RemoteSection}" Width="110"/>
+                                <DataGridTextColumn Header="Trigger Regex" Binding="{Binding TriggerRegex}" Width="*"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="Add Mapping" Click="AddSectionMapping_Click" Padding="12,4" Margin="0,0,6,0"/>
+                            <Button Content="Remove" Click="RemoveSectionMapping_Click" Padding="12,4" Margin="0,0,6,0"/>
+                            <Button Content="Edit Tag Rules..." Click="EditTagRules_Click" Padding="12,4"
+                                    ToolTip="Per-mapping tag rules (DENY/ALLOW) applied only to this mapping"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Expander>
 
                 <Separator Margin="0,4,0,12"/>
 
