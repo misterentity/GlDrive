@@ -189,23 +189,60 @@ public partial class App
         try
         {
             var settingsPath = Path.Combine(ConfigManager.AppDataPath, "extractor-settings.json");
-            if (!File.Exists(settingsPath)) return;
+            if (!File.Exists(settingsPath))
+            {
+                Log.Debug("AutoStartExtractorWatch: no settings file at {Path}", settingsPath);
+                return;
+            }
 
             var json = File.ReadAllText(settingsPath);
-            var settings = System.Text.Json.JsonSerializer.Deserialize<ExtractorSettings>(json,
-                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-
-            if (settings is { WatchEnabled: true, WatchFolders.Count: > 0 })
+            ExtractorSettings? settings;
+            try
             {
-                Log.Information("Auto-starting extractor watch folders ({Count} folders)", settings.WatchFolders.Count);
-                var win = new ExtractorWindow { ShowInTaskbar = false, WindowState = WindowState.Minimized };
-                win.Show();
-                win.Hide(); // Hidden but alive — watchers are running from LoadSettings
+                settings = System.Text.Json.JsonSerializer.Deserialize<ExtractorSettings>(json,
+                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
             }
+            catch (Exception jex)
+            {
+                Log.Warning(jex, "AutoStartExtractorWatch: failed to parse {Path}", settingsPath);
+                return;
+            }
+
+            if (settings == null)
+            {
+                Log.Warning("AutoStartExtractorWatch: settings deserialized to null");
+                return;
+            }
+
+            if (!settings.WatchEnabled || settings.WatchFolders == null || settings.WatchFolders.Count == 0)
+            {
+                Log.Debug(
+                    "AutoStartExtractorWatch: disabled or empty (watchEnabled={We}, folders={Nf})",
+                    settings.WatchEnabled, settings.WatchFolders?.Count ?? 0);
+                return;
+            }
+
+            Log.Information(
+                "Auto-starting extractor watch folders ({Count} folders)",
+                settings.WatchFolders.Count);
+
+            // Create the ExtractorWindow hidden. Its constructor calls LoadSettings(),
+            // which starts the FileSystemWatchers when WatchEnabled is true. The window
+            // stays alive (referenced by Application.Current.Windows) even after Hide()
+            // because WPF tracks visible and hidden windows the same way.
+            var win = new ExtractorWindow
+            {
+                ShowInTaskbar = false,
+                WindowState = WindowState.Minimized
+            };
+            win.Show();
+            win.Hide();
+            Log.Information("AutoStartExtractorWatch: hidden ExtractorWindow created and watchers started");
         }
         catch (Exception ex)
         {
-            Log.Debug(ex, "Failed to auto-start extractor watch");
+            // Warning (not Debug) so failures are visible at default log level
+            Log.Warning(ex, "AutoStartExtractorWatch: unexpected failure");
         }
     }
 
