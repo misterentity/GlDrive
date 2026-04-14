@@ -473,10 +473,31 @@ public partial class ExtractorWindow : Window
 
         var lastProgressUpdate = DateTime.MinValue;
 
-        // Try archive-based extraction first (supports random access, multi-volume)
+        // Try archive-based extraction first (supports random access, multi-volume).
+        //
+        // For old-style scene multi-volume RARs (.rar + .r00 + .r01 + ... + .r99 [+ .s00...])
+        // SharpCompress's single-path auto-detection can fail with
+        // "Unknown Rar Header: <byte>" when it can't correctly walk to the next volume.
+        // Explicitly enumerating the volumes in the same directory and passing the
+        // full list to ArchiveFactory.OpenArchive(IReadOnlyList<FileInfo>, ...) bypasses
+        // SharpCompress's discovery entirely and reads the volumes as given.
         try
         {
-            using var archive = ArchiveFactory.OpenArchive(item.FilePath, readerOptions);
+            IArchive archive;
+            var volumes = TryDiscoverRarVolumes(item.FilePath);
+            if (volumes != null && volumes.Count > 1)
+            {
+                Log.Debug(
+                    "Extractor: opening {Count}-volume RAR set starting at {First}",
+                    volumes.Count, Path.GetFileName(item.FilePath));
+                archive = ArchiveFactory.OpenArchive(volumes, readerOptions);
+            }
+            else
+            {
+                archive = ArchiveFactory.OpenArchive(item.FilePath, readerOptions);
+            }
+
+            using var _ = archive;
 
             var entries = archive.Entries.Where(e => !e.IsDirectory).ToList();
             Dispatcher.BeginInvoke(() => item.EntryCount = entries.Count);
@@ -538,12 +559,71 @@ public partial class ExtractorWindow : Window
 
             Dispatcher.BeginInvoke(() => item.Progress = 100);
         }
-        catch (InvalidOperationException)
+        catch (Exception ex) when (ex is InvalidOperationException or InvalidFormatException)
         {
-            // Fallback to reader-based (streaming) extraction for formats that don't support random access
+            // Fallback to reader-based (streaming) extraction. Handles formats that
+            // don't support random access AND cases where archive-mode parsing hits
+            // a malformed block ('Unknown Rar Header: ...') that the streaming reader
+            // can sometimes work around.
+            Log.Warning(ex, "Extractor: archive-mode failed, falling back to streaming reader: {File}", item.FileName);
             using var fileStream = new FileStream(item.FilePath, FileMode.Open, FileAccess.Read,
                 FileShare.Read, bufferSize: 256 * 1024, FileOptions.SequentialScan);
             ExtractWithReader(item, fileStream, outputDir, readerOptions, overwriteMode, ct);
+        }
+    }
+
+    /// <summary>
+    /// For old-style scene multi-volume RARs (name.rar + name.r00 + name.r01 + ...
+    /// + optionally name.s00 + ...) enumerate all volumes in order and return the
+    /// complete file list. Returns null if this doesn't look like an old-style set
+    /// (e.g. for .partNN.rar modern multi-volume, for single-file RARs, or for
+    /// non-RAR archives).
+    /// </summary>
+    private static List<FileInfo>? TryDiscoverRarVolumes(string firstVolumePath)
+    {
+        try
+        {
+            var ext = Path.GetExtension(firstVolumePath);
+            if (!ext.Equals(".rar", StringComparison.OrdinalIgnoreCase)) return null;
+
+            var dir = Path.GetDirectoryName(firstVolumePath);
+            if (dir == null || !Directory.Exists(dir)) return null;
+
+            var baseName = Path.GetFileNameWithoutExtension(firstVolumePath);
+            // Skip modern .partNN.rar naming — SharpCompress handles that via
+            // single-path auto-detection. This helper is only for old-style sets.
+            if (Regex.IsMatch(baseName, @"\.part\d+$", RegexOptions.IgnoreCase))
+                return null;
+
+            var result = new List<FileInfo> { new(firstVolumePath) };
+
+            // Enumerate all files in the directory once to avoid 2000+ File.Exists calls
+            var candidates = new DirectoryInfo(dir)
+                .EnumerateFiles($"{baseName}.*")
+                .ToList();
+
+            // .r00 – .r999 volumes, in numeric order
+            var rVolumes = candidates
+                .Select(f => new { File = f, Match = Regex.Match(f.Extension, @"^\.r(\d{2,3})$", RegexOptions.IgnoreCase) })
+                .Where(x => x.Match.Success)
+                .OrderBy(x => int.Parse(x.Match.Groups[1].Value))
+                .Select(x => x.File);
+            result.AddRange(rVolumes);
+
+            // .s00 – .s999 continuation volumes (used by some releases after r99)
+            var sVolumes = candidates
+                .Select(f => new { File = f, Match = Regex.Match(f.Extension, @"^\.s(\d{2,3})$", RegexOptions.IgnoreCase) })
+                .Where(x => x.Match.Success)
+                .OrderBy(x => int.Parse(x.Match.Groups[1].Value))
+                .Select(x => x.File);
+            result.AddRange(sVolumes);
+
+            return result.Count > 1 ? result : null;
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Extractor: volume discovery failed for {File}", firstVolumePath);
+            return null;
         }
     }
 
