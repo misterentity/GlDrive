@@ -339,8 +339,14 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         spread.AutoRaceAttempted += (section, release, result) =>
             Application.Current?.Dispatcher.BeginInvoke(() =>
                 AddAutoRaceLog(section, release, "", result));
+        spread.JobStarted += _ =>
+            Application.Current?.Dispatcher.BeginInvoke(SafeRefresh);
         spread.JobCompleted += _ =>
-            Application.Current?.Dispatcher.BeginInvoke(RefreshHistory);
+            Application.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                SafeRefresh();
+                RefreshHistory();
+            });
     }
 
     private void AddAutoRaceLog(string section, string release, string source, string result)
