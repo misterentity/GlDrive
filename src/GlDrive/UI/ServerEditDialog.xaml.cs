@@ -716,10 +716,28 @@ public partial class ServerEditDialog : Window
             var model = savedConfig.Downloads.OpenRouterModel;
             if (string.IsNullOrEmpty(model)) model = "openai/gpt-oss-120b:free";
 
-            TestResultText.Text = $"Analyzing with AI ({model})...";
+            // Pull IRC announce context from the pattern detector. If IRC is
+            // connected the detector has been buffering channel messages — this
+            // gives the model the site's actual announce format and lets it
+            // spot IRC-only section names that need SectionMapping entries.
+            List<string> ircMessages = [];
+            List<DetectedPattern> ircPatterns = [];
+            if (_serverManager != null && !string.IsNullOrEmpty(_serverConfig.Id))
+            {
+                try
+                {
+                    ircMessages = _serverManager.GetRecentIrcMessages(_serverConfig.Id, 60);
+                    ircPatterns = _serverManager.DetectIrcPatterns(_serverConfig.Id);
+                }
+                catch (Exception ex) { Log.Debug(ex, "Failed to gather IRC context for AI"); }
+            }
+
+            TestResultText.Text = $"Analyzing with AI ({model})" +
+                (ircMessages.Count > 0 ? $" — including {ircMessages.Count} IRC messages" : "") + "...";
 
             using var aiClient = new OpenRouterClient(apiKey, model);
-            var result = await aiClient.AnalyzeSiteRules(rulesText, currentSections, currentAffils, sectionSamples);
+            var result = await aiClient.AnalyzeSiteRules(rulesText, currentSections, currentAffils,
+                sectionSamples, ircMessages, ircPatterns);
 
             if (result == null)
             {
@@ -814,6 +832,121 @@ public partial class ServerEditDialog : Window
                 }
                 if (added > 0)
                     changes.Add($"{added} section mapping(s) added");
+            }
+
+            // AI-suggested IRC → internal SectionMapping entries. Only add new
+            // rows; never touch existing mappings (preserve user tag rules).
+            if (result.SectionMappings.Count > 0)
+            {
+                var added = 0;
+                foreach (var sm in result.SectionMappings)
+                {
+                    if (string.IsNullOrWhiteSpace(sm.IrcSection) ||
+                        string.IsNullOrWhiteSpace(sm.RemoteSection)) continue;
+
+                    var exists = _sectionMappings.Any(m =>
+                        m.IrcSection.Equals(sm.IrcSection, StringComparison.OrdinalIgnoreCase) &&
+                        m.RemoteSection.Equals(sm.RemoteSection, StringComparison.OrdinalIgnoreCase));
+                    if (exists) continue;
+
+                    // Try to pull Path from any existing mapping with same RemoteSection
+                    var pathSource = _sectionMappings.FirstOrDefault(m =>
+                        m.RemoteSection.Equals(sm.RemoteSection, StringComparison.OrdinalIgnoreCase));
+
+                    _sectionMappings.Add(new SectionMapping
+                    {
+                        IrcSection = sm.IrcSection,
+                        RemoteSection = sm.RemoteSection,
+                        Path = pathSource?.Path ?? "",
+                        TriggerRegex = string.IsNullOrWhiteSpace(sm.Trigger) ? ".*" : sm.Trigger,
+                        Enabled = true
+                    });
+                    added++;
+                }
+                if (added > 0)
+                    changes.Add($"{added} IRC section mapping(s) detected");
+            }
+
+            // AI-suggested IRC announce rules. Append any new rules that the
+            // user hasn't already configured.
+            if (result.AnnounceRules.Count > 0)
+            {
+                var existing = (IrcAnnounceRulesBox.Text ?? "").Trim();
+                var existingLines = existing.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(l => l.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                var newLines = new List<string>();
+                foreach (var ar in result.AnnounceRules)
+                {
+                    if (string.IsNullOrWhiteSpace(ar.Pattern)) continue;
+                    var line = string.IsNullOrWhiteSpace(ar.Channel) ? ar.Pattern : $"{ar.Channel} {ar.Pattern}";
+                    if (existingLines.Add(line))
+                        newLines.Add(line);
+                }
+                if (newLines.Count > 0)
+                {
+                    IrcAnnounceRulesBox.Text = string.IsNullOrEmpty(existing)
+                        ? string.Join("\n", newLines)
+                        : existing + "\n" + string.Join("\n", newLines);
+                    changes.Add($"{newLines.Count} IRC announce rule(s) detected");
+                }
+            }
+
+            // Site priority (VeryLow/Low/Normal/High/VeryHigh)
+            if (!string.IsNullOrWhiteSpace(result.Priority))
+            {
+                var idx = result.Priority.Trim().ToLowerInvariant() switch
+                {
+                    "verylow" or "very low" or "very_low" => 0,
+                    "low" => 1,
+                    "normal" => 2,
+                    "high" => 3,
+                    "veryhigh" or "very high" or "very_high" => 4,
+                    _ => -1
+                };
+                if (idx >= 0 && idx != SpreadPriorityBox.SelectedIndex)
+                {
+                    SpreadPriorityBox.SelectedIndex = idx;
+                    changes.Add($"Priority → {result.Priority}");
+                }
+            }
+
+            // Download-only flag
+            if (result.DownloadOnly.HasValue && result.DownloadOnly.Value &&
+                SpreadDownloadOnlyBox.IsChecked != true)
+            {
+                SpreadDownloadOnlyBox.IsChecked = true;
+                changes.Add("Marked as download-only");
+            }
+
+            // Excluded notification categories (merge with user's list)
+            if (result.ExcludedNotificationCategories.Count > 0)
+            {
+                var existingExcluded = (ExcludedCategoriesBox.Text ?? "")
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var addedCats = 0;
+                foreach (var cat in result.ExcludedNotificationCategories)
+                {
+                    if (!string.IsNullOrWhiteSpace(cat) && existingExcluded.Add(cat.Trim()))
+                        addedCats++;
+                }
+                if (addedCats > 0)
+                {
+                    ExcludedCategoriesBox.Text = string.Join(", ", existingExcluded.OrderBy(c => c));
+                    changes.Add($"{addedCats} notification category exclusion(s)");
+                }
+            }
+
+            // Auto request filler — enable only if AI detected a channel pattern
+            if (!string.IsNullOrWhiteSpace(result.RequestFillerPattern) &&
+                RequestFillerEnabledBox.IsChecked != true)
+            {
+                RequestFillerPatternBox.Text = result.RequestFillerPattern;
+                if (!string.IsNullOrWhiteSpace(result.RequestFillerChannel))
+                    RequestFillerChannelBox.Text = result.RequestFillerChannel;
+                RequestFillerEnabledBox.IsChecked = true;
+                changes.Add("Auto request filler enabled");
             }
 
             TestResultText.Text = changes.Count > 0
