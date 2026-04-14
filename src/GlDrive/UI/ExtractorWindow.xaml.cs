@@ -678,6 +678,19 @@ public partial class ExtractorWindow : Window
         using var proc = System.Diagnostics.Process.Start(psi);
         if (proc == null) return false;
 
+        // Drain stdout and stderr CONCURRENTLY with WaitForExit. If we don't drain,
+        // the child process blocks writing to the pipe once its 4 KB buffer fills,
+        // and we deadlock waiting for a child that can't finish writing. Classic
+        // Process.Start gotcha — observed in the wild when UnRAR extracted ~95% of
+        // a 20 GB archive and then stalled indefinitely because -idq still produces
+        // enough output to fill the pipe over the course of a full extraction.
+        var stdoutBuffer = new System.Text.StringBuilder();
+        var stderrBuffer = new System.Text.StringBuilder();
+        proc.OutputDataReceived += (_, e) => { if (e.Data != null) stdoutBuffer.AppendLine(e.Data); };
+        proc.ErrorDataReceived += (_, e) => { if (e.Data != null) stderrBuffer.AppendLine(e.Data); };
+        proc.BeginOutputReadLine();
+        proc.BeginErrorReadLine();
+
         // Show indeterminate progress while the external tool runs. The tool doesn't
         // report progress per-file in quiet mode, so we just spin a pseudo-progress
         // animation via the UI update loop. Real progress would require parsing the
@@ -705,6 +718,9 @@ public partial class ExtractorWindow : Window
                 }
                 proc.WaitForExit(200);
             }
+            // After HasExited returns true, make sure the async read handlers have
+            // drained whatever remained in the pipes. This is the documented pattern.
+            proc.WaitForExit();
         }
         finally
         {
@@ -712,8 +728,8 @@ public partial class ExtractorWindow : Window
             spinCts.Dispose();
         }
 
-        var stderr = proc.StandardError.ReadToEnd();
-        var stdout = proc.StandardOutput.ReadToEnd();
+        var stderr = stderrBuffer.ToString();
+        var stdout = stdoutBuffer.ToString();
 
         if (proc.ExitCode != 0)
         {
