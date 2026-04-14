@@ -127,8 +127,7 @@ public partial class ServerEditDialog : Window
                     IrcPasswordBox.Password = ircPw;
             }
 
-            // Spread
-            SpreadSectionsBox.Text = string.Join("\n", existing.SpreadSite.Sections.Select(kv => $"{kv.Key}={kv.Value}"));
+            // Spread (Sections dict is derived from SectionMappings — grid loads below)
             SpreadPriorityBox.SelectedIndex = existing.SpreadSite.Priority switch
             {
                 SitePriority.VeryLow => 0,
@@ -380,13 +379,15 @@ public partial class ServerEditDialog : Window
                 };
             }).ToList();
 
-        // Spread
-        _serverConfig.SpreadSite.Sections = (SpreadSectionsBox.Text ?? "")
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(l => l.Contains('='))
-            .ToDictionary(
-                l => l[..l.IndexOf('=')].Trim(),
-                l => l[(l.IndexOf('=') + 1)..].Trim());
+        // Spread — SectionMappings is the source of truth; derive the
+        // legacy Sections dict so SpreadJob / DashboardViewModel / MountService
+        // keep working without changes.
+        _serverConfig.SpreadSite.SectionMappings = _sectionMappings.ToList();
+        _serverConfig.SpreadSite.Sections = _sectionMappings
+            .Where(m => m.Enabled && !string.IsNullOrWhiteSpace(m.RemoteSection)
+                        && !string.IsNullOrWhiteSpace(m.Path))
+            .GroupBy(m => m.RemoteSection, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().Path, StringComparer.OrdinalIgnoreCase);
         _serverConfig.SpreadSite.Priority = SpreadPriorityBox.SelectedIndex switch
         {
             0 => SitePriority.VeryLow,
@@ -403,7 +404,6 @@ public partial class ServerEditDialog : Window
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(s => s.Length > 0).ToList();
         _serverConfig.SpreadSite.Skiplist = _siteSkiplist.ToList();
-        _serverConfig.SpreadSite.SectionMappings = _sectionMappings.ToList();
 
         // Metadata filter
         var metaFilter = _serverConfig.SpreadSite.MetadataFilter;
@@ -645,8 +645,11 @@ public partial class ServerEditDialog : Window
                 return;
             }
 
-            // Gather current config context
-            var currentSections = ParseSections(SpreadSectionsBox.Text ?? "");
+            // Gather current config context from the section mappings grid
+            var currentSections = _sectionMappings
+                .Where(m => !string.IsNullOrWhiteSpace(m.RemoteSection) && !string.IsNullOrWhiteSpace(m.Path))
+                .GroupBy(m => m.RemoteSection, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First().Path, StringComparer.OrdinalIgnoreCase);
             var currentAffils = (SpreadAffilsBox.Text ?? "")
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .ToList();
@@ -785,15 +788,32 @@ public partial class ServerEditDialog : Window
 
             if (result.SuggestedSections.Count > 0)
             {
-                var existing = ParseSections(SpreadSectionsBox.Text ?? "");
+                var added = 0;
                 foreach (var (name, path) in result.SuggestedSections)
                 {
-                    if (!existing.ContainsKey(name))
-                        existing[name] = path;
+                    var existing = _sectionMappings.FirstOrDefault(m =>
+                        m.RemoteSection.Equals(name, StringComparison.OrdinalIgnoreCase));
+                    if (existing != null)
+                    {
+                        if (string.IsNullOrEmpty(existing.Path))
+                        {
+                            existing.Path = path;
+                            added++;
+                        }
+                        continue;
+                    }
+                    _sectionMappings.Add(new SectionMapping
+                    {
+                        IrcSection = name,
+                        RemoteSection = name,
+                        Path = path,
+                        TriggerRegex = ".*",
+                        Enabled = true
+                    });
+                    added++;
                 }
-                SpreadSectionsBox.Text = string.Join("\n",
-                    existing.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key}={kv.Value}"));
-                changes.Add($"{result.SuggestedSections.Count} section suggestions");
+                if (added > 0)
+                    changes.Add($"{added} section mapping(s) added");
             }
 
             TestResultText.Text = changes.Count > 0
@@ -823,11 +843,10 @@ public partial class ServerEditDialog : Window
         try
         {
             AutoDetectSections_Click(sender, e);
-            // Wait for it to finish (it's async void, track via the TextBox)
+            // Wait for it to finish (it's async void, track via the grid)
             await Task.Delay(500);
-            while (!SpreadSectionsBox.IsEnabled) await Task.Delay(500);
-            var sectionCount = SpreadSectionsBox.Text.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
-            results.Add($"Sections: {sectionCount} detected");
+            while (!SectionMappingsGrid.IsEnabled) await Task.Delay(500);
+            results.Add($"Sections: {_sectionMappings.Count} detected");
         }
         catch { results.Add("Sections: detection failed"); }
 
@@ -871,8 +890,8 @@ public partial class ServerEditDialog : Window
 
     private async void AutoDetectSections_Click(object sender, RoutedEventArgs e)
     {
-        SpreadSectionsBox.IsEnabled = false;
-        var originalText = SpreadSectionsBox.Text;
+        SectionMappingsGrid.IsEnabled = false;
+        TestResultText.Text = "";
 
         try
         {
@@ -916,7 +935,7 @@ public partial class ServerEditDialog : Window
             client.Config.CustomStreamConfig = gnuConfig;
             client.ValidateCertificate += (_, ev) => ev.Accept = true;
 
-            SpreadSectionsBox.Text = "Connecting...";
+            TestResultText.Text = "Connecting...";
             await client.Connect();
 
             var useCpsv = client.Capabilities.Contains(FtpCapability.CPSV);
@@ -936,9 +955,8 @@ public partial class ServerEditDialog : Window
             var scanAll = ScanAllDirsBox.IsChecked == true;
             if (!scanAll)
             {
-                // Try /incoming/ under the root path first
                 var incomingPath = rootPath == "/" ? "/incoming" : rootPath + "/incoming";
-                SpreadSectionsBox.Text = $"Checking {incomingPath}...";
+                TestResultText.Text = $"Checking {incomingPath}...";
                 try
                 {
                     var incomingItems = await ListDir(incomingPath);
@@ -948,13 +966,10 @@ public partial class ServerEditDialog : Window
                     if (hasDirs)
                         rootPath = incomingPath;
                 }
-                catch
-                {
-                    // /incoming/ doesn't exist — fall back to full root scan
-                }
+                catch { }
             }
 
-            SpreadSectionsBox.Text = $"Scanning {rootPath}...";
+            TestResultText.Text = $"Scanning {rootPath}...";
 
             var sections = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -962,7 +977,6 @@ public partial class ServerEditDialog : Window
                 (i.Type == FtpObjectType.Directory || i.Type == FtpObjectType.Link)
                 && !NonContentDirs.Contains(i.Name);
 
-            // Scan primary root (e.g., /incoming/ or /)
             FtpListItem[] rootItems;
             try { rootItems = await ListDir(rootPath); }
             catch { rootItems = []; }
@@ -973,7 +987,7 @@ public partial class ServerEditDialog : Window
             {
                 try
                 {
-                    SpreadSectionsBox.Text = $"Checking {dir.Name}...";
+                    TestResultText.Text = $"Checking {dir.Name}...";
                     var subItems = await ListDir(dir.FullName);
                     var subDirCount = subItems.Count(IsDirOrLink);
 
@@ -987,21 +1001,17 @@ public partial class ServerEditDialog : Window
                 catch { }
             }
 
-            // Also scan the notification watch path (e.g., /recent/)
-            // Each subdirectory there is typically a section category
             var watchPath = WatchPathBox.Text?.Trim();
             if (!string.IsNullOrEmpty(watchPath) && watchPath != rootPath)
             {
                 try
                 {
-                    SpreadSectionsBox.Text = $"Scanning {watchPath}...";
+                    TestResultText.Text = $"Scanning {watchPath}...";
                     var watchItems = await ListDir(watchPath);
                     foreach (var dir2 in watchItems.Where(IsDirOrLink))
                     {
                         var sectionName = dir2.Name.ToUpper()
                             .Replace(" ", "_").Replace("-", "_");
-                        // Use the watch path subdirectory as the section path
-                        // (e.g., /recent/tv-hd → TV_HD=/recent/tv-hd)
                         sections.TryAdd(sectionName, dir2.FullName);
                     }
                 }
@@ -1013,34 +1023,52 @@ public partial class ServerEditDialog : Window
 
             if (sections.Count > 0)
             {
-                // Merge with existing sections (don't overwrite user edits)
-                var existing = ParseSections(originalText);
-                foreach (var (name, path) in sections)
+                // Merge discovered sections into the SectionMappings grid.
+                // Don't touch existing rows (preserve user edits, enabled flags, tag rules).
+                var added = 0;
+                foreach (var (name, path) in sections.OrderBy(kv => kv.Key))
                 {
-                    if (!existing.ContainsKey(name))
-                        existing[name] = path;
+                    var existing = _sectionMappings.FirstOrDefault(m =>
+                        m.RemoteSection.Equals(name, StringComparison.OrdinalIgnoreCase));
+                    if (existing != null)
+                    {
+                        // Update path if missing, leave everything else alone
+                        if (string.IsNullOrEmpty(existing.Path))
+                        {
+                            existing.Path = path;
+                            added++;
+                        }
+                        continue;
+                    }
+                    _sectionMappings.Add(new SectionMapping
+                    {
+                        IrcSection = name,
+                        RemoteSection = name,
+                        Path = path,
+                        TriggerRegex = ".*",
+                        Enabled = true
+                    });
+                    added++;
                 }
-
-                SpreadSectionsBox.Text = string.Join("\n",
-                    existing.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key}={kv.Value}"));
+                TestResultText.Text = $"Auto-detect: {added} section(s) added/updated.";
             }
             else
             {
-                SpreadSectionsBox.Text = originalText;
+                TestResultText.Text = "No content sections detected.";
                 MessageBox.Show("No content sections detected. Ensure the root path points to a directory containing section folders.",
                     "Auto-Detect", MessageBoxButton.OK, MessageBoxImage.Information);
             }
         }
         catch (Exception ex)
         {
-            SpreadSectionsBox.Text = originalText;
+            TestResultText.Text = $"Auto-detect failed: {ex.Message}";
             MessageBox.Show($"Auto-detect failed: {ex.Message}", "Error",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
             Log.Warning(ex, "Section auto-detect failed");
         }
         finally
         {
-            SpreadSectionsBox.IsEnabled = true;
+            SectionMappingsGrid.IsEnabled = true;
         }
     }
 
@@ -1072,7 +1100,14 @@ public partial class ServerEditDialog : Window
 
     private void AddSectionMapping_Click(object sender, RoutedEventArgs e)
     {
-        _sectionMappings.Add(new SectionMapping { TriggerRegex = ".*", Enabled = true });
+        _sectionMappings.Add(new SectionMapping
+        {
+            IrcSection = "",
+            RemoteSection = "",
+            Path = "",
+            TriggerRegex = ".*",
+            Enabled = true
+        });
     }
 
     private void RemoveSectionMapping_Click(object sender, RoutedEventArgs e)

@@ -1,8 +1,8 @@
 <Window x:Class="GlDrive.UI.ServerEditDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Server Configuration" Width="460" Height="800"
-        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        Title="Server Configuration" Width="520" Height="820"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResize"
         Background="{DynamicResource BackgroundBrush}"
         Foreground="{DynamicResource ForegroundBrush}">
     <Grid Margin="16">
@@ -31,41 +31,40 @@
                 <TextBlock Text="Root Path:" Margin="0,0,0,4"/>
                 <TextBox x:Name="RootPathBox" Text="/" Margin="0,0,0,12"/>
 
-                <Separator Margin="0,0,0,12"/>
-
                 <!-- SOCKS5 Proxy -->
-                <TextBlock Text="SOCKS5 Proxy" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                <CheckBox x:Name="ProxyEnabledBox" Content="Connect via SOCKS5 proxy" Margin="0,0,0,8"/>
-                <Grid Margin="0,0,0,8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="100"/>
-                    </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" Margin="0,0,8,0">
-                        <TextBlock Text="Proxy Host:" Margin="0,0,0,2"/>
-                        <TextBox x:Name="ProxyHostBox" Margin="0,0,0,0"/>
+                <Expander Header="SOCKS5 Proxy" Margin="0,0,0,8">
+                    <StackPanel Margin="0,6,0,0">
+                        <CheckBox x:Name="ProxyEnabledBox" Content="Connect via SOCKS5 proxy" Margin="0,0,0,8"/>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="100"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                                <TextBlock Text="Proxy Host:" Margin="0,0,0,2"/>
+                                <TextBox x:Name="ProxyHostBox" Margin="0,0,0,0"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Text="Port:" Margin="0,0,0,2"/>
+                                <TextBox x:Name="ProxyPortBox" Text="1080"/>
+                            </StackPanel>
+                        </Grid>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                                <TextBlock Text="Proxy Username (optional):" Margin="0,0,0,2"/>
+                                <TextBox x:Name="ProxyUsernameBox"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Text="Proxy Password:" Margin="0,0,0,2"/>
+                                <PasswordBox x:Name="ProxyPasswordBox"/>
+                            </StackPanel>
+                        </Grid>
                     </StackPanel>
-                    <StackPanel Grid.Column="1">
-                        <TextBlock Text="Port:" Margin="0,0,0,2"/>
-                        <TextBox x:Name="ProxyPortBox" Text="1080"/>
-                    </StackPanel>
-                </Grid>
-                <Grid Margin="0,0,0,8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" Margin="0,0,8,0">
-                        <TextBlock Text="Proxy Username (optional):" Margin="0,0,0,2"/>
-                        <TextBox x:Name="ProxyUsernameBox"/>
-                    </StackPanel>
-                    <StackPanel Grid.Column="1">
-                        <TextBlock Text="Proxy Password:" Margin="0,0,0,2"/>
-                        <PasswordBox x:Name="ProxyPasswordBox"/>
-                    </StackPanel>
-                </Grid>
-
-                <Separator Margin="0,4,0,12"/>
+                </Expander>
 
                 <TextBlock Text="Drive Letter:" Margin="0,0,0,4"/>
                 <ComboBox x:Name="DriveLetterBox" Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
@@ -80,107 +79,109 @@
                 <TextBlock Text="Speed Limit (KB/s, 0=use global):" Margin="0,0,0,4"/>
                 <TextBox x:Name="SpeedLimitBox" Text="0" Width="100" HorizontalAlignment="Left" Margin="0,0,0,12"/>
 
-                <Separator Margin="0,0,0,12"/>
+                <!-- Cache -->
+                <Expander Header="Cache" Margin="0,0,0,8">
+                    <Grid Margin="0,6,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition/>
+                            <RowDefinition/>
+                        </Grid.RowDefinitions>
+                        <StackPanel Grid.Column="0" Grid.Row="0" Margin="0,0,8,4">
+                            <TextBlock Text="Directory TTL (sec):" Margin="0,0,0,2"/>
+                            <TextBox x:Name="CacheTtlBox" Text="30" Width="80" HorizontalAlignment="Left"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Grid.Row="0" Margin="0,0,0,4">
+                            <TextBlock Text="Max Cached Dirs:" Margin="0,0,0,2"/>
+                            <TextBox x:Name="MaxCachedDirsBox" Text="500" Width="80" HorizontalAlignment="Left"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="0" Grid.Row="1" Margin="0,0,8,0">
+                            <TextBlock Text="File Info Timeout (ms):" Margin="0,0,0,2"/>
+                            <TextBox x:Name="FileInfoTimeoutBox" Text="1000" Width="80" HorizontalAlignment="Left"/>
+                        </StackPanel>
+                    </Grid>
+                </Expander>
 
-                <!-- Cache Settings -->
-                <TextBlock Text="Cache" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                <Grid Margin="0,0,0,8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                    <Grid.RowDefinitions>
-                        <RowDefinition/>
-                        <RowDefinition/>
-                    </Grid.RowDefinitions>
-                    <StackPanel Grid.Column="0" Grid.Row="0" Margin="0,0,8,4">
-                        <TextBlock Text="Directory TTL (sec):" Margin="0,0,0,2"/>
-                        <TextBox x:Name="CacheTtlBox" Text="30" Width="80" HorizontalAlignment="Left"/>
-                    </StackPanel>
-                    <StackPanel Grid.Column="1" Grid.Row="0" Margin="0,0,0,4">
-                        <TextBlock Text="Max Cached Dirs:" Margin="0,0,0,2"/>
-                        <TextBox x:Name="MaxCachedDirsBox" Text="500" Width="80" HorizontalAlignment="Left"/>
-                    </StackPanel>
-                    <StackPanel Grid.Column="0" Grid.Row="1" Margin="0,0,8,0">
-                        <TextBlock Text="File Info Timeout (ms):" Margin="0,0,0,2"/>
-                        <TextBox x:Name="FileInfoTimeoutBox" Text="1000" Width="80" HorizontalAlignment="Left"/>
-                    </StackPanel>
-                </Grid>
+                <!-- Connection Pool -->
+                <Expander Header="Connection Pool" Margin="0,0,0,8">
+                    <Grid Margin="0,6,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                            <TextBlock Text="Max Connections:" Margin="0,0,0,2"/>
+                            <TextBox x:Name="PoolSizeBox" Text="3" Width="80" HorizontalAlignment="Left"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Text="Keepalive (sec):" Margin="0,0,0,2"/>
+                            <TextBox x:Name="KeepaliveBox" Text="30" Width="80" HorizontalAlignment="Left"/>
+                        </StackPanel>
+                    </Grid>
+                </Expander>
 
-                <!-- Pool Settings -->
-                <TextBlock Text="Connection Pool" FontWeight="SemiBold" Margin="0,8,0,8"/>
-                <Grid Margin="0,0,0,8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" Margin="0,0,8,0">
-                        <TextBlock Text="Max Connections:" Margin="0,0,0,2"/>
-                        <TextBox x:Name="PoolSizeBox" Text="3" Width="80" HorizontalAlignment="Left"/>
+                <!-- Notifications -->
+                <Expander Header="Notifications" Margin="0,0,0,8">
+                    <StackPanel Margin="0,6,0,0">
+                        <CheckBox x:Name="NotificationsEnabledBox" Content="Enable new release notifications" IsChecked="True" Margin="0,0,0,8"/>
+                        <TextBlock Text="Excluded Categories (comma-separated):" Margin="0,0,0,2"/>
+                        <TextBox x:Name="ExcludedCategoriesBox" Margin="0,0,0,8"
+                                 ToolTip="e.g. xxx-paysite, 0day — these categories won't trigger notifications"/>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                                <TextBlock Text="Poll Interval (sec):" Margin="0,0,0,2"/>
+                                <TextBox x:Name="PollIntervalBox" Text="60" Width="80" HorizontalAlignment="Left"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Text="Watch Path:" Margin="0,0,0,2"/>
+                                <TextBox x:Name="WatchPathBox" Text="/recent" HorizontalAlignment="Left" Width="140"/>
+                            </StackPanel>
+                        </Grid>
                     </StackPanel>
-                    <StackPanel Grid.Column="1">
-                        <TextBlock Text="Keepalive (sec):" Margin="0,0,0,2"/>
-                        <TextBox x:Name="KeepaliveBox" Text="30" Width="80" HorizontalAlignment="Left"/>
-                    </StackPanel>
-                </Grid>
+                </Expander>
 
-                <!-- Notification Settings -->
-                <TextBlock Text="Notifications" FontWeight="SemiBold" Margin="0,8,0,8"/>
-                <CheckBox x:Name="NotificationsEnabledBox" Content="Enable new release notifications" IsChecked="True" Margin="0,0,0,8"/>
-                <TextBlock Text="Excluded Categories (comma-separated):" Margin="0,0,0,2"/>
-                <TextBox x:Name="ExcludedCategoriesBox" Margin="0,0,0,8"
-                         ToolTip="e.g. xxx-paysite, 0day — these categories won't trigger notifications"/>
-                <Grid Margin="0,0,0,8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" Margin="0,0,8,0">
-                        <TextBlock Text="Poll Interval (sec):" Margin="0,0,0,2"/>
-                        <TextBox x:Name="PollIntervalBox" Text="60" Width="80" HorizontalAlignment="Left"/>
+                <!-- Search -->
+                <Expander Header="Search" Margin="0,0,0,8">
+                    <StackPanel Margin="0,6,0,0">
+                        <TextBlock Text="Search Paths (one per line):" Margin="0,0,0,2"/>
+                        <TextBox x:Name="SearchPathsBox" AcceptsReturn="True" TextWrapping="Wrap"
+                                 Height="80" VerticalScrollBarVisibility="Auto" Margin="0,0,0,8"
+                                 Text="/" ToolTip="Directories to search for releases, e.g. /site&#x0a;/archive"/>
+                        <TextBlock Text="Search Method:" Margin="0,0,0,4"/>
+                        <ComboBox x:Name="SearchMethodBox" Width="160" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Margin="0,0,16,0">
+                                <TextBlock Text="Max Depth:" Margin="0,0,0,2"/>
+                                <TextBox x:Name="SearchMaxDepthBox" Text="2" Width="60" HorizontalAlignment="Left"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Margin="0,0,16,0">
+                                <TextBlock Text="Index Refresh (min):" Margin="0,0,0,2"/>
+                                <TextBox x:Name="IndexCacheMinutesBox" Text="60" Width="60" HorizontalAlignment="Left"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2" VerticalAlignment="Bottom">
+                                <Button Content="Discover Paths" Click="DiscoverPaths_Click"
+                                        HorizontalAlignment="Left" Padding="16,6"/>
+                            </StackPanel>
+                        </Grid>
+                        <TextBlock x:Name="DiscoverResultText" Margin="0,0,0,8" TextWrapping="Wrap"/>
                     </StackPanel>
-                    <StackPanel Grid.Column="1">
-                        <TextBlock Text="Watch Path:" Margin="0,0,0,2"/>
-                        <TextBox x:Name="WatchPathBox" Text="/recent" HorizontalAlignment="Left" Width="140"/>
-                    </StackPanel>
-                </Grid>
-
-                <Separator Margin="0,4,0,12"/>
-
-                <!-- Search Settings -->
-                <TextBlock Text="Search" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                <TextBlock Text="Search Paths (one per line):" Margin="0,0,0,2"/>
-                <TextBox x:Name="SearchPathsBox" AcceptsReturn="True" TextWrapping="Wrap"
-                         Height="80" VerticalScrollBarVisibility="Auto" Margin="0,0,0,8"
-                         Text="/" ToolTip="Directories to search for releases, e.g. /site&#x0a;/archive"/>
-                <TextBlock Text="Search Method:" Margin="0,0,0,4"/>
-                <ComboBox x:Name="SearchMethodBox" Width="160" HorizontalAlignment="Left" Margin="0,0,0,8"/>
-
-                <Grid Margin="0,0,0,8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" Margin="0,0,16,0">
-                        <TextBlock Text="Max Depth:" Margin="0,0,0,2"/>
-                        <TextBox x:Name="SearchMaxDepthBox" Text="2" Width="60" HorizontalAlignment="Left"/>
-                    </StackPanel>
-                    <StackPanel Grid.Column="1" Margin="0,0,16,0">
-                        <TextBlock Text="Index Refresh (min):" Margin="0,0,0,2"/>
-                        <TextBox x:Name="IndexCacheMinutesBox" Text="60" Width="60" HorizontalAlignment="Left"/>
-                    </StackPanel>
-                    <StackPanel Grid.Column="2" VerticalAlignment="Bottom">
-                        <Button Content="Discover Paths" Click="DiscoverPaths_Click"
-                                HorizontalAlignment="Left" Padding="16,6"/>
-                    </StackPanel>
-                </Grid>
-                <TextBlock x:Name="DiscoverResultText" Margin="0,0,0,8" TextWrapping="Wrap"/>
-
-                <Separator Margin="0,4,0,12"/>
+                </Expander>
 
                 <!-- IRC Settings -->
-                <TextBlock Text="IRC" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                <Expander Header="IRC" Margin="0,0,0,8">
+                 <StackPanel Margin="0,6,0,0">
                 <CheckBox x:Name="IrcEnabledBox" Content="Enable IRC client" Margin="0,0,0,8"/>
                 <Grid Margin="0,0,0,8">
                     <Grid.ColumnDefinitions>
@@ -278,88 +279,113 @@
                         </Grid>
                     </StackPanel>
                 </Expander>
-
-                <Separator Margin="0,4,0,12"/>
+                 </StackPanel>
+                </Expander>
 
                 <!-- Spread/FXP Settings -->
-                <DockPanel Margin="0,0,0,8">
-                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                        <Button Content="AI Setup" Click="AiSetup_Click"
-                                Padding="12,4" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"
-                                ToolTip="Use AI (OpenRouter) to analyze SITE RULES and suggest optimal spread configuration"/>
-                        <Button Content="Quick Setup" Click="QuickSetup_Click"
-                                Padding="12,4" Style="{StaticResource PrimaryButton}"
-                                ToolTip="Auto-detect sections, site rules, skiplist, and slots — all in one click"/>
-                    </StackPanel>
-                    <TextBlock Text="Spread / FXP" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                </DockPanel>
-                <DockPanel Margin="0,0,0,2">
-                    <Button DockPanel.Dock="Right" Content="Auto-Detect" Click="AutoDetectSections_Click"
-                            Padding="8,2" Margin="6,0,0,0" VerticalAlignment="Bottom"/>
-                    <CheckBox x:Name="ScanAllDirsBox" DockPanel.Dock="Right" Content="Scan all"
-                              VerticalAlignment="Bottom" Margin="0,0,6,0"
-                              ToolTip="Scan all directories, not just /incoming/"/>
-                    <TextBlock Text="Sections (Name=Path, one per line):" VerticalAlignment="Bottom"/>
-                </DockPanel>
-                <TextBox x:Name="SpreadSectionsBox" AcceptsReturn="True" TextWrapping="Wrap"
-                         Height="80" VerticalScrollBarVisibility="Auto" Margin="0,0,0,8"
-                         ToolTip="e.g. MP3=/site/mp3&#x0a;0DAY=/site/0day"/>
-                <TextBlock Text="Priority:" Margin="0,0,0,4"/>
-                <ComboBox x:Name="SpreadPriorityBox" Width="120" HorizontalAlignment="Left" Margin="0,0,0,8">
-                    <ComboBoxItem Content="Very Low"/>
-                    <ComboBoxItem Content="Low"/>
-                    <ComboBoxItem Content="Normal"/>
-                    <ComboBoxItem Content="High"/>
-                    <ComboBoxItem Content="Very High"/>
-                </ComboBox>
-                <Grid Margin="0,0,0,8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" Margin="0,0,8,0">
-                        <TextBlock Text="Max Upload Slots:" Margin="0,0,0,2"/>
-                        <TextBox x:Name="SpreadMaxUpBox" Text="3" Width="60" HorizontalAlignment="Left"/>
-                    </StackPanel>
-                    <StackPanel Grid.Column="1">
-                        <TextBlock Text="Max Download Slots:" Margin="0,0,0,2"/>
-                        <TextBox x:Name="SpreadMaxDownBox" Text="3" Width="60" HorizontalAlignment="Left"/>
-                    </StackPanel>
-                </Grid>
-                <CheckBox x:Name="SpreadDownloadOnlyBox" Content="Download only (don't upload to this site)" Margin="0,0,0,8"/>
-                <TextBlock Text="Affiliations (comma-separated groups):" Margin="0,0,0,2"/>
-                <TextBox x:Name="SpreadAffilsBox" Margin="0,0,0,12"
-                         ToolTip="Groups affiliated with this site — their releases won't be spread here"/>
+                <Expander Header="Spread / FXP" Margin="0,0,0,8" IsExpanded="True">
+                    <StackPanel Margin="0,6,0,0">
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Button Content="AI Setup" Click="AiSetup_Click"
+                                    Padding="12,4" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"
+                                    ToolTip="Use AI (OpenRouter) to analyze SITE RULES and suggest optimal spread configuration"/>
+                            <Button Content="Quick Setup" Click="QuickSetup_Click"
+                                    Padding="12,4" Style="{StaticResource PrimaryButton}"
+                                    ToolTip="Auto-detect sections, site rules, skiplist, and slots — all in one click"/>
+                        </StackPanel>
 
-                <TextBlock Text="Site Skiplist:" Margin="0,0,0,4" FontWeight="SemiBold"/>
-                <DataGrid x:Name="SiteSkiplistGrid"
-                          AutoGenerateColumns="False" CanUserAddRows="False"
-                          SelectionMode="Single" GridLinesVisibility="Horizontal"
-                          HeadersVisibility="Column" Height="120" Margin="0,0,0,8">
-                    <DataGrid.Columns>
-                        <DataGridTextColumn Header="Pattern" Binding="{Binding Pattern}" Width="*"/>
-                        <DataGridCheckBoxColumn Header="Regex" Binding="{Binding IsRegex}" Width="55"/>
-                        <DataGridTextColumn Header="Action" Binding="{Binding Action}" Width="70"/>
-                        <DataGridCheckBoxColumn Header="Dirs" Binding="{Binding MatchDirectories}" Width="45"/>
-                        <DataGridCheckBoxColumn Header="Files" Binding="{Binding MatchFiles}" Width="50"/>
-                        <DataGridTextColumn Header="Section" Binding="{Binding Section}" Width="70"/>
-                    </DataGrid.Columns>
-                </DataGrid>
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                    <Button Content="Add Rule" Click="AddSiteSkiplistRule_Click" Padding="12,4" Margin="0,0,6,0"/>
-                    <Button Content="Remove" Click="RemoveSiteSkiplistRule_Click" Padding="12,4" Margin="0,0,6,0"/>
-                    <Button Content="Add Defaults" Click="AddDefaultSkiplistRules_Click" Padding="12,4"
-                            ToolTip="Add common scene skiplist rules (incomplete, sample, proof, etc.)"/>
-                    <Button Content="Import..." Click="ImportSiteSkiplist_Click" Padding="12,4" Margin="6,0,0,0"
-                            ToolTip="Import skiplist rules from a text file"/>
-                    <Button Content="Detect Rules" Click="DetectSiteRules_Click" Padding="12,4" Margin="6,0,0,0"
-                            ToolTip="Run SITE RULES on the server and auto-configure slots, skiplist, and affils"/>
-                </StackPanel>
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
-                    <Button Content="Test Rules..." Click="TestRules_Click" Padding="12,4"
-                            Style="{StaticResource SecondaryButton}"
-                            ToolTip="Test how current rules evaluate against a sample release name"/>
-                </StackPanel>
+                        <!-- Unified Section Mappings (replaces old SpreadSectionsBox) -->
+                        <DockPanel Margin="0,0,0,2">
+                            <Button DockPanel.Dock="Right" Content="Auto-Detect" Click="AutoDetectSections_Click"
+                                    Padding="8,2" Margin="6,0,0,0" VerticalAlignment="Bottom"/>
+                            <CheckBox x:Name="ScanAllDirsBox" DockPanel.Dock="Right" Content="Scan all"
+                                      VerticalAlignment="Bottom" Margin="0,0,6,0"
+                                      ToolTip="Scan all directories, not just /incoming/"/>
+                            <TextBlock Text="Sections &amp; IRC Mappings:" VerticalAlignment="Bottom" FontWeight="SemiBold"/>
+                        </DockPanel>
+                        <TextBlock FontSize="11" Foreground="{DynamicResource ForegroundDimBrush}"
+                                   TextWrapping="Wrap" Margin="0,2,0,4"
+                                   Text="Each row is one section on this server. IRC Section = name announced on IRC; Remote Section = internal key used by spread; Path = directory on the server. Trigger regex filters which announces use this mapping (default .*). Tag Rules are per-mapping filters."/>
+                        <DataGrid x:Name="SectionMappingsGrid"
+                                  AutoGenerateColumns="False" CanUserAddRows="False"
+                                  SelectionMode="Single" GridLinesVisibility="Horizontal"
+                                  HeadersVisibility="Column" Height="140" Margin="0,0,0,6">
+                            <DataGrid.Columns>
+                                <DataGridCheckBoxColumn Header="On" Binding="{Binding Enabled}" Width="35"/>
+                                <DataGridTextColumn Header="IRC Section" Binding="{Binding IrcSection}" Width="100"/>
+                                <DataGridTextColumn Header="Remote Section" Binding="{Binding RemoteSection}" Width="110"/>
+                                <DataGridTextColumn Header="Path" Binding="{Binding Path}" Width="*"/>
+                                <DataGridTextColumn Header="Trigger" Binding="{Binding TriggerRegex}" Width="90"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Button Content="Add" Click="AddSectionMapping_Click" Padding="12,4" Margin="0,0,6,0"/>
+                            <Button Content="Remove" Click="RemoveSectionMapping_Click" Padding="12,4" Margin="0,0,6,0"/>
+                            <Button Content="Edit Tag Rules..." Click="EditTagRules_Click" Padding="12,4"
+                                    ToolTip="Per-mapping tag rules (DENY/ALLOW) applied only to this mapping"/>
+                        </StackPanel>
+
+                        <TextBlock Text="Priority:" Margin="0,0,0,4"/>
+                        <ComboBox x:Name="SpreadPriorityBox" Width="120" HorizontalAlignment="Left" Margin="0,0,0,8">
+                            <ComboBoxItem Content="Very Low"/>
+                            <ComboBoxItem Content="Low"/>
+                            <ComboBoxItem Content="Normal"/>
+                            <ComboBoxItem Content="High"/>
+                            <ComboBoxItem Content="Very High"/>
+                        </ComboBox>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                                <TextBlock Text="Max Upload Slots:" Margin="0,0,0,2"/>
+                                <TextBox x:Name="SpreadMaxUpBox" Text="3" Width="60" HorizontalAlignment="Left"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Text="Max Download Slots:" Margin="0,0,0,2"/>
+                                <TextBox x:Name="SpreadMaxDownBox" Text="3" Width="60" HorizontalAlignment="Left"/>
+                            </StackPanel>
+                        </Grid>
+                        <CheckBox x:Name="SpreadDownloadOnlyBox" Content="Download only (don't upload to this site)" Margin="0,0,0,8"/>
+                        <TextBlock Text="Affiliations (comma-separated groups):" Margin="0,0,0,2"/>
+                        <TextBox x:Name="SpreadAffilsBox" Margin="0,0,0,4"
+                                 ToolTip="Groups affiliated with this site — their releases get auto-allowed (highest priority in rules engine)"/>
+                    </StackPanel>
+                </Expander>
+
+                <!-- Site Skiplist -->
+                <Expander Header="Site Skiplist" Margin="0,0,0,8">
+                    <StackPanel Margin="0,6,0,0">
+                        <DataGrid x:Name="SiteSkiplistGrid"
+                                  AutoGenerateColumns="False" CanUserAddRows="False"
+                                  SelectionMode="Single" GridLinesVisibility="Horizontal"
+                                  HeadersVisibility="Column" Height="140" Margin="0,0,0,8">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Pattern" Binding="{Binding Pattern}" Width="140"/>
+                                <DataGridCheckBoxColumn Header="Rx" Binding="{Binding IsRegex}" Width="40"/>
+                                <DataGridTextColumn Header="Expression" Binding="{Binding Expression}" Width="*"/>
+                                <DataGridTextColumn Header="Action" Binding="{Binding Action}" Width="65"/>
+                                <DataGridCheckBoxColumn Header="Dirs" Binding="{Binding MatchDirectories}" Width="40"/>
+                                <DataGridCheckBoxColumn Header="Files" Binding="{Binding MatchFiles}" Width="45"/>
+                                <DataGridTextColumn Header="Section" Binding="{Binding Section}" Width="70"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                            <Button Content="Add Rule" Click="AddSiteSkiplistRule_Click" Padding="12,4" Margin="0,0,6,0"/>
+                            <Button Content="Remove" Click="RemoveSiteSkiplistRule_Click" Padding="12,4" Margin="0,0,6,0"/>
+                            <Button Content="Add Defaults" Click="AddDefaultSkiplistRules_Click" Padding="12,4"
+                                    ToolTip="Add common scene skiplist rules (incomplete, sample, proof, etc.)"/>
+                            <Button Content="Import..." Click="ImportSiteSkiplist_Click" Padding="12,4" Margin="6,0,0,0"/>
+                            <Button Content="Detect Rules" Click="DetectSiteRules_Click" Padding="12,4" Margin="6,0,0,0"
+                                    ToolTip="Run SITE RULES on the server and auto-configure slots, skiplist, and affils"/>
+                        </StackPanel>
+                        <Button Content="Test Rules..." Click="TestRules_Click" Padding="12,4"
+                                HorizontalAlignment="Left"
+                                Style="{StaticResource SecondaryButton}"
+                                ToolTip="Test how current rules evaluate against a sample release name"/>
+                    </StackPanel>
+                </Expander>
 
                 <!-- Metadata Filter (IMDb/TVMaze) -->
                 <Expander Header="Metadata Filter (IMDb/TVMaze — no API key required)" Margin="0,0,0,8">
@@ -398,32 +424,6 @@
                                  ToolTip="e.g. Documentary, Reality-TV"/>
                         <CheckBox x:Name="MetaSkipEndedBox" Content="Skip ended/cancelled TV shows"
                                   Margin="0,0,0,4"/>
-                    </StackPanel>
-                </Expander>
-
-                <!-- Section Mappings (RaceTrade-style IRC → internal section mapping) -->
-                <Expander Header="Section Mappings (IRC → internal section with tag rules)" Margin="0,0,0,12">
-                    <StackPanel Margin="0,6,0,0">
-                        <TextBlock FontSize="11" Foreground="{DynamicResource ForegroundDimBrush}"
-                                   TextWrapping="Wrap" Margin="0,0,0,6"
-                                   Text="Map IRC-announced section names to this site's internal section keys. First enabled mapping whose IrcSection and TriggerRegex both match wins. Tag rules apply only to the matched mapping."/>
-                        <DataGrid x:Name="SectionMappingsGrid"
-                                  AutoGenerateColumns="False" CanUserAddRows="False"
-                                  SelectionMode="Single" GridLinesVisibility="Horizontal"
-                                  HeadersVisibility="Column" Height="100" Margin="0,0,0,6">
-                            <DataGrid.Columns>
-                                <DataGridCheckBoxColumn Header="On" Binding="{Binding Enabled}" Width="35"/>
-                                <DataGridTextColumn Header="IRC Section" Binding="{Binding IrcSection}" Width="110"/>
-                                <DataGridTextColumn Header="Remote Section" Binding="{Binding RemoteSection}" Width="110"/>
-                                <DataGridTextColumn Header="Trigger Regex" Binding="{Binding TriggerRegex}" Width="*"/>
-                            </DataGrid.Columns>
-                        </DataGrid>
-                        <StackPanel Orientation="Horizontal">
-                            <Button Content="Add Mapping" Click="AddSectionMapping_Click" Padding="12,4" Margin="0,0,6,0"/>
-                            <Button Content="Remove" Click="RemoveSectionMapping_Click" Padding="12,4" Margin="0,0,6,0"/>
-                            <Button Content="Edit Tag Rules..." Click="EditTagRules_Click" Padding="12,4"
-                                    ToolTip="Per-mapping tag rules (DENY/ALLOW) applied only to this mapping"/>
-                        </StackPanel>
                     </StackPanel>
                 </Expander>
 
