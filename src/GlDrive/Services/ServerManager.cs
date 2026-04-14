@@ -342,7 +342,7 @@ public class ServerManager : IDisposable
         await ircService.StartAsync();
 
         // Start pattern detector for learning announce formats
-        var detector = new IrcPatternDetector(ircService);
+        var detector = new IrcPatternDetector(ircService, serverConfig.Id);
         _patternDetectors[serverConfig.Id] = detector;
 
         // Wire IRC announce listener for auto-racing

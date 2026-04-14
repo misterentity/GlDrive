@@ -716,18 +716,28 @@ public partial class ServerEditDialog : Window
             var model = savedConfig.Downloads.OpenRouterModel;
             if (string.IsNullOrEmpty(model)) model = "openai/gpt-oss-120b:free";
 
-            // Pull IRC announce context from the pattern detector. If IRC is
-            // connected the detector has been buffering channel messages — this
-            // gives the model the site's actual announce format and lets it
-            // spot IRC-only section names that need SectionMapping entries.
+            // Pull IRC announce context. First try the persistent log store
+            // (works even on cold start), then fall back to the live in-memory
+            // buffer for anything newer. This gives the model the site's actual
+            // announce format and lets it spot IRC-only section names that need
+            // SectionMapping entries.
             List<string> ircMessages = [];
             List<DetectedPattern> ircPatterns = [];
-            if (_serverManager != null && !string.IsNullOrEmpty(_serverConfig.Id))
+            if (!string.IsNullOrEmpty(_serverConfig.Id))
             {
                 try
                 {
-                    ircMessages = _serverManager.GetRecentIrcMessages(_serverConfig.Id, 60);
-                    ircPatterns = _serverManager.DetectIrcPatterns(_serverConfig.Id);
+                    // Persistent log survives restarts — primary source
+                    ircMessages = Irc.IrcLogStore.ReadRecent(_serverConfig.Id, 100);
+
+                    // Live buffer + detected patterns (only if IRC currently connected)
+                    if (_serverManager != null)
+                    {
+                        var live = _serverManager.GetRecentIrcMessages(_serverConfig.Id, 60);
+                        if (live.Count > 0 && ircMessages.Count == 0)
+                            ircMessages = live;
+                        ircPatterns = _serverManager.DetectIrcPatterns(_serverConfig.Id);
+                    }
                 }
                 catch (Exception ex) { Log.Debug(ex, "Failed to gather IRC context for AI"); }
             }

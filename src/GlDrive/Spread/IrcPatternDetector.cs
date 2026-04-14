@@ -18,6 +18,7 @@ namespace GlDrive.Spread;
 public class IrcPatternDetector : IDisposable
 {
     private readonly IrcService _ircService;
+    private readonly string _serverId;
     private readonly Lock _lock = new();
 
     // channel -> nick -> message queue
@@ -44,10 +45,57 @@ public class IrcPatternDetector : IDisposable
 
     public event Action<string, List<DetectedPattern>>? PatternsDetected; // channel, patterns
 
-    public IrcPatternDetector(IrcService ircService)
+    public IrcPatternDetector(IrcService ircService, string serverId = "")
     {
         _ircService = ircService;
+        _serverId = serverId;
         _ircService.MessageReceived += OnMessage;
+
+        // Rehydrate the in-memory buffer from today's persistent log so
+        // pattern detection has history immediately on startup (instead of
+        // waiting for 20+ fresh announces after reconnect).
+        if (!string.IsNullOrEmpty(_serverId))
+        {
+            try { RehydrateFromLog(); }
+            catch (Exception ex) { Log.Debug(ex, "IrcPatternDetector: rehydrate failed"); }
+        }
+    }
+
+    private void RehydrateFromLog()
+    {
+        var lines = IrcLogStore.ReadRecent(_serverId, 500);
+        if (lines.Count == 0) return;
+
+        lock (_lock)
+        {
+            foreach (var line in lines)
+            {
+                // Format: HH:mm:ss\t#channel\t<nick>\ttext
+                var parts = line.Split('\t', 4);
+                if (parts.Length < 4) continue;
+                var channel = parts[1];
+                var nick = parts[2];
+                var text = parts[3];
+                if (!channel.StartsWith('#') || string.IsNullOrEmpty(nick)) continue;
+
+                if (!_buffer.TryGetValue(channel, out var channelBuffer))
+                {
+                    channelBuffer = new Dictionary<string, Queue<string>>(StringComparer.OrdinalIgnoreCase);
+                    _buffer[channel] = channelBuffer;
+                }
+                if (channelBuffer.Count >= MaxNicksPerChannel && !channelBuffer.ContainsKey(nick))
+                    continue;
+                if (!channelBuffer.TryGetValue(nick, out var msgs))
+                {
+                    msgs = new Queue<string>();
+                    channelBuffer[nick] = msgs;
+                }
+                msgs.Enqueue(text);
+                while (msgs.Count > MaxBufferPerNick) msgs.Dequeue();
+            }
+        }
+        Log.Information("IrcPatternDetector: rehydrated {Count} messages from disk for {Server}",
+            lines.Count, _serverId);
     }
 
     private void OnMessage(string target, IrcMessageItem message)
@@ -56,6 +104,9 @@ public class IrcPatternDetector : IDisposable
         if (!target.StartsWith('#')) return;
         if (message.Type != IrcMessageType.Normal && message.Type != IrcMessageType.Notice) return;
         if (string.IsNullOrWhiteSpace(message.Text)) return;
+
+        // Persist to disk so AI Setup + restarted sessions still have context
+        IrcLogStore.Append(_serverId, target, message.Nick, message.Text);
 
         lock (_lock)
         {

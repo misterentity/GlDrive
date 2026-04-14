@@ -64,6 +64,7 @@ public partial class App
 
         // Clean up .old files and stale update marker from a previous update
         UpdateChecker.CleanupOldUpdateFiles();
+        Irc.IrcLogStore.PruneOld();
         try { File.Delete(Path.Combine(ConfigManager.AppDataPath, ".updating")); } catch { }
 
         // Screenshot mode — capture all UI windows to PNGs and exit
