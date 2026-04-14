@@ -17,6 +17,25 @@ public class IrcConfig
     public FishMode FishMode { get; set; } = FishMode.CBC;
     public List<IrcChannelConfig> Channels { get; set; } = [];
     public List<IrcAnnounceRule> AnnounceRules { get; set; } = [];
+    public RequestFillerConfig RequestFiller { get; set; } = new();
+}
+
+/// <summary>
+/// RaceTrade-style auto request filler: detects request announces in IRC
+/// and fills them by racing a matching release from another connected server
+/// into this server's request path.
+/// </summary>
+public class RequestFillerConfig
+{
+    public bool Enabled { get; set; }
+    /// <summary>Regex matching request announces. Must capture named group "release".</summary>
+    public string Pattern { get; set; } = @"!request\s+(?<release>\S+)";
+    /// <summary>IRC channel to monitor (empty = all channels).</summary>
+    public string Channel { get; set; } = "";
+    /// <summary>Max number of request fills per hour (rate limit).</summary>
+    public int MaxPerHour { get; set; } = 10;
+    /// <summary>Minimum seconds between request fills.</summary>
+    public int CooldownSeconds { get; set; } = 60;
 }
 
 public class IrcChannelConfig

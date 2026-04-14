@@ -21,6 +21,26 @@ public class SiteSpreadConfig
     public bool DownloadOnly { get; set; }
     public List<SkiplistRule> Skiplist { get; set; } = [];
     public List<string> Affils { get; set; } = [];
+
+    /// <summary>
+    /// RaceTrade-style mappings: IRC section → internal/remote section with
+    /// per-mapping trigger regex and tag rules.
+    /// When set, takes precedence over Sections fuzzy matching for IRC announces.
+    /// </summary>
+    public List<SectionMapping> SectionMappings { get; set; } = [];
+}
+
+/// <summary>
+/// Maps an IRC-announced section name to a remote section path on this site,
+/// filtered by a release-name trigger regex. Tag rules apply only to this mapping.
+/// </summary>
+public class SectionMapping
+{
+    public string IrcSection { get; set; } = "";   // e.g., "TV-1080P" (from announce)
+    public string RemoteSection { get; set; } = ""; // e.g., "X264-HD" (local section key in Sections dict)
+    public string TriggerRegex { get; set; } = ".*"; // release-name filter for this mapping
+    public List<SkiplistRule> TagRules { get; set; } = [];
+    public bool Enabled { get; set; } = true;
 }
 
 public enum SitePriority { VeryLow = 0, Low = 625, Normal = 1250, High = 1875, VeryHigh = 2500 }

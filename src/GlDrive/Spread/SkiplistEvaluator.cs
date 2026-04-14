@@ -36,6 +36,50 @@ public class SkiplistEvaluator
     }
 
     /// <summary>
+    /// RaceTrade-style tiered evaluation with affiliate auto-allow and
+    /// per-mapping tag rules.
+    ///
+    /// Priority:
+    ///   0. Affiliate groups → immediate ALLOW (highest priority)
+    ///   1. Site section DENY rules (rules scoped to the current section with action=Deny)
+    ///   2. Tag rules for the matched mapping (DENY first, then ALLOW)
+    ///   3. Site section ALLOW rules (remaining site rules)
+    ///   4. Global DENY then ALLOW
+    ///   5. Default ALLOW
+    /// </summary>
+    public SkiplistAction EvaluateTiered(string fileName, bool isDir, bool inRace,
+        string? section,
+        IReadOnlyList<SkiplistRule> siteRules,
+        IReadOnlyList<SkiplistRule> tagRules,
+        IReadOnlyList<SkiplistRule> globalRules,
+        IReadOnlyList<string> affils,
+        ParsedRelease? parsed)
+    {
+        // 0. Affiliate auto-allow
+        if (parsed?.Group is { } g && affils.Any(a => string.Equals(a, g, StringComparison.OrdinalIgnoreCase)))
+            return SkiplistAction.Allow;
+
+        // 1. Site section DENY rules
+        var denyOnly = EvaluateRulesFiltered(fileName, isDir, inRace, section, siteRules, parsed, onlyDeny: true);
+        if (denyOnly.HasValue) return denyOnly.Value;
+
+        // 2. Tag rules (both DENY and ALLOW)
+        var tag = EvaluateRules(fileName, isDir, inRace, section, tagRules, parsed);
+        if (tag.HasValue) return tag.Value;
+
+        // 3. Site section ALLOW rules
+        var allowOnly = EvaluateRulesFiltered(fileName, isDir, inRace, section, siteRules, parsed, onlyDeny: false);
+        if (allowOnly.HasValue) return allowOnly.Value;
+
+        // 4. Global rules
+        var global = EvaluateRules(fileName, isDir, inRace, section, globalRules, parsed);
+        if (global.HasValue) return global.Value;
+
+        // 5. Default allow
+        return SkiplistAction.Allow;
+    }
+
+    /// <summary>
     /// Evaluates skiplist rules and returns a detailed trace of every rule checked.
     /// Used for the race history detail popup.
     /// </summary>
@@ -102,6 +146,28 @@ public class SkiplistEvaluator
     {
         foreach (var rule in rules)
         {
+            if (isDir && !rule.MatchDirectories) continue;
+            if (!isDir && !rule.MatchFiles) continue;
+            if (rule.Scope == SkiplistScope.InRace && !inRace) continue;
+            if (rule.Section != null && !rule.Section.Equals(section, StringComparison.OrdinalIgnoreCase)) continue;
+
+            var matched = !string.IsNullOrWhiteSpace(rule.Expression)
+                ? RuleExpressionEvaluator.Matches(rule.Expression, fileName, section, parsed)
+                : Matches(fileName, rule.Pattern, rule.IsRegex);
+
+            if (matched)
+                return rule.Action;
+        }
+        return null;
+    }
+
+    private SkiplistAction? EvaluateRulesFiltered(string fileName, bool isDir, bool inRace,
+        string? section, IReadOnlyList<SkiplistRule> rules, ParsedRelease? parsed, bool onlyDeny)
+    {
+        foreach (var rule in rules)
+        {
+            if (onlyDeny && rule.Action != SkiplistAction.Deny) continue;
+            if (!onlyDeny && rule.Action == SkiplistAction.Deny) continue;
             if (isDir && !rule.MatchDirectories) continue;
             if (!isDir && !rule.MatchFiles) continue;
             if (rule.Scope == SkiplistScope.InRace && !inRace) continue;
