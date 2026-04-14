@@ -23,6 +23,7 @@ public class IrcAnnounceListener : IDisposable
     private readonly LinkedList<string> _recentAnnounceOrder = new();
     private readonly HashSet<string> _recentAnnounces = new(StringComparer.OrdinalIgnoreCase);
     private readonly Lock _lock = new();
+    private readonly bool _defaultAutoRace;
 
     // Built-in pattern for common glftpd verbose announces:
     //   [ NEW ] in [ section ] Release.Name OK pred 2s ago.
@@ -34,11 +35,13 @@ public class IrcAnnounceListener : IDisposable
 
     public event Action<string, string, string, bool>? ReleaseAnnounced; // serverId, section, releaseName, autoRace
 
-    public IrcAnnounceListener(string serverId, IrcService ircService, List<IrcAnnounceRule> rules)
+    public IrcAnnounceListener(string serverId, IrcService ircService,
+        List<IrcAnnounceRule> rules, bool defaultAutoRace)
     {
         _serverId = serverId;
         _ircService = ircService;
         _rules = rules;
+        _defaultAutoRace = defaultAutoRace;
 
         // Pre-compile regex patterns
         foreach (var rule in rules.Where(r => r.Enabled && !string.IsNullOrEmpty(r.Pattern)))
@@ -55,12 +58,12 @@ public class IrcAnnounceListener : IDisposable
             }
         }
 
-        if (_compiledRules.Count > 0)
-        {
-            _ircService.MessageReceived += OnMessage;
-            Log.Information("IRC announce listener active for {Server} with {Count} rules",
-                _serverId, _compiledRules.Count);
-        }
+        // Always subscribe — the built-in verbose pattern works without any custom rules.
+        // Without this, users must configure announce rules before the announce pipeline
+        // becomes live, which defeats the purpose of shipping a built-in pattern.
+        _ircService.MessageReceived += OnMessage;
+        Log.Information("IRC announce listener active for {Server} ({Count} custom rules, builtin={Builtin})",
+            _serverId, _compiledRules.Count, _defaultAutoRace ? "autoRace" : "logOnly");
     }
 
     private int _traceCount;
@@ -86,13 +89,16 @@ public class IrcAnnounceListener : IDisposable
             var section = verboseMatch.Groups["section"].Value.Trim();
             var release = verboseMatch.Groups["release"].Value;
 
-            // Find any enabled rule matching this channel to get autoRace setting
+            // If user has enabled rules for this channel, prefer their autoRace setting.
+            // Otherwise fall back to the global default (from SpreadConfig.AutoRaceOnNotification)
+            // so the built-in pattern is functional without rule configuration.
             var matchingRule = _rules.FirstOrDefault(r => r.Enabled &&
                 (string.IsNullOrEmpty(r.Channel) || target.Equals(r.Channel, StringComparison.OrdinalIgnoreCase)));
+            var autoRace = matchingRule?.AutoRace ?? _defaultAutoRace;
 
-            if (matchingRule != null && !string.IsNullOrEmpty(release) && release.Length >= 5)
+            if (!string.IsNullOrEmpty(release) && release.Length >= 5)
             {
-                if (TryFireAnnounce(section, release, target, message.Text, matchingRule.AutoRace))
+                if (TryFireAnnounce(section, release, target, message.Text, autoRace))
                     return;
             }
         }
