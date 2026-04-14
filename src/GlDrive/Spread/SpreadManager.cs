@@ -92,6 +92,12 @@ public class SpreadManager : IDisposable
         releaseName = SanitizeFtpPath(releaseName);
         section = SanitizeFtpPath(section);
 
+        // Dedup the participant list — callers may pass the same server twice
+        // (e.g. RequestFiller passing [sourceId, requesterId] where they match,
+        // or UI code merging lists). A dup would crash StartRaceInternal's
+        // ToDictionary with ArgumentException.
+        serverIds = serverIds.Distinct().ToList();
+
         var maxRaces = Math.Max(_config.Spread.MaxConcurrentRaces, 1);
         lock (_lock)
         {
