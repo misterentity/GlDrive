@@ -21,6 +21,13 @@ public partial class ExtractorWindow : Window
     private CancellationTokenSource? _cts;
     private bool _extracting;
 
+    // True once the constructor has finished initializing the window.
+    // Guards Settings_Changed so that the Checked event handlers on the
+    // checkboxes (wired via XAML) don't fire SaveSettings during
+    // InitializeComponent and LoadSettings, when not all UI controls exist
+    // yet OR when internal state like _watchEnabled hasn't been restored.
+    private bool _initialized;
+
     // Watch folder monitoring
     private readonly List<FileSystemWatcher> _watchers = new();
     private readonly List<string> _watchFolders = new();
@@ -54,9 +61,18 @@ public partial class ExtractorWindow : Window
         Archives.CollectionChanged += (_, _) => UpdateDropHint();
         UpdateDropHint();
         LoadSettings();
+        _initialized = true; // Enable Settings_Changed → SaveSettings from here on
     }
 
-    private void Settings_Changed(object sender, RoutedEventArgs e) => SaveSettings();
+    private void Settings_Changed(object sender, RoutedEventArgs e)
+    {
+        // Ignore events fired during XAML parsing / LoadSettings — the UI
+        // controls or internal state may not be fully set up yet, and any
+        // save at that point would both crash (NullReferenceException) and
+        // corrupt the on-disk settings with intermediate state.
+        if (!_initialized) return;
+        SaveSettings();
+    }
 
     private void UpdateDropHint() =>
         DropHint.Visibility = Archives.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -728,16 +744,31 @@ public partial class ExtractorWindow : Window
                 }
             }
 
-            if (!File.Exists(SettingsPath)) return;
+            if (!File.Exists(SettingsPath))
+            {
+                Log.Debug("ExtractorWindow: no settings file at {Path}", SettingsPath);
+                return;
+            }
             var json = File.ReadAllText(SettingsPath);
             var s = JsonSerializer.Deserialize<ExtractorSettings>(json, _jsonOptions);
-            if (s == null) return;
+            if (s == null)
+            {
+                Log.Warning("ExtractorWindow: settings file parsed to null — {Path}", SettingsPath);
+                return;
+            }
 
             foreach (var f in s.WatchFolders.Where(f => !string.IsNullOrWhiteSpace(f) && Directory.Exists(f)))
                 _watchFolders.Add(f);
 
             if (_watchFolders.Count > 0)
                 WatchFoldersText.Text = string.Join("; ", _watchFolders);
+
+            // Set _watchEnabled BEFORE programmatically assigning IsChecked on
+            // the checkboxes. Those assignments raise Checked events that would
+            // re-enter SaveSettings (via Settings_Changed) if _initialized were
+            // somehow true here; defensive either way — the saved state will
+            // have WatchEnabled set correctly.
+            _watchEnabled = s.WatchEnabled && _watchFolders.Count > 0;
 
             ChkDeleteAfter.IsChecked = s.DeleteAfterExtract;
             ChkRecursive.IsChecked = s.ScanSubfolders;
@@ -747,10 +778,13 @@ public partial class ExtractorWindow : Window
             if (!string.IsNullOrEmpty(s.CustomOutputPath))
                 CustomOutputPath.Text = s.CustomOutputPath;
 
+            Log.Information(
+                "ExtractorWindow: loaded settings — watchEnabled={We}, folders={Nf}, deleteAfter={Da}, recursive={Rc}",
+                _watchEnabled, _watchFolders.Count, s.DeleteAfterExtract, s.ScanSubfolders);
+
             // Auto-start watchers if they were enabled
-            if (s.WatchEnabled && _watchFolders.Count > 0)
+            if (_watchEnabled)
             {
-                _watchEnabled = true;
                 WatchToggle.Content = "On";
                 WatchToggle.IsChecked = true;
                 foreach (var folder in _watchFolders)
@@ -880,21 +914,31 @@ public partial class ExtractorWindow : Window
             if (!_watchProcessed.Add(path)) return;
         }
 
+        Log.Information("Extractor: watched archive detected — {Path}", path);
+
         // Wait for the file to finish being written (e.g. download completing)
         await WaitForFileReady(path);
 
-        if (!File.Exists(path)) return;
+        if (!File.Exists(path))
+        {
+            Log.Warning("Extractor: file disappeared before it became ready — {Path}", path);
+            return;
+        }
 
         Dispatcher.Invoke(() =>
         {
             var existing = Archives.Any(a => a.FilePath.Equals(path, StringComparison.OrdinalIgnoreCase));
-            if (existing) return;
+            if (existing)
+            {
+                Log.Debug("Extractor: already in queue — {Path}", path);
+                return;
+            }
 
             var item = CreateItem(path);
             Archives.Add(item);
             UpdateStatus();
 
-            // Auto-extract immediately
+            Log.Information("Extractor: queued for auto-extract — {File}", item.FileName);
             _ = AutoExtractItem(item);
         });
     }
@@ -968,14 +1012,23 @@ public partial class ExtractorWindow : Window
             deleteAfter = ChkDeleteAfter.IsChecked == true;
         });
 
+        Log.Information(
+            "Extractor: auto-extract starting — {File} → {Dir} (deleteAfter={Delete})",
+            item.FileName, outputDir, deleteAfter);
+
         try
         {
             await ExtractArchiveAsync(item, outputDir, password, overwriteIdx, CancellationToken.None);
             item.Status = "Done";
             item.Progress = 100;
 
+            Log.Information("Extractor: auto-extract completed — {File}", item.FileName);
+
             if (deleteAfter)
+            {
+                Log.Information("Extractor: deleting source archive set for {File}", item.FileName);
                 await Task.Run(() => DeleteSourceFiles(item.FilePath));
+            }
         }
         catch (Exception ex)
         {
