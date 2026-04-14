@@ -18,6 +18,7 @@ public partial class ServerEditDialog : Window
 {
     private readonly ServerConfig _serverConfig;
     private readonly ObservableCollection<SkiplistRule> _siteSkiplist = new();
+    private readonly ObservableCollection<SectionMapping> _sectionMappings = new();
     private readonly Services.ServerManager? _serverManager;
     private string _password = "";
 
@@ -31,6 +32,7 @@ public partial class ServerEditDialog : Window
         _serverConfig = existing ?? new ServerConfig();
 
         SiteSkiplistGrid.ItemsSource = _siteSkiplist;
+        SectionMappingsGrid.ItemsSource = _sectionMappings;
 
         // Populate drive letter combo
         var used = DriveInfo.GetDrives().Select(d => d.Name[0]).ToHashSet();
@@ -148,6 +150,16 @@ public partial class ServerEditDialog : Window
 
             foreach (var rule in existing.SpreadSite.Skiplist)
                 _siteSkiplist.Add(rule);
+
+            foreach (var mapping in existing.SpreadSite.SectionMappings)
+                _sectionMappings.Add(mapping);
+
+            // Request Filler
+            RequestFillerEnabledBox.IsChecked = existing.Irc.RequestFiller.Enabled;
+            RequestFillerPatternBox.Text = existing.Irc.RequestFiller.Pattern;
+            RequestFillerChannelBox.Text = existing.Irc.RequestFiller.Channel;
+            RequestFillerMaxPerHourBox.Text = existing.Irc.RequestFiller.MaxPerHour.ToString();
+            RequestFillerCooldownBox.Text = existing.Irc.RequestFiller.CooldownSeconds.ToString();
 
             // Load stored password hint
             var storedPw = CredentialStore.GetPassword(existing.Connection.Host, existing.Connection.Port, existing.Connection.Username);
@@ -380,6 +392,18 @@ public partial class ServerEditDialog : Window
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(s => s.Length > 0).ToList();
         _serverConfig.SpreadSite.Skiplist = _siteSkiplist.ToList();
+        _serverConfig.SpreadSite.SectionMappings = _sectionMappings.ToList();
+
+        // Request Filler
+        _serverConfig.Irc.RequestFiller.Enabled = RequestFillerEnabledBox.IsChecked == true;
+        var rfPattern = RequestFillerPatternBox.Text?.Trim();
+        if (!string.IsNullOrEmpty(rfPattern))
+            _serverConfig.Irc.RequestFiller.Pattern = rfPattern;
+        _serverConfig.Irc.RequestFiller.Channel = RequestFillerChannelBox.Text?.Trim() ?? "";
+        _serverConfig.Irc.RequestFiller.MaxPerHour =
+            int.TryParse(RequestFillerMaxPerHourBox.Text, out var rfMax) ? Math.Clamp(rfMax, 1, 100) : 10;
+        _serverConfig.Irc.RequestFiller.CooldownSeconds =
+            int.TryParse(RequestFillerCooldownBox.Text, out var rfCd) ? Math.Clamp(rfCd, 0, 3600) : 60;
 
         // IRC announce rules
         _serverConfig.Irc.AnnounceRules = (IrcAnnounceRulesBox.Text ?? "")
@@ -1018,6 +1042,46 @@ public partial class ServerEditDialog : Window
     {
         if (SiteSkiplistGrid.SelectedItem is SkiplistRule rule)
             _siteSkiplist.Remove(rule);
+    }
+
+    private void AddSectionMapping_Click(object sender, RoutedEventArgs e)
+    {
+        _sectionMappings.Add(new SectionMapping { TriggerRegex = ".*", Enabled = true });
+    }
+
+    private void RemoveSectionMapping_Click(object sender, RoutedEventArgs e)
+    {
+        if (SectionMappingsGrid.SelectedItem is SectionMapping m)
+            _sectionMappings.Remove(m);
+    }
+
+    private void EditTagRules_Click(object sender, RoutedEventArgs e)
+    {
+        if (SectionMappingsGrid.SelectedItem is not SectionMapping mapping)
+        {
+            MessageBox.Show("Select a mapping first.", "Tag Rules",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var dlg = new TagRulesDialog(mapping) { Owner = this };
+        dlg.ShowDialog();
+    }
+
+    private void TestRules_Click(object sender, RoutedEventArgs e)
+    {
+        // Snapshot current unsaved rules into a temp site config for evaluation
+        var tempSite = new SiteSpreadConfig
+        {
+            Skiplist = _siteSkiplist.ToList(),
+            SectionMappings = _sectionMappings.ToList(),
+            Affils = (SpreadAffilsBox.Text ?? "")
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList()
+        };
+
+        var dlg = new RuleTestDialog(tempSite) { Owner = this };
+        dlg.ShowDialog();
     }
 
     private void ImportSiteSkiplist_Click(object sender, RoutedEventArgs e)
