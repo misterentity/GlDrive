@@ -154,6 +154,17 @@ public partial class ServerEditDialog : Window
             foreach (var mapping in existing.SpreadSite.SectionMappings)
                 _sectionMappings.Add(mapping);
 
+            // Metadata filter
+            var mf = existing.SpreadSite.MetadataFilter;
+            MetaFilterEnabledBox.IsChecked = mf.Enabled;
+            MetaMinRatingBox.Text = mf.MinImdbRating.ToString("0.#",
+                System.Globalization.CultureInfo.InvariantCulture);
+            MetaMinVotesBox.Text = mf.MinVotes.ToString();
+            MetaTimeoutBox.Text = mf.LookupTimeoutSeconds.ToString();
+            MetaAllowGenresBox.Text = mf.AllowGenres;
+            MetaDenyGenresBox.Text = mf.DenyGenres;
+            MetaSkipEndedBox.IsChecked = mf.SkipEndedShows;
+
             // Request Filler
             RequestFillerEnabledBox.IsChecked = existing.Irc.RequestFiller.Enabled;
             RequestFillerPatternBox.Text = existing.Irc.RequestFiller.Pattern;
@@ -393,6 +404,21 @@ public partial class ServerEditDialog : Window
             .Where(s => s.Length > 0).ToList();
         _serverConfig.SpreadSite.Skiplist = _siteSkiplist.ToList();
         _serverConfig.SpreadSite.SectionMappings = _sectionMappings.ToList();
+
+        // Metadata filter
+        var metaFilter = _serverConfig.SpreadSite.MetadataFilter;
+        metaFilter.Enabled = MetaFilterEnabledBox.IsChecked == true;
+        metaFilter.MinImdbRating = double.TryParse(MetaMinRatingBox.Text,
+            System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out var mr)
+            ? Math.Clamp(mr, 0, 10) : 0;
+        metaFilter.MinVotes = int.TryParse(MetaMinVotesBox.Text, out var mv)
+            ? Math.Max(0, mv) : 0;
+        metaFilter.LookupTimeoutSeconds = int.TryParse(MetaTimeoutBox.Text, out var mt)
+            ? Math.Clamp(mt, 1, 60) : 5;
+        metaFilter.AllowGenres = MetaAllowGenresBox.Text?.Trim() ?? "";
+        metaFilter.DenyGenres = MetaDenyGenresBox.Text?.Trim() ?? "";
+        metaFilter.SkipEndedShows = MetaSkipEndedBox.IsChecked == true;
 
         // Request Filler
         _serverConfig.Irc.RequestFiller.Enabled = RequestFillerEnabledBox.IsChecked == true;

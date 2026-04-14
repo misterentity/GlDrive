@@ -16,6 +16,7 @@ public class SpreadManager : IDisposable
     private readonly SpeedTracker _speedTracker = new();
     private readonly SkiplistEvaluator _skiplist = new();
     private readonly RaceHistoryStore _history = new();
+    private readonly MetadataFilterService _metadataFilter;
     private readonly Lock _lock = new();
     private bool _disposed;
 
@@ -37,6 +38,7 @@ public class SpreadManager : IDisposable
     public SpreadManager(AppConfig config)
     {
         _config = config;
+        _metadataFilter = new MetadataFilterService(config);
         _history.Load();
     }
 
@@ -318,16 +320,47 @@ public class SpreadManager : IDisposable
             return;
         }
 
-        // Pre-check: evaluate release name against directory-level skiplist rules.
-        // Uses RaceTrade-style tiered evaluation with section mapping, tag rules,
-        // and affiliate auto-allow.
+        // Pre-check: rules evaluation + metadata filter happen async (metadata
+        // filter may do an HTTP call). Fire and forget — TryAutoRace stays sync
+        // for its callers, but the gating runs in the background.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await TryAutoRaceInternalAsync(category, releaseName, serverIds,
+                    sourceServerId, sourcePath);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Auto-race pre-check failed for {Release}", releaseName);
+                AutoRaceAttempted?.Invoke(category, releaseName, $"Pre-check error: {ex.Message}");
+            }
+        });
+    }
+
+    private async Task TryAutoRaceInternalAsync(string category, string releaseName,
+        List<string> serverIds, string? sourceServerId, string? sourcePath)
+    {
         var parsed = SceneNameParser.Parse(releaseName);
+        var debug = _config.Spread.DebugMode;
+
         foreach (var serverId in serverIds)
         {
             var serverConfig = _config.Servers.First(s => s.Id == serverId);
             var mapping = SectionMapper.Resolve(serverConfig.SpreadSite, category, releaseName);
             var effectiveSection = mapping?.RemoteSection ?? category;
             var tagRules = mapping?.TagRules ?? (IReadOnlyList<SkiplistRule>)Array.Empty<SkiplistRule>();
+
+            if (debug)
+            {
+                var (traceAction, trace) = _skiplist.EvaluateWithTrace(
+                    releaseName, true, false, effectiveSection,
+                    serverConfig.SpreadSite.Skiplist, _config.Spread.GlobalSkiplist, parsed);
+                Log.Information("[DEBUG] {Server} rules trace for {Release}: action={Action}, " +
+                                "evaluated {Count} rules", serverConfig.Name, releaseName, traceAction, trace.Count);
+                foreach (var t in trace.Where(x => x.IsMatch || x.Result.StartsWith("MATCHED")))
+                    Log.Information("[DEBUG]   MATCH: {Pattern} → {Result}", t.Pattern, t.Result);
+            }
 
             var action = _skiplist.EvaluateTiered(releaseName, true, false,
                 effectiveSection,
@@ -342,6 +375,24 @@ public class SpreadManager : IDisposable
                 Log.Debug("Auto-race denied by rules on {Server}: {Release}", serverConfig.Name, releaseName);
                 AutoRaceAttempted?.Invoke(category, releaseName, $"Denied by rules on {serverConfig.Name}");
                 return;
+            }
+
+            // Metadata filter (per-site) — fails OPEN on error/timeout
+            var metaFilter = serverConfig.SpreadSite.MetadataFilter;
+            if (metaFilter.Enabled)
+            {
+                var verdict = await _metadataFilter.EvaluateAsync(metaFilter, releaseName, parsed);
+                if (debug)
+                    Log.Information("[DEBUG] {Server} metadata filter: allowed={Allowed} reason={Reason}",
+                        serverConfig.Name, verdict.Allowed, verdict.Reason);
+                if (!verdict.Allowed)
+                {
+                    Log.Debug("Auto-race denied by metadata filter on {Server}: {Release} ({Reason})",
+                        serverConfig.Name, releaseName, verdict.Reason);
+                    AutoRaceAttempted?.Invoke(category, releaseName,
+                        $"Metadata filter denied on {serverConfig.Name}: {verdict.Reason}");
+                    return;
+                }
             }
         }
 
@@ -499,6 +550,8 @@ public class SpreadManager : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+
+        _metadataFilter.Dispose();
 
         lock (_lock)
         {

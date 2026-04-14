@@ -190,7 +190,10 @@
                         <CheckBox Content="Auto-race when new releases are detected"
                                   IsChecked="{Binding SpreadAutoRace}" Margin="0,0,0,4"/>
                         <CheckBox Content="Show tray notification on race completion"
-                                  IsChecked="{Binding SpreadNotifyComplete}" Margin="0,0,0,12"/>
+                                  IsChecked="{Binding SpreadNotifyComplete}" Margin="0,0,0,4"/>
+                        <CheckBox Content="Debug mode (log full rules engine trace for every release)"
+                                  IsChecked="{Binding SpreadDebugMode}" Margin="0,0,0,12"
+                                  ToolTip="When on, SpreadManager logs every rule evaluation at Info level. Useful for diagnosing filter decisions."/>
 
                         <Separator Margin="0,0,0,12"/>
                         <TextBlock Text="Global Skiplist" FontWeight="SemiBold" Margin="0,0,0,8"/>
