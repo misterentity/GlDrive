@@ -17,6 +17,7 @@ public class ServerManager : IDisposable
     private readonly ConcurrentDictionary<string, IrcService> _ircServices = new();
     private readonly Dictionary<string, IrcAnnounceListener> _announceListeners = new();
     private readonly Dictionary<string, IrcPatternDetector> _patternDetectors = new();
+    private readonly Dictionary<string, RequestFiller> _requestFillers = new();
     private SpreadManager? _spreadManager;
 
     public SpreadManager? Spread => _spreadManager;
@@ -283,6 +284,9 @@ public class ServerManager : IDisposable
 
     public IReadOnlyList<MountService> GetMountedServers() => _servers.Values.ToList();
 
+    /// <summary>IDs of currently mounted/connected servers.</summary>
+    public IReadOnlyList<string> ConnectedServerIds => _servers.Keys.ToList();
+
     public IrcService? GetIrcService(string serverId)
     {
         _ircServices.TryGetValue(serverId, out var service);
@@ -342,6 +346,14 @@ public class ServerManager : IDisposable
             };
             _announceListeners[serverConfig.Id] = listener;
         }
+
+        // Wire auto request filler (RaceTrade-style)
+        if (serverConfig.Irc.RequestFiller.Enabled && _spreadManager != null)
+        {
+            var filler = new RequestFiller(serverConfig.Id, ircService,
+                serverConfig.Irc.RequestFiller, this, _spreadManager);
+            _requestFillers[serverConfig.Id] = filler;
+        }
     }
 
     private async Task StopIrcService(string serverId)
@@ -350,6 +362,8 @@ public class ServerManager : IDisposable
             detector.Dispose();
         if (_announceListeners.Remove(serverId, out var listener))
             listener.Dispose();
+        if (_requestFillers.Remove(serverId, out var filler))
+            filler.Dispose();
 
         if (!_ircServices.TryGetValue(serverId, out var ircService)) return;
         await ircService.StopAsync();
@@ -366,6 +380,8 @@ public class ServerManager : IDisposable
         _patternDetectors.Clear();
         foreach (var listener in _announceListeners.Values) listener.Dispose();
         _announceListeners.Clear();
+        foreach (var filler in _requestFillers.Values) filler.Dispose();
+        _requestFillers.Clear();
 
         foreach (var irc in _ircServices.Values)
         {

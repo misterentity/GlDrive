@@ -318,17 +318,29 @@ public class SpreadManager : IDisposable
             return;
         }
 
-        // Pre-check: evaluate release name against directory-level skiplist rules
+        // Pre-check: evaluate release name against directory-level skiplist rules.
+        // Uses RaceTrade-style tiered evaluation with section mapping, tag rules,
+        // and affiliate auto-allow.
         var parsed = SceneNameParser.Parse(releaseName);
         foreach (var serverId in serverIds)
         {
             var serverConfig = _config.Servers.First(s => s.Id == serverId);
-            var action = _skiplist.Evaluate(releaseName, true, false,
-                serverId, category, serverConfig.SpreadSite.Skiplist, _config.Spread.GlobalSkiplist, parsed);
+            var mapping = SectionMapper.Resolve(serverConfig.SpreadSite, category, releaseName);
+            var effectiveSection = mapping?.RemoteSection ?? category;
+            var tagRules = mapping?.TagRules ?? (IReadOnlyList<SkiplistRule>)Array.Empty<SkiplistRule>();
+
+            var action = _skiplist.EvaluateTiered(releaseName, true, false,
+                effectiveSection,
+                serverConfig.SpreadSite.Skiplist,
+                tagRules,
+                _config.Spread.GlobalSkiplist,
+                serverConfig.SpreadSite.Affils,
+                parsed);
+
             if (action == SkiplistAction.Deny)
             {
-                Log.Debug("Auto-race skipped by skiplist on {Server}: {Release}", serverConfig.Name, releaseName);
-                AutoRaceAttempted?.Invoke(category, releaseName, $"Denied by skiplist on {serverConfig.Name}");
+                Log.Debug("Auto-race denied by rules on {Server}: {Release}", serverConfig.Name, releaseName);
+                AutoRaceAttempted?.Invoke(category, releaseName, $"Denied by rules on {serverConfig.Name}");
                 return;
             }
         }
