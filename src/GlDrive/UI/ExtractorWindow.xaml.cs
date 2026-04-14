@@ -559,17 +559,171 @@ public partial class ExtractorWindow : Window
 
             Dispatcher.BeginInvoke(() => item.Progress = 100);
         }
-        catch (Exception ex) when (ex is InvalidOperationException or InvalidFormatException)
+        catch (Exception ex) when (ex is InvalidOperationException or InvalidFormatException
+                                      or SharpCompress.Common.MultiVolumeExtractionException)
         {
-            // Fallback to reader-based (streaming) extraction. Handles formats that
-            // don't support random access AND cases where archive-mode parsing hits
-            // a malformed block ('Unknown Rar Header: ...') that the streaming reader
-            // can sometimes work around.
-            Log.Warning(ex, "Extractor: archive-mode failed, falling back to streaming reader: {File}", item.FileName);
-            using var fileStream = new FileStream(item.FilePath, FileMode.Open, FileAccess.Read,
-                FileShare.Read, bufferSize: 256 * 1024, FileOptions.SequentialScan);
-            ExtractWithReader(item, fileStream, outputDir, readerOptions, overwriteMode, ct);
+            // SharpCompress has known issues with scene-style multi-volume RAR sets
+            // (.rar + .r00 + .r01 + ...). Both archive-mode and streaming-reader mode
+            // fail for these — the streaming reader throws MultiVolumeExtractionException
+            // explicitly, and archive-mode throws "Unknown Rar Header" garbage.
+            //
+            // When that happens, fall back to the external UnRAR.exe or 7z.exe binary
+            // if one is installed on the system. WinRAR is the canonical reference
+            // implementation and handles every edge case; 7-Zip covers most RAR5 files.
+            Log.Warning(
+                "Extractor: SharpCompress archive-mode failed ({Msg}), trying external tool: {File}",
+                ex.Message, item.FileName);
+
+            if (!TryExtractExternal(item, outputDir, password, overwriteMode, ct))
+            {
+                // No external tool available — fall through to the streaming reader as
+                // a last-ditch attempt. Will still fail for multi-volume sets, but might
+                // work for certain single-file archive formats.
+                Log.Warning("Extractor: no external unrar/7z found, falling back to streaming reader");
+                using var fileStream = new FileStream(item.FilePath, FileMode.Open, FileAccess.Read,
+                    FileShare.Read, bufferSize: 256 * 1024, FileOptions.SequentialScan);
+                ExtractWithReader(item, fileStream, outputDir, readerOptions, overwriteMode, ct);
+            }
         }
+    }
+
+    // Common install paths for WinRAR's UnRAR and 7-Zip. Checked in order.
+    private static readonly string[] ExternalToolCandidates =
+    {
+        @"C:\Program Files\WinRAR\UnRAR.exe",
+        @"C:\Program Files (x86)\WinRAR\UnRAR.exe",
+        @"C:\Program Files\WinRAR\Rar.exe",
+        @"C:\Program Files (x86)\WinRAR\Rar.exe",
+        @"C:\Program Files\7-Zip\7z.exe",
+        @"C:\Program Files (x86)\7-Zip\7z.exe",
+    };
+
+    private static string? FindExternalTool()
+    {
+        foreach (var p in ExternalToolCandidates)
+            if (File.Exists(p)) return p;
+        // Last-chance: PATH lookup for unrar / 7z
+        foreach (var name in new[] { "unrar.exe", "UnRAR.exe", "7z.exe" })
+        {
+            var path = Environment.GetEnvironmentVariable("PATH")?
+                .Split(Path.PathSeparator)
+                .Select(d => Path.Combine(d, name))
+                .FirstOrDefault(File.Exists);
+            if (path != null) return path;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Shell out to an external UnRAR or 7-Zip binary to extract the archive.
+    /// Returns true on success, false if no tool was found (caller should then try
+    /// the next fallback). Throws IOException on non-zero exit code.
+    /// </summary>
+    private bool TryExtractExternal(ArchiveItem item, string outputDir, string password, int overwriteMode, CancellationToken ct)
+    {
+        var tool = FindExternalTool();
+        if (tool == null) return false;
+
+        Directory.CreateDirectory(outputDir);
+
+        var isUnrar = Path.GetFileName(tool).StartsWith("unrar", StringComparison.OrdinalIgnoreCase)
+                   || Path.GetFileName(tool).StartsWith("rar.exe", StringComparison.OrdinalIgnoreCase);
+        var isSevenZip = Path.GetFileName(tool).StartsWith("7z", StringComparison.OrdinalIgnoreCase);
+
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = tool,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            WorkingDirectory = outputDir,
+        };
+
+        if (isUnrar)
+        {
+            // UnRAR syntax:
+            //   UnRAR x -y -o+ -idq [-p<password>] <archive> <destDir>\
+            psi.ArgumentList.Add("x");                  // extract with full paths
+            psi.ArgumentList.Add("-y");                 // yes to all prompts
+            if (overwriteMode == 0) psi.ArgumentList.Add("-o+");   // overwrite
+            else if (overwriteMode == 1) psi.ArgumentList.Add("-o-"); // skip existing
+            else psi.ArgumentList.Add("-or");                      // rename auto
+            psi.ArgumentList.Add("-idq");               // quiet (hide all but errors)
+            if (!string.IsNullOrEmpty(password)) psi.ArgumentList.Add($"-p{password}");
+            psi.ArgumentList.Add(item.FilePath);
+            psi.ArgumentList.Add(outputDir + Path.DirectorySeparatorChar);
+        }
+        else if (isSevenZip)
+        {
+            // 7z syntax:
+            //   7z x -y -aoa [-p<password>] -o<destDir> <archive>
+            psi.ArgumentList.Add("x");
+            psi.ArgumentList.Add("-y");
+            if (overwriteMode == 0) psi.ArgumentList.Add("-aoa");   // overwrite all
+            else if (overwriteMode == 1) psi.ArgumentList.Add("-aos"); // skip existing
+            else psi.ArgumentList.Add("-aou");                      // rename auto
+            if (!string.IsNullOrEmpty(password)) psi.ArgumentList.Add($"-p{password}");
+            psi.ArgumentList.Add($"-o{outputDir}");
+            psi.ArgumentList.Add(item.FilePath);
+        }
+        else
+        {
+            Log.Warning("Extractor: unknown external tool shape: {Tool}", tool);
+            return false;
+        }
+
+        Log.Information("Extractor: using external tool {Tool} for {File}", Path.GetFileName(tool), item.FileName);
+
+        using var proc = System.Diagnostics.Process.Start(psi);
+        if (proc == null) return false;
+
+        // Show indeterminate progress while the external tool runs. The tool doesn't
+        // report progress per-file in quiet mode, so we just spin a pseudo-progress
+        // animation via the UI update loop. Real progress would require parsing the
+        // tool's verbose stdout.
+        var spinCts = new CancellationTokenSource();
+        _ = Task.Run(async () =>
+        {
+            var pct = 0.0;
+            while (!spinCts.IsCancellationRequested)
+            {
+                pct = (pct + 2) % 95;
+                Dispatcher.BeginInvoke(() => item.Progress = pct);
+                try { await Task.Delay(200, spinCts.Token); } catch { break; }
+            }
+        }, spinCts.Token);
+
+        try
+        {
+            while (!proc.HasExited)
+            {
+                if (ct.IsCancellationRequested)
+                {
+                    try { proc.Kill(entireProcessTree: true); } catch { }
+                    throw new OperationCanceledException(ct);
+                }
+                proc.WaitForExit(200);
+            }
+        }
+        finally
+        {
+            spinCts.Cancel();
+            spinCts.Dispose();
+        }
+
+        var stderr = proc.StandardError.ReadToEnd();
+        var stdout = proc.StandardOutput.ReadToEnd();
+
+        if (proc.ExitCode != 0)
+        {
+            var msg = !string.IsNullOrWhiteSpace(stderr) ? stderr.Trim() : stdout.Trim();
+            throw new IOException($"{Path.GetFileName(tool)} failed (exit {proc.ExitCode}): {msg}");
+        }
+
+        Dispatcher.BeginInvoke(() => item.Progress = 100);
+        Log.Information("Extractor: external tool completed for {File}", item.FileName);
+        return true;
     }
 
     /// <summary>
