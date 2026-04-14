@@ -583,24 +583,34 @@ public class SpreadManager : IDisposable
 
         _metadataFilter.Dispose();
 
+        List<SpreadJob> jobs;
         lock (_lock)
         {
-            foreach (var job in _activeJobs)
-                job.Stop();
+            jobs = _activeJobs.ToList();
             _activeJobs.Clear();
             _raceQueue.Clear();
         }
+        foreach (var job in jobs)
+            job.Stop();
 
-        var pools = _spreadPools.Values.ToList();
-        _spreadPools.Clear();
-        _ = Task.Run(async () =>
+        List<FtpConnectionPool> pools;
+        lock (_lock)
+        {
+            pools = _spreadPools.Values.ToList();
+            _spreadPools.Clear();
+            _factories.Clear();
+        }
+
+        // Dispose pools on the threadpool and block briefly — fire-and-forget
+        // risks leaving native GnuTLS sessions open past process exit.
+        Task.Run(async () =>
         {
             foreach (var pool in pools)
             {
                 try { await pool.DisposeAsync(); }
                 catch (Exception ex) { Log.Debug(ex, "Spread pool dispose error"); }
             }
-        });
+        }).Wait(TimeSpan.FromSeconds(5));
 
         GC.SuppressFinalize(this);
     }

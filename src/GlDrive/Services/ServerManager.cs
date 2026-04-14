@@ -124,8 +124,12 @@ public class ServerManager : IDisposable
 
     public void UnmountServer(string serverId)
     {
-        StopIrcService(serverId).GetAwaiter().GetResult();
-        _spreadManager?.DisposePool(serverId).GetAwaiter().GetResult();
+        // Run awaits on the threadpool so we don't deadlock if this is called
+        // from the UI dispatcher (e.g. tray shutdown). Capturing the dispatcher
+        // SynchronizationContext in .GetResult() was the original bug risk.
+        Task.Run(() => StopIrcService(serverId)).GetAwaiter().GetResult();
+        if (_spreadManager != null)
+            Task.Run(() => _spreadManager.DisposePool(serverId)).GetAwaiter().GetResult();
 
         if (!_servers.TryGetValue(serverId, out var service))
             return;
