@@ -630,39 +630,61 @@ public partial class ExtractorWindow : Window
                    || Path.GetFileName(tool).StartsWith("rar.exe", StringComparison.OrdinalIgnoreCase);
         var isSevenZip = Path.GetFileName(tool).StartsWith("7z", StringComparison.OrdinalIgnoreCase);
 
+        // Pipe-deadlock avoidance: do NOT redirect stdout or stderr. The earlier
+        // v1.44.64 approach used BeginOutputReadLine/BeginErrorReadLine to drain
+        // asynchronously, but UnRAR's output on corrupted RAR sets (one CRC error
+        // line per volume × 80+ volumes) still managed to stall, and the cost of
+        // losing the exact error text in the log is lower than the cost of an
+        // occasional deadlock.
+        //
+        // Instead, silence the tool entirely with -inul (UnRAR) / combined flags
+        // (7-Zip), and rely on the exit code to determine success or failure.
+        // stdin IS redirected so we can close it immediately, preventing the tool
+        // from blocking on any read-from-stdin that isn't covered by -y.
+        //
+        // CreateNoWindow + UseShellExecute=false means the tool runs detached with
+        // its own hidden console; unredirected writes go to that console and are
+        // discarded by the OS.
         var psi = new System.Diagnostics.ProcessStartInfo
         {
             FileName = tool,
             UseShellExecute = false,
             CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = false,
+            RedirectStandardError = false,
             WorkingDirectory = outputDir,
         };
 
         if (isUnrar)
         {
             // UnRAR syntax:
-            //   UnRAR x -y -o+ -idq [-p<password>] <archive> <destDir>\
-            psi.ArgumentList.Add("x");                  // extract with full paths
-            psi.ArgumentList.Add("-y");                 // yes to all prompts
-            if (overwriteMode == 0) psi.ArgumentList.Add("-o+");   // overwrite
+            //   UnRAR x -y -o+ -inul [-p-] [-p<password>] <archive> <destDir>\
+            psi.ArgumentList.Add("x");                     // extract with full paths
+            psi.ArgumentList.Add("-y");                    // yes to all prompts
+            if (overwriteMode == 0) psi.ArgumentList.Add("-o+");      // overwrite
             else if (overwriteMode == 1) psi.ArgumentList.Add("-o-"); // skip existing
-            else psi.ArgumentList.Add("-or");                      // rename auto
-            psi.ArgumentList.Add("-idq");               // quiet (hide all but errors)
-            if (!string.IsNullOrEmpty(password)) psi.ArgumentList.Add($"-p{password}");
+            else psi.ArgumentList.Add("-or");                         // rename auto
+            psi.ArgumentList.Add("-inul");                 // disable ALL output
+            if (string.IsNullOrEmpty(password))
+                psi.ArgumentList.Add("-p-");               // prevent password prompt
+            else
+                psi.ArgumentList.Add($"-p{password}");
             psi.ArgumentList.Add(item.FilePath);
             psi.ArgumentList.Add(outputDir + Path.DirectorySeparatorChar);
         }
         else if (isSevenZip)
         {
             // 7z syntax:
-            //   7z x -y -aoa [-p<password>] -o<destDir> <archive>
+            //   7z x -y -aoa [-p<password>] -bso0 -bse0 -bsp0 -o<destDir> <archive>
             psi.ArgumentList.Add("x");
             psi.ArgumentList.Add("-y");
-            if (overwriteMode == 0) psi.ArgumentList.Add("-aoa");   // overwrite all
+            if (overwriteMode == 0) psi.ArgumentList.Add("-aoa");     // overwrite all
             else if (overwriteMode == 1) psi.ArgumentList.Add("-aos"); // skip existing
-            else psi.ArgumentList.Add("-aou");                      // rename auto
+            else psi.ArgumentList.Add("-aou");                         // rename auto
+            psi.ArgumentList.Add("-bso0");                 // stdout: no messages
+            psi.ArgumentList.Add("-bse0");                 // stderr: no messages
+            psi.ArgumentList.Add("-bsp0");                 // progress: no output
             if (!string.IsNullOrEmpty(password)) psi.ArgumentList.Add($"-p{password}");
             psi.ArgumentList.Add($"-o{outputDir}");
             psi.ArgumentList.Add(item.FilePath);
@@ -678,23 +700,12 @@ public partial class ExtractorWindow : Window
         using var proc = System.Diagnostics.Process.Start(psi);
         if (proc == null) return false;
 
-        // Drain stdout and stderr CONCURRENTLY with WaitForExit. If we don't drain,
-        // the child process blocks writing to the pipe once its 4 KB buffer fills,
-        // and we deadlock waiting for a child that can't finish writing. Classic
-        // Process.Start gotcha — observed in the wild when UnRAR extracted ~95% of
-        // a 20 GB archive and then stalled indefinitely because -idq still produces
-        // enough output to fill the pipe over the course of a full extraction.
-        var stdoutBuffer = new System.Text.StringBuilder();
-        var stderrBuffer = new System.Text.StringBuilder();
-        proc.OutputDataReceived += (_, e) => { if (e.Data != null) stdoutBuffer.AppendLine(e.Data); };
-        proc.ErrorDataReceived += (_, e) => { if (e.Data != null) stderrBuffer.AppendLine(e.Data); };
-        proc.BeginOutputReadLine();
-        proc.BeginErrorReadLine();
+        // Close stdin immediately so the child can't block reading from it.
+        // UnRAR's -y covers most interactive prompts, but some edge cases (like
+        // file-in-use warnings) would otherwise read from stdin and block forever.
+        try { proc.StandardInput.Close(); } catch { }
 
-        // Show indeterminate progress while the external tool runs. The tool doesn't
-        // report progress per-file in quiet mode, so we just spin a pseudo-progress
-        // animation via the UI update loop. Real progress would require parsing the
-        // tool's verbose stdout.
+        // Show indeterminate progress while the external tool runs.
         var spinCts = new CancellationTokenSource();
         _ = Task.Run(async () =>
         {
@@ -703,9 +714,14 @@ public partial class ExtractorWindow : Window
             {
                 pct = (pct + 2) % 95;
                 Dispatcher.BeginInvoke(() => item.Progress = pct);
-                try { await Task.Delay(200, spinCts.Token); } catch { break; }
+                try { await Task.Delay(500, spinCts.Token); } catch { break; }
             }
         }, spinCts.Token);
+
+        // Hard timeout so a genuinely stuck tool can't hold up extraction forever.
+        // 60 minutes covers extraction of very large multi-volume sets on slow disks.
+        var startedAt = DateTime.UtcNow;
+        var timeout = TimeSpan.FromMinutes(60);
 
         try
         {
@@ -716,11 +732,15 @@ public partial class ExtractorWindow : Window
                     try { proc.Kill(entireProcessTree: true); } catch { }
                     throw new OperationCanceledException(ct);
                 }
-                proc.WaitForExit(200);
+                if (DateTime.UtcNow - startedAt > timeout)
+                {
+                    Log.Warning("Extractor: {Tool} timed out after {Minutes} min for {File}, killing",
+                        Path.GetFileName(tool), timeout.TotalMinutes, item.FileName);
+                    try { proc.Kill(entireProcessTree: true); } catch { }
+                    throw new IOException($"{Path.GetFileName(tool)} timed out after {timeout.TotalMinutes} minutes");
+                }
+                proc.WaitForExit(500);
             }
-            // After HasExited returns true, make sure the async read handlers have
-            // drained whatever remained in the pipes. This is the documented pattern.
-            proc.WaitForExit();
         }
         finally
         {
@@ -728,17 +748,26 @@ public partial class ExtractorWindow : Window
             spinCts.Dispose();
         }
 
-        var stderr = stderrBuffer.ToString();
-        var stdout = stdoutBuffer.ToString();
-
         if (proc.ExitCode != 0)
         {
-            var msg = !string.IsNullOrWhiteSpace(stderr) ? stderr.Trim() : stdout.Trim();
-            throw new IOException($"{Path.GetFileName(tool)} failed (exit {proc.ExitCode}): {msg}");
+            // UnRAR exit codes: 0=ok, 1=non-fatal warning, 2=fatal, 3=CRC error,
+            // 4=locked, 5=write error, 6=open, 7=usage, 8=memory, 9=create, 10=no
+            // files, 11=wrong password, 255=user stop. Treat 1 (warning) as success.
+            var interpretedExit = proc.ExitCode;
+            if (isUnrar && interpretedExit == 1)
+            {
+                Log.Warning("Extractor: UnRAR reported warning (exit 1) for {File} — treating as success",
+                    item.FileName);
+            }
+            else
+            {
+                throw new IOException($"{Path.GetFileName(tool)} failed (exit {interpretedExit})");
+            }
         }
 
         Dispatcher.BeginInvoke(() => item.Progress = 100);
-        Log.Information("Extractor: external tool completed for {File}", item.FileName);
+        Log.Information("Extractor: external tool completed for {File} (exit {Code})",
+            item.FileName, proc.ExitCode);
         return true;
     }
 
