@@ -719,9 +719,12 @@ public partial class ExtractorWindow : Window
         }, spinCts.Token);
 
         // Hard timeout so a genuinely stuck tool can't hold up extraction forever.
-        // 60 minutes covers extraction of very large multi-volume sets on slow disks.
+        // 20 minutes covers extraction of very large multi-volume sets on slow disks,
+        // while failing fast enough to unblock the queue when UnRAR can't cleanly exit
+        // — observed in the wild on corrupt RAR sets where UnRAR extracts the data
+        // correctly but then hangs in its finalize-with-CRC-errors code path.
         var startedAt = DateTime.UtcNow;
-        var timeout = TimeSpan.FromMinutes(60);
+        var timeout = TimeSpan.FromMinutes(20);
 
         try
         {
@@ -969,18 +972,46 @@ public partial class ExtractorWindow : Window
             Log.Information("Deleting {Count} archive files for set {Base}: {Files}",
                 toDelete.Count, setBase, string.Join(", ", toDelete.Select(Path.GetFileName)));
 
+            // SharpCompress archive disposal races with file handle release — even
+            // after IArchive.Dispose() returns, the underlying FileStreams may still
+            // be in the finalizer queue and hold the files locked. Force GC and
+            // finalizers to drain before we try to delete, then retry each file up
+            // to 5 times with exponential backoff.
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            var deleted = 0;
+            var failed = 0;
             foreach (var file in toDelete)
             {
-                try
+                var attempts = 0;
+                var succeeded = false;
+                while (attempts < 5 && !succeeded)
                 {
-                    File.Delete(file);
-                    Log.Debug("Deleted: {File}", Path.GetFileName(file));
-                }
-                catch (Exception ex)
-                {
-                    Log.Warning(ex, "Failed to delete {File}", file);
+                    try
+                    {
+                        File.Delete(file);
+                        Log.Debug("Deleted: {File}", Path.GetFileName(file));
+                        succeeded = true;
+                        deleted++;
+                    }
+                    catch (IOException) when (attempts < 4)
+                    {
+                        // File-in-use race — wait and retry
+                        attempts++;
+                        Thread.Sleep(200 * attempts); // 200, 400, 600, 800 ms backoff
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning(ex, "Failed to delete {File} (after {Attempts} attempts)", file, attempts + 1);
+                        failed++;
+                        break;
+                    }
                 }
             }
+            Log.Information("Archive cleanup: deleted {Deleted} of {Total} files ({Failed} failed)",
+                deleted, toDelete.Count, failed);
         }
         catch (Exception ex)
         {
@@ -1305,6 +1336,11 @@ public partial class ExtractorWindow : Window
 
             if (deleteAfter)
             {
+                // Small settling delay + GC to let SharpCompress fully release the
+                // underlying volume FileStreams before we try to delete them.
+                // DeleteSourceFiles does its own retry loop too, but this head-start
+                // avoids the first attempt hitting a doomed file-in-use exception.
+                await Task.Delay(500);
                 Log.Information("Extractor: deleting source archive set for {File}", item.FileName);
                 await Task.Run(() => DeleteSourceFiles(item.FilePath));
             }
