@@ -25,7 +25,7 @@ public class SiteProgress
 public class SpreadJob : IDisposable
 {
     private readonly SpreadConfig _spreadConfig;
-    private readonly Dictionary<string, FtpConnectionPool> _pools;
+    private Dictionary<string, FtpConnectionPool> _pools;
     private readonly Dictionary<string, ServerConfig> _serverConfigs;
     private readonly SpeedTracker _speedTracker;
     private readonly SkiplistEvaluator _skiplist;
@@ -131,6 +131,17 @@ public class SpreadJob : IDisposable
                 config.SpreadSite.Affils.Any(g =>
                     releaseName.EndsWith($"-{g}", StringComparison.OrdinalIgnoreCase));
         }
+    }
+
+    /// <summary>
+    /// Swap the pool dictionary. Called by SpreadManager after ReinitDeadPools
+    /// replaces an exhausted pool with a fresh one — without this the job would
+    /// hold a reference to the disposed pool for its entire lifetime.
+    /// Must be called before RunAsync begins using pools.
+    /// </summary>
+    public void UpdatePools(Dictionary<string, FtpConnectionPool> pools)
+    {
+        _pools = pools;
     }
 
     public async Task RunAsync()
