@@ -145,6 +145,36 @@ public partial class ExtractorWindow : Window
     }
 
     /// <summary>
+    /// Background-safe archive path collector. Does NOT touch any UI state.
+    /// Used by the startup initial scan to avoid blocking the UI thread on
+    /// slow/network-backed watch folders.
+    /// </summary>
+    private static void CollectArchivePaths(string dir, bool recursive, List<string> results)
+    {
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(dir))
+                if (IsArchiveFile(file))
+                    results.Add(file);
+        }
+        catch (UnauthorizedAccessException) { }
+        catch (IOException) { }
+
+        if (!recursive) return;
+
+        IEnumerable<string> subdirs;
+        try { subdirs = Directory.EnumerateDirectories(dir); }
+        catch (UnauthorizedAccessException) { return; }
+        catch (IOException) { return; }
+
+        foreach (var sub in subdirs)
+        {
+            try { CollectArchivePaths(sub, true, results); }
+            catch { }
+        }
+    }
+
+    /// <summary>
     /// Manually recurse directories so a single permission error doesn't kill the whole scan.
     /// Directory.EnumerateFiles with AllDirectories throws on the first inaccessible dir.
     /// </summary>
@@ -1092,16 +1122,69 @@ public partial class ExtractorWindow : Window
                 "ExtractorWindow: loaded settings — watchEnabled={We}, folders={Nf}, deleteAfter={Da}, recursive={Rc}",
                 _watchEnabled, _watchFolders.Count, s.DeleteAfterExtract, s.ScanSubfolders);
 
-            // Auto-start watchers if they were enabled
+            // Auto-start watchers if they were enabled.
+            // Start the FileSystemWatchers synchronously (fast) so new files
+            // immediately get picked up, but offload the initial recursive
+            // scan to a background thread. ScanDirectory is O(tree size) and
+            // can take minutes on slow/network watch folders — running it
+            // inline froze app startup (extractor blocked server mount + IRC
+            // connect for ~60s on a network-backed watch folder).
             if (_watchEnabled)
             {
                 WatchToggle.Content = "On";
                 WatchToggle.IsChecked = true;
-                foreach (var folder in _watchFolders)
-                {
-                    ScanAndAutoExtract(folder);
+                var recursive = ChkRecursive.IsChecked == true;
+                var foldersToScan = _watchFolders.ToList();
+                foreach (var folder in foldersToScan)
                     StartWatcherFor(folder);
-                }
+
+                _ = Task.Run(() =>
+                {
+                    try
+                    {
+                        // Filesystem walk on background thread — no UI touches
+                        var discovered = new Dictionary<string, List<string>>();
+                        foreach (var folder in foldersToScan)
+                        {
+                            var paths = new List<string>();
+                            CollectArchivePaths(folder, recursive, paths);
+                            discovered[folder] = paths;
+                        }
+
+                        // Hop to UI thread briefly to add items + fire extracts
+                        Dispatcher.Invoke(() =>
+                        {
+                            var existing = new HashSet<string>(
+                                Archives.Select(a => a.FilePath),
+                                StringComparer.OrdinalIgnoreCase);
+
+                            foreach (var (folder, paths) in discovered)
+                            {
+                                foreach (var p in paths)
+                                    if (existing.Add(p))
+                                        Archives.Add(CreateItem(p));
+                            }
+
+                            foreach (var item in Archives.Where(a => a.Status == "Queued").ToList())
+                            {
+                                if (IsAlreadyExtracted(item))
+                                {
+                                    item.Status = "Done";
+                                    item.Progress = 100;
+                                    lock (_watchLock) _watchProcessed.Add(item.FilePath);
+                                    continue;
+                                }
+                                lock (_watchLock) _watchProcessed.Add(item.FilePath);
+                                _ = AutoExtractItem(item);
+                            }
+                            UpdateStatus();
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning(ex, "Initial watch-folder scan failed");
+                    }
+                });
             }
         }
         catch (Exception ex)

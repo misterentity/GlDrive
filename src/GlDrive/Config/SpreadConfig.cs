@@ -80,7 +80,8 @@ public class MetadataFilterConfig
 public class SectionMapping
 {
     public string IrcSection { get; set; } = "";   // e.g., "TV-1080P" (from announce)
-    public string RemoteSection { get; set; } = ""; // e.g., "X264-HD" (local section key in Sections dict)
+    public string RemoteSection { get; set; } = ""; // e.g., "X264-HD" (local section key, used by SpreadJob)
+    public string Path { get; set; } = "";          // e.g., "/site/TV-HD" (remote path on this server)
     public string TriggerRegex { get; set; } = ".*"; // release-name filter for this mapping
     public List<SkiplistRule> TagRules { get; set; } = [];
     public bool Enabled { get; set; } = true;

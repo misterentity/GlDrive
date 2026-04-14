@@ -43,6 +43,7 @@ public class ConfigManager
 
             var result = JsonSerializer.Deserialize<AppConfig>(json, JsonOptions) ?? new AppConfig();
             MigrateApiKeys(json, result);
+            MigrateSectionsToMappings(result);
             return result;
         }
         catch (Exception ex)
@@ -116,6 +117,36 @@ public class ConfigManager
     /// <summary>
     /// Migrate plaintext API keys from config JSON to Credential Manager, then re-save to strip them.
     /// </summary>
+    /// <summary>
+    /// Seeds SectionMappings from the legacy Sections dict if the mappings list
+    /// is empty. Runs every load so existing configs get upgraded in place.
+    /// The Sections dict is kept in sync during save (ServerEditDialog derives
+    /// it from SectionMappings) so SpreadJob / SpreadManager / DashboardViewModel
+    /// continue to work unchanged.
+    /// </summary>
+    private static void MigrateSectionsToMappings(AppConfig config)
+    {
+        foreach (var server in config.Servers)
+        {
+            if (server.SpreadSite.SectionMappings.Count > 0) continue;
+            if (server.SpreadSite.Sections.Count == 0) continue;
+
+            foreach (var (key, path) in server.SpreadSite.Sections)
+            {
+                server.SpreadSite.SectionMappings.Add(new SectionMapping
+                {
+                    IrcSection = key,
+                    RemoteSection = key,
+                    Path = path,
+                    TriggerRegex = ".*",
+                    Enabled = true
+                });
+            }
+            Log.Information("Migrated {Count} sections to SectionMappings on server {Name}",
+                server.SpreadSite.Sections.Count, server.Name);
+        }
+    }
+
     private static void MigrateApiKeys(string json, AppConfig config)
     {
         try
