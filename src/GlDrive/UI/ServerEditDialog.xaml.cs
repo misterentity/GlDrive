@@ -844,20 +844,40 @@ public partial class ServerEditDialog : Window
                     changes.Add($"{added} section mapping(s) added");
             }
 
-            // AI-suggested IRC → internal SectionMapping entries. Only add new
-            // rows; never touch existing mappings (preserve user tag rules).
+            // AI-suggested IRC → internal SectionMapping entries. Add new rows AND
+            // patch existing rows whose TriggerRegex is still the default ".*"
+            // (or empty). Tag rules and any non-default user-edited trigger are
+            // preserved.
             if (result.SectionMappings.Count > 0)
             {
                 var added = 0;
+                var updated = 0;
                 foreach (var sm in result.SectionMappings)
                 {
                     if (string.IsNullOrWhiteSpace(sm.IrcSection) ||
                         string.IsNullOrWhiteSpace(sm.RemoteSection)) continue;
 
-                    var exists = _sectionMappings.Any(m =>
+                    var aiTrigger = string.IsNullOrWhiteSpace(sm.Trigger) ? ".*" : sm.Trigger.Trim();
+
+                    var existing = _sectionMappings.FirstOrDefault(m =>
                         m.IrcSection.Equals(sm.IrcSection, StringComparison.OrdinalIgnoreCase) &&
                         m.RemoteSection.Equals(sm.RemoteSection, StringComparison.OrdinalIgnoreCase));
-                    if (exists) continue;
+
+                    if (existing != null)
+                    {
+                        // Patch the trigger if the user hasn't customized it. Without
+                        // this, re-running AI Setup never refreshed triggers on
+                        // already-discovered mappings — which was the whole point of
+                        // re-scanning IRC logs.
+                        var existingTrigger = (existing.TriggerRegex ?? "").Trim();
+                        var isDefault = string.IsNullOrEmpty(existingTrigger) || existingTrigger == ".*";
+                        if (isDefault && aiTrigger != ".*")
+                        {
+                            existing.TriggerRegex = aiTrigger;
+                            updated++;
+                        }
+                        continue;
+                    }
 
                     // Try to pull Path from any existing mapping with same RemoteSection
                     var pathSource = _sectionMappings.FirstOrDefault(m =>
@@ -868,13 +888,19 @@ public partial class ServerEditDialog : Window
                         IrcSection = sm.IrcSection,
                         RemoteSection = sm.RemoteSection,
                         Path = pathSource?.Path ?? "",
-                        TriggerRegex = string.IsNullOrWhiteSpace(sm.Trigger) ? ".*" : sm.Trigger,
+                        TriggerRegex = aiTrigger,
                         Enabled = true
                     });
                     added++;
                 }
                 if (added > 0)
                     changes.Add($"{added} IRC section mapping(s) detected");
+                if (updated > 0)
+                    changes.Add($"{updated} mapping trigger(s) updated from IRC logs");
+                // POCO mutation doesn't fire INotifyPropertyChanged — refresh the
+                // grid so the new TriggerRegex values are visible immediately.
+                if (updated > 0)
+                    SectionMappingsGrid.Items.Refresh();
             }
 
             // AI-suggested IRC announce rules. Append any new rules that the
