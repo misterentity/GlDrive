@@ -61,6 +61,16 @@ public class SpreadJob : IDisposable
     private readonly HashSet<string> _dirsCreated = new(); // serverId values that got MKD
     private readonly HashSet<string> _serversWithSuccessfulTransfer = new();
 
+    // Permanent per-destination MKD failure tracking. Unlike _failureCounts
+    // (per file/src/dst, cleared by completion sweep), these survive sweeps so
+    // a destination that systematically rejects MKD (permission denied, wrong
+    // section path, path-filter rejection) gets permanently dropped from the
+    // race after BlacklistThreshold consecutive failures. Resets to 0 when a
+    // transfer to that dest succeeds.
+    private const int BlacklistThreshold = 3;
+    private readonly Dictionary<string, int> _destMkdFailures = new();
+    private readonly HashSet<string> _blacklistedDests = new();
+
     // Skiplist evaluation trace (captured in Phase 0 for history popup)
     public List<SkiplistTraceEntry>? SkiplistTrace { get; private set; }
     public string SkiplistResult { get; private set; } = "Allowed";
@@ -280,7 +290,14 @@ public class SpreadJob : IDisposable
                 }
                 else
                 {
-                    Log.Debug("Spread: {Server} has no matching section for [{Section}]", config.Name, Section);
+                    // Promoted from Debug to Information — the user needs to see
+                    // when a server is silently being excluded from a race
+                    // because it has no section mapping for the announced
+                    // category. Without this, mp3 races with only one
+                    // destination (and no other visible reason) look like a bug.
+                    Log.Information("Spread: {Server} has no matching section for [{Section}] — " +
+                        "not participating in this race (add a '{Section}' entry to its section map)",
+                        config.Name, Section);
                 }
             }
 
@@ -343,6 +360,41 @@ public class SpreadJob : IDisposable
                 if (_isNuked)
                 {
                     SetFailed("Release is NUKED — aborting race");
+                    return;
+                }
+
+                // All non-source destinations blacklisted? Fail fast instead of
+                // burning 3 completion sweeps on a race that has nowhere to go.
+                int viableDestCount;
+                lock (_ownershipLock)
+                {
+                    viableDestCount = sitePaths.Keys
+                        .Count(id => !sourceServers.Contains(id)
+                                  && !_serverConfigs[id].SpreadSite.DownloadOnly
+                                  && !_blacklistedDests.Contains(id));
+                }
+                if (viableDestCount == 0)
+                {
+                    string blName;
+                    lock (_ownershipLock)
+                    {
+                        blName = string.Join(", ", _blacklistedDests
+                            .Select(id => _serverConfigs.TryGetValue(id, out var c) ? c.Name : id));
+                    }
+                    bool hadTransfersBl;
+                    lock (_ownershipLock)
+                        hadTransfersBl = _serversWithSuccessfulTransfer.Count > 0;
+                    if (hadTransfersBl)
+                    {
+                        State = SpreadJobState.Completed;
+                        Completed?.Invoke(this);
+                        Log.Information("Spread completed (partial): {Release} — all remaining destinations blacklisted ({Bl})",
+                            ReleaseName, blName);
+                    }
+                    else
+                    {
+                        SetFailed($"All destinations blacklisted — {blName}");
+                    }
                     return;
                 }
 
@@ -897,6 +949,9 @@ public class SpreadJob : IDisposable
         var skippedAffil = 0;
         var skippedSlots = 0;
         var skippedFailures = 0;
+        var skippedBlacklisted = 0;
+        HashSet<string> blacklistedSnapshot;
+        lock (_ownershipLock) blacklistedSnapshot = new HashSet<string>(_blacklistedDests);
         var skippedOwned = 0;
 
         lock (_ownershipLock)
@@ -965,6 +1020,12 @@ public class SpreadJob : IDisposable
                         if (srcId == dstId) continue;
                         if (owners.Contains(dstId)) { skippedOwned++; continue; }
                         if (_inFlightFiles.Contains((fileName, dstId))) { skippedOwned++; continue; }
+
+                        // Permanent per-race destination blacklist (MKD permission
+                        // denied, path-filter rejection, etc.). Survives completion
+                        // sweeps so we don't keep burning cycles on a dest that
+                        // can't accept this release.
+                        if (blacklistedSnapshot.Contains(dstId)) { skippedBlacklisted++; continue; }
 
                         // Chain mode: if a route is active with in-flight transfers, only
                         // consider that route. Prevents multi-site connection exhaustion.
@@ -1037,8 +1098,9 @@ public class SpreadJob : IDisposable
         {
             if (_fileInfos.Count > 0 && candidateCount == 0)
             {
-                Log.Warning("FindBestTransfer: {Files} files, 0 candidates. Skipped: owned={Owned} downloadOnly={DL} affil={Affil} slots={Slots} failures={Fail}",
-                    _fileInfos.Count, skippedOwned, skippedDownloadOnly, skippedAffil, skippedSlots, skippedFailures);
+                Log.Warning("FindBestTransfer: {Files} files, 0 candidates. Skipped: owned={Owned} downloadOnly={DL} affil={Affil} slots={Slots} failures={Fail} blacklisted={BL}",
+                    _fileInfos.Count, skippedOwned, skippedDownloadOnly, skippedAffil,
+                    skippedSlots, skippedFailures, skippedBlacklisted);
                 if (skippedSlots > 0 && skippedOwned == 0)
                     Log.Warning("FindBestTransfer slot details: {SlotInfo}",
                         string.Join(", ", activeTransferSnapshot.Select(kv =>
@@ -1156,9 +1218,11 @@ public class SpreadJob : IDisposable
                         _serverFileCount.TryGetValue(dstId, out var cnt);
                         _serverFileCount[dstId] = cnt + 1;
                     }
+                    _serversWithSuccessfulTransfer.Add(dstId);
+                    // A single success proves the dest is working — clear any
+                    // accumulated MKD failure count on that dest.
+                    _destMkdFailures[dstId] = 0;
                 }
-
-                lock (_ownershipLock) _serversWithSuccessfulTransfer.Add(dstId);
                 _forceScan = true; // Rescan — new files likely appeared on source from other racers
                 Log.Information("FXP complete: {File} ({Src} -> {Dst})", file.Name,
                     _serverConfigs[srcId].Name, _serverConfigs[dstId].Name);
@@ -1182,6 +1246,15 @@ public class SpreadJob : IDisposable
                 }
                 Log.Warning("FXP failed: {File} ({Src} -> {Dst}): {Error}", file.Name,
                     _serverConfigs[srcId].Name, _serverConfigs[dstId].Name, transfer.ErrorMessage);
+
+                // Per-dest MKD failure tracking — survives completion sweeps.
+                // The old failure counter was keyed (file, src, dst) and got
+                // cleared every 60s, so a permanently-broken destination kept
+                // getting re-attempted forever. This one persists for the whole
+                // race so a dest that systematically rejects MKD gets dropped
+                // after BlacklistThreshold consecutive fails.
+                if (IsMkdError(transfer.ErrorMessage))
+                    RegisterDestFailure(dstId, dstBasePath, transfer.ErrorMessage);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -1239,6 +1312,50 @@ public class SpreadJob : IDisposable
             }
 
             ProgressChanged?.Invoke(this);
+        }
+    }
+
+    /// <summary>
+    /// Heuristic: does this FXP error message look like a directory-creation
+    /// failure? If so we treat it as a destination-level problem (permission,
+    /// path-filter, missing section) rather than a per-file transfer glitch.
+    /// </summary>
+    private static bool IsMkdError(string? errorMessage)
+    {
+        if (string.IsNullOrEmpty(errorMessage)) return false;
+        return errorMessage.Contains("MKD failed", StringComparison.OrdinalIgnoreCase)
+            || errorMessage.Contains("make directories", StringComparison.OrdinalIgnoreCase)
+            || errorMessage.Contains("Permission denied", StringComparison.OrdinalIgnoreCase)
+            || errorMessage.Contains("path-filter", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Record a MKD-style failure for a destination. When the count reaches
+    /// BlacklistThreshold, the destination is permanently excluded from this
+    /// race and a prominent warning is logged so the user knows exactly which
+    /// server and path need attention. Successful transfers to the same dest
+    /// reset the counter.
+    /// </summary>
+    private void RegisterDestFailure(string dstId, string dstBasePath, string? errorMessage)
+    {
+        int newCount;
+        bool justBlacklisted;
+        string dstName;
+        lock (_ownershipLock)
+        {
+            _destMkdFailures.TryGetValue(dstId, out var prev);
+            newCount = prev + 1;
+            _destMkdFailures[dstId] = newCount;
+            justBlacklisted = newCount >= BlacklistThreshold && _blacklistedDests.Add(dstId);
+            dstName = _serverConfigs.TryGetValue(dstId, out var cfg) ? cfg.Name : dstId;
+        }
+
+        if (justBlacklisted)
+        {
+            Log.Warning("Spread: destination {Dst} blacklisted after {Count} MKD failures at {Path} " +
+                "— last error: {Err}. Remaining destinations will continue the race.",
+                dstName, newCount, dstBasePath, errorMessage ?? "(no message)");
+            _forceScan = true; // Trigger immediate re-evaluation so the route rotates away
         }
     }
 
