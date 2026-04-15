@@ -46,11 +46,17 @@ public class SpreadManager : IDisposable
     {
         if (_disposed) return;
 
-        // Chain mode: only 1 transfer at a time per route, so we only need 1 connection
-        // per server at a time. Keep pool small to avoid hitting server login limits
-        // (main pool already uses up to 3 of the server's allowed logins).
+        // Chain mode races 1 FXP at a time per route, so a spread pool of 1
+        // connection per server is fully sufficient. Pool size is hard-capped
+        // at 1 — the previous cap of 2 added up with the main pool's 2 slots
+        // to exactly 4 connections, matching glftpd BNCs' typical 4-login cap
+        // and leaving ZERO headroom for transient ghost-kill-and-retry, scan
+        // fallback, or spread pool reinit. The log showed 364 "Pool: new
+        // connection failed (created=1, max=2)" 530 login-cap rejections in
+        // one ~3h window — exclusively during attempts to grow the spread
+        // pool beyond 1. Cap at 1 and leave an entire slot of headroom.
         var poolSize = Math.Max(_config.Spread.SpreadPoolSize, 1);
-        poolSize = Math.Min(poolSize, 2); // Cap at 2 to leave room for main pool
+        poolSize = Math.Min(poolSize, 1);
         if (poolSize <= 0) return;
 
         var pool = new FtpConnectionPool(factory, poolSize);
@@ -281,12 +287,13 @@ public class SpreadManager : IDisposable
             Log.Warning("Spread pool exhausted for {Server} — reinitializing", serverName);
             try
             {
-                // If pool max size is too small for configured slots, recreate with correct size
-                var serverCfg = _config.Servers.FirstOrDefault(s => s.Id == id);
-                var neededSlots = Math.Max(
-                    serverCfg?.SpreadSite.MaxUploadSlots ?? 3,
-                    serverCfg?.SpreadSite.MaxDownloadSlots ?? 3);
-                var neededSize = Math.Max(_config.Spread.SpreadPoolSize, neededSlots);
+                // Spread pool is always sized 1 in chain mode. Previously this
+                // computed a larger "needed size" based on MaxUploadSlots /
+                // MaxDownloadSlots, which defeated the cap in InitializePool
+                // and caused 530 login-cap rejections on busy sites. Chain
+                // mode runs one FXP transfer per route at a time, so a single
+                // spread-pool slot covers every race.
+                const int neededSize = 1;
 
                 if (pool.MaxSize < neededSize)
                 {
