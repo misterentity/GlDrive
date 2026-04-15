@@ -1260,52 +1260,98 @@ public class SpreadJob : IDisposable
     }
 
     /// <summary>
-    /// Try MKD first, then SITE MKD as fallback (glftpd often blocks MKD in section dirs
-    /// but allows SITE MKD). Returns true if dir was created or already exists.
+    /// Create a directory on glftpd. glftpd speaks plain RFC 959 MKD — there is
+    /// no SITE MKD command (that is a ProFTPD mod_site_misc extension and will
+    /// always return 500 "Command not understood" on glftpd, which just adds
+    /// noise and swallows the real reply). cbftp, the reference race engine,
+    /// only ever fires plain MKD against an absolute path.
+    ///
+    /// Semantics:
+    ///   CWD &lt;path&gt;          → fast path: already exists
+    ///   MKD &lt;path&gt;          → 257 = created, 2xx = OK
+    ///   reply text "File exist" / "already exist" → treat as success (cbftp)
+    ///   550 with "No such file" → parent missing, recurse once
+    ///   anything else → fail, log actual reply code + message
     /// </summary>
     private static async Task<bool> TryMakeDir(FluentFTP.AsyncFtpClient client, string path, CancellationToken ct)
     {
+        var (ok, code, msg) = await TryMakeDirCore(client, path, ct, depth: 0);
+        if (!ok)
+            Log.Warning("MKD failed for {Path}: {Code} {Msg}", path, code, msg);
+        return ok;
+    }
+
+    private static async Task<(bool ok, string code, string msg)> TryMakeDirCore(
+        FluentFTP.AsyncFtpClient client, string path, CancellationToken ct, int depth)
+    {
+        if (depth > 4)
+            return (false, "ERR", "parent recursion depth exceeded");
+
         var sanitized = Ftp.CpsvDataHelper.SanitizeFtpPath(path);
 
-        // First check if directory already exists via CWD
+        // Fast path: directory already exists. CWD is cheap and idempotent on
+        // glftpd. We don't care about the resulting working-dir state since
+        // all subsequent FXP commands use absolute paths.
         var cwdReply = await client.Execute($"CWD {sanitized}", ct);
         if (cwdReply.Success)
-            return true;
+            return (true, cwdReply.Code ?? "250", "exists (CWD)");
 
+        // Create it.
         var reply = await client.Execute($"MKD {sanitized}", ct);
-        if (reply.Success || reply.Message.Contains("exists", StringComparison.OrdinalIgnoreCase))
-            return true;
+        if (IsMkdSuccess(reply))
+            return (true, reply.Code ?? "257", reply.Message ?? "created");
 
-        // Fallback: SITE MKD (glftpd allows this when MKD is blocked)
-        reply = await client.Execute($"SITE MKD {sanitized}", ct);
-        if (reply.Success || reply.Message.Contains("exists", StringComparison.OrdinalIgnoreCase)
-                          || reply.Message.Contains("created", StringComparison.OrdinalIgnoreCase))
-            return true;
+        var mkdCode = reply.Code ?? "";
+        var mkdMsg = reply.Message ?? "";
 
-        // Fallback: CWD to parent + relative MKD (some glftpd configs only allow relative paths)
-        var trimmed = sanitized.TrimEnd('/');
-        var lastSlash = trimmed.LastIndexOf('/');
-        if (lastSlash > 0)
+        // 550 + "no such file" style message → the parent doesn't exist yet.
+        // This is the legit recursive case — walk up one level, MKD the parent,
+        // then retry the original path. One level is usually enough since glftpd
+        // sections are shallow (/mp3/0415/Release.Name is only 2 deep), but the
+        // recursion handles deeper nesting up to depth 4.
+        if (mkdCode == "550" && LooksLikeMissingParent(mkdMsg))
         {
-            var parent = trimmed[..lastSlash];
-            var dirName = trimmed[(lastSlash + 1)..];
-            var cwdParent = await client.Execute($"CWD {parent}", ct);
-            if (cwdParent.Success)
+            var parent = GetParentPath(sanitized);
+            if (!string.IsNullOrEmpty(parent) && parent != "/" && parent != sanitized)
             {
-                reply = await client.Execute($"MKD {dirName}", ct);
-                if (reply.Success || reply.Message.Contains("exists", StringComparison.OrdinalIgnoreCase))
-                    return true;
-
-                reply = await client.Execute($"SITE MKD {dirName}", ct);
-                if (reply.Success || reply.Message.Contains("exists", StringComparison.OrdinalIgnoreCase)
-                                  || reply.Message.Contains("created", StringComparison.OrdinalIgnoreCase))
-                    return true;
+                var parentResult = await TryMakeDirCore(client, parent, ct, depth + 1);
+                if (parentResult.ok)
+                {
+                    var retry = await client.Execute($"MKD {sanitized}", ct);
+                    if (IsMkdSuccess(retry))
+                        return (true, retry.Code ?? "257", retry.Message ?? "created after parent");
+                    return (false, retry.Code ?? "", retry.Message ?? "(no reply text)");
+                }
+                return (false, parentResult.code, $"parent MKD failed: {parentResult.msg}");
             }
         }
 
-        Log.Warning("MKD failed for {Path}: all methods tried (MKD, SITE MKD, relative MKD). Last reply: {Code} {Msg}",
-            path, reply.Code, reply.Message);
-        return false;
+        return (false, mkdCode, mkdMsg);
+    }
+
+    /// <summary>
+    /// cbftp's MKD response check: accept 257 / any 2xx as success, and also
+    /// accept 550 when the message body indicates the directory already exists.
+    /// Different glftpd versions + themes use slightly different phrasings.
+    /// </summary>
+    private static bool IsMkdSuccess(FluentFTP.FtpReply reply)
+    {
+        if (reply.Success) return true;
+        var msg = reply.Message ?? "";
+        return msg.Contains("File exist", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("already exist", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool LooksLikeMissingParent(string msg) =>
+        msg.Contains("No such file", StringComparison.OrdinalIgnoreCase) ||
+        msg.Contains("does not exist", StringComparison.OrdinalIgnoreCase) ||
+        msg.Contains("Not a directory", StringComparison.OrdinalIgnoreCase);
+
+    private static string? GetParentPath(string path)
+    {
+        var trimmed = path.TrimEnd('/');
+        var i = trimmed.LastIndexOf('/');
+        return i <= 0 ? null : trimmed[..i];
     }
 
     /// <summary>
@@ -1349,26 +1395,15 @@ public class SpreadJob : IDisposable
     private static async Task EnsureDirectoryExists(FluentFTP.AsyncFtpClient client,
         string basePath, string relativePath, CancellationToken ct)
     {
+        // TryMakeDir handles missing-parent recursion internally, so no outer
+        // retry loop is needed here. If this throws it means the server gave
+        // a real failure reply (permissions, path-filter, etc.) — the log line
+        // inside TryMakeDir carries the actual reply code + message for
+        // diagnosis.
         if (!await TryMakeDir(client, basePath, ct))
-        {
-            // Try creating parent directory first (section dir might not exist yet)
-            var parentPath = basePath.TrimEnd('/');
-            var lastSlash = parentPath.LastIndexOf('/');
-            if (lastSlash > 0)
-            {
-                var parent = parentPath[..lastSlash];
-                await TryMakeDir(client, parent, ct);
-                // Retry the base path after parent created
-                if (!await TryMakeDir(client, basePath, ct))
-                    throw new IOException($"MKD failed for {basePath} (tried MKD + SITE MKD)");
-            }
-            else
-            {
-                throw new IOException($"MKD failed for {basePath} (tried MKD + SITE MKD)");
-            }
-        }
+            throw new IOException($"MKD failed for {basePath}");
 
-        // If file is in a subdirectory (e.g. "CD1/file.rar"), create nested dirs
+        // If file is in a subdirectory (e.g. "CD1/file.rar"), create nested dirs.
         var dirPart = Path.GetDirectoryName(relativePath)?.Replace('\\', '/');
         if (string.IsNullOrEmpty(dirPart)) return;
 
@@ -1378,7 +1413,7 @@ public class SpreadJob : IDisposable
         {
             current += "/" + part;
             if (!await TryMakeDir(client, current, ct))
-                throw new IOException($"MKD failed for {current} (tried MKD + SITE MKD)");
+                throw new IOException($"MKD failed for {current}");
         }
     }
 
