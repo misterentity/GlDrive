@@ -650,31 +650,79 @@ public class SpreadJob : IDisposable
         {
             var (serverId, basePath) = kvp;
             var serverName = _serverConfigs.TryGetValue(serverId, out var cfg) ? cfg.Name : serverId;
-            try
-            {
-                // Prefer main server pool for scanning (has keepalive/reconnect)
-                // Fall back to spread pool if main pool unavailable
-                FtpConnectionPool? pool = null;
-                if (_mainPools.TryGetValue(serverId, out var mainPool))
-                    pool = mainPool;
-                else if (_pools.TryGetValue(serverId, out var spreadPool))
-                    pool = spreadPool;
 
-                if (pool == null)
+            _mainPools.TryGetValue(serverId, out var mainPool);
+            _pools.TryGetValue(serverId, out var spreadPool);
+
+            if (mainPool == null && spreadPool == null)
+            {
+                Log.Warning("Spread scan: no pool for {Server}", serverName);
+                return;
+            }
+
+            // Try main pool first (has keepalive + reconnect), fall back to
+            // dedicated spread pool if the main pool borrow times out. Main
+            // pool is shared with filesystem/search/downloads, so during a race
+            // burst its 3-4 slots can saturate and the old single-pool path
+            // would abandon the scan with "OperationCanceledException". That
+            // leaves _fileInfos empty, FindBestTransfer returns null, and the
+            // race dies at the 60s inactivity timer with "no viable transfers"
+            // — even though zephyr was ready to receive.
+            var files = new List<SpreadFileInfo>();
+            var scanDone = false;
+            Exception? lastError = null;
+
+            if (mainPool != null)
+            {
+                try
                 {
-                    Log.Warning("Spread scan: no pool for {Server}", serverName);
-                    return;
+                    Log.Information("Spread scan: listing {Server} at {Path} (using main pool)...",
+                        serverName, basePath);
+                    await ScanDirectoryRecursive(mainPool, basePath, basePath, files, 0, ct);
+                    scanDone = true;
                 }
-                Log.Information("Spread scan: listing {Server} at {Path} (using {PoolType} pool)...",
-                    serverName, basePath, _mainPools.ContainsKey(serverId) ? "main" : "spread");
-                var files = new List<SpreadFileInfo>();
-                await ScanDirectoryRecursive(pool, basePath, basePath, files, 0, ct);
+                catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
+                {
+                    // Borrow timeout on main pool — don't blow away the whole scan,
+                    // try the spread pool as a fallback. The fresh buffer must be
+                    // cleared because a partial recursive scan may have appended
+                    // items before hitting the timeout.
+                    Log.Warning("Spread scan: main pool exhausted for {Server}, falling back to spread pool",
+                        serverName);
+                    files.Clear();
+                    lastError = ex;
+                }
+                catch (Exception ex)
+                {
+                    lastError = ex;
+                    files.Clear();
+                }
+            }
+
+            if (!scanDone && spreadPool != null)
+            {
+                try
+                {
+                    Log.Information("Spread scan: listing {Server} at {Path} (using spread pool fallback)...",
+                        serverName, basePath);
+                    await ScanDirectoryRecursive(spreadPool, basePath, basePath, files, 0, ct);
+                    scanDone = true;
+                }
+                catch (Exception ex)
+                {
+                    lastError = ex;
+                }
+            }
+
+            if (scanDone)
+            {
                 Log.Information("Spread scan: {Server} returned {Count} files", serverName, files.Count);
                 lock (scanLock) results.Add((serverId, files));
             }
-            catch (Exception ex)
+            else
             {
-                Log.Warning(ex, "Spread scan FAILED for {Server} at {Path}", serverName, basePath);
+                Log.Warning(lastError, "Spread scan FAILED for {Server} at {Path} (both pools unavailable)",
+                    serverName, basePath);
             }
         });
 
@@ -742,9 +790,12 @@ public class SpreadJob : IDisposable
     {
         if (depth > 3) return; // Max recursion depth
 
-        // Timeout on borrow — don't wait forever if pool is exhausted
+        // Borrow timeout — don't wait forever if pool is exhausted. 20s gives
+        // the main pool enough time to free a slot under heavy race load
+        // without making scan cycles feel sluggish. If the borrow still times
+        // out, ScanSites will retry on the spread pool.
         using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        borrowCts.CancelAfter(TimeSpan.FromSeconds(15));
+        borrowCts.CancelAfter(TimeSpan.FromSeconds(20));
         await using var conn = await pool.Borrow(borrowCts.Token);
 
         FtpListItem[] items;
