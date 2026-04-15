@@ -130,8 +130,10 @@ public class OpenRouterClient : IDisposable
             ],
             "sections": {"TV_HD": "/incoming/tv-hd"},
             "section_mappings": [
-                {"irc_section": "TV-1080P", "remote_section": "TV_HD", "trigger": ".*"},
-                {"irc_section": "X264-HD", "remote_section": "TV_HD", "trigger": ".*"}
+                {"irc_section": "TV", "remote_section": "TV_HD",  "trigger": "(?i).*\\.1080p\\..*"},
+                {"irc_section": "TV", "remote_section": "TV_SD",  "trigger": "(?i).*\\.(480p|576p|xvid|dvdrip)\\..*"},
+                {"irc_section": "TV", "remote_section": "TV_X265","trigger": "(?i).*\\.(x265|hevc)\\..*"},
+                {"irc_section": "MOVIE", "remote_section": "X264_1080", "trigger": "(?i).*\\.1080p\\..*x264.*"}
             ],
             "announce_rules": [
                 {"channel": "#announce", "pattern": "\\[(?<section>[^\\]]+)\\]\\s*(?<release>\\S+)"}
@@ -146,9 +148,23 @@ public class OpenRouterClient : IDisposable
 
         FIELD RULES:
         - "section_mappings" and "announce_rules": ONLY populate if IRC data is
-          provided. If no IRC data, return empty arrays. "section_mappings"
-          entries should only be created when IRC announces reference a section
-          name that does NOT exist in the FTP sections list.
+          provided. If no IRC data, return empty arrays.
+        - "section_mappings" entries map a name from the IRC announce onto a
+          local FTP section key. A single IRC section may legitimately map to
+          SEVERAL local sections — pick which one by writing a release-name
+          REGEX in the "trigger" field that only matches the releases that
+          belong in that destination. Examples:
+            * IRC "TV" with release "Foo.S01E01.1080p.WEB-DL.x264-GRP"
+              should go to TV_HD — trigger: "(?i).*\\.1080p\\..*"
+            * IRC "TV" with release "Foo.S01E01.720p.HDTV.x264-GRP"
+              should go to TV_SD — trigger: "(?i).*\\.(480p|576p|720p\\.HDTV)\\..*"
+            * IRC "MOVIE" with release ending "-x265-GRP" should go to an
+              X265 section — trigger: "(?i).*\\.(x265|hevc)\\..*"
+          Use ".*" ONLY when the IRC section maps 1:1 to exactly one local
+          section with no discrimination needed. Prefer real triggers whenever
+          the IRC announces in the provided sample show mixed release types
+          under a single IRC section. Use case-insensitive `(?i)` flag and
+          escape dots as `\\.`.
         - "priority": infer site tier from rules — use "High" or "VeryHigh" for
           top-tier / pre-sites, "Normal" for standard sites, "Low" / "VeryLow"
           for dump sites. If unclear, use "Normal". Omit if no signal.
@@ -240,9 +256,14 @@ public class OpenRouterClient : IDisposable
             5. Identify the announce-bot nick and channel; suggest an IrcAnnounceRule
                regex with named groups (?<section>...) (?<release>...) that matches
                the bot's actual announce format.
-            6. Extract any section names that appear in IRC announces but NOT in the
-               FTP section list — these are candidates for SectionMapping entries
-               (IRC name → internal name).
+            6. Extract every distinct section name that appears in IRC announces.
+               For each one, look at the actual release names announced under it
+               and build "section_mappings" rows that route each release type to
+               the correct LOCAL FTP section via the "trigger" regex. If the IRC
+               section mixes HD and SD releases, emit MULTIPLE rows (one per
+               target) with discriminating triggers — NEVER emit a single ".*"
+               row when discrimination is possible. Re-read the trigger guidance
+               in the system prompt.
             7. Spot any release groups shown as "pre'd by" or "aff" in IRC — add
                them to the affils list if not already present.
             """;

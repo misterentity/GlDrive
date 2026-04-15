@@ -745,14 +745,28 @@ public partial class ServerEditDialog : Window
             TestResultText.Text = $"Analyzing with AI ({model})" +
                 (ircMessages.Count > 0 ? $" — including {ircMessages.Count} IRC messages" : "") + "...";
 
+            Log.Information("AI Setup invoked: model={Model}, sections={SectionCount}, " +
+                "ircMessages={IrcMsgCount}, ircPatterns={IrcPatCount}",
+                model, currentSections.Count, ircMessages.Count, ircPatterns?.Count ?? 0);
+
             using var aiClient = new OpenRouterClient(apiKey, model);
             var result = await aiClient.AnalyzeSiteRules(rulesText, currentSections, currentAffils,
                 sectionSamples, ircMessages, ircPatterns);
 
             if (result == null)
             {
-                // AI failed — use deterministic fallback parser
+                Log.Warning("AI Setup: AnalyzeSiteRules returned null — falling back to deterministic parser only");
                 result = new AiSetupResult { Explanation = "AI unavailable — used rule-text parser" };
+            }
+            else
+            {
+                Log.Information("AI Setup response: skiplist={Skip}, sections={Sec}, " +
+                    "section_mappings={Map}, announce_rules={Ann}",
+                    result.SkiplistRules.Count, result.SuggestedSections.Count,
+                    result.SectionMappings.Count, result.AnnounceRules.Count);
+                foreach (var sm in result.SectionMappings)
+                    Log.Information("AI Setup mapping: irc='{Irc}' remote='{Remote}' trigger='{Trigger}'",
+                        sm.IrcSection, sm.RemoteSection, sm.Trigger);
             }
 
             // Always supplement with deterministic parser to catch patterns AI may have missed
@@ -873,8 +887,20 @@ public partial class ServerEditDialog : Window
                         var isDefault = string.IsNullOrEmpty(existingTrigger) || existingTrigger == ".*";
                         if (isDefault && aiTrigger != ".*")
                         {
+                            Log.Information("AI Setup: updating trigger for mapping {Irc}→{Remote}: '{Old}' → '{New}'",
+                                existing.IrcSection, existing.RemoteSection, existingTrigger, aiTrigger);
                             existing.TriggerRegex = aiTrigger;
                             updated++;
+                        }
+                        else if (!isDefault)
+                        {
+                            Log.Information("AI Setup: preserving user-edited trigger for {Irc}→{Remote}: '{Existing}' (AI suggested '{Ai}')",
+                                existing.IrcSection, existing.RemoteSection, existingTrigger, aiTrigger);
+                        }
+                        else
+                        {
+                            Log.Information("AI Setup: AI suggested '.*' for {Irc}→{Remote}, nothing to update",
+                                existing.IrcSection, existing.RemoteSection);
                         }
                         continue;
                     }
