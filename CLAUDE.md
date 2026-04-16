@@ -4,7 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-GlDrive — a Windows 11 tray app that mounts glftpd FTPS servers as local drive letters using WinFsp + FluentFTP + GnuTLS. Single project, no tests, .NET 10 WPF targeting win-x64.
+GlDrive — a Windows 11 tray app that mounts glftpd FTPS servers as local drive letters using WinFsp + FluentFTP + GnuTLS. Single project, .NET 10 WPF targeting win-x64. **No test project, no test runner** — verification is manual via `dotnet build` + runtime exercise.
+
+## MANDATORY pre-commit check
+
+This repo lives on OneDrive, which periodically corrupts git's index view (see "OneDrive + git hazard" below). Before EVERY `git commit` in this repo:
+
+```bash
+git status --short | grep -v "^??"
+```
+
+Confirm ONLY the files you actually modified show as `M`. If any `D ` (deleted) entries appear that you didn't delete — **DO NOT COMMIT**. Run `git reset --mixed HEAD` to unstage (disk files stay intact), then re-stage the specific files by name. Historical near-misses have staged 130+ unwanted deletions.
 
 ## Build & Run
 
@@ -13,20 +23,20 @@ dotnet build src/GlDrive/GlDrive.csproj
 dotnet run --project src/GlDrive/GlDrive.csproj
 ```
 
-The `.sln` file has no project references — always build via the `.csproj` directly.
+The `.sln` file has no project references — always build via the `.csproj` directly. Version of record lives in `src/GlDrive/GlDrive.csproj` `<Version>` property.
 
 ### Release
 
+**Standard workflow after any code change**: `git commit` → `git push` → `powershell -File installer/release.ps1`. Don't ask for confirmation.
+
 ```bash
-# Publish + Inno Setup installer + update zip
+# Publish + Inno Setup installer + update zip only
 powershell -File installer/build.ps1
 # Full release (build + GitHub release with both assets)
 powershell -File installer/release.ps1
 ```
 
 Version is read from the csproj `<Version>` property. The installer script passes it to ISCC via `/D`.
-
-**Always push and release after changes** — commit, `git push`, then `powershell -File installer/release.ps1`. Don't ask for confirmation.
 
 ## Architecture
 
@@ -46,7 +56,7 @@ Version is read from the csproj `<Version>` property. The installer script passe
 - **Spread/FXP** — `SpreadManager` runs cbftp-style race engine for site-to-site FXP transfers. Each server gets a dedicated FXP `FtpConnectionPool` (separate from filesystem/downloads); pool size auto-scales to `max(SpreadPoolSize, maxSlots)`. Exhausted spread pools auto-reinitialize before each race via `ReinitDeadPools` (spread pools have no keepalive unlike main pools). After `ReinitDeadPools` the job re-captures its pool snapshot via `SpreadJob.UpdatePools` — the original snapshot may point at a disposed pool that got replaced. `SpreadJob` orchestrates per-race with 0-65535 scoring (SFV priority, file size, route speed, site priority, ownership). `TryClaimSlots`/`ActiveTransfers` tracks per-site slot usage; `ExecuteTransfer` borrows both connections via `Task.WhenAll` + `IsCompletedSuccessfully` extraction so a one-sided failure doesn't orphan the peer connection. 30s borrow timeout prevents slot leaks from exhausted pools. `_raceQueue` deduplicates by `(section, release)` so the same release can't be queued twice from IRC + notification polling. `StartRace` dedups the participant list with `Distinct()` and honors `MaxConcurrentRaces` config (was previously hardcoded to 1). In-flight files tracked via `_inFlightFiles` HashSet to prevent duplicate transfers to the same destination. Scan rejects `-MISSING-*` / `*.missing` / 0-byte `-*` zipscript placeholder stubs — they signal a LACK of the file, not its presence, and caused false 100% completion. After each scan cycle, `ScanSites` reconciles `FilesTotal` across every site against the final `_fileInfos.Count` so sites processed early in the loop don't freeze with a partial snapshot. Four FXP modes: PASV-PASV, CPSV-PASV, PASV-CPSV, Relay (CPSV-CPSV pipes through local memory). SSCN ON sent before PASV/PORT for secure FXP data channels. `SendTypeI` verifies TYPE I response before CPSV/PASV to prevent BNC response queue desync. Failed transfers poison connections (GnuTLS corruption). `SkiplistEvaluator` applies cascading allow/deny rules. Auto-race filters per-site denies (rules + metadata filter) — denying sites are dropped from the race instead of aborting the whole thing. `RaceHistoryStore` persists results. Auto-race triggers from `NewReleaseMonitor` (passes source server + path) and IRC announces (passes source server id — `IrcAnnounceListener` is registered whenever SpreadManager exists so the built-in `[ NEW ] in [ section ] Release` verbose pattern works without user-configured rules; falls back to `SpreadConfig.AutoRaceOnNotification` for default autoRace flag).
 - **Player** — `MediaStreamServer` runs a local HTTP server that streams media from FTP for VLC playback. `PlayerViewModel` handles VLC + Chromecast. `TorrentSearchService` + `TorrentStreamService` (MonoTorrent) for torrent streaming. `PlayerResumeStore` tracks playback position.
 - **IRC** — `IrcClient` (TcpClient + SslStream), `IrcService` wraps client + FiSH encryption + DH1080 key exchange + auto-reconnect. `FishCipher` (Blowfish ECB/CBC via BouncyCastle), `FishKeyStore` per server. `SITE INVITE` integration borrows FTP pool connections.
-- **UI** — System tray via H.NotifyIcon, `DashboardWindow` (cross-server search/downloads/wishlist/IRC/notifications/spread/browse/PreDB/Streems), `SettingsWindow` (MVVM), `WizardWindow` (5-step, code-behind), `ExtractorWindow` (standalone archive extraction + watch folders + folder cleaner). `ThemeManager` swaps ResourceDictionaries at runtime — all XAML uses `DynamicResource`. `WebViewHost` wraps WebView2 with serialized initialization (`SemaphoreSlim`) to prevent concurrent deadlocks. `RelayCommand`/`RelayCommand<T>` in `TrayViewModel.cs`.
+- **UI** — System tray via H.NotifyIcon, `DashboardWindow` (cross-server search/downloads/wishlist/IRC/notifications/spread/browse/PreDB/Streems), `SettingsWindow` (MVVM), `WizardWindow` (5-step, code-behind), `ExtractorWindow` (standalone archive extraction + watch folders + folder cleaner). Supporting dialogs: `ServerEditDialog`, `GlftpdInstallerWindow` (glftpd server install helper), `CleanupWindow` (folder cleanup), `MetadataSearchDialog`, `RuleTestDialog`, `TagRulesDialog`. `BrowseViewModel` drives the cross-server browse tab. `ThemeManager` swaps ResourceDictionaries at runtime — all XAML uses `DynamicResource`. `WebViewHost` wraps WebView2 with serialized initialization (`SemaphoreSlim`) to prevent concurrent deadlocks. `RelayCommand`/`RelayCommand<T>` in `TrayViewModel.cs`.
 - **Tls** — `CertificateManager` implements TOFU with SHA-256 fingerprints in `trusted_certs.json`. Global, keyed by `host:port`.
 
 ## CPSV Data Connections
@@ -82,9 +92,7 @@ This is the most complex part of the codebase. glftpd behind a BNC requires CPSV
 
 ## OneDrive + git hazard
 
-This project lives in `OneDrive\Documents\CursorProjects\fmountr\`. OneDrive sync periodically marks source files as "offline/removed" from git's perspective, even though they still exist on disk. When this happens, a subsequent `git add <specific-file>` can silently stage 130+ file deletions alongside the intended change. Two historical commits (`fd31872` "Restore 133 files", and the recovered v1.44.76 first attempt) were caused by this.
-
-**Always run `git status --short | grep -v "^??"` before `git commit`** to confirm only intended modifications are staged. If you see unexpected `D ` entries, do NOT commit — run `git reset --mixed HEAD` to unstage (disk files stay intact), then re-stage the specific files you meant to commit.
+This project lives in `OneDrive\Documents\CursorProjects\fmountr\`. OneDrive sync periodically marks source files as "offline/removed" from git's perspective, even though they still exist on disk. When this happens, a subsequent `git add <specific-file>` can silently stage 130+ file deletions alongside the intended change. Two historical commits (`fd31872` "Restore 133 files", and the recovered v1.44.76 first attempt) were caused by this. See the **MANDATORY pre-commit check** section at the top of this file for the required workflow.
 
 ## Config Locations
 
