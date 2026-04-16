@@ -16,6 +16,7 @@ public class SpreadManager : IDisposable
     private readonly SpeedTracker _speedTracker = new();
     private readonly SkiplistEvaluator _skiplist = new();
     private readonly RaceHistoryStore _history = new();
+    private readonly SectionBlacklistStore _blacklist = new();
     private readonly MetadataFilterService _metadataFilter;
     private readonly Lock _lock = new();
     private bool _disposed;
@@ -30,6 +31,7 @@ public class SpreadManager : IDisposable
     }
 
     public RaceHistoryStore History => _history;
+    public SectionBlacklistStore Blacklist => _blacklist;
 
     public event Action<SpreadJob>? JobStarted;
     public event Action<SpreadJob>? JobCompleted;
@@ -40,6 +42,7 @@ public class SpreadManager : IDisposable
         _config = config;
         _metadataFilter = new MetadataFilterService(config);
         _history.Load();
+        _blacklist.Load();
     }
 
     public async Task InitializePool(string serverId, FtpClientFactory factory, CancellationToken ct)
@@ -163,7 +166,7 @@ public class SpreadManager : IDisposable
         }
 
         var job = new SpreadJob(section, releaseName, mode, _config.Spread,
-            pools, mainPools, configs, _speedTracker, _skiplist,
+            pools, mainPools, configs, _speedTracker, _skiplist, _blacklist,
             knownSourceServerId, knownSourcePath);
 
         job.ProgressChanged += j => JobProgressChanged?.Invoke(j);
@@ -407,6 +410,18 @@ public class SpreadManager : IDisposable
             var mapping = SectionMapper.Resolve(serverConfig.SpreadSite, category, releaseName);
             var effectiveSection = mapping?.RemoteSection ?? category;
             var tagRules = mapping?.TagRules ?? (IReadOnlyList<SkiplistRule>)Array.Empty<SkiplistRule>();
+
+            // Blacklist check: sites that previously failed MKD permanently for
+            // this section (550 path-filter, permission denied) are dropped here
+            // so we don't waste borrow timeouts rediscovering the same NO every
+            // race. SpreadJob also enforces this at dest selection for manually
+            // started (non-auto) races.
+            if (_blacklist.IsBlacklisted(serverId, category))
+            {
+                var entry = _blacklist.Get(serverId, category);
+                denials.Add($"{serverConfig.Name}: blacklisted ({entry?.Reason ?? "permanent MKD failure"})");
+                continue;
+            }
 
             if (debug)
             {

@@ -29,6 +29,7 @@ public class SpreadJob : IDisposable
     private readonly Dictionary<string, ServerConfig> _serverConfigs;
     private readonly SpeedTracker _speedTracker;
     private readonly SkiplistEvaluator _skiplist;
+    private readonly SectionBlacklistStore? _blacklist;
     private readonly CancellationTokenSource _cts = new();
 
     // Split locks by concern to reduce contention
@@ -116,6 +117,7 @@ public class SpreadJob : IDisposable
         Dictionary<string, FtpConnectionPool> mainPools,
         Dictionary<string, ServerConfig> serverConfigs,
         SpeedTracker speedTracker, SkiplistEvaluator skiplist,
+        SectionBlacklistStore? blacklist = null,
         string? knownSourceServerId = null, string? knownSourcePath = null)
     {
         Section = section;
@@ -126,6 +128,7 @@ public class SpreadJob : IDisposable
         _serverConfigs = serverConfigs;
         _speedTracker = speedTracker;
         _skiplist = skiplist;
+        _blacklist = blacklist;
         _knownSourceServerId = knownSourceServerId;
         _knownSourcePath = knownSourcePath;
         _mainPools = mainPools;
@@ -253,6 +256,20 @@ public class SpreadJob : IDisposable
             {
                 if (sitePaths.ContainsKey(serverId)) continue; // Already has it
                 if (config.SpreadSite.DownloadOnly) continue; // Can't upload to download-only
+
+                // Skip sites that have permanently failed MKD for this section.
+                // Without this check, every race re-discovers the 550 the hard
+                // way (5 retries per file * N files), burning minutes per race.
+                if (_blacklist != null && _blacklist.IsBlacklisted(serverId, Section))
+                {
+                    var entry = _blacklist.Get(serverId, Section);
+                    Log.Information("Spread: {Server} blacklisted for [{Section}] — {Reason} " +
+                        "(first failed {When:u}, {Count} total). Skipping. " +
+                        "Delete entry from section-blacklist.json to retry.",
+                        config.Name, Section, entry?.Reason ?? "unknown",
+                        entry?.FirstFailedAt ?? DateTime.UtcNow, entry?.FailureCount ?? 0);
+                    continue;
+                }
 
                 // Find the best section path on this server
                 var sectionMatch = config.SpreadSite.Sections
@@ -1264,7 +1281,7 @@ public class SpreadJob : IDisposable
             var fileName = file.Name;
             transfer.BeforeStore = async storeCt =>
             {
-                await EnsureDirectoryExists(dstClient, dstBasePath, fileName, storeCt);
+                await EnsureDirectoryExists(dstClient, dstId, dstBasePath, fileName, storeCt);
                 lock (_ownershipLock) _dirsCreated.Add(dstId);
             };
             var startTime = DateTime.UtcNow;
@@ -1566,10 +1583,23 @@ public class SpreadJob : IDisposable
     /// </summary>
     private static async Task<bool> TryMakeDir(FluentFTP.AsyncFtpClient client, string path, CancellationToken ct)
     {
+        var (ok, _, _) = await TryMakeDirWithResult(client, path, ct);
+        return ok;
+    }
+
+    /// <summary>
+    /// Same as <see cref="TryMakeDir"/> but returns the FTP reply code + message
+    /// on failure so the caller can classify the error (permanent vs transient)
+    /// and drive the section blacklist. Logs the failure once here so callers
+    /// don't need to.
+    /// </summary>
+    private static async Task<(bool ok, string code, string msg)> TryMakeDirWithResult(
+        FluentFTP.AsyncFtpClient client, string path, CancellationToken ct)
+    {
         var (ok, code, msg) = await TryMakeDirCore(client, path, ct, depth: 0);
         if (!ok)
             Log.Warning("MKD failed for {Path}: {Code} {Msg}", path, code, msg);
-        return ok;
+        return (ok, code, msg);
     }
 
     private static async Task<(bool ok, string code, string msg)> TryMakeDirCore(
@@ -1683,16 +1713,20 @@ public class SpreadJob : IDisposable
         return null;
     }
 
-    private static async Task EnsureDirectoryExists(FluentFTP.AsyncFtpClient client,
+    private async Task EnsureDirectoryExists(FluentFTP.AsyncFtpClient client, string dstId,
         string basePath, string relativePath, CancellationToken ct)
     {
-        // TryMakeDir handles missing-parent recursion internally, so no outer
-        // retry loop is needed here. If this throws it means the server gave
-        // a real failure reply (permissions, path-filter, etc.) — the log line
-        // inside TryMakeDir carries the actual reply code + message for
-        // diagnosis.
-        if (!await TryMakeDir(client, basePath, ct))
+        // TryMakeDirWithResult handles missing-parent recursion internally.
+        // On failure we classify the reply code+message: permanent (550 path-filter,
+        // permission denied, etc.) → add to section blacklist so future races skip
+        // this dst at selection. Transient (timeout, 4xx, GnuTLS hiccup) → just throw
+        // and let the existing destFailure backoff ladder handle it.
+        var (ok, code, msg) = await TryMakeDirWithResult(client, basePath, ct);
+        if (!ok)
+        {
+            RecordIfPermanent(dstId, basePath, code, msg);
             throw new IOException($"MKD failed for {basePath}");
+        }
 
         // If file is in a subdirectory (e.g. "CD1/file.rar"), create nested dirs.
         var dirPart = Path.GetDirectoryName(relativePath)?.Replace('\\', '/');
@@ -1703,9 +1737,21 @@ public class SpreadJob : IDisposable
         foreach (var part in parts)
         {
             current += "/" + part;
-            if (!await TryMakeDir(client, current, ct))
+            var (okSub, codeSub, msgSub) = await TryMakeDirWithResult(client, current, ct);
+            if (!okSub)
+            {
+                RecordIfPermanent(dstId, current, codeSub, msgSub);
                 throw new IOException($"MKD failed for {current}");
+            }
         }
+    }
+
+    private void RecordIfPermanent(string dstId, string path, string code, string msg)
+    {
+        if (_blacklist == null) return;
+        if (!MkdFailureClassifier.IsPermanent(code, msg)) return;
+        var name = _serverConfigs.TryGetValue(dstId, out var cfg) ? cfg.Name : dstId;
+        _blacklist.RecordPermanentFailure(dstId, name, Section, path, $"{code} {msg}".Trim());
     }
 
     public void Stop()
