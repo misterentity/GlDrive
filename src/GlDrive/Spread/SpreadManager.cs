@@ -217,8 +217,6 @@ public class SpreadManager : IDisposable
                     // with stale references.
                     Log.Warning("Spread job {Release}: only {Count} pools available after reinit, aborting",
                         job.ReleaseName, fresh.Count);
-                    lock (_lock) _activeJobs.Remove(job);
-                    DequeueNextRace();
                     return;
                 }
 
@@ -229,8 +227,23 @@ public class SpreadManager : IDisposable
             catch (Exception ex)
             {
                 Log.Error(ex, "Spread job crashed: {Release} [{Section}]", job.ReleaseName, job.Section);
-                lock (_lock) _activeJobs.Remove(job);
-                DequeueNextRace();
+            }
+            finally
+            {
+                // Always remove from active jobs — RunAsync can exit normally
+                // (hard timeout, user stop, while-loop end) without invoking
+                // Error/Completed, which left zombie jobs in _activeJobs and
+                // permanently blocked the queue.
+                bool wasActive;
+                lock (_lock) wasActive = _activeJobs.Remove(job);
+                if (wasActive)
+                {
+                    RecordHistory(job);
+                    if (job.State == SpreadJobState.Stopped)
+                        Log.Information("Spread job stopped: {Release} [{Section}]",
+                            job.ReleaseName, job.Section);
+                    DequeueNextRace();
+                }
             }
         });
         return job;
@@ -466,11 +479,14 @@ public class SpreadManager : IDisposable
 
         try
         {
-            StartRace(category, releaseName, allowed, SpreadMode.Race, sourceServerId, sourcePath);
-            Log.Information("Auto-race started: {Release} [{Section}] across {Count} servers",
-                releaseName, category, allowed.Count);
-            var suffix = denials.Count > 0 ? $" (skipped: {string.Join(", ", denials)})" : "";
-            AutoRaceAttempted?.Invoke(category, releaseName, $"Racing on {allowed.Count} servers{suffix}");
+            var job = StartRace(category, releaseName, allowed, SpreadMode.Race, sourceServerId, sourcePath);
+            if (job != null)
+            {
+                Log.Information("Auto-race started: {Release} [{Section}] across {Count} servers",
+                    releaseName, category, allowed.Count);
+                var suffix = denials.Count > 0 ? $" (skipped: {string.Join(", ", denials)})" : "";
+                AutoRaceAttempted?.Invoke(category, releaseName, $"Racing on {allowed.Count} servers{suffix}");
+            }
         }
         catch (Exception ex)
         {
