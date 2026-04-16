@@ -44,6 +44,7 @@ public class ConfigManager
             var result = JsonSerializer.Deserialize<AppConfig>(json, JsonOptions) ?? new AppConfig();
             MigrateApiKeys(json, result);
             MigrateSectionsToMappings(result);
+            MigrateSlotDefaults(result);
             return result;
         }
         catch (Exception ex)
@@ -144,6 +145,35 @@ public class ConfigManager
             }
             Log.Information("Migrated {Count} sections to SectionMappings on server {Name}",
                 server.SpreadSite.Sections.Count, server.Name);
+        }
+    }
+
+    /// <summary>
+    /// Bump per-server spread slot defaults from 1 (pre-v1.44.82) to 3 for
+    /// existing configs. Slots=1 forces serial transfers in chain mode which
+    /// can't keep up with glftpd's stale-release timeouts on large releases,
+    /// causing dirscript to deny MKD mid-race and leaving incomplete releases
+    /// that get nuked. Only migrates the exact old-default value of 1 so
+    /// users who explicitly chose a different number are left alone.
+    /// </summary>
+    private static void MigrateSlotDefaults(AppConfig config)
+    {
+        foreach (var server in config.Servers)
+        {
+            var changed = false;
+            if (server.SpreadSite.MaxUploadSlots == 1)
+            {
+                server.SpreadSite.MaxUploadSlots = 3;
+                changed = true;
+            }
+            if (server.SpreadSite.MaxDownloadSlots == 1)
+            {
+                server.SpreadSite.MaxDownloadSlots = 3;
+                changed = true;
+            }
+            if (changed)
+                Log.Information("Migrated spread slot defaults 1→3 on server {Name} (was serial, now parallel)",
+                    server.Name);
         }
     }
 

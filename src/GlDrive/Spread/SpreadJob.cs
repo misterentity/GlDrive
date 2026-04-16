@@ -560,8 +560,14 @@ public class SpreadJob : IDisposable
                     }, token);
                 }
 
-                // Brief pause between scheduling — enough time for next score round
-                await Task.Delay(500, token);
+                // Brief pause between scheduling — 50ms is enough for the
+                // background transfer Task.Run to actually claim a slot and
+                // register itself before the next iteration scores again.
+                // Was 500ms which throttled parallel scheduling too hard:
+                // with MaxUploadSlots=N, it took N*500ms = 1.5s just to fill
+                // slots. Dropped to 50ms so the parallel-slot capacity
+                // actually gets used on fast sites.
+                await Task.Delay(50, token);
             }
 
             if (State == SpreadJobState.Running)
@@ -578,40 +584,91 @@ public class SpreadJob : IDisposable
         }
         finally
         {
-            // Clean up empty directories on destinations where no files were transferred
-            _ = CleanupEmptyDirs(sitePaths);
+            // Clean up any destination directory we created where the release
+            // didn't finish (either zero files or partial). SITE WIPE -r removes
+            // the directory WITHOUT deducting user credits — glftpd's whole
+            // point of SITE WIPE vs plain DELE/RMD. Left-behind partial
+            // releases get auto-nuked by dirscript/zipscript which costs the
+            // user credits and triggers ratio penalties, so we always clean up
+            // our own incomplete work before leaving.
+            await CleanupIncompleteDirs(sitePaths);
         }
     }
 
     /// <summary>
-    /// Remove release directories on destinations where we created them (MKD) but
-    /// never successfully transferred any files. Prevents empty folder litter.
+    /// Remove release directories on destinations where we created them (MKD)
+    /// but the release didn't fully land. Uses glftpd's SITE WIPE -r which
+    /// removes a directory WITHOUT deducting user credits — that's the whole
+    /// point of wipe vs delete. Any destination with owned &lt; total is
+    /// considered incomplete and wiped. The source server and any destination
+    /// that successfully received every file are left alone.
     /// </summary>
-    private async Task CleanupEmptyDirs(Dictionary<string, string> sitePaths)
+    private async Task CleanupIncompleteDirs(Dictionary<string, string> sitePaths)
     {
-        HashSet<string> created, succeeded;
+        HashSet<string> created;
+        Dictionary<string, int> ownedCounts;
+        int total;
         lock (_ownershipLock)
         {
             created = [.._dirsCreated];
-            succeeded = [.._serversWithSuccessfulTransfer];
+            ownedCounts = new Dictionary<string, int>(_serverFileCount);
+            total = _expectedFileCount > 0 ? _expectedFileCount : _fileInfos.Count;
         }
 
         foreach (var serverId in created)
         {
-            if (succeeded.Contains(serverId)) continue; // Had successful transfers — keep dir
+            var owned = ownedCounts.GetValueOrDefault(serverId);
+            // If the dest has every file the release needs, it's complete.
+            // Leave it alone (don't wipe a good release!).
+            if (total > 0 && owned >= total) continue;
+
             if (!sitePaths.TryGetValue(serverId, out var path)) continue;
             if (!_pools.TryGetValue(serverId, out var pool)) continue;
 
             var serverName = _serverConfigs.TryGetValue(serverId, out var cfg) ? cfg.Name : serverId;
+            var sanitized = Ftp.CpsvDataHelper.SanitizeFtpPath(path);
+
             try
             {
                 await using var conn = await pool.Borrow(CancellationToken.None);
-                await conn.Client.Execute($"RMD {Ftp.CpsvDataHelper.SanitizeFtpPath(path)}", CancellationToken.None);
-                Log.Information("Spread cleanup: removed empty dir {Path} on {Server}", path, serverName);
+
+                // Prefer SITE WIPE -r: removes dir + contents without credit
+                // deduction. This is the critical difference — if we use DELE
+                // or plain RMD, the user gets nuked for leaving incomplete
+                // files behind AND pays the credit penalty for deleting their
+                // own upload. SITE WIPE is glftpd's explicit "no penalty"
+                // removal command.
+                var wipeReply = await conn.Client.Execute($"SITE WIPE -r {sanitized}", CancellationToken.None);
+                if (wipeReply.Success ||
+                    (wipeReply.Message ?? "").Contains("wiped", StringComparison.OrdinalIgnoreCase) ||
+                    (wipeReply.Message ?? "").Contains("removed", StringComparison.OrdinalIgnoreCase))
+                {
+                    Log.Information("Spread cleanup: SITE WIPE -r {Path} on {Server} ({Owned}/{Total} files — {Reason})",
+                        path, serverName, owned, total, owned == 0 ? "empty" : "partial");
+                    continue;
+                }
+
+                // Fall back to plain RMD when SITE WIPE isn't available or
+                // denied. Only useful when the dir is already empty — RMD on
+                // a non-empty dir will fail and glftpd will nuke us anyway,
+                // but it's worth trying as a last resort.
+                Log.Warning("Spread cleanup: SITE WIPE failed on {Server} ({Code} {Msg}), trying RMD",
+                    serverName, wipeReply.Code, wipeReply.Message);
+                var rmdReply = await conn.Client.Execute($"RMD {sanitized}", CancellationToken.None);
+                if (rmdReply.Success)
+                {
+                    Log.Information("Spread cleanup: RMD {Path} on {Server} (fallback)", path, serverName);
+                }
+                else
+                {
+                    Log.Warning("Spread cleanup: could not remove {Path} on {Server} — site may nuke you ({Code} {Msg})",
+                        path, serverName, rmdReply.Code, rmdReply.Message);
+                }
             }
             catch (Exception ex)
             {
-                Log.Debug(ex, "Spread cleanup: failed to remove {Path} on {Server}", path, serverName);
+                Log.Warning(ex, "Spread cleanup: failed to wipe {Path} on {Server} — partial release left behind, site may nuke",
+                    path, serverName);
             }
         }
     }

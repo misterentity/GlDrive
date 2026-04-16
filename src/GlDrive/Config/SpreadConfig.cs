@@ -22,8 +22,12 @@ public class SiteSpreadConfig
 {
     public Dictionary<string, string> Sections { get; set; } = new();
     public SitePriority Priority { get; set; } = SitePriority.Normal;
-    public int MaxUploadSlots { get; set; } = 1;
-    public int MaxDownloadSlots { get; set; } = 1;
+    // Defaults raised from 1 → 3 so new configs run properly parallel
+    // transfers out of the box. With slots=1, chain mode races were fully
+    // serial at ~5MB/s per file and couldn't finish 2160p releases before
+    // glftpd's dirscript flagged them as stale and started denying MKD.
+    public int MaxUploadSlots { get; set; } = 3;
+    public int MaxDownloadSlots { get; set; } = 3;
     public bool DownloadOnly { get; set; }
     public List<SkiplistRule> Skiplist { get; set; } = [];
     public List<string> Affils { get; set; } = [];
