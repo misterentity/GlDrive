@@ -36,17 +36,26 @@ public class WebViewHost : ContentControl
 
         try
         {
-            _webView = new WebView2();
-            Content = _webView;
+            var dataDir = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "GlDrive", "WebView2");
 
-            // Serialize WebView2 initialization — multiple instances sharing the same
-            // browser process can deadlock if they call EnsureCoreWebView2Async concurrently
-            await _initLock.WaitAsync();
+            _webView = new WebView2();
+            _webView.CreationProperties = new CoreWebView2CreationProperties
+            {
+                UserDataFolder = dataDir
+            };
+
+            Log.Information("WebView2 init starting for {Url}", url);
+
+            // Serialize initialization AND visual tree attachment — adding a WebView2
+            // to the visual tree triggers auto-init; if multiple instances auto-init
+            // concurrently they deadlock on the browser process lock.
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await _initLock.WaitAsync(cts.Token);
             try
             {
-                var dataDir = System.IO.Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                    "GlDrive", "WebView2");
+                Content = _webView;
                 var env = await CoreWebView2Environment.CreateAsync(userDataFolder: dataDir);
                 await _webView.EnsureCoreWebView2Async(env);
             }
@@ -54,6 +63,9 @@ public class WebViewHost : ContentControl
             {
                 _initLock.Release();
             }
+
+            Log.Information("WebView2 initialized for {Url}", url);
+
             var settings = _webView.CoreWebView2.Settings;
             settings.UserAgent =
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -62,7 +74,20 @@ public class WebViewHost : ContentControl
             settings.AreDefaultContextMenusEnabled = false;
             settings.IsStatusBarEnabled = false;
 
-            // Restrict navigation to the initial origin (unless cross-origin is allowed for login flows)
+            // Suppress JS alert/confirm/prompt — they create native modals that block the WPF window
+            _webView.CoreWebView2.ScriptDialogOpening += (_, args) =>
+            {
+                Log.Debug("WebView2 suppressed {Kind} dialog", args.Kind);
+                args.Accept();
+            };
+
+            // Block popup windows
+            _webView.CoreWebView2.NewWindowRequested += (_, args) =>
+            {
+                Log.Debug("WebView2 blocked new window: {Uri}", args.Uri);
+                args.Handled = true;
+            };
+
             if (!allowCrossOrigin)
             {
                 var allowedOrigin = new Uri(url).GetLeftPart(UriPartial.Authority);
@@ -81,9 +106,7 @@ public class WebViewHost : ContentControl
                     Log.Warning("WebView2 navigation failed: status={Status}, id={Id}",
                         args.WebErrorStatus, args.NavigationId);
             };
-            // Fix DPI double-scaling: WPF applies its own DPI transform, and WebView2 also
-            // scales for DPI, resulting in content that appears zoomed in on high-DPI displays.
-            // Counteract by setting ZoomFactor to 1/dpiScale.
+
             try
             {
                 var source = PresentationSource.FromVisual(this)
@@ -102,6 +125,13 @@ public class WebViewHost : ContentControl
 
             _webView.CoreWebView2.Navigate(url);
             return true;
+        }
+        catch (OperationCanceledException)
+        {
+            Log.Warning("WebView2 initialization timed out for {Url}", url);
+            _webView = null;
+            ShowFallback();
+            return false;
         }
         catch (Exception ex)
         {
