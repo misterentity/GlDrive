@@ -146,7 +146,7 @@ public class SettingsViewModel : INotifyPropertyChanged
         config.Downloads.PlaySoundOnComplete = PlaySoundOnComplete;
         config.Downloads.Theme = Theme;
 
-        config.Spread.SpreadPoolSize = int.TryParse(SpreadPoolSize, out var sps) ? Math.Clamp(sps, 1, 10) : 2;
+        config.Spread.SpreadPoolSize = int.TryParse(SpreadPoolSize, out var sps) ? Math.Clamp(sps, 1, 10) : 3;
         config.Spread.TransferTimeoutSeconds = int.TryParse(SpreadTransferTimeout, out var stt) ? Math.Clamp(stt, 10, 600) : 60;
         config.Spread.HardTimeoutSeconds = int.TryParse(SpreadHardTimeout, out var sht) ? Math.Clamp(sht, 60, 7200) : 1200;
         config.Spread.MaxConcurrentRaces = int.TryParse(SpreadMaxConcurrent, out var smc) ? Math.Clamp(smc, 1, 10) : 3;
