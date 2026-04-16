@@ -444,12 +444,21 @@ public class SpreadJob : IDisposable
                         }
                     }
 
-                    // Completion sweep: cbftp-style. First idle window clears
-                    // failures + reinits pools + rescans; second idle window
-                    // gives up. 15s + 15s = 30s total, replacing the old
-                    // 60s × 3 = 180s schedule which spent most of its budget
-                    // burning stale state instead of retrying.
+                    // A dest sitting inside its backoff window is pending work,
+                    // not idle — the retry is scheduled. Hard-cap the total
+                    // time we'll wait on backoffs (3min, above the 2min tier
+                    // of the ladder) so a permanently-dropped dest can't
+                    // pin the race forever, but otherwise keep lastActivity
+                    // fresh. Without this, a 30s backoff fires its retry
+                    // only AFTER the 15s idle timer has killed the race.
                     var idleSeconds = (DateTime.UtcNow - lastActivity).TotalSeconds;
+                    var nextBackoff = NextBackoffExpiry();
+                    if (nextBackoff is { } bAt && bAt > DateTime.UtcNow && idleSeconds < 180)
+                    {
+                        lastActivity = DateTime.UtcNow;
+                        idleSeconds = 0;
+                    }
+
                     if (activeCount == 0 && idleSeconds > 15)
                     {
                         int missingFiles;
@@ -1429,26 +1438,56 @@ public class SpreadJob : IDisposable
         int newCount;
         DateTime retryAt;
         bool justDropped;
+        bool coalesced;
         string dstName;
         lock (_ownershipLock)
         {
-            _destFailureCount.TryGetValue(dstId, out var prev);
-            newCount = prev + 1;
-            _destFailureCount[dstId] = newCount;
-            if (newCount > BackoffLadder.Length)
+            // Coalesce concurrent failures: with SpreadPoolSize=3 and three
+            // parallel transfers all hitting MKD in the same ~100ms window,
+            // a naive bump-per-failure advances the ladder 3 steps at once
+            // (3s → 10s → 30s) when really we only took ONE retry cycle.
+            // If the dest is already inside an active backoff window, the
+            // ladder has already been advanced for this cycle — log and
+            // return without bumping again. Ladder only advances when a
+            // NEW attempt (post-retryAt) fails.
+            var now = DateTime.UtcNow;
+            if (_destRetryAt.TryGetValue(dstId, out var currentRetryAt)
+                && currentRetryAt != DateTime.MaxValue
+                && now < currentRetryAt)
             {
-                retryAt = DateTime.MaxValue;
-                justDropped = _destRetryAt.TryGetValue(dstId, out var prevAt)
-                    ? prevAt != DateTime.MaxValue
-                    : true;
+                coalesced = true;
+                newCount = _destFailureCount.GetValueOrDefault(dstId);
+                retryAt = currentRetryAt;
+                justDropped = false;
+                dstName = _serverConfigs.TryGetValue(dstId, out var cfg0) ? cfg0.Name : dstId;
             }
             else
             {
-                retryAt = DateTime.UtcNow + BackoffLadder[newCount - 1];
-                justDropped = false;
+                coalesced = false;
+                _destFailureCount.TryGetValue(dstId, out var prev);
+                newCount = prev + 1;
+                _destFailureCount[dstId] = newCount;
+                if (newCount > BackoffLadder.Length)
+                {
+                    retryAt = DateTime.MaxValue;
+                    justDropped = !_destRetryAt.TryGetValue(dstId, out var prevAt)
+                        || prevAt != DateTime.MaxValue;
+                }
+                else
+                {
+                    retryAt = now + BackoffLadder[newCount - 1];
+                    justDropped = false;
+                }
+                _destRetryAt[dstId] = retryAt;
+                dstName = _serverConfigs.TryGetValue(dstId, out var cfg) ? cfg.Name : dstId;
             }
-            _destRetryAt[dstId] = retryAt;
-            dstName = _serverConfigs.TryGetValue(dstId, out var cfg) ? cfg.Name : dstId;
+        }
+
+        if (coalesced)
+        {
+            Log.Debug("Spread: concurrent failure on {Dst} (still backing off, ladder unchanged) — {Err}",
+                dstName, errorMessage ?? "(no message)");
+            return;
         }
 
         if (justDropped)
@@ -1463,6 +1502,26 @@ public class SpreadJob : IDisposable
             var waitSeconds = (retryAt - DateTime.UtcNow).TotalSeconds;
             Log.Information("Spread: destination {Dst} backing off {Wait:F0}s (failure #{Count}, {Kind}) — {Err}",
                 dstName, waitSeconds, newCount, isMkd ? "MKD" : "FXP", errorMessage ?? "(no message)");
+        }
+    }
+
+    /// <summary>
+    /// Return the soonest retryAt among non-dropped dests, or null if none
+    /// are in backoff. Used to extend the idle timer past a pending backoff —
+    /// killing a race because the 15s idle timer fires 2s before a 17s backoff
+    /// expires is a waste of the whole race.
+    /// </summary>
+    private DateTime? NextBackoffExpiry()
+    {
+        lock (_ownershipLock)
+        {
+            DateTime? earliest = null;
+            foreach (var (_, at) in _destRetryAt)
+            {
+                if (at == DateTime.MaxValue) continue; // dropped
+                if (earliest == null || at < earliest) earliest = at;
+            }
+            return earliest;
         }
     }
 
