@@ -2,7 +2,13 @@ namespace GlDrive.Config;
 
 public class SpreadConfig
 {
-    public int SpreadPoolSize { get; set; } = 2;
+    // Raised 2 → 3. Chain mode is gone so races now use N² concurrent routes
+    // bounded by per-site slots; a 1-connection spread pool serialised every
+    // transfer and was the second root cause of half-raced releases. glftpd's
+    // default max_logins=4 + main pool of 2 + spread of 3 exceeds the cap by 1;
+    // the pool tolerates 530 rejections and will run with whatever connections
+    // actually got through. Tight BNCs can lower to 2.
+    public int SpreadPoolSize { get; set; } = 3;
     public int TransferTimeoutSeconds { get; set; } = 60;
     public int HardTimeoutSeconds { get; set; } = 1200;
     public int MaxConcurrentRaces { get; set; } = 1;

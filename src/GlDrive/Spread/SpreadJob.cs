@@ -52,24 +52,29 @@ public class SpreadJob : IDisposable
     private readonly HashSet<(string fileName, string dstId)> _inFlightFiles =
         new(new FileDstTupleComparer());
 
-    // Chain mode: only one route (src→dst) active per release at a time.
-    // Prevents connection exhaustion from parallel multi-site transfers.
-    // Once current route has no more files to send, picks next hop.
-    private (string srcId, string dstId)? _activeRoute;
-
     // Directory cleanup: track created dirs and successful transfers per destination
     private readonly HashSet<string> _dirsCreated = new(); // serverId values that got MKD
     private readonly HashSet<string> _serversWithSuccessfulTransfer = new();
 
-    // Permanent per-destination MKD failure tracking. Unlike _failureCounts
-    // (per file/src/dst, cleared by completion sweep), these survive sweeps so
-    // a destination that systematically rejects MKD (permission denied, wrong
-    // section path, path-filter rejection) gets permanently dropped from the
-    // race after BlacklistThreshold consecutive failures. Resets to 0 when a
-    // transfer to that dest succeeds.
-    private const int BlacklistThreshold = 3;
-    private readonly Dictionary<string, int> _destMkdFailures = new();
-    private readonly HashSet<string> _blacklistedDests = new();
+    // Per-destination failure backoff. When MKD or FXP fails to a dest, the dest
+    // is parked in _destRetryAt until the backoff expires; FindBestTransfer skips
+    // it until then. Successful transfer to that dest clears the failure count
+    // and retry window. Backoff schedule is exponential so a momentarily-broken
+    // dest (lost TLS, one-off 550) heals fast, but a persistently-broken dest
+    // (wrong section path, path-filter) is eventually dropped for the race.
+    // Replaces the old permanent-blacklist model which chain-mode combined with
+    // meant a single early MKD fail killed the dest for the whole race.
+    private static readonly TimeSpan[] BackoffLadder =
+    [
+        TimeSpan.FromSeconds(3),
+        TimeSpan.FromSeconds(10),
+        TimeSpan.FromSeconds(30),
+        TimeSpan.FromMinutes(2),
+    ];
+    // A retry time of DateTime.MaxValue means "dropped for this race" — exceeded
+    // the ladder. Checked in FindBestTransfer + the all-dests-broken fail-fast.
+    private readonly Dictionary<string, int> _destFailureCount = new();
+    private readonly Dictionary<string, DateTime> _destRetryAt = new();
 
     // Skiplist evaluation trace (captured in Phase 0 for history popup)
     public List<SkiplistTraceEntry>? SkiplistTrace { get; private set; }
@@ -363,23 +368,25 @@ public class SpreadJob : IDisposable
                     return;
                 }
 
-                // All non-source destinations blacklisted? Fail fast instead of
-                // burning 3 completion sweeps on a race that has nowhere to go.
+                // All non-source destinations dropped for this race (retryAt ==
+                // MaxValue, meaning they blew the backoff ladder). Fail fast
+                // instead of idling to the hard timeout.
                 int viableDestCount;
                 lock (_ownershipLock)
                 {
                     viableDestCount = sitePaths.Keys
                         .Count(id => !sourceServers.Contains(id)
                                   && !_serverConfigs[id].SpreadSite.DownloadOnly
-                                  && !_blacklistedDests.Contains(id));
+                                  && !IsDestDropped(id));
                 }
                 if (viableDestCount == 0)
                 {
-                    string blName;
+                    string droppedName;
                     lock (_ownershipLock)
                     {
-                        blName = string.Join(", ", _blacklistedDests
-                            .Select(id => _serverConfigs.TryGetValue(id, out var c) ? c.Name : id));
+                        droppedName = string.Join(", ", _destRetryAt
+                            .Where(kv => kv.Value == DateTime.MaxValue)
+                            .Select(kv => _serverConfigs.TryGetValue(kv.Key, out var c) ? c.Name : kv.Key));
                     }
                     bool hadTransfersBl;
                     lock (_ownershipLock)
@@ -388,12 +395,12 @@ public class SpreadJob : IDisposable
                     {
                         State = SpreadJobState.Completed;
                         Completed?.Invoke(this);
-                        Log.Information("Spread completed (partial): {Release} — all remaining destinations blacklisted ({Bl})",
-                            ReleaseName, blName);
+                        Log.Information("Spread completed (partial): {Release} — all remaining destinations dropped after repeated failures ({Dropped})",
+                            ReleaseName, droppedName);
                     }
                     else
                     {
-                        SetFailed($"All destinations blacklisted — {blName}");
+                        SetFailed($"All destinations dropped after repeated failures — {droppedName}");
                     }
                     return;
                 }
@@ -410,25 +417,6 @@ public class SpreadJob : IDisposable
 
                 if (transfer == null)
                 {
-                    // Chain mode: clear route if no more files for it, so next
-                    // iteration can pick a new route (e.g. B->C after A->B done)
-                    if (_activeRoute is { } ar)
-                    {
-                        bool hasInFlight;
-                        lock (_ownershipLock)
-                            hasInFlight = _inFlightFiles.Any(f => f.dstId == ar.dstId);
-                        if (!hasInFlight)
-                        {
-                            var srcName = _serverConfigs.TryGetValue(ar.srcId, out var sc) ? sc.Name : ar.srcId;
-                            var dstName = _serverConfigs.TryGetValue(ar.dstId, out var dc) ? dc.Name : ar.dstId;
-                            Log.Information("Spread chain: route {Src} -> {Dst} finished, picking next hop",
-                                srcName, dstName);
-                            _activeRoute = null;
-                            _forceScan = true; // Rescan immediately — new files may have appeared
-                            continue; // Re-evaluate immediately with no route lock
-                        }
-                    }
-
                     if (IsJobComplete())
                     {
                         State = SpreadJobState.Completed;
@@ -456,10 +444,14 @@ public class SpreadJob : IDisposable
                         }
                     }
 
-                    if (activeCount == 0 && (DateTime.UtcNow - lastActivity).TotalSeconds > 60)
+                    // Completion sweep: cbftp-style. First idle window clears
+                    // failures + reinits pools + rescans; second idle window
+                    // gives up. 15s + 15s = 30s total, replacing the old
+                    // 60s × 3 = 180s schedule which spent most of its budget
+                    // burning stale state instead of retrying.
+                    var idleSeconds = (DateTime.UtcNow - lastActivity).TotalSeconds;
+                    if (activeCount == 0 && idleSeconds > 15)
                     {
-                        // Completion sweep: if destinations are still missing files,
-                        // reset failure counters and try again (up to 3 retries)
                         int missingFiles;
                         lock (_ownershipLock)
                         {
@@ -473,12 +465,19 @@ public class SpreadJob : IDisposable
                             }
                         }
 
-                        if (missingFiles > 0 && _completionRetries < 3)
+                        if (missingFiles > 0 && _completionRetries < 1)
                         {
                             _completionRetries++;
                             lock (_failureLock) _failureCounts.Clear();
+                            // Also clear per-dest backoff — the sweep's whole
+                            // job is to undo transient failure state so the
+                            // retry actually has a chance.
+                            lock (_ownershipLock)
+                            {
+                                _destFailureCount.Clear();
+                                _destRetryAt.Clear();
+                            }
                             _forceScan = true;
-                            _activeRoute = null;
                             lastActivity = DateTime.UtcNow;
                             consecutiveEmpty = 0;
 
@@ -495,9 +494,9 @@ public class SpreadJob : IDisposable
                                 }
                             }
 
-                            Log.Information("Spread completion sweep {Retry}/3: {Missing} files still missing on destinations, " +
+                            Log.Information("Spread completion sweep: {Missing} files still missing, " +
                                 "resetting failures and reinitializing pools — {Release}",
-                                _completionRetries, missingFiles, ReleaseName);
+                                missingFiles, ReleaseName);
                             continue;
                         }
 
@@ -515,7 +514,7 @@ public class SpreadJob : IDisposable
                         }
                         else
                         {
-                            SetFailed("No activity for 60 seconds, no viable transfers");
+                            SetFailed("No activity for 15 seconds, no viable transfers");
                         }
                         return;
                     }
@@ -532,16 +531,6 @@ public class SpreadJob : IDisposable
 
                 // 4. Claim slots atomically before starting transfer
                 var (file, srcId, dstId) = transfer.Value;
-
-                // Chain mode: lock onto this route if none active
-                if (_activeRoute == null)
-                {
-                    _activeRoute = (srcId, dstId);
-                    var srcName = _serverConfigs.TryGetValue(srcId, out var sc) ? sc.Name : srcId;
-                    var dstName = _serverConfigs.TryGetValue(dstId, out var dc) ? dc.Name : dstId;
-                    Log.Information("Spread chain: locked route {Src} -> {Dst} for {Release}",
-                        srcName, dstName, ReleaseName);
-                }
 
                 if (TryClaimSlots(srcId, dstId))
                 {
@@ -1057,9 +1046,10 @@ public class SpreadJob : IDisposable
         var skippedAffil = 0;
         var skippedSlots = 0;
         var skippedFailures = 0;
-        var skippedBlacklisted = 0;
-        HashSet<string> blacklistedSnapshot;
-        lock (_ownershipLock) blacklistedSnapshot = new HashSet<string>(_blacklistedDests);
+        var skippedBackoff = 0;
+        Dictionary<string, DateTime> retrySnapshot;
+        lock (_ownershipLock) retrySnapshot = new Dictionary<string, DateTime>(_destRetryAt);
+        var now = DateTime.UtcNow;
         var skippedOwned = 0;
 
         lock (_ownershipLock)
@@ -1129,17 +1119,11 @@ public class SpreadJob : IDisposable
                         if (owners.Contains(dstId)) { skippedOwned++; continue; }
                         if (_inFlightFiles.Contains((fileName, dstId))) { skippedOwned++; continue; }
 
-                        // Permanent per-race destination blacklist (MKD permission
-                        // denied, path-filter rejection, etc.). Survives completion
-                        // sweeps so we don't keep burning cycles on a dest that
-                        // can't accept this release.
-                        if (blacklistedSnapshot.Contains(dstId)) { skippedBlacklisted++; continue; }
-
-                        // Chain mode: if a route is active with in-flight transfers, only
-                        // consider that route. Prevents multi-site connection exhaustion.
-                        if (_activeRoute is { } route &&
-                            (srcId != route.srcId || dstId != route.dstId))
-                            continue;
+                        // Per-destination backoff. The dest recently failed and
+                        // is parked until retryAt; MaxValue means dropped from
+                        // this race entirely (blew the backoff ladder).
+                        if (retrySnapshot.TryGetValue(dstId, out var until) && now < until)
+                        { skippedBackoff++; continue; }
 
                         // SFV-first: block non-SFV files until SFV is delivered to this dest
                         if (destsNeedingSfv != null && destsNeedingSfv.Contains(dstId) &&
@@ -1206,9 +1190,9 @@ public class SpreadJob : IDisposable
         {
             if (_fileInfos.Count > 0 && candidateCount == 0)
             {
-                Log.Warning("FindBestTransfer: {Files} files, 0 candidates. Skipped: owned={Owned} downloadOnly={DL} affil={Affil} slots={Slots} failures={Fail} blacklisted={BL}",
+                Log.Warning("FindBestTransfer: {Files} files, 0 candidates. Skipped: owned={Owned} downloadOnly={DL} affil={Affil} slots={Slots} failures={Fail} backoff={BO}",
                     _fileInfos.Count, skippedOwned, skippedDownloadOnly, skippedAffil,
-                    skippedSlots, skippedFailures, skippedBlacklisted);
+                    skippedSlots, skippedFailures, skippedBackoff);
                 if (skippedSlots > 0 && skippedOwned == 0)
                     Log.Warning("FindBestTransfer slot details: {SlotInfo}",
                         string.Join(", ", activeTransferSnapshot.Select(kv =>
@@ -1328,8 +1312,10 @@ public class SpreadJob : IDisposable
                     }
                     _serversWithSuccessfulTransfer.Add(dstId);
                     // A single success proves the dest is working — clear any
-                    // accumulated MKD failure count on that dest.
-                    _destMkdFailures[dstId] = 0;
+                    // accumulated failure count + backoff window so future
+                    // transient 550s don't immediately re-trigger the ladder.
+                    _destFailureCount.Remove(dstId);
+                    _destRetryAt.Remove(dstId);
                 }
                 _forceScan = true; // Rescan — new files likely appeared on source from other racers
                 Log.Information("FXP complete: {File} ({Src} -> {Dst})", file.Name,
@@ -1355,14 +1341,14 @@ public class SpreadJob : IDisposable
                 Log.Warning("FXP failed: {File} ({Src} -> {Dst}): {Error}", file.Name,
                     _serverConfigs[srcId].Name, _serverConfigs[dstId].Name, transfer.ErrorMessage);
 
-                // Per-dest MKD failure tracking — survives completion sweeps.
-                // The old failure counter was keyed (file, src, dst) and got
-                // cleared every 60s, so a permanently-broken destination kept
-                // getting re-attempted forever. This one persists for the whole
-                // race so a dest that systematically rejects MKD gets dropped
-                // after BlacklistThreshold consecutive fails.
-                if (IsMkdError(transfer.ErrorMessage))
-                    RegisterDestFailure(dstId, dstBasePath, transfer.ErrorMessage);
+                // Push the dest onto the backoff ladder. Both MKD and FXP
+                // failures flow through here — a destination whose data
+                // channel keeps dying (GnuTLS corruption, BNC dropouts)
+                // deserves the same adaptive pause as one that rejects MKD.
+                // _failureCounts (per file/src/dst) is the per-pair retry
+                // limit; _destFailureCount is the per-dest backoff schedule.
+                RegisterDestFailure(dstId, dstBasePath, transfer.ErrorMessage,
+                    IsMkdError(transfer.ErrorMessage));
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -1404,14 +1390,6 @@ public class SpreadJob : IDisposable
             lock (_ownershipLock)
             {
                 _inFlightFiles.Remove((file.Name, dstId));
-
-                // Chain mode: clear route when last in-flight transfer on it completes
-                if (_activeRoute is { } ar && ar.dstId == dstId &&
-                    !_inFlightFiles.Any(f => f.dstId == dstId))
-                {
-                    _activeRoute = null;
-                    _forceScan = true; // Rescan for next hop
-                }
             }
             lock (_progressLock)
             {
@@ -1438,32 +1416,61 @@ public class SpreadJob : IDisposable
     }
 
     /// <summary>
-    /// Record a MKD-style failure for a destination. When the count reaches
-    /// BlacklistThreshold, the destination is permanently excluded from this
-    /// race and a prominent warning is logged so the user knows exactly which
-    /// server and path need attention. Successful transfers to the same dest
-    /// reset the counter.
+    /// Record a failure for a destination and park it on the backoff ladder.
+    /// Each failure picks the next step (3s → 10s → 30s → 2min); one past the
+    /// end of the ladder marks the dest as dropped for the race (retryAt =
+    /// MaxValue). Successful transfer to the dest clears the failure count so
+    /// a later transient 550 doesn't jump straight to the end of the ladder.
+    /// Caller should pass true for <paramref name="isMkd"/> on MKD-class
+    /// failures so the log line reflects the root cause.
     /// </summary>
-    private void RegisterDestFailure(string dstId, string dstBasePath, string? errorMessage)
+    private void RegisterDestFailure(string dstId, string dstBasePath, string? errorMessage, bool isMkd)
     {
         int newCount;
-        bool justBlacklisted;
+        DateTime retryAt;
+        bool justDropped;
         string dstName;
         lock (_ownershipLock)
         {
-            _destMkdFailures.TryGetValue(dstId, out var prev);
+            _destFailureCount.TryGetValue(dstId, out var prev);
             newCount = prev + 1;
-            _destMkdFailures[dstId] = newCount;
-            justBlacklisted = newCount >= BlacklistThreshold && _blacklistedDests.Add(dstId);
+            _destFailureCount[dstId] = newCount;
+            if (newCount > BackoffLadder.Length)
+            {
+                retryAt = DateTime.MaxValue;
+                justDropped = _destRetryAt.TryGetValue(dstId, out var prevAt)
+                    ? prevAt != DateTime.MaxValue
+                    : true;
+            }
+            else
+            {
+                retryAt = DateTime.UtcNow + BackoffLadder[newCount - 1];
+                justDropped = false;
+            }
+            _destRetryAt[dstId] = retryAt;
             dstName = _serverConfigs.TryGetValue(dstId, out var cfg) ? cfg.Name : dstId;
         }
 
-        if (justBlacklisted)
+        if (justDropped)
         {
-            Log.Warning("Spread: destination {Dst} blacklisted after {Count} MKD failures at {Path} " +
-                "— last error: {Err}. Remaining destinations will continue the race.",
+            Log.Warning("Spread: destination {Dst} dropped after {Count} failures at {Path} " +
+                "— last error: {Err}. Remaining destinations continue.",
                 dstName, newCount, dstBasePath, errorMessage ?? "(no message)");
-            _forceScan = true; // Trigger immediate re-evaluation so the route rotates away
+            _forceScan = true;
+        }
+        else
+        {
+            var waitSeconds = (retryAt - DateTime.UtcNow).TotalSeconds;
+            Log.Information("Spread: destination {Dst} backing off {Wait:F0}s (failure #{Count}, {Kind}) — {Err}",
+                dstName, waitSeconds, newCount, isMkd ? "MKD" : "FXP", errorMessage ?? "(no message)");
+        }
+    }
+
+    private bool IsDestDropped(string dstId)
+    {
+        lock (_ownershipLock)
+        {
+            return _destRetryAt.TryGetValue(dstId, out var until) && until == DateTime.MaxValue;
         }
     }
 

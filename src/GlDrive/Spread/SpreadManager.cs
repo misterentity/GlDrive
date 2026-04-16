@@ -46,17 +46,13 @@ public class SpreadManager : IDisposable
     {
         if (_disposed) return;
 
-        // Chain mode races 1 FXP at a time per route, so a spread pool of 1
-        // connection per server is fully sufficient. Pool size is hard-capped
-        // at 1 — the previous cap of 2 added up with the main pool's 2 slots
-        // to exactly 4 connections, matching glftpd BNCs' typical 4-login cap
-        // and leaving ZERO headroom for transient ghost-kill-and-retry, scan
-        // fallback, or spread pool reinit. The log showed 364 "Pool: new
-        // connection failed (created=1, max=2)" 530 login-cap rejections in
-        // one ~3h window — exclusively during attempts to grow the spread
-        // pool beyond 1. Cap at 1 and leave an entire slot of headroom.
+        // Chain mode is gone — races now run N² concurrent routes throttled by
+        // per-site slots, so a 1-connection spread pool serialises every
+        // transfer and makes the whole engine look slow. Honor the configured
+        // SpreadPoolSize (default 3) instead of the old hard-cap-at-1. Pool
+        // creation is best-effort: if the server's login cap rejects some of
+        // the N attempts, FtpConnectionPool runs with whatever it got.
         var poolSize = Math.Max(_config.Spread.SpreadPoolSize, 1);
-        poolSize = Math.Min(poolSize, 1);
         if (poolSize <= 0) return;
 
         var pool = new FtpConnectionPool(factory, poolSize);
@@ -300,13 +296,11 @@ public class SpreadManager : IDisposable
             Log.Warning("Spread pool exhausted for {Server} — reinitializing", serverName);
             try
             {
-                // Spread pool is always sized 1 in chain mode. Previously this
-                // computed a larger "needed size" based on MaxUploadSlots /
-                // MaxDownloadSlots, which defeated the cap in InitializePool
-                // and caused 530 login-cap rejections on busy sites. Chain
-                // mode runs one FXP transfer per route at a time, so a single
-                // spread-pool slot covers every race.
-                const int neededSize = 1;
+                // Match the configured spread pool size — with chain mode
+                // removed we want all available slots back. Reinit must not
+                // silently shrink the pool to 1 like the old chain-mode build
+                // did or every subsequent race would run serial.
+                var neededSize = Math.Max(_config.Spread.SpreadPoolSize, 1);
 
                 if (pool.MaxSize < neededSize)
                 {
