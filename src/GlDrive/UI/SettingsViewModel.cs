@@ -229,6 +229,25 @@ public class SettingsViewModel : INotifyPropertyChanged
         config.Spread.NotifyOnRaceComplete = SpreadNotifyComplete;
         config.Spread.DebugMode = SpreadDebugMode;
         config.Spread.GlobalSkiplist = GlobalSkiplist.ToList();
+
+        // AI Agent — properties bind directly to _config.Agent, but mirror to the passed-in
+        // config for consistency with all other ApplyTo sections. Keeps the method the
+        // single authoritative flush path.
+        config.Agent ??= new AgentConfig();
+        config.Agent.Enabled = _config.Agent.Enabled;
+        config.Agent.RunHourLocal = _config.Agent.RunHourLocal;
+        config.Agent.ConfidenceThreshold_x100 = _config.Agent.ConfidenceThreshold_x100;
+        config.Agent.MaxChangesPerRun = _config.Agent.MaxChangesPerRun;
+        config.Agent.MaxChangesPerCategory = _config.Agent.MaxChangesPerCategory;
+        config.Agent.DryRunsRemaining = _config.Agent.DryRunsRemaining;
+        config.Agent.WindowDays = _config.Agent.WindowDays;
+        config.Agent.NukePollIntervalHours = _config.Agent.NukePollIntervalHours;
+        config.Agent.ModelId = _config.Agent.ModelId;
+        config.Agent.GzipAfterDays = _config.Agent.GzipAfterDays;
+        config.Agent.DeleteAfterDays = _config.Agent.DeleteAfterDays;
+        config.Agent.SnapshotRetentionCount = _config.Agent.SnapshotRetentionCount;
+        config.Agent.TelemetryMaxFileMB = _config.Agent.TelemetryMaxFileMB;
+        config.Agent.HasAcceptedConsent = _config.Agent.HasAcceptedConsent;
     }
 
     public void RefreshCertsInfo()
