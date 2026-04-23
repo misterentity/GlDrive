@@ -75,15 +75,15 @@ public class WishlistMatcher
                     Log.Information("Wishlist match: [{Category}] {Release} -> {Title} (server: {Server})",
                         category, releaseName, item.Title, _serverName);
 
-                    var localPath = BuildLocalPath(item, category, releaseName);
+                    var localPath = BuildLocalPath(item, category!, releaseName);
                     matched.Add((item, new DownloadItem
                     {
                         RemotePath = remotePath,
                         ReleaseName = releaseName,
                         LocalPath = localPath,
                         WishlistItemId = item.Id,
-                        Category = category,
-                        ServerId = _serverId,
+                        Category = category!,
+                        ServerId = _serverId ?? "",
                         ServerName = _serverName
                     }));
                 }
@@ -100,7 +100,7 @@ public class WishlistMatcher
 
                 item.GrabbedReleases.Add(releaseName);
                 _wishlist.Update(item);
-                MatchFound?.Invoke(item, category, releaseName);
+                MatchFound?.Invoke(item, category!, releaseName);
             }
         }
         catch (Exception ex)
