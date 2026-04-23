@@ -1379,7 +1379,8 @@ public class SpreadJob : IDisposable
 
             var ok = await transfer.ExecuteAsync(srcConn!, dstConn, srcPath, dstPath, mode,
                 _spreadConfig.TransferTimeoutSeconds, ct,
-                raceId: Id, srcServerId: srcId, dstServerId: dstId);
+                raceId: Id, srcServerId: srcId, dstServerId: dstId,
+                fileSizeBytes: file.Size);
 
             lock (_progressLock) _activeTransfers.Remove(transferKey);
 
