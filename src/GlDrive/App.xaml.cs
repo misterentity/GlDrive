@@ -117,6 +117,7 @@ public partial class App
 
         // Initialize AI agent telemetry recorder
         TelemetryRecorder = new GlDrive.AiAgent.TelemetryRecorder(ConfigManager.AppDataPath, config.Agent.TelemetryMaxFileMB);
+        SerilogSetup.AgentSink.Recorder = TelemetryRecorder;
 
         // Check first run
         if (!ConfigManager.ConfigExists || config.Servers.Count == 0)
