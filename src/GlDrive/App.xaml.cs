@@ -19,6 +19,8 @@ public partial class App
     private TrayViewModel? _trayViewModel;
     private H.NotifyIcon.TaskbarIcon? _taskbarIcon;
 
+    public static GlDrive.AiAgent.TelemetryRecorder? TelemetryRecorder { get; private set; }
+
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
@@ -112,6 +114,10 @@ public partial class App
         // Init logging
         SerilogSetup.Configure(config.Logging);
         Log.Information("GlDrive starting...");
+
+        // Initialize AI agent telemetry recorder
+        var appDataRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GlDrive");
+        TelemetryRecorder = new GlDrive.AiAgent.TelemetryRecorder(appDataRoot, config.Agent.TelemetryMaxFileMB);
 
         // Check first run
         if (!ConfigManager.ConfigExists || config.Servers.Count == 0)
@@ -253,6 +259,8 @@ public partial class App
     protected override void OnExit(ExitEventArgs e)
     {
         Log.Information("GlDrive shutting down...");
+        TelemetryRecorder?.Dispose();
+        TelemetryRecorder = null;
         _serverManager?.Dispose();
         _taskbarIcon?.Dispose();
         _guard?.Dispose();
