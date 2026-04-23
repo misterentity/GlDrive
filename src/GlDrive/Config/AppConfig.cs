@@ -6,6 +6,10 @@ public class AppConfig
     public LoggingConfig Logging { get; set; } = new();
     public DownloadConfig Downloads { get; set; } = new();
     public SpreadConfig Spread { get; set; } = new();
+    public AgentConfig Agent { get; set; } = new();
+
+    public string ResolveAgentModel() => string.IsNullOrWhiteSpace(Agent.ModelId)
+        ? "anthropic/claude-sonnet-4-6" : Agent.ModelId;
 }
 
 public class ServerConfig
@@ -145,4 +149,22 @@ public class DownloadConfig
     public bool VerifySfv { get; set; } = true;
     public bool PlaySoundOnComplete { get; set; }
     public string Theme { get; set; } = "Dark";
+}
+
+public class AgentConfig
+{
+    public bool Enabled { get; set; } = false;
+    public int RunHourLocal { get; set; } = 4;
+    public int ConfidenceThreshold_x100 { get; set; } = 70;
+    public int MaxChangesPerRun { get; set; } = 20;
+    public int MaxChangesPerCategory { get; set; } = 5;
+    public int DryRunsRemaining { get; set; } = 3;
+    public int WindowDays { get; set; } = 7;
+    public int GzipAfterDays { get; set; } = 30;
+    public int DeleteAfterDays { get; set; } = 90;
+    public int SnapshotRetentionCount { get; set; } = 30;
+    public int NukePollIntervalHours { get; set; } = 6;
+    public string ModelId { get; set; } = "anthropic/claude-sonnet-4-6";
+    public int TelemetryMaxFileMB { get; set; } = 100;
+    public bool HasAcceptedConsent { get; set; } = false;
 }
