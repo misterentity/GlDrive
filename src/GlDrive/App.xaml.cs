@@ -20,6 +20,7 @@ public partial class App
     private H.NotifyIcon.TaskbarIcon? _taskbarIcon;
 
     public static GlDrive.AiAgent.TelemetryRecorder? TelemetryRecorder { get; private set; }
+    public static GlDrive.AiAgent.HealthRollup? HealthRollup { get; private set; }
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -158,6 +159,7 @@ public partial class App
         try { notificationStore.Load(); }
         catch (Exception ex) { Log.Warning(ex, "Failed to load notification store"); }
         _serverManager = new ServerManager(config, certManager, notificationStore);
+        HealthRollup = new GlDrive.AiAgent.HealthRollup(TelemetryRecorder, _serverManager);
 
         // Init tray
         _trayViewModel = new TrayViewModel(_serverManager, config, notificationStore);
@@ -261,6 +263,8 @@ public partial class App
         Log.Information("GlDrive shutting down...");
         try { GlDrive.Logging.SerilogSetup.AgentSink.Flush(); }
         catch (Exception ex) { Log.Debug(ex, "AgentSink final flush failed"); }
+        HealthRollup?.Dispose();
+        HealthRollup = null;
         TelemetryRecorder?.Dispose();
         TelemetryRecorder = null;
         _serverManager?.Dispose();
