@@ -170,7 +170,8 @@ public class IrcAnnounceListener : IDisposable
         var m = message;
         return (m.Contains('[') && m.Contains(']')) ||
                m.Contains("NEW ", StringComparison.OrdinalIgnoreCase) ||
-               m.Contains(" pre", StringComparison.OrdinalIgnoreCase) ||
+               m.Contains(" pre'd", StringComparison.OrdinalIgnoreCase) ||
+               m.Contains(" pre ", StringComparison.OrdinalIgnoreCase) ||
                m.Contains("Release", StringComparison.OrdinalIgnoreCase);
     }
 
@@ -182,7 +183,9 @@ public class IrcAnnounceListener : IDisposable
         int bestDist = int.MaxValue;
         foreach (var r in rules)
         {
-            var d = LevenshteinLimited(message, r.Pattern ?? "", 200);
+            if (!r.Enabled) continue;
+            if (string.IsNullOrEmpty(r.Pattern)) continue;
+            var d = LevenshteinLimited(message, r.Pattern, 200);
             if (d < bestDist) { bestDist = d; best = r.Pattern; }
         }
         return (best, bestDist == int.MaxValue ? null : bestDist);
