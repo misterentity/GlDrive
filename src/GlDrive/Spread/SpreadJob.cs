@@ -607,6 +607,52 @@ public class SpreadJob : IDisposable
             // user credits and triggers ratio penalties, so we always clean up
             // our own incomplete work before leaving.
             await CleanupIncompleteDirs(sitePaths);
+            EmitRaceOutcome(State == SpreadJobState.Completed ? "complete" : "aborted");
+        }
+    }
+
+    private void EmitRaceOutcome(string result)
+    {
+        try
+        {
+            var recorder = App.TelemetryRecorder;
+            if (recorder is null) return;
+
+            List<GlDrive.AiAgent.RaceParticipant> participants;
+            lock (_progressLock)
+            {
+                participants = _siteProgress.Values.Select(s => new GlDrive.AiAgent.RaceParticipant(
+                    ServerId: s.ServerId,
+                    Role: s.IsSource ? "src" : "dst",
+                    Bytes: s.BytesTransferred,
+                    Files: s.FilesOwned,
+                    AvgKbps: s.SpeedBps / 1024.0,
+                    AbortReason: null
+                )).ToList();
+            }
+
+            int filesTotal;
+            lock (_ownershipLock) filesTotal = _fileInfos.Count;
+
+            recorder.Record(GlDrive.AiAgent.TelemetryStream.Races, new GlDrive.AiAgent.RaceOutcomeEvent
+            {
+                RaceId = Id,
+                Section = Section ?? "",
+                Release = ReleaseName ?? "",
+                StartedAt = StartedAt.ToString("O"),
+                EndedAt = DateTime.UtcNow.ToString("O"),
+                Participants = participants,
+                Winner = null,
+                FxpMode = Mode.ToString(),
+                ScoreBreakdown = new Dictionary<string, int>(),
+                Result = result,
+                FilesExpected = _expectedFileCount,
+                FilesTotal = filesTotal
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "EmitRaceOutcome failed for race {RaceId}", Id);
         }
     }
 
