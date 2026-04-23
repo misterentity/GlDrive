@@ -34,7 +34,8 @@ public class FxpTransfer
         string srcPath, string dstPath,
         FxpMode mode, int transferTimeoutSeconds,
         CancellationToken ct,
-        string raceId = "", string srcServerId = "", string dstServerId = "")
+        string raceId = "", string srcServerId = "", string dstServerId = "",
+        long fileSizeBytes = 0)
     {
         var totalSw = Stopwatch.StartNew();
         // pasvLatencyMs: time from method entry until data transfer starts (negotiation phase).
@@ -85,6 +86,7 @@ public class FxpTransfer
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            pasvSw.Stop();   // stop here so PasvLatencyMs reflects negotiation phase, not full failed attempt
             SetState(TransferState.Error);
             ErrorMessage = ex.Message;
             abortReason = ex.Message;
@@ -103,7 +105,7 @@ public class FxpTransfer
                 SrcServer     = srcServerId,
                 DstServer     = dstServerId,
                 File          = srcPath,
-                Bytes         = TotalBytes,
+                Bytes         = TotalBytes > 0 ? TotalBytes : fileSizeBytes,  // Measured (Relay) else expected (size was passed at call site)
                 ElapsedMs     = totalSw.ElapsedMilliseconds,
                 TtfbMs        = 0,   // not measurable via FluentFTP server-to-server API
                 PasvLatencyMs = pasvSw.ElapsedMilliseconds,
