@@ -28,20 +28,37 @@ public class FtpConnectionPool : IAsyncDisposable
     public int Errors5xxSinceFlush { get; private set; }   // TODO: wire IncrementError5xx when 5xx signal is plumbed
     public int ReinitCountSinceFlush { get; private set; }
 
+    private const int MaxHealthSamples = 1000;
     private readonly List<double> _connectMsSamples = new();
     private readonly List<double> _tlsMsSamples = new();   // reserved for future TLS timing
 
     private int _disconnects, _exhaustCount, _ghostKills, _errors5xx, _reinitCount;
 
-    internal void RecordConnect(double ms) { lock (_connectMsSamples) _connectMsSamples.Add(ms); }
-    internal void RecordTlsHandshake(double ms) { lock (_tlsMsSamples) _tlsMsSamples.Add(ms); }
+    internal void RecordConnect(double ms)
+    {
+        lock (_connectMsSamples)
+        {
+            if (_connectMsSamples.Count < MaxHealthSamples) _connectMsSamples.Add(ms);
+        }
+    }
+    internal void RecordTlsHandshake(double ms)
+    {
+        lock (_tlsMsSamples)
+        {
+            if (_tlsMsSamples.Count < MaxHealthSamples) _tlsMsSamples.Add(ms);
+        }
+    }
     internal void IncrementDisconnect() => Interlocked.Increment(ref _disconnects);
     internal void IncrementExhaust() => Interlocked.Increment(ref _exhaustCount);
     internal void IncrementGhostKill() => Interlocked.Increment(ref _ghostKills);
     internal void IncrementError5xx() => Interlocked.Increment(ref _errors5xx);
     internal void IncrementReinit() => Interlocked.Increment(ref _reinitCount);
 
-    public void FlushHealthCounters()
+    /// <summary>
+    /// Called by HealthRollup only. Snapshots + zeros all health counters. Calling this
+    /// outside the hourly rollup path will silently drop the in-progress window's data.
+    /// </summary>
+    internal void FlushHealthCounters()
     {
         lock (_connectMsSamples)
         {
