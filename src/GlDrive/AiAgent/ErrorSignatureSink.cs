@@ -62,11 +62,15 @@ public sealed class ErrorSignatureSink : ILogEventSink
         return new Sig(component, exType, msg, frame);
     }
 
+    private static readonly Regex _reDigits = new(@"\d+", RegexOptions.Compiled);
+    private static readonly Regex _rePath = new(@"[A-Z]:\\[^\s""']+", RegexOptions.Compiled);
+    private static readonly Regex _reGuid = new(@"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}", RegexOptions.Compiled);
+
     private static string Normalize(string s)
     {
-        s = Regex.Replace(s, @"\d+", "N");
-        s = Regex.Replace(s, @"[A-Z]:\\[^\s""']+", "<path>");
-        s = Regex.Replace(s, @"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}", "<guid>");
+        s = _reDigits.Replace(s, "N");
+        s = _rePath.Replace(s, "<path>");
+        s = _reGuid.Replace(s, "<guid>");
         return s.Length > 200 ? s[..200] : s;
     }
 }

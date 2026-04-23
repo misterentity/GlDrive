@@ -259,6 +259,8 @@ public partial class App
     protected override void OnExit(ExitEventArgs e)
     {
         Log.Information("GlDrive shutting down...");
+        try { GlDrive.Logging.SerilogSetup.AgentSink.Flush(); }
+        catch (Exception ex) { Log.Debug(ex, "AgentSink final flush failed"); }
         TelemetryRecorder?.Dispose();
         TelemetryRecorder = null;
         _serverManager?.Dispose();
