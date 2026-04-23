@@ -535,7 +535,9 @@ public class SpreadManager : IDisposable
 
         var transfer = new FxpTransfer();
         var ok = await transfer.ExecuteAsync(srcConn, dstConn, srcPath, dstPath, mode,
-            _config.Spread.TransferTimeoutSeconds, ct);
+            _config.Spread.TransferTimeoutSeconds, ct,
+            raceId: $"direct-{Guid.NewGuid():N}"[..16],
+            srcServerId: srcServerId, dstServerId: dstServerId);
 
         if (!ok)
         {
@@ -596,7 +598,9 @@ public class SpreadManager : IDisposable
                 }
             };
             var ok = await transfer.ExecuteAsync(srcConn, dstConn, fullPath, destFile, mode,
-                _config.Spread.TransferTimeoutSeconds, ct);
+                _config.Spread.TransferTimeoutSeconds, ct,
+                raceId: $"direct-{Guid.NewGuid():N}"[..16],
+                srcServerId: srcServerId, dstServerId: dstServerId);
             if (!ok)
             {
                 srcConn.Poisoned = true;

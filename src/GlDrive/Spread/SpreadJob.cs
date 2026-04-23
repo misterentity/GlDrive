@@ -77,6 +77,10 @@ public class SpreadJob : IDisposable
     private readonly Dictionary<string, int> _destFailureCount = new();
     private readonly Dictionary<string, DateTime> _destRetryAt = new();
 
+    // Set to true when the race terminates due to a skiplist/blacklist denial.
+    // Used by EmitRaceOutcome to emit "blacklisted" instead of "aborted".
+    private bool _blacklisted = false;
+
     // Skiplist evaluation trace (captured in Phase 0 for history popup)
     public List<SkiplistTraceEntry>? SkiplistTrace { get; private set; }
     public string SkiplistResult { get; private set; } = "Allowed";
@@ -188,6 +192,7 @@ public class SpreadJob : IDisposable
                     SkiplistTrace = allTrace;
                     var matchedRule = trace.FirstOrDefault(t => t.IsMatch);
                     SkiplistResult = $"Denied by: {matchedRule?.Pattern} (on {config.Name})";
+                    _blacklisted = true;
                     SetFailed($"Release denied by skiplist on {config.Name}: {ReleaseName}");
                     return;
                 }
@@ -607,6 +612,59 @@ public class SpreadJob : IDisposable
             // user credits and triggers ratio penalties, so we always clean up
             // our own incomplete work before leaving.
             await CleanupIncompleteDirs(sitePaths);
+            EmitRaceOutcome(State == SpreadJobState.Completed ? "complete"
+                          : _blacklisted                       ? "blacklisted"
+                          :                                      "aborted");
+        }
+    }
+
+    private void EmitRaceOutcome(string result)
+    {
+        try
+        {
+            var recorder = App.TelemetryRecorder;
+            if (recorder is null) return;
+
+            List<GlDrive.AiAgent.RaceParticipant> participants;
+            lock (_progressLock)
+            {
+                participants = _siteProgress.Values.Select(s => new GlDrive.AiAgent.RaceParticipant(
+                    ServerId: s.ServerId,
+                    Role: s.IsSource ? "src" : "dst",  // NOTE: may misclassify in multi-source topologies; see _knownSourceServerId
+                    Bytes: s.BytesTransferred,
+                    Files: s.FilesOwned,
+                    AvgKbps: s.SpeedBps / 1024.0,  // NOTE: instantaneous speed; often 0 at race end. Use transfers stream for avg.
+                    AbortReason: null
+                )).ToList();
+            }
+
+            int filesTotal;
+            int filesExpected;
+            lock (_ownershipLock)
+            {
+                filesTotal    = _fileInfos.Count;
+                filesExpected = _expectedFileCount;
+            }
+
+            recorder.Record(GlDrive.AiAgent.TelemetryStream.Races, new GlDrive.AiAgent.RaceOutcomeEvent
+            {
+                RaceId = Id,
+                Section = Section ?? "",
+                Release = ReleaseName ?? "",
+                StartedAt = StartedAt.ToString("O"),
+                EndedAt = DateTime.UtcNow.ToString("O"),
+                Participants = participants,
+                Winner = null,
+                FxpMode = Mode.ToString(),
+                ScoreBreakdown = new Dictionary<string, int>(),
+                Result = result,
+                FilesExpected = filesExpected,
+                FilesTotal = filesTotal
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "EmitRaceOutcome failed for race {RaceId}", Id);
         }
     }
 
@@ -1320,7 +1378,9 @@ public class SpreadJob : IDisposable
             // (double TYPE I causes response queue desync on BNC servers)
 
             var ok = await transfer.ExecuteAsync(srcConn!, dstConn, srcPath, dstPath, mode,
-                _spreadConfig.TransferTimeoutSeconds, ct);
+                _spreadConfig.TransferTimeoutSeconds, ct,
+                raceId: Id, srcServerId: srcId, dstServerId: dstId,
+                fileSizeBytes: file.Size);
 
             lock (_progressLock) _activeTransfers.Remove(transferKey);
 

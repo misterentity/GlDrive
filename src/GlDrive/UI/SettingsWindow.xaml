@@ -222,6 +222,69 @@
                 </ScrollViewer>
             </TabItem>
 
+            <!-- AI Agent Tab -->
+            <TabItem Header="AI Agent">
+              <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel Margin="12">
+                  <TextBlock Text="Nightly AI Agent" FontSize="18" FontWeight="Bold" Margin="0,0,0,8"/>
+                  <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource SecondaryTextBrush}" Margin="0,0,0,12">
+                    Reviews telemetry overnight and applies config tweaks within safety rails. BYOK via OpenRouter.
+                  </TextBlock>
+
+                  <CheckBox Content="Enabled" IsChecked="{Binding AgentEnabled}" Margin="0,0,0,8"/>
+
+                  <TextBlock Text="Run hour (local, 0–23)" Margin="0,6,0,2"/>
+                  <TextBox Text="{Binding AgentRunHourLocal, UpdateSourceTrigger=PropertyChanged}" Width="80" HorizontalAlignment="Left"/>
+
+                  <TextBlock Text="Model (OpenRouter id)" Margin="0,10,0,2"/>
+                  <Border BorderBrush="{DynamicResource AccentBrush}" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,4">
+                    <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource SecondaryTextBrush}">
+                      Suggested: anthropic/claude-sonnet-4-6 — best long-context reasoning for log review. Free tier models work but can miss trends.
+                    </TextBlock>
+                  </Border>
+                  <TextBox Text="{Binding AgentModelId, UpdateSourceTrigger=PropertyChanged}" Width="320" HorizontalAlignment="Left"/>
+
+                  <TextBlock Text="Confidence threshold (percent)" Margin="0,10,0,2"/>
+                  <TextBox Text="{Binding AgentConfidenceThresholdPercent, UpdateSourceTrigger=PropertyChanged}" Width="80" HorizontalAlignment="Left"/>
+
+                  <TextBlock Text="Max changes per run / per category" Margin="0,10,0,2"/>
+                  <StackPanel Orientation="Horizontal">
+                    <TextBox Text="{Binding AgentMaxChangesPerRun, UpdateSourceTrigger=PropertyChanged}" Width="80"/>
+                    <TextBlock Text="  /  " VerticalAlignment="Center"/>
+                    <TextBox Text="{Binding AgentMaxChangesPerCategory, UpdateSourceTrigger=PropertyChanged}" Width="80"/>
+                  </StackPanel>
+
+                  <TextBlock Text="Dry runs remaining" Margin="0,10,0,2"/>
+                  <StackPanel Orientation="Horizontal">
+                    <TextBox Text="{Binding AgentDryRunsRemaining, UpdateSourceTrigger=PropertyChanged}" Width="80"/>
+                    <Button Content="Reset to 3" Command="{Binding ResetDryRunsCommand}" Margin="8,0,0,0"/>
+                  </StackPanel>
+
+                  <TextBlock Text="Window (days)" Margin="0,10,0,2"/>
+                  <TextBox Text="{Binding AgentWindowDays, UpdateSourceTrigger=PropertyChanged}" Width="80" HorizontalAlignment="Left"/>
+
+                  <TextBlock Text="Nuke poll interval (hours)" Margin="0,10,0,2"/>
+                  <TextBox Text="{Binding AgentNukePollIntervalHours, UpdateSourceTrigger=PropertyChanged}" Width="80" HorizontalAlignment="Left"/>
+
+                  <TextBlock Text="Retention" FontWeight="Bold" Margin="0,16,0,4"/>
+                  <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="Gzip after (days)" Width="160" VerticalAlignment="Center"/>
+                    <TextBox Text="{Binding AgentGzipAfterDays, UpdateSourceTrigger=PropertyChanged}" Width="80"/>
+                  </StackPanel>
+                  <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                    <TextBlock Text="Delete after (days)" Width="160" VerticalAlignment="Center"/>
+                    <TextBox Text="{Binding AgentDeleteAfterDays, UpdateSourceTrigger=PropertyChanged}" Width="80"/>
+                  </StackPanel>
+                  <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                    <TextBlock Text="Snapshots kept" Width="160" VerticalAlignment="Center"/>
+                    <TextBox Text="{Binding AgentSnapshotRetentionCount, UpdateSourceTrigger=PropertyChanged}" Width="80"/>
+                  </StackPanel>
+
+                  <Button Content="Open ai-data folder" Command="{Binding OpenAiDataFolderCommand}" Margin="0,20,0,0" HorizontalAlignment="Left"/>
+                </StackPanel>
+              </ScrollViewer>
+            </TabItem>
+
             <!-- Diagnostics Tab -->
             <TabItem Header="Diagnostics">
                 <StackPanel Margin="12">

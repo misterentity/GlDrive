@@ -272,6 +272,9 @@ public class DownloadManager : IDisposable
                 if (localFile.Exists && localFile.Length > 0)
                     resumeOffset = localFile.Length;
 
+                if (resumeOffset > 0)
+                    EmitDownloadOutcome(item, "resumed");
+
                 var progress = new Progress<DownloadProgress>(p =>
                 {
                     item.DownloadedBytes = p.DownloadedBytes;
@@ -293,7 +296,7 @@ public class DownloadManager : IDisposable
                         item.ErrorMessage = "Release appears incomplete (no .nfo file found)";
                         _store.Update(item);
                         DownloadStatusChanged?.Invoke(item);
-
+                        EmitDownloadOutcome(item, "failed");
                         return;
                     }
                 }
@@ -314,7 +317,7 @@ public class DownloadManager : IDisposable
                             item.ErrorMessage = $"Insufficient disk space: need {FormatSize(item.TotalBytes)}, have {FormatSize(driveInfo.AvailableFreeSpace)}";
                             _store.Update(item);
                             DownloadStatusChanged?.Invoke(item);
-    
+                            EmitDownloadOutcome(item, "failed");
                             return;
                         }
                     }
@@ -359,6 +362,9 @@ public class DownloadManager : IDisposable
                         resumeOffset = existingFile.Length;
                     }
 
+                    if (resumeOffset > 0)
+                        EmitDownloadOutcome(item, "resumed");
+
                     long fileCompleted = resumeOffset;
 
                     var progress = new Progress<DownloadProgress>(p =>
@@ -382,6 +388,10 @@ public class DownloadManager : IDisposable
                     var failures = await SfvVerifier.VerifyAsync(item.LocalPath, itemCts.Token);
                     if (failures.Count > 0)
                     {
+                        // NOTE: SFV failures currently fall through to "complete" emit below.
+                        // ClassifyFailure defines "sfv-mismatch" but this path never populates it.
+                        // Deferred: product decision on whether SFV failure should mark download as failed.
+                        // For now, agent cannot distinguish clean completion from SFV-failing completion.
                         foreach (var f in failures)
                             Log.Warning("SFV verification failed: {File}", f);
                     }
@@ -420,7 +430,7 @@ public class DownloadManager : IDisposable
                     item.ErrorMessage = $"Extraction failed: {ex.Message}";
                     _store.Update(item);
                     DownloadStatusChanged?.Invoke(item);
-
+                    EmitDownloadOutcome(item, "failed");
                     return;
                 }
             }
@@ -429,17 +439,15 @@ public class DownloadManager : IDisposable
             item.CompletedAt = DateTime.UtcNow;
             _store.Update(item);
             DownloadStatusChanged?.Invoke(item);
-
+            EmitDownloadOutcome(item, "complete");
             Log.Information("Download completed: {Release}", item.ReleaseName);
         }
         catch (OperationCanceledException)
         {
-            if (item.Status == DownloadStatus.Downloading)
-            {
-                item.Status = DownloadStatus.Cancelled;
-                _store.Update(item);
-                DownloadStatusChanged?.Invoke(item);
-            }
+            item.Status = DownloadStatus.Cancelled;
+            _store.Update(item);
+            DownloadStatusChanged?.Invoke(item);
+            EmitDownloadOutcome(item, "cancelled");
         }
         catch (Exception ex)
         {
@@ -454,6 +462,8 @@ public class DownloadManager : IDisposable
                 item.ErrorMessage = $"Retry {item.RetryCount}/{_config.MaxRetries}: {ex.Message}";
                 _store.Update(item);
                 DownloadStatusChanged?.Invoke(item);
+                // NOTE: item.RetryCount is post-increment here — means "scheduling retry attempt N".
+                EmitDownloadOutcome(item, "retried");
                 var retryToken = _cts?.Token ?? CancellationToken.None;
                 _ = Task.Run(async () =>
                 {
@@ -473,7 +483,7 @@ public class DownloadManager : IDisposable
                 item.ErrorMessage = ex.Message;
                 _store.Update(item);
                 DownloadStatusChanged?.Invoke(item);
-    
+                EmitDownloadOutcome(item, "failed");
             }
         }
         finally
@@ -482,6 +492,45 @@ public class DownloadManager : IDisposable
             itemCts.Dispose();
             _concurrency.Release();
         }
+    }
+
+    private static void EmitDownloadOutcome(DownloadItem item, string result)
+    {
+        try
+        {
+            var recorder = App.TelemetryRecorder;
+            if (recorder is null) return;
+            long elapsed = 0;
+            var endTime = result == "complete" ? item.CompletedAt ?? DateTime.UtcNow : DateTime.UtcNow;
+            if (item.StartedAt.HasValue && endTime > item.StartedAt.Value)
+                elapsed = (long)(endTime - item.StartedAt.Value).TotalMilliseconds;
+            recorder.Record(GlDrive.AiAgent.TelemetryStream.Downloads,
+                new GlDrive.AiAgent.DownloadOutcomeEvent
+                {
+                    DownloadId  = item.Id,
+                    ServerId    = item.ServerId,
+                    RemotePath  = item.RemotePath,
+                    Result      = result,
+                    Bytes       = item.TotalBytes,
+                    ElapsedMs   = elapsed,
+                    RetryCount  = item.RetryCount,
+                    FailureClass = result == "failed" ? ClassifyFailure(item.ErrorMessage) : null
+                });
+        }
+        catch (Exception ex) { Serilog.Log.Debug(ex, "EmitDownloadOutcome failed"); }
+    }
+
+    private static string? ClassifyFailure(string? err)
+    {
+        if (string.IsNullOrEmpty(err)) return null;
+        var low = err.ToLowerInvariant();
+        if (low.Contains("timeout"))                     return "timeout";
+        if (low.Contains("tls") || low.Contains("handshake")) return "tls";
+        if (low.Contains("550"))                         return "ftp-550";
+        if (low.Contains("421"))                         return "ftp-421";
+        if (low.Contains("disk") || low.Contains("space")) return "disk";
+        if (low.Contains("sfv"))                         return "sfv-mismatch";
+        return "other";
     }
 
     private static string FormatSize(long bytes)

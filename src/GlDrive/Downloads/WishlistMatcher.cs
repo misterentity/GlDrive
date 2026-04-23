@@ -1,4 +1,5 @@
 using System.IO;
+using GlDrive.AiAgent;
 using GlDrive.Config;
 using GlDrive.Ftp;
 using Serilog;
@@ -52,20 +53,37 @@ public class WishlistMatcher
                         _ => false
                     };
 
+                    string? missReason = matches ? null : ClassifyMissReason(releaseName, item);
+                    try
+                    {
+                        App.TelemetryRecorder?.Record(TelemetryStream.WishlistAttempts,
+                            new WishlistAttemptEvent
+                            {
+                                WishlistItemId = item.Id,
+                                Release = releaseName,
+                                Score = matches ? 1.0 : 0.0,
+                                Matched = matches,
+                                MissReason = missReason,
+                                Section = category ?? "",
+                                ServerId = _serverId ?? ""
+                            });
+                    }
+                    catch (Exception ex) { Log.Debug(ex, "WishlistAttempt emit failed"); }
+
                     if (!matches) continue;
 
                     Log.Information("Wishlist match: [{Category}] {Release} -> {Title} (server: {Server})",
                         category, releaseName, item.Title, _serverName);
 
-                    var localPath = BuildLocalPath(item, category, releaseName);
+                    var localPath = BuildLocalPath(item, category!, releaseName);
                     matched.Add((item, new DownloadItem
                     {
                         RemotePath = remotePath,
                         ReleaseName = releaseName,
                         LocalPath = localPath,
                         WishlistItemId = item.Id,
-                        Category = category,
-                        ServerId = _serverId,
+                        Category = category!,
+                        ServerId = _serverId ?? "",
                         ServerName = _serverName
                     }));
                 }
@@ -82,13 +100,40 @@ public class WishlistMatcher
 
                 item.GrabbedReleases.Add(releaseName);
                 _wishlist.Update(item);
-                MatchFound?.Invoke(item, category, releaseName);
+                MatchFound?.Invoke(item, category!, releaseName);
             }
         }
         catch (Exception ex)
         {
             Log.Error(ex, "Error in wishlist matcher for [{Category}] {Release}", category, releaseName);
         }
+    }
+
+    private static string ClassifyMissReason(string releaseName, WishlistItem item)
+    {
+        var parsed = SceneNameParser.Parse(releaseName);
+
+        if (item.Type == MediaType.Movie)
+        {
+            // MatchesMovie: season/episode check → title → year → quality
+            if (parsed.Season != null || parsed.Episode != null) return "not-a-movie";
+            if (item.Year.HasValue && parsed.Year.HasValue && parsed.Year != item.Year) return "year-mismatch";
+            if (item.Quality != QualityProfile.Any && parsed.Quality != QualityProfile.Any && parsed.Quality != item.Quality)
+                return "quality-tag-mismatch";
+            // Title is checked after season but before year in MatchesMovie; if we get here it's a title miss
+            return "title-fuzzy-below-threshold";
+        }
+
+        if (item.Type == MediaType.TvShow)
+        {
+            // MatchesTvEpisode: season check → title → quality
+            if (parsed.Season == null) return "not-a-tv-episode";
+            if (item.Quality != QualityProfile.Any && parsed.Quality != QualityProfile.Any && parsed.Quality != item.Quality)
+                return "quality-tag-mismatch";
+            return "title-fuzzy-below-threshold";
+        }
+
+        return "other";
     }
 
     private string BuildLocalPath(WishlistItem item, string category, string releaseName)
