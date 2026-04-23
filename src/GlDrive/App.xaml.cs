@@ -22,6 +22,7 @@ public partial class App
     public static GlDrive.AiAgent.TelemetryRecorder? TelemetryRecorder { get; private set; }
     public static GlDrive.AiAgent.HealthRollup? HealthRollup { get; private set; }
     public static GlDrive.AiAgent.SectionActivityRollup? SectionActivityRollup { get; private set; }
+    public static GlDrive.AiAgent.TelemetryRetention? TelemetryRetention { get; private set; }
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -164,6 +165,10 @@ public partial class App
         SectionActivityRollup = new GlDrive.AiAgent.SectionActivityRollup(
             TelemetryRecorder,
             Path.Combine(ConfigManager.AppDataPath, "ai-data"));
+        TelemetryRetention = new GlDrive.AiAgent.TelemetryRetention(
+            Path.Combine(ConfigManager.AppDataPath, "ai-data"),
+            config.Agent.GzipAfterDays,
+            config.Agent.DeleteAfterDays);
 
         // Init tray
         _trayViewModel = new TrayViewModel(_serverManager, config, notificationStore);
@@ -271,6 +276,8 @@ public partial class App
         HealthRollup = null;
         SectionActivityRollup?.Dispose();
         SectionActivityRollup = null;
+        TelemetryRetention?.Dispose();
+        TelemetryRetention = null;
         TelemetryRecorder?.Dispose();
         TelemetryRecorder = null;
         _serverManager?.Dispose();
