@@ -15,6 +15,7 @@ public sealed class TelemetryRecorder : IDisposable
     };
 
     private readonly string _root;
+    // Retained for forward-compat; actual enforcement lives in TelemetryRetention (not here).
     private readonly int _maxFileMB;
     private readonly Dictionary<TelemetryStream, StreamWriterTask> _writers = new();
     private readonly Dictionary<TelemetryStream, int> _drops = new();
@@ -70,7 +71,11 @@ public sealed class TelemetryRecorder : IDisposable
     private sealed class StreamWriterTask : IDisposable
     {
         private readonly Channel<string> _channel = Channel.CreateBounded<string>(
-            new BoundedChannelOptions(2048) { FullMode = BoundedChannelFullMode.DropNewest });
+            new BoundedChannelOptions(2048)
+            {
+                FullMode = BoundedChannelFullMode.DropNewest,
+                SingleReader = true
+            });
         private readonly Task _pump;
         private readonly CancellationTokenSource _cts = new();
         private readonly TelemetryStream _stream;
