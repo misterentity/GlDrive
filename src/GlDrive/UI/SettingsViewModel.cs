@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using System.Windows.Input;
 using GlDrive.Config;
 using GlDrive.Tls;
 using static GlDrive.Config.CredentialStore;
@@ -9,6 +10,7 @@ namespace GlDrive.UI;
 
 public class SettingsViewModel : INotifyPropertyChanged
 {
+    private AppConfig _config;
     private string _logLevel;
     private string _trustedCertsInfo;
     private string _downloadLocalPath;
@@ -43,6 +45,7 @@ public class SettingsViewModel : INotifyPropertyChanged
 
     public SettingsViewModel(AppConfig config)
     {
+        _config = config;
         _logLevel = config.Logging.Level;
         _trustedCertsInfo = GetCertsInfo();
         _downloadLocalPath = config.Downloads.LocalPath;
@@ -113,6 +116,78 @@ public class SettingsViewModel : INotifyPropertyChanged
     public bool SpreadDebugMode { get => _spreadDebugMode; set { _spreadDebugMode = value; OnPropertyChanged(); } }
     public ObservableCollection<SkiplistRule> GlobalSkiplist { get; set; } = new();
 
+    // Agent properties — bound directly to _config.Agent (no local backing field needed)
+    public bool AgentEnabled
+    {
+        get => _config.Agent.Enabled;
+        set { _config.Agent.Enabled = value; OnPropertyChanged(); OnAgentEnabledChanged?.Invoke(value); }
+    }
+    public int AgentRunHourLocal
+    {
+        get => _config.Agent.RunHourLocal;
+        set { _config.Agent.RunHourLocal = Math.Clamp(value, 0, 23); OnPropertyChanged(); }
+    }
+    public int AgentConfidenceThresholdPercent
+    {
+        get => _config.Agent.ConfidenceThreshold_x100;
+        set { _config.Agent.ConfidenceThreshold_x100 = Math.Clamp(value, 50, 99); OnPropertyChanged(); }
+    }
+    public int AgentMaxChangesPerRun
+    {
+        get => _config.Agent.MaxChangesPerRun;
+        set { _config.Agent.MaxChangesPerRun = Math.Max(1, value); OnPropertyChanged(); }
+    }
+    public int AgentMaxChangesPerCategory
+    {
+        get => _config.Agent.MaxChangesPerCategory;
+        set { _config.Agent.MaxChangesPerCategory = Math.Max(1, value); OnPropertyChanged(); }
+    }
+    public int AgentDryRunsRemaining
+    {
+        get => _config.Agent.DryRunsRemaining;
+        set { _config.Agent.DryRunsRemaining = Math.Max(0, value); OnPropertyChanged(); }
+    }
+    public int AgentWindowDays
+    {
+        get => _config.Agent.WindowDays;
+        set { _config.Agent.WindowDays = Math.Clamp(value, 1, 30); OnPropertyChanged(); }
+    }
+    public int AgentNukePollIntervalHours
+    {
+        get => _config.Agent.NukePollIntervalHours;
+        set { _config.Agent.NukePollIntervalHours = Math.Clamp(value, 1, 24); OnPropertyChanged(); }
+    }
+    public string AgentModelId
+    {
+        get => _config.Agent.ModelId;
+        set { _config.Agent.ModelId = value ?? ""; OnPropertyChanged(); }
+    }
+    public int AgentGzipAfterDays
+    {
+        get => _config.Agent.GzipAfterDays;
+        set { _config.Agent.GzipAfterDays = Math.Max(1, value); OnPropertyChanged(); }
+    }
+    public int AgentDeleteAfterDays
+    {
+        get => _config.Agent.DeleteAfterDays;
+        set { _config.Agent.DeleteAfterDays = Math.Max(1, value); OnPropertyChanged(); }
+    }
+    public int AgentSnapshotRetentionCount
+    {
+        get => _config.Agent.SnapshotRetentionCount;
+        set { _config.Agent.SnapshotRetentionCount = Math.Max(1, value); OnPropertyChanged(); }
+    }
+
+    public event Action<bool>? OnAgentEnabledChanged;
+
+    public ICommand ResetDryRunsCommand => new RelayCommand(() => { AgentDryRunsRemaining = 3; });
+    public ICommand OpenAiDataFolderCommand => new RelayCommand(() =>
+    {
+        var path = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GlDrive", "ai-data");
+        System.IO.Directory.CreateDirectory(path);
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = path, UseShellExecute = true });
+    });
+
     public string[] LogLevels { get; } = ["Verbose", "Debug", "Information", "Warning", "Error"];
     public string[] QualityOptions { get; } = ["Any", "SD", "720p", "1080p", "2160p"];
     public string[] ThemeOptions { get; } = ["Dark", "Light", "System"];
@@ -154,6 +229,25 @@ public class SettingsViewModel : INotifyPropertyChanged
         config.Spread.NotifyOnRaceComplete = SpreadNotifyComplete;
         config.Spread.DebugMode = SpreadDebugMode;
         config.Spread.GlobalSkiplist = GlobalSkiplist.ToList();
+
+        // AI Agent — properties bind directly to _config.Agent, but mirror to the passed-in
+        // config for consistency with all other ApplyTo sections. Keeps the method the
+        // single authoritative flush path.
+        config.Agent ??= new AgentConfig();
+        config.Agent.Enabled = _config.Agent.Enabled;
+        config.Agent.RunHourLocal = _config.Agent.RunHourLocal;
+        config.Agent.ConfidenceThreshold_x100 = _config.Agent.ConfidenceThreshold_x100;
+        config.Agent.MaxChangesPerRun = _config.Agent.MaxChangesPerRun;
+        config.Agent.MaxChangesPerCategory = _config.Agent.MaxChangesPerCategory;
+        config.Agent.DryRunsRemaining = _config.Agent.DryRunsRemaining;
+        config.Agent.WindowDays = _config.Agent.WindowDays;
+        config.Agent.NukePollIntervalHours = _config.Agent.NukePollIntervalHours;
+        config.Agent.ModelId = _config.Agent.ModelId;
+        config.Agent.GzipAfterDays = _config.Agent.GzipAfterDays;
+        config.Agent.DeleteAfterDays = _config.Agent.DeleteAfterDays;
+        config.Agent.SnapshotRetentionCount = _config.Agent.SnapshotRetentionCount;
+        config.Agent.TelemetryMaxFileMB = _config.Agent.TelemetryMaxFileMB;
+        config.Agent.HasAcceptedConsent = _config.Agent.HasAcceptedConsent;
     }
 
     public void RefreshCertsInfo()

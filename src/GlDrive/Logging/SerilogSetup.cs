@@ -1,4 +1,5 @@
 using System.IO;
+using GlDrive.AiAgent;
 using GlDrive.Config;
 using Serilog;
 using Serilog.Core;
@@ -9,6 +10,11 @@ namespace GlDrive.Logging;
 public static class SerilogSetup
 {
     private static LoggingLevelSwitch? _levelSwitch;
+
+    /// <summary>
+    /// Singleton sink installed during Configure(). Assign Recorder after TelemetryRecorder is ready.
+    /// </summary>
+    public static ErrorSignatureSink AgentSink { get; } = new ErrorSignatureSink();
 
     public static void Configure(LoggingConfig? config = null)
     {
@@ -27,6 +33,7 @@ public static class SerilogSetup
                 rollOnFileSizeLimit: true,
                 retainedFileCountLimit: config.RetainedFiles,
                 outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
+            .WriteTo.Sink(AgentSink)
             .CreateLogger();
 
         Log.Information("GlDrive logging initialized at {Level} level", _levelSwitch.MinimumLevel);

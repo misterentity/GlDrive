@@ -288,6 +288,9 @@ public class ServerManager : IDisposable
 
     public IReadOnlyList<MountService> GetMountedServers() => _servers.Values.ToList();
 
+    /// <summary>Returns all currently mounted/active MountService instances. Used by HealthRollup.</summary>
+    public IEnumerable<MountService> GetAllMountServices() => _servers.Values;
+
     /// <summary>IDs of currently mounted/connected servers.</summary>
     public IReadOnlyList<string> ConnectedServerIds => _servers.Keys.ToList();
 

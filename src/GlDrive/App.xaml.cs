@@ -19,6 +19,11 @@ public partial class App
     private TrayViewModel? _trayViewModel;
     private H.NotifyIcon.TaskbarIcon? _taskbarIcon;
 
+    public static GlDrive.AiAgent.TelemetryRecorder? TelemetryRecorder { get; private set; }
+    public static GlDrive.AiAgent.HealthRollup? HealthRollup { get; private set; }
+    public static GlDrive.AiAgent.SectionActivityRollup? SectionActivityRollup { get; private set; }
+    public static GlDrive.AiAgent.TelemetryRetention? TelemetryRetention { get; private set; }
+
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
@@ -113,6 +118,10 @@ public partial class App
         SerilogSetup.Configure(config.Logging);
         Log.Information("GlDrive starting...");
 
+        // Initialize AI agent telemetry recorder
+        TelemetryRecorder = new GlDrive.AiAgent.TelemetryRecorder(ConfigManager.AppDataPath, config.Agent.TelemetryMaxFileMB);
+        SerilogSetup.AgentSink.Recorder = TelemetryRecorder;
+
         // Check first run
         if (!ConfigManager.ConfigExists || config.Servers.Count == 0)
         {
@@ -152,6 +161,14 @@ public partial class App
         try { notificationStore.Load(); }
         catch (Exception ex) { Log.Warning(ex, "Failed to load notification store"); }
         _serverManager = new ServerManager(config, certManager, notificationStore);
+        HealthRollup = new GlDrive.AiAgent.HealthRollup(TelemetryRecorder, _serverManager);
+        SectionActivityRollup = new GlDrive.AiAgent.SectionActivityRollup(
+            TelemetryRecorder,
+            Path.Combine(ConfigManager.AppDataPath, "ai-data"));
+        TelemetryRetention = new GlDrive.AiAgent.TelemetryRetention(
+            Path.Combine(ConfigManager.AppDataPath, "ai-data"),
+            config.Agent.GzipAfterDays,
+            config.Agent.DeleteAfterDays);
 
         // Init tray
         _trayViewModel = new TrayViewModel(_serverManager, config, notificationStore);
@@ -253,6 +270,16 @@ public partial class App
     protected override void OnExit(ExitEventArgs e)
     {
         Log.Information("GlDrive shutting down...");
+        try { GlDrive.Logging.SerilogSetup.AgentSink.Flush(); }
+        catch (Exception ex) { Log.Debug(ex, "AgentSink final flush failed"); }
+        HealthRollup?.Dispose();
+        HealthRollup = null;
+        SectionActivityRollup?.Dispose();
+        SectionActivityRollup = null;
+        TelemetryRetention?.Dispose();
+        TelemetryRetention = null;
+        TelemetryRecorder?.Dispose();
+        TelemetryRecorder = null;
         _serverManager?.Dispose();
         _taskbarIcon?.Dispose();
         _guard?.Dispose();

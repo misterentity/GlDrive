@@ -141,6 +141,76 @@ public class IrcAnnounceListener : IDisposable
                 Log.Debug(ex, "IRC announce match error");
             }
         }
+
+        // No rule matched — emit telemetry if the message looks announce-y so the nightly
+        // agent can detect regex drift over time.
+        if (LooksAnnouncey(message.Text))
+        {
+            try
+            {
+                var (near, dist) = NearestRule(message.Text, _rules);
+                App.TelemetryRecorder?.Record(GlDrive.AiAgent.TelemetryStream.AnnouncesNoMatch,
+                    new GlDrive.AiAgent.AnnounceNoMatchEvent
+                    {
+                        ServerId = _serverId,
+                        Channel = target,
+                        BotNick = message.Nick ?? "",
+                        Message = message.Text.Length > 512 ? message.Text[..512] : message.Text,
+                        NearestRulePattern = near,
+                        NearestRuleDistance = dist
+                    });
+            }
+            catch (Exception ex) { Log.Debug(ex, "AnnounceNoMatch emit failed"); }
+        }
+    }
+
+    private static bool LooksAnnouncey(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message)) return false;
+        var m = message;
+        return (m.Contains('[') && m.Contains(']')) ||
+               m.Contains("NEW ", StringComparison.OrdinalIgnoreCase) ||
+               m.Contains(" pre'd", StringComparison.OrdinalIgnoreCase) ||
+               m.Contains(" pre ", StringComparison.OrdinalIgnoreCase) ||
+               m.Contains("Release", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static (string? pattern, int? distance) NearestRule(
+        string message, IReadOnlyList<IrcAnnounceRule> rules)
+    {
+        if (rules.Count == 0) return (null, null);
+        string? best = null;
+        int bestDist = int.MaxValue;
+        foreach (var r in rules)
+        {
+            if (!r.Enabled) continue;
+            if (string.IsNullOrEmpty(r.Pattern)) continue;
+            var d = LevenshteinLimited(message, r.Pattern, 200);
+            if (d < bestDist) { bestDist = d; best = r.Pattern; }
+        }
+        return (best, bestDist == int.MaxValue ? null : bestDist);
+    }
+
+    private static int LevenshteinLimited(string a, string b, int max)
+    {
+        if (a.Length == 0) return Math.Min(b.Length, max);
+        if (b.Length == 0) return Math.Min(a.Length, max);
+        var dp = new int[b.Length + 1];
+        for (int j = 0; j <= b.Length; j++) dp[j] = j;
+        for (int i = 1; i <= a.Length; i++)
+        {
+            var prev = dp[0]; dp[0] = i; var rowMin = dp[0];
+            for (int j = 1; j <= b.Length; j++)
+            {
+                var tmp = dp[j];
+                dp[j] = a[i - 1] == b[j - 1]
+                    ? prev
+                    : 1 + Math.Min(prev, Math.Min(dp[j], dp[j - 1]));
+                prev = tmp; rowMin = Math.Min(rowMin, dp[j]);
+            }
+            if (rowMin >= max) return max;
+        }
+        return dp[b.Length];
     }
 
     private bool TryFireAnnounce(string section, string release, string channel, string msgText, bool autoRace)
