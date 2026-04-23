@@ -1378,7 +1378,8 @@ public class SpreadJob : IDisposable
             // (double TYPE I causes response queue desync on BNC servers)
 
             var ok = await transfer.ExecuteAsync(srcConn!, dstConn, srcPath, dstPath, mode,
-                _spreadConfig.TransferTimeoutSeconds, ct);
+                _spreadConfig.TransferTimeoutSeconds, ct,
+                raceId: Id, srcServerId: srcId, dstServerId: dstId);
 
             lock (_progressLock) _activeTransfers.Remove(transferKey);
 

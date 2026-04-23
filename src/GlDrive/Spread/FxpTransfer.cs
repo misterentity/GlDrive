@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Net.Security;
@@ -32,8 +33,20 @@ public class FxpTransfer
         PooledConnection source, PooledConnection dest,
         string srcPath, string dstPath,
         FxpMode mode, int transferTimeoutSeconds,
-        CancellationToken ct)
+        CancellationToken ct,
+        string raceId = "", string srcServerId = "", string dstServerId = "")
     {
+        var totalSw = Stopwatch.StartNew();
+        // pasvLatencyMs: time from method entry until data transfer starts (negotiation phase).
+        // We measure this as the time until SetState(Transferring) is called inside each mode method,
+        // which captures PASV/CPSV command round-trips + PORT/connection setup.
+        // ttfbMs: FluentFTP server-to-server transfers don't expose a first-byte hook — set to 0.
+        // For Relay mode, we could measure the first ReadAsync, but for consistency across all
+        // modes we set ttfbMs=0 and put the full negotiation cost into pasvLatencyMs.
+        var pasvSw = Stopwatch.StartNew();
+        bool ok;
+        string? abortReason = null;
+
         try
         {
             // When both support CPSV, try CpsvPasv first (source CPSV, dest regular PASV).
@@ -45,33 +58,64 @@ public class FxpTransfer
             {
                 try
                 {
-                    return await ExecuteCpsvPasv(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct);
+                    ok = await ExecuteCpsvPasv(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct, pasvSw);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     Log.Debug("CpsvPasv failed ({Error}), trying Relay mode — connections will be poisoned", ex.Message);
                     source.Poisoned = true;
                     dest.Poisoned = true;
+                    pasvSw.Restart();
+                    ok = await ExecuteRelay(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct, pasvSw);
                 }
-                return await ExecuteRelay(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct);
+            }
+            else
+            {
+                ok = mode switch
+                {
+                    FxpMode.PasvPasv => await ExecutePasvPasv(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct, pasvSw),
+                    FxpMode.CpsvPasv => await ExecuteCpsvPasv(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct, pasvSw),
+                    FxpMode.PasvCpsv => await ExecutePasvCpsv(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct, pasvSw),
+                    FxpMode.Relay    => await ExecuteRelay(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct, pasvSw),
+                    _ => throw new ArgumentOutOfRangeException(nameof(mode))
+                };
             }
 
-            return mode switch
-            {
-                FxpMode.PasvPasv => await ExecutePasvPasv(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct),
-                FxpMode.CpsvPasv => await ExecuteCpsvPasv(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct),
-                FxpMode.PasvCpsv => await ExecutePasvCpsv(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct),
-                FxpMode.Relay => await ExecuteRelay(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct),
-                _ => throw new ArgumentOutOfRangeException(nameof(mode))
-            };
+            if (!ok) abortReason = ErrorMessage ?? "transfer failed";
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             SetState(TransferState.Error);
             ErrorMessage = ex.Message;
+            abortReason = ex.Message;
+            ok = false;
             Log.Warning(ex, "FXP transfer failed: {Src} -> {Dst}", srcPath, dstPath);
-            return false;
         }
+
+        totalSw.Stop();
+
+        try
+        {
+            var recorder = App.TelemetryRecorder;
+            recorder?.Record(GlDrive.AiAgent.TelemetryStream.Transfers, new GlDrive.AiAgent.FileTransferEvent
+            {
+                RaceId        = raceId,
+                SrcServer     = srcServerId,
+                DstServer     = dstServerId,
+                File          = srcPath,
+                Bytes         = TotalBytes,
+                ElapsedMs     = totalSw.ElapsedMilliseconds,
+                TtfbMs        = 0,   // not measurable via FluentFTP server-to-server API
+                PasvLatencyMs = pasvSw.ElapsedMilliseconds,
+                AbortReason   = abortReason
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "FXP telemetry emit failed (non-fatal)");
+        }
+
+        return ok;
     }
 
     /// <summary>
@@ -106,7 +150,8 @@ public class FxpTransfer
     private async Task<bool> ExecutePasvPasv(
         AsyncFtpClient src, AsyncFtpClient dst,
         string srcPath, string dstPath,
-        int timeoutSec, CancellationToken ct)
+        int timeoutSec, CancellationToken ct,
+        Stopwatch pasvSw)
     {
         SetState(TransferState.NegotiatingPassive);
 
@@ -143,6 +188,7 @@ public class FxpTransfer
         if (retrReply.Code != "150" && retrReply.Code != "125")
             throw new IOException($"RETR failed: {retrReply.Code} {retrReply.Message}");
 
+        pasvSw.Stop(); // negotiation complete — data is now flowing
         SetState(TransferState.Transferring);
 
         // Wait for completion with timeout
@@ -152,7 +198,8 @@ public class FxpTransfer
     private async Task<bool> ExecuteCpsvPasv(
         AsyncFtpClient src, AsyncFtpClient dst,
         string srcPath, string dstPath,
-        int timeoutSec, CancellationToken ct)
+        int timeoutSec, CancellationToken ct,
+        Stopwatch pasvSw)
     {
         // Source is CPSV (behind BNC, can't PASV). Dest does PASV, source PORTs to it.
         SetState(TransferState.NegotiatingPassive);
@@ -184,6 +231,7 @@ public class FxpTransfer
         if (retrReply.Code != "150" && retrReply.Code != "125")
             throw new IOException($"RETR failed: {retrReply.Code} {retrReply.Message}");
 
+        pasvSw.Stop(); // negotiation complete — data is now flowing
         SetState(TransferState.Transferring);
         return await WaitForTransferComplete(src, dst, timeoutSec, ct);
     }
@@ -191,7 +239,8 @@ public class FxpTransfer
     private async Task<bool> ExecutePasvCpsv(
         AsyncFtpClient src, AsyncFtpClient dst,
         string srcPath, string dstPath,
-        int timeoutSec, CancellationToken ct)
+        int timeoutSec, CancellationToken ct,
+        Stopwatch pasvSw)
     {
         // Dest is CPSV. Source does PASV, dest PORTs to source.
         SetState(TransferState.NegotiatingPassive);
@@ -223,6 +272,7 @@ public class FxpTransfer
         if (retrReply.Code != "150" && retrReply.Code != "125")
             throw new IOException($"RETR failed: {retrReply.Code} {retrReply.Message}");
 
+        pasvSw.Stop(); // negotiation complete — data is now flowing
         SetState(TransferState.Transferring);
         return await WaitForTransferComplete(src, dst, timeoutSec, ct);
     }
@@ -230,7 +280,8 @@ public class FxpTransfer
     private async Task<bool> ExecuteRelay(
         AsyncFtpClient src, AsyncFtpClient dst,
         string srcPath, string dstPath,
-        int timeoutSec, CancellationToken ct)
+        int timeoutSec, CancellationToken ct,
+        Stopwatch pasvSw)
     {
         // Both CPSV — neither backend IP is routable. Relay through local memory.
         SetState(TransferState.NegotiatingPassive);
@@ -265,6 +316,7 @@ public class FxpTransfer
             srcSsl = await CpsvDataHelper.NegotiateDataTls(srcTcp.GetStream(), ct);
             dstSsl = await CpsvDataHelper.NegotiateDataTls(dstTcp.GetStream(), ct);
 
+            pasvSw.Stop(); // TCP+TLS setup done — relay loop about to start
             SetState(TransferState.Transferring);
 
             // Double-buffered relay: read next chunk while writing current
