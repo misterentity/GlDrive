@@ -57,10 +57,33 @@ public class ConfigManager
     public static void Save(AppConfig config)
     {
         Directory.CreateDirectory(AppDataFolder);
+        string? beforeJson = File.Exists(ConfigFilePath) ? File.ReadAllText(ConfigFilePath) : null;
         var json = JsonSerializer.Serialize(config, JsonOptions);
         var tempPath = ConfigFilePath + ".tmp";
         File.WriteAllText(tempPath, json);
         File.Move(tempPath, ConfigFilePath, overwrite: true);
+
+        if (beforeJson != null)
+        {
+            try
+            {
+                var beforeNode = JsonNode.Parse(beforeJson);
+                var afterNode  = JsonNode.Parse(json);
+                var recorder = App.TelemetryRecorder;
+                if (recorder != null && beforeNode != null && afterNode != null)
+                {
+                    foreach (var (ptr, b, a) in AiAgent.ConfigDiff.Diff(beforeNode, afterNode))
+                        recorder.Record(AiAgent.TelemetryStream.Overrides,
+                            new AiAgent.ConfigOverrideEvent
+                            {
+                                JsonPointer = ptr,
+                                BeforeValue = b,
+                                AfterValue  = a
+                            });
+                }
+            }
+            catch (Exception ex) { Log.Debug(ex, "ConfigOverride emit failed"); }
+        }
     }
 
     private static bool NeedsMigration(string json)
