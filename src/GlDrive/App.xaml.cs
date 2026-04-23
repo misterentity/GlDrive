@@ -116,8 +116,7 @@ public partial class App
         Log.Information("GlDrive starting...");
 
         // Initialize AI agent telemetry recorder
-        var appDataRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GlDrive");
-        TelemetryRecorder = new GlDrive.AiAgent.TelemetryRecorder(appDataRoot, config.Agent.TelemetryMaxFileMB);
+        TelemetryRecorder = new GlDrive.AiAgent.TelemetryRecorder(ConfigManager.AppDataPath, config.Agent.TelemetryMaxFileMB);
 
         // Check first run
         if (!ConfigManager.ConfigExists || config.Servers.Count == 0)
