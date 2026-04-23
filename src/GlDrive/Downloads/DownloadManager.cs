@@ -272,6 +272,9 @@ public class DownloadManager : IDisposable
                 if (localFile.Exists && localFile.Length > 0)
                     resumeOffset = localFile.Length;
 
+                if (resumeOffset > 0)
+                    EmitDownloadOutcome(item, "resumed");
+
                 var progress = new Progress<DownloadProgress>(p =>
                 {
                     item.DownloadedBytes = p.DownloadedBytes;
@@ -359,6 +362,9 @@ public class DownloadManager : IDisposable
                         resumeOffset = existingFile.Length;
                     }
 
+                    if (resumeOffset > 0)
+                        EmitDownloadOutcome(item, "resumed");
+
                     long fileCompleted = resumeOffset;
 
                     var progress = new Progress<DownloadProgress>(p =>
@@ -382,6 +388,10 @@ public class DownloadManager : IDisposable
                     var failures = await SfvVerifier.VerifyAsync(item.LocalPath, itemCts.Token);
                     if (failures.Count > 0)
                     {
+                        // NOTE: SFV failures currently fall through to "complete" emit below.
+                        // ClassifyFailure defines "sfv-mismatch" but this path never populates it.
+                        // Deferred: product decision on whether SFV failure should mark download as failed.
+                        // For now, agent cannot distinguish clean completion from SFV-failing completion.
                         foreach (var f in failures)
                             Log.Warning("SFV verification failed: {File}", f);
                     }
@@ -434,12 +444,10 @@ public class DownloadManager : IDisposable
         }
         catch (OperationCanceledException)
         {
-            if (item.Status == DownloadStatus.Downloading)
-            {
-                item.Status = DownloadStatus.Cancelled;
-                _store.Update(item);
-                DownloadStatusChanged?.Invoke(item);
-            }
+            item.Status = DownloadStatus.Cancelled;
+            _store.Update(item);
+            DownloadStatusChanged?.Invoke(item);
+            EmitDownloadOutcome(item, "cancelled");
         }
         catch (Exception ex)
         {
@@ -454,6 +462,7 @@ public class DownloadManager : IDisposable
                 item.ErrorMessage = $"Retry {item.RetryCount}/{_config.MaxRetries}: {ex.Message}";
                 _store.Update(item);
                 DownloadStatusChanged?.Invoke(item);
+                // NOTE: item.RetryCount is post-increment here — means "scheduling retry attempt N".
                 EmitDownloadOutcome(item, "retried");
                 var retryToken = _cts?.Token ?? CancellationToken.None;
                 _ = Task.Run(async () =>
