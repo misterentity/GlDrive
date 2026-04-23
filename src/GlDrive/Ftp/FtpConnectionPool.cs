@@ -18,6 +18,57 @@ public class FtpConnectionPool : IAsyncDisposable
     private bool _disposed;
     private DateTime _lastGhostKill;
 
+    // Health counters — flushed hourly by HealthRollup
+    public double AvgConnectMs { get; private set; }
+    public double P99ConnectMs { get; private set; }
+    public int DisconnectsSinceFlush { get; private set; }
+    public double AvgTlsHandshakeMs { get; private set; }  // always 0 — TLS buried inside FluentFTP Connect
+    public int ExhaustCountSinceFlush { get; private set; }
+    public int GhostKillsSinceFlush { get; private set; }
+    public int Errors5xxSinceFlush { get; private set; }   // TODO: wire IncrementError5xx when 5xx signal is plumbed
+    public int ReinitCountSinceFlush { get; private set; }
+
+    private readonly List<double> _connectMsSamples = new();
+    private readonly List<double> _tlsMsSamples = new();   // reserved for future TLS timing
+
+    private int _disconnects, _exhaustCount, _ghostKills, _errors5xx, _reinitCount;
+
+    internal void RecordConnect(double ms) { lock (_connectMsSamples) _connectMsSamples.Add(ms); }
+    internal void RecordTlsHandshake(double ms) { lock (_tlsMsSamples) _tlsMsSamples.Add(ms); }
+    internal void IncrementDisconnect() => Interlocked.Increment(ref _disconnects);
+    internal void IncrementExhaust() => Interlocked.Increment(ref _exhaustCount);
+    internal void IncrementGhostKill() => Interlocked.Increment(ref _ghostKills);
+    internal void IncrementError5xx() => Interlocked.Increment(ref _errors5xx);
+    internal void IncrementReinit() => Interlocked.Increment(ref _reinitCount);
+
+    public void FlushHealthCounters()
+    {
+        lock (_connectMsSamples)
+        {
+            AvgConnectMs = _connectMsSamples.Count == 0 ? 0 : _connectMsSamples.Average();
+            P99ConnectMs = _connectMsSamples.Count == 0 ? 0 : Percentile(_connectMsSamples, 0.99);
+            _connectMsSamples.Clear();
+        }
+        lock (_tlsMsSamples)
+        {
+            AvgTlsHandshakeMs = _tlsMsSamples.Count == 0 ? 0 : _tlsMsSamples.Average();
+            _tlsMsSamples.Clear();
+        }
+        DisconnectsSinceFlush = Interlocked.Exchange(ref _disconnects, 0);
+        ExhaustCountSinceFlush = Interlocked.Exchange(ref _exhaustCount, 0);
+        GhostKillsSinceFlush = Interlocked.Exchange(ref _ghostKills, 0);
+        Errors5xxSinceFlush = Interlocked.Exchange(ref _errors5xx, 0);
+        ReinitCountSinceFlush = Interlocked.Exchange(ref _reinitCount, 0);
+    }
+
+    private static double Percentile(List<double> samples, double p)
+    {
+        if (samples.Count == 0) return 0;
+        var copy = new List<double>(samples); copy.Sort();
+        var idx = (int)Math.Clamp(Math.Round(p * (copy.Count - 1)), 0, copy.Count - 1);
+        return copy[idx];
+    }
+
     public FtpConnectionPool(FtpClientFactory factory, int maxSize = 3)
     {
         _factory = factory;
@@ -42,7 +93,9 @@ public class FtpConnectionPool : IAsyncDisposable
             if (_created > 0) return;
 
             // Create initial connection to verify connectivity
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             var client = await _factory.CreateAndConnect(ct);
+            RecordConnect(sw.ElapsedMilliseconds);
 
             // Detect CPSV support (glftpd BNC)
             ControlHost = _factory.Host;
@@ -77,7 +130,9 @@ public class FtpConnectionPool : IAsyncDisposable
         {
             if (_created > 0 || _active > 0) return; // Double-check under lock
 
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             var client = await _factory.CreateAndConnect(ct);
+            RecordConnect(sw.ElapsedMilliseconds);
             ControlHost = _factory.Host;
             if (client.Capabilities.Contains(FtpCapability.CPSV))
                 UseCpsv = true;
@@ -85,6 +140,7 @@ public class FtpConnectionPool : IAsyncDisposable
             await _pool.Writer.WriteAsync(client, ct);
             _created = 1;
             IsConnected = true;
+            IncrementReinit();
             Log.Information("Connection pool reinitialized with 1 connection (max {Max})", _maxSize);
         }
         finally
@@ -107,6 +163,7 @@ public class FtpConnectionPool : IAsyncDisposable
             }
 
             // Stale or corrupt connection, properly disconnect and create new
+            IncrementDisconnect();
             DisconnectAndDispose(client);
             Interlocked.Decrement(ref _created);
         }
@@ -116,7 +173,9 @@ public class FtpConnectionPool : IAsyncDisposable
         {
             try
             {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
                 client = await _factory.CreateAndConnect(ct);
+                RecordConnect(sw.ElapsedMilliseconds);
                 Interlocked.Increment(ref _active);
                 return new PooledConnection(client, this);
             }
@@ -132,12 +191,15 @@ public class FtpConnectionPool : IAsyncDisposable
                     try
                     {
                         await _factory.KillGhosts(ct);
+                        IncrementGhostKill();
                         // Retry connection after ghost kill
                         if (Interlocked.Increment(ref _created) <= _maxSize)
                         {
                             try
                             {
+                                var sw2 = System.Diagnostics.Stopwatch.StartNew();
                                 client = await _factory.CreateAndConnect(ct);
+                                RecordConnect(sw2.ElapsedMilliseconds);
                                 Interlocked.Increment(ref _active);
                                 return new PooledConnection(client, this);
                             }
@@ -165,7 +227,10 @@ public class FtpConnectionPool : IAsyncDisposable
 
         // If no connections exist at all (all discarded), don't wait — nothing will be returned
         if (_created <= 0)
+        {
+            IncrementExhaust();
             throw new InvalidOperationException("Pool exhausted: all connections discarded and new connections failed");
+        }
 
         // At capacity — wait for one to be returned
         client = await _pool.Reader.ReadAsync(ct);
@@ -176,13 +241,16 @@ public class FtpConnectionPool : IAsyncDisposable
         }
 
         // Stale, replace it
+        IncrementDisconnect();
         DisconnectAndDispose(client);
         Interlocked.Decrement(ref _created); // Account for disposed connection
         if (Interlocked.Increment(ref _created) <= _maxSize)
         {
             try
             {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
                 client = await _factory.CreateAndConnect(ct);
+                RecordConnect(sw.ElapsedMilliseconds);
                 Interlocked.Increment(ref _active);
                 return new PooledConnection(client, this);
             }
@@ -193,6 +261,7 @@ public class FtpConnectionPool : IAsyncDisposable
             }
         }
         Interlocked.Decrement(ref _created);
+        IncrementExhaust();
         throw new InvalidOperationException("Pool exhausted after stale connection replacement");
     }
 
@@ -201,6 +270,7 @@ public class FtpConnectionPool : IAsyncDisposable
         Interlocked.Decrement(ref _active);
         if (_disposed || !client.IsConnected)
         {
+            IncrementDisconnect();
             DisconnectAndDispose(client);
             Interlocked.Decrement(ref _created);
             return;
@@ -221,6 +291,7 @@ public class FtpConnectionPool : IAsyncDisposable
     {
         Interlocked.Decrement(ref _active);
         Interlocked.Decrement(ref _created);
+        IncrementDisconnect();
         DisconnectAndDispose(client);
         Log.Debug("Pool: discarded poisoned connection (created={Created})", _created);
     }
