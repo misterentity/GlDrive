@@ -77,6 +77,10 @@ public class SpreadJob : IDisposable
     private readonly Dictionary<string, int> _destFailureCount = new();
     private readonly Dictionary<string, DateTime> _destRetryAt = new();
 
+    // Set to true when the race terminates due to a skiplist/blacklist denial.
+    // Used by EmitRaceOutcome to emit "blacklisted" instead of "aborted".
+    private bool _blacklisted = false;
+
     // Skiplist evaluation trace (captured in Phase 0 for history popup)
     public List<SkiplistTraceEntry>? SkiplistTrace { get; private set; }
     public string SkiplistResult { get; private set; } = "Allowed";
@@ -188,6 +192,7 @@ public class SpreadJob : IDisposable
                     SkiplistTrace = allTrace;
                     var matchedRule = trace.FirstOrDefault(t => t.IsMatch);
                     SkiplistResult = $"Denied by: {matchedRule?.Pattern} (on {config.Name})";
+                    _blacklisted = true;
                     SetFailed($"Release denied by skiplist on {config.Name}: {ReleaseName}");
                     return;
                 }
@@ -607,7 +612,9 @@ public class SpreadJob : IDisposable
             // user credits and triggers ratio penalties, so we always clean up
             // our own incomplete work before leaving.
             await CleanupIncompleteDirs(sitePaths);
-            EmitRaceOutcome(State == SpreadJobState.Completed ? "complete" : "aborted");
+            EmitRaceOutcome(State == SpreadJobState.Completed ? "complete"
+                          : _blacklisted                       ? "blacklisted"
+                          :                                      "aborted");
         }
     }
 
@@ -623,16 +630,21 @@ public class SpreadJob : IDisposable
             {
                 participants = _siteProgress.Values.Select(s => new GlDrive.AiAgent.RaceParticipant(
                     ServerId: s.ServerId,
-                    Role: s.IsSource ? "src" : "dst",
+                    Role: s.IsSource ? "src" : "dst",  // NOTE: may misclassify in multi-source topologies; see _knownSourceServerId
                     Bytes: s.BytesTransferred,
                     Files: s.FilesOwned,
-                    AvgKbps: s.SpeedBps / 1024.0,
+                    AvgKbps: s.SpeedBps / 1024.0,  // NOTE: instantaneous speed; often 0 at race end. Use transfers stream for avg.
                     AbortReason: null
                 )).ToList();
             }
 
             int filesTotal;
-            lock (_ownershipLock) filesTotal = _fileInfos.Count;
+            int filesExpected;
+            lock (_ownershipLock)
+            {
+                filesTotal    = _fileInfos.Count;
+                filesExpected = _expectedFileCount;
+            }
 
             recorder.Record(GlDrive.AiAgent.TelemetryStream.Races, new GlDrive.AiAgent.RaceOutcomeEvent
             {
@@ -646,7 +658,7 @@ public class SpreadJob : IDisposable
                 FxpMode = Mode.ToString(),
                 ScoreBreakdown = new Dictionary<string, int>(),
                 Result = result,
-                FilesExpected = _expectedFileCount,
+                FilesExpected = filesExpected,
                 FilesTotal = filesTotal
             });
         }
