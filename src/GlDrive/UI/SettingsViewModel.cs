@@ -136,6 +136,11 @@ public class SettingsViewModel : INotifyPropertyChanged
                 _config.Agent.HasAcceptedConsent = true;
             }
             _config.Agent.Enabled = value;
+            // Persist immediately so a restart preserves the toggle even if user never clicks Save.
+            GlDrive.Config.ConfigManager.Save(_config);
+            // Start/stop the scheduler — mirrors the tray toggle behavior.
+            if (value) App.AgentRunner?.Start();
+            else       App.AgentRunner?.Stop();
             OnPropertyChanged();
             OnAgentEnabledChanged?.Invoke(value);
         }
