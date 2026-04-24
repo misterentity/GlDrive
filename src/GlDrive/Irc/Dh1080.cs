@@ -77,17 +77,20 @@ public class Dh1080
 
     public string ComputeSharedSecret(string theirPubKeyBase64)
     {
-        // Normalize the incoming pubkey:
-        //   - fish-irssi and compatible clients emit 181 chars (180 real + 'A'
-        //     quirk padding). Strip the trailing 'A' to get 180 chars, which is
-        //     valid standard base64 for a 135-byte pubkey.
-        //   - .NET's Convert.FromBase64String requires the string length to be a
-        //     multiple of 4 and accepts '=' padding. For the rare case where a
-        //     peer sends unpadded standard base64 with a non-multiple-of-4 length,
-        //     right-pad with '=' to the next multiple of 4.
+        // Normalize the incoming pubkey to match fish-irssi b64toh semantics:
+        // strip ALL trailing 'A' chars (B64ABC[0] = 'A', value 0), not just one.
+        // fish-irssi-compatible clients (mIRC fish10, HexChat FiSH, KVIrc, weechat-fish)
+        // emit a quirk trailing 'A' for byte-aligned multi-of-6-bits inputs (135-byte
+        // pubkey → 181 chars). When the pubkey value's natural representation also
+        // ends in zero bytes, htob64 emits MORE trailing 'A' chars from that data.
+        // The canonical b64toh strips them all before bit-stream decoding, so peer
+        // and we agree on a truncated bigint value. If we strip only one, we decode
+        // a different bigint than peer does (for ~1/256 of exchanges), shared secret
+        // diverges, FiSH key mismatches, decryption produces garbled UTF-8.
         var normalized = theirPubKeyBase64;
-        if (normalized.Length >= 181 && normalized[^1] == 'A')
+        while (normalized.Length > 0 && normalized[^1] == 'A')
             normalized = normalized[..^1];
+        // Right-pad to multiple of 4 for Convert.FromBase64String.
         while (normalized.Length % 4 != 0)
             normalized += '=';
 
