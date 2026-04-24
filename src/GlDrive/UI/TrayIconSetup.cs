@@ -209,6 +209,11 @@ public static class TrayIconSetup
         logs.Click += (_, _) => vm.ViewLogsCommand.Execute(null);
         menu.Items.Add(logs);
 
+        // Build AI digest (debug)
+        var digest = new MenuItem { Header = "Build AI digest (debug)..." };
+        digest.Click += (_, _) => vm.BuildDigestDebugCommand.Execute(null);
+        menu.Items.Add(digest);
+
         // Install glftpd
         var installer = new MenuItem { Header = "Install glftpd..." };
         installer.Click += (_, _) =>
