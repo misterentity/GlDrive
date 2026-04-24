@@ -283,6 +283,12 @@
                   </StackPanel>
 
                   <Button Content="Open ai-data folder" Command="{Binding OpenAiDataFolderCommand}" Margin="0,20,0,0" HorizontalAlignment="Left"/>
+
+                  <Separator Margin="0,20,0,10"/>
+                  <Button Content="Panic: revert every AI change..." Command="{Binding PanicRevertAllCommand}"
+                          Background="#662222" Foreground="White" HorizontalAlignment="Left" Padding="8,4"/>
+                  <Button Content="Restore from snapshot..." Command="{Binding RestoreFromSnapshotCommand}"
+                          Margin="0,8,0,0" HorizontalAlignment="Left" Padding="8,4"/>
                 </StackPanel>
               </ScrollViewer>
             </TabItem>

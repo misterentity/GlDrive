@@ -120,7 +120,25 @@ public class SettingsViewModel : INotifyPropertyChanged
     public bool AgentEnabled
     {
         get => _config.Agent.Enabled;
-        set { _config.Agent.Enabled = value; OnPropertyChanged(); OnAgentEnabledChanged?.Invoke(value); }
+        set
+        {
+            if (value && !_config.Agent.HasAcceptedConsent)
+            {
+                var dlg = new FirstRunAgentConsentDialog(_config.Agent.ModelId)
+                {
+                    Owner = System.Windows.Application.Current.MainWindow
+                };
+                if (dlg.ShowDialog() != true)
+                {
+                    OnPropertyChanged();  // bounce the checkbox back to false
+                    return;
+                }
+                _config.Agent.HasAcceptedConsent = true;
+            }
+            _config.Agent.Enabled = value;
+            OnPropertyChanged();
+            OnAgentEnabledChanged?.Invoke(value);
+        }
     }
     public int AgentRunHourLocal
     {
@@ -186,6 +204,59 @@ public class SettingsViewModel : INotifyPropertyChanged
         var path = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GlDrive", "ai-data");
         System.IO.Directory.CreateDirectory(path);
         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = path, UseShellExecute = true });
+    });
+
+    public ICommand PanicRevertAllCommand => new RelayCommand(() =>
+    {
+        if (System.Windows.MessageBox.Show(
+            "Revert EVERY change the AI agent has ever made? This cannot be undone easily.",
+            "DANGER",
+            System.Windows.MessageBoxButton.YesNo,
+            System.Windows.MessageBoxImage.Warning) != System.Windows.MessageBoxResult.Yes) return;
+        if (App.AuditTrail is null || App.ChangeApplier is null) return;
+
+        var runs = App.AuditTrail.ReadAll().Where(r => r.Applied && !r.Undone)
+            .GroupBy(r => r.RunId).Select(g => g.Key).ToList();
+        foreach (var runId in runs)
+        {
+            var rows = App.AuditTrail.ReadAll()
+                .Where(r => r.RunId == runId && r.Applied && !r.Undone).Reverse().ToList();
+            foreach (var r in rows)
+            {
+                var inverse = new GlDrive.AiAgent.AgentChange
+                {
+                    Category = r.Category,
+                    Target = r.Target,
+                    Before = r.After,
+                    After = r.Before,
+                    Reasoning = "Panic revert all",
+                    EvidenceRef = "panic-all",
+                    Confidence = 1.0
+                };
+                App.ChangeApplier.Apply(new[] { inverse }, _config, _config.Agent,
+                    "panic-" + Guid.NewGuid().ToString()[..8], dryRun: false);
+                App.AuditTrail.MarkUndone(r.RunId, r.Target, "panic-all");
+            }
+        }
+        GlDrive.Config.ConfigManager.Save(_config);
+        System.Windows.MessageBox.Show($"Reverted {runs.Count} runs.");
+    });
+
+    public ICommand RestoreFromSnapshotCommand => new RelayCommand(() =>
+    {
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            InitialDirectory = System.IO.Path.Combine(
+                GlDrive.Config.ConfigManager.AppDataPath, "ai-data", "ai-snapshots"),
+            Filter = "Snapshot (*.json)|*.json"
+        };
+        if (dlg.ShowDialog() != true) return;
+        if (System.Windows.MessageBox.Show(
+            $"Restore config from {System.IO.Path.GetFileName(dlg.FileName)}? A pre-restore snapshot will be saved.",
+            "Confirm restore",
+            System.Windows.MessageBoxButton.YesNo) != System.Windows.MessageBoxResult.Yes) return;
+        App.SnapshotStore?.Restore(dlg.FileName, GlDrive.Config.ConfigManager.ConfigPath);
+        System.Windows.MessageBox.Show("Restored. Restart the app to pick up the change.");
     });
 
     public string[] LogLevels { get; } = ["Verbose", "Debug", "Information", "Warning", "Error"];
