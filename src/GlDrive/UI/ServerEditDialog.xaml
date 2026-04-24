@@ -1,6 +1,7 @@
 <Window x:Class="GlDrive.UI.ServerEditDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:aia="clr-namespace:GlDrive.AiAgent"
         Title="Server Configuration" Width="520" Height="820"
         WindowStartupLocation="CenterOwner" ResizeMode="CanResize"
         Background="{DynamicResource BackgroundBrush}"
@@ -129,7 +130,8 @@
                         <CheckBox x:Name="NotificationsEnabledBox" Content="Enable new release notifications" IsChecked="True" Margin="0,0,0,8"/>
                         <TextBlock Text="Excluded Categories (comma-separated):" Margin="0,0,0,2"/>
                         <TextBox x:Name="ExcludedCategoriesBox" Margin="0,0,0,8"
-                                 ToolTip="e.g. xxx-paysite, 0day — these categories won't trigger notifications"/>
+                                 ToolTip="e.g. xxx-paysite, 0day — these categories won't trigger notifications"
+                                 aia:AiAgentAttached.FreezablePath="{Binding ExcludedCategoriesFreezePath}"/>
                         <Grid Margin="0,0,0,8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
@@ -242,7 +244,8 @@
                            Foreground="{DynamicResource ForegroundDimBrush}" FontSize="11" Margin="0,0,0,4"/>
                 <TextBox x:Name="IrcAnnounceRulesBox" AcceptsReturn="True" TextWrapping="Wrap"
                          Height="60" VerticalScrollBarVisibility="Auto" Margin="0,0,0,4"
-                         ToolTip="One rule per line: #channel pattern&#x0a;e.g. #announce (?&lt;section&gt;\w+) :: (?&lt;release&gt;\S+)&#x0a;Or: #pre \[(?&lt;section&gt;[^\]]+)\]\s*(?&lt;release&gt;\S+)"/>
+                         ToolTip="One rule per line: #channel pattern&#x0a;e.g. #announce (?&lt;section&gt;\w+) :: (?&lt;release&gt;\S+)&#x0a;Or: #pre \[(?&lt;section&gt;[^\]]+)\]\s*(?&lt;release&gt;\S+)"
+                         aia:AiAgentAttached.FreezablePath="{Binding AnnounceRulesFreezePath}"/>
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                     <Button Content="Add Common Patterns" Click="AddCommonAnnouncePatterns_Click"
                             Padding="12,4" Margin="0,0,6,0"/>
@@ -309,7 +312,8 @@
                         <DataGrid x:Name="SectionMappingsGrid"
                                   AutoGenerateColumns="False" CanUserAddRows="False"
                                   SelectionMode="Single" GridLinesVisibility="Horizontal"
-                                  HeadersVisibility="Column" Height="140" Margin="0,0,0,6">
+                                  HeadersVisibility="Column" Height="140" Margin="0,0,0,6"
+                                  aia:AiAgentAttached.FreezablePath="{Binding SectionMappingsFreezePath}">
                             <DataGrid.Columns>
                                 <DataGridCheckBoxColumn Header="On" Binding="{Binding Enabled}" Width="35"/>
                                 <DataGridTextColumn Header="IRC Section" Binding="{Binding IrcSection}" Width="100"/>
@@ -326,7 +330,8 @@
                         </StackPanel>
 
                         <TextBlock Text="Priority:" Margin="0,0,0,4"/>
-                        <ComboBox x:Name="SpreadPriorityBox" Width="120" HorizontalAlignment="Left" Margin="0,0,0,8">
+                        <ComboBox x:Name="SpreadPriorityBox" Width="120" HorizontalAlignment="Left" Margin="0,0,0,8"
+                                  aia:AiAgentAttached.FreezablePath="{Binding SitePriorityFreezePath}">
                             <ComboBoxItem Content="Very Low"/>
                             <ComboBoxItem Content="Low"/>
                             <ComboBoxItem Content="Normal"/>
@@ -340,17 +345,20 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Grid.Column="0" Margin="0,0,8,0">
                                 <TextBlock Text="Max Upload Slots:" Margin="0,0,0,2"/>
-                                <TextBox x:Name="SpreadMaxUpBox" Text="3" Width="60" HorizontalAlignment="Left"/>
+                                <TextBox x:Name="SpreadMaxUpBox" Text="3" Width="60" HorizontalAlignment="Left"
+                                         aia:AiAgentAttached.FreezablePath="{Binding MaxUploadSlotsFreezePath}"/>
                             </StackPanel>
                             <StackPanel Grid.Column="1">
                                 <TextBlock Text="Max Download Slots:" Margin="0,0,0,2"/>
-                                <TextBox x:Name="SpreadMaxDownBox" Text="3" Width="60" HorizontalAlignment="Left"/>
+                                <TextBox x:Name="SpreadMaxDownBox" Text="3" Width="60" HorizontalAlignment="Left"
+                                         aia:AiAgentAttached.FreezablePath="{Binding MaxDownloadSlotsFreezePath}"/>
                             </StackPanel>
                         </Grid>
                         <CheckBox x:Name="SpreadDownloadOnlyBox" Content="Download only (don't upload to this site)" Margin="0,0,0,8"/>
                         <TextBlock Text="Affiliations (comma-separated groups):" Margin="0,0,0,2"/>
                         <TextBox x:Name="SpreadAffilsBox" Margin="0,0,0,4"
-                                 ToolTip="Groups affiliated with this site — their releases get auto-allowed (highest priority in rules engine)"/>
+                                 ToolTip="Groups affiliated with this site — their releases get auto-allowed (highest priority in rules engine)"
+                                 aia:AiAgentAttached.FreezablePath="{Binding AffilsFreezePath}"/>
                     </StackPanel>
                 </Expander>
 
@@ -360,7 +368,8 @@
                         <DataGrid x:Name="SiteSkiplistGrid"
                                   AutoGenerateColumns="False" CanUserAddRows="False"
                                   SelectionMode="Single" GridLinesVisibility="Horizontal"
-                                  HeadersVisibility="Column" Height="140" Margin="0,0,0,8">
+                                  HeadersVisibility="Column" Height="140" Margin="0,0,0,8"
+                                  aia:AiAgentAttached.FreezablePath="{Binding SkiplistRulesFreezePath}">
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="Pattern" Binding="{Binding Pattern}" Width="140"/>
                                 <DataGridCheckBoxColumn Header="Rx" Binding="{Binding IsRegex}" Width="40"/>

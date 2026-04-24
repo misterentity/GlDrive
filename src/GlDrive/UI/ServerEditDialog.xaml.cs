@@ -24,10 +24,22 @@ public partial class ServerEditDialog : Window
 
     public ServerConfig Result => _serverConfig;
 
+    // Computed paths for FreezablePath annotations — server id resolved at load time
+    private string ServerId => _serverConfig.Id;
+    public string MaxUploadSlotsFreezePath       => $"/servers/{ServerId}/spread/maxUploadSlots";
+    public string MaxDownloadSlotsFreezePath     => $"/servers/{ServerId}/spread/maxDownloadSlots";
+    public string SitePriorityFreezePath         => $"/servers/{ServerId}/spread/sitePriority";
+    public string AffilsFreezePath               => $"/servers/{ServerId}/spread/affils";
+    public string SkiplistRulesFreezePath        => $"/servers/{ServerId}/spread/skiplistRules";
+    public string SectionMappingsFreezePath      => $"/servers/{ServerId}/spread/sectionMappings";
+    public string AnnounceRulesFreezePath        => $"/servers/{ServerId}/irc/announceRules";
+    public string ExcludedCategoriesFreezePath   => $"/servers/{ServerId}/notifications/excludedCategories";
+
     public ServerEditDialog(ServerConfig? existing = null, Services.ServerManager? serverManager = null)
     {
         _serverManager = serverManager;
         InitializeComponent();
+        DataContext = this;
 
         _serverConfig = existing ?? new ServerConfig();
 
