@@ -25,6 +25,9 @@ public partial class App
     public static GlDrive.AiAgent.TelemetryRetention? TelemetryRetention { get; private set; }
     public static GlDrive.AiAgent.NukePoller? NukePoller { get; private set; }
     public static GlDrive.AiAgent.FreezeStore? FreezeStore { get; private set; }
+    public static GlDrive.AiAgent.AuditTrail? AuditTrail { get; private set; }
+    public static GlDrive.AiAgent.SnapshotStore? SnapshotStore { get; private set; }
+    public static GlDrive.AiAgent.AgentMemo? AgentMemo { get; private set; }
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -124,6 +127,13 @@ public partial class App
         TelemetryRecorder = new GlDrive.AiAgent.TelemetryRecorder(ConfigManager.AppDataPath, config.Agent.TelemetryMaxFileMB);
         SerilogSetup.AgentSink.Recorder = TelemetryRecorder;
         FreezeStore = new GlDrive.AiAgent.FreezeStore(
+            System.IO.Path.Combine(ConfigManager.AppDataPath, "ai-data"));
+        AuditTrail = new GlDrive.AiAgent.AuditTrail(
+            System.IO.Path.Combine(ConfigManager.AppDataPath, "ai-data"));
+        SnapshotStore = new GlDrive.AiAgent.SnapshotStore(
+            System.IO.Path.Combine(ConfigManager.AppDataPath, "ai-data"),
+            config.Agent.SnapshotRetentionCount);
+        AgentMemo = new GlDrive.AiAgent.AgentMemo(
             System.IO.Path.Combine(ConfigManager.AppDataPath, "ai-data"));
 
         // Check first run
