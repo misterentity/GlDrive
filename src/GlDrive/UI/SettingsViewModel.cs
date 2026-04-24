@@ -120,7 +120,25 @@ public class SettingsViewModel : INotifyPropertyChanged
     public bool AgentEnabled
     {
         get => _config.Agent.Enabled;
-        set { _config.Agent.Enabled = value; OnPropertyChanged(); OnAgentEnabledChanged?.Invoke(value); }
+        set
+        {
+            if (value && !_config.Agent.HasAcceptedConsent)
+            {
+                var dlg = new FirstRunAgentConsentDialog(_config.Agent.ModelId)
+                {
+                    Owner = System.Windows.Application.Current.MainWindow
+                };
+                if (dlg.ShowDialog() != true)
+                {
+                    OnPropertyChanged();  // bounce the checkbox back to false
+                    return;
+                }
+                _config.Agent.HasAcceptedConsent = true;
+            }
+            _config.Agent.Enabled = value;
+            OnPropertyChanged();
+            OnAgentEnabledChanged?.Invoke(value);
+        }
     }
     public int AgentRunHourLocal
     {
