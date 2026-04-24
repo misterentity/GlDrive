@@ -1,3 +1,4 @@
+using System.IO;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -77,12 +78,13 @@ public sealed class AgentClient : IDisposable
                 if (u.TryGetProperty("completion_tokens", out var ot)) outputTok = ot.GetInt32();
             }
 
-            var jsonStart = msg.IndexOf('{');
-            var jsonEnd = msg.LastIndexOf('}');
+            // Extract the outermost balanced JSON object. Models sometimes wrap the
+            // response in markdown fences or add prose; the prior naive IndexOf('{')
+            // + LastIndexOf('}') can grab too much (spanning multiple objects).
+            var rawJson = ExtractFirstBalancedJsonObject(msg);
             AgentRunResult? result = null;
-            if (jsonStart >= 0 && jsonEnd > jsonStart)
+            if (rawJson != null)
             {
-                var rawJson = msg[jsonStart..(jsonEnd + 1)];
                 try { result = JsonSerializer.Deserialize<AgentRunResult>(rawJson, JsonOpts); }
                 catch (JsonException ex)
                 {
@@ -94,6 +96,22 @@ public sealed class AgentClient : IDisposable
                         catch (Exception ex2) { Log.Warning("AgentClient JSON repair parse also failed: {Msg}", ex2.Message); }
                     }
                 }
+            }
+
+            if (result is null)
+            {
+                // Persist raw response for user inspection so "failed-to-parse-json" is debuggable.
+                try
+                {
+                    var dumpDir = Path.Combine(GlDrive.Config.ConfigManager.AppDataPath, "ai-data");
+                    Directory.CreateDirectory(dumpDir);
+                    var dumpPath = Path.Combine(dumpDir,
+                        $"last-response-{DateTime.Now:yyyyMMdd-HHmmss}.txt");
+                    File.WriteAllText(dumpPath,
+                        $"# model: {_model}\n# tokens: {inputTok} in / {outputTok} out\n\n{msg}");
+                    Log.Warning("AgentClient parse failed — raw response dumped to {Path}", dumpPath);
+                }
+                catch { /* best-effort */ }
             }
 
             return new AgentRunOutcome
@@ -127,6 +145,50 @@ public sealed class AgentClient : IDisposable
     /// array/object boundary and closing any remaining open brackets/braces.
     /// Adapted from OpenRouterClient.RepairTruncatedJson.
     /// </summary>
+    /// <summary>
+    /// Finds the first complete balanced JSON object in <paramref name="msg"/> by tracking
+    /// brace depth + string escapes. Safer than IndexOf('{') + LastIndexOf('}') which can
+    /// span multiple objects when the model's response includes markdown explanation, code
+    /// fences, or example snippets before the real payload.
+    /// Returns null if no balanced object is found.
+    /// </summary>
+    internal static string? ExtractFirstBalancedJsonObject(string msg)
+    {
+        if (string.IsNullOrEmpty(msg)) return null;
+        int start = -1;
+        int depth = 0;
+        bool inString = false;
+        bool escape = false;
+        for (int i = 0; i < msg.Length; i++)
+        {
+            var c = msg[i];
+            if (escape) { escape = false; continue; }
+            if (c == '\\' && inString) { escape = true; continue; }
+            if (c == '"') { inString = !inString; continue; }
+            if (inString) continue;
+            if (c == '{')
+            {
+                if (depth == 0) start = i;
+                depth++;
+            }
+            else if (c == '}')
+            {
+                if (depth == 0) continue; // stray closing brace
+                depth--;
+                if (depth == 0 && start >= 0)
+                    return msg[start..(i + 1)];
+            }
+        }
+        // No balanced object completed. If we opened one but never closed it,
+        // fall back to "first { to last }" so RepairJson downstream can try to fix truncation.
+        if (start >= 0)
+        {
+            var lastBrace = msg.LastIndexOf('}');
+            if (lastBrace > start) return msg[start..(lastBrace + 1)];
+        }
+        return null;
+    }
+
     private static string? RepairJson(string json)
     {
         try
