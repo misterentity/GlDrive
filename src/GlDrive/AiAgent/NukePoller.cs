@@ -12,7 +12,7 @@ public sealed class NukePoller : IDisposable
     private readonly string _aiDataRoot;
     private readonly int _intervalHours;
     private readonly Timer _timer;
-    private readonly Dictionary<string, int> _failCount = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _failCount = new();
     private const int BreakerThreshold = 3;
 
     public NukePoller(TelemetryRecorder recorder, Services.ServerManager servers,
@@ -25,8 +25,11 @@ public sealed class NukePoller : IDisposable
         _intervalHours = Math.Max(1, intervalHours);
 
         // First fire 5 minutes after startup; subsequent every interval hours.
-        _timer = new Timer(_ => _ = PollAllAsync(), null,
-            TimeSpan.FromMinutes(5), TimeSpan.FromHours(_intervalHours));
+        _timer = new Timer(async _ =>
+        {
+            try { await PollAllAsync(); }
+            catch (Exception ex) { Log.Error(ex, "NukePoller.PollAllAsync unhandled"); }
+        }, null, TimeSpan.FromMinutes(5), TimeSpan.FromHours(_intervalHours));
     }
 
     public async Task PollAllAsync()
@@ -89,8 +92,8 @@ public sealed class NukePoller : IDisposable
 
     private void BumpFail(string serverId)
     {
-        _failCount[serverId] = _failCount.GetValueOrDefault(serverId) + 1;
-        if (_failCount[serverId] == BreakerThreshold)
+        var newCount = _failCount.AddOrUpdate(serverId, 1, (_, current) => current + 1);
+        if (newCount == BreakerThreshold)
             Log.Warning("NukePoller breaker opened for {Server} after {N} failures", serverId, BreakerThreshold);
     }
 
@@ -103,7 +106,7 @@ public sealed class NukePoller : IDisposable
             if (!File.Exists(racesFile)) return null;
             foreach (var line in File.ReadLines(racesFile))
             {
-                if (!line.Contains($"\"release\":\"{release}\"", StringComparison.OrdinalIgnoreCase)) continue;
+                if (!line.Contains($"\"release\":\"{release}\"", StringComparison.Ordinal)) continue;
                 RaceOutcomeEvent? r;
                 try { r = JsonSerializer.Deserialize<RaceOutcomeEvent>(line); }
                 catch { continue; }
