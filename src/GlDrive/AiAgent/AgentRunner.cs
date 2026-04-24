@@ -63,10 +63,26 @@ public sealed class AgentRunner : IDisposable
         ScheduleNext();
     }
 
+    /// <summary>
+    /// Stops future scheduled runs. Does NOT abort a currently-executing run — that lets
+    /// a ~30-second-remaining HTTP round-trip finish naturally instead of losing the work
+    /// when the user toggles Enabled off (or WPF re-fires the setter during Settings save).
+    /// Call Dispose() to fully shut down including active-run cancellation.
+    /// </summary>
     public void Stop()
     {
         _timer?.Dispose();
         _timer = null;
+        // Intentionally NOT cancelling _activeRunCts here — see doc comment above.
+    }
+
+    /// <summary>
+    /// Forcibly cancels the in-flight run (if any) and stops the scheduler. Only called
+    /// from Dispose() or an explicit "kill switch" path that genuinely needs to abort.
+    /// </summary>
+    public void Abort()
+    {
+        Stop();
         _activeRunCts?.Cancel();
     }
 
@@ -257,7 +273,7 @@ public sealed class AgentRunner : IDisposable
 
     public void Dispose()
     {
-        Stop();
+        Abort();  // app is shutting down — full cancel is OK
         SystemEvents.PowerModeChanged -= OnPower;
         SystemEvents.TimeChanged -= OnTimeChanged;
     }
