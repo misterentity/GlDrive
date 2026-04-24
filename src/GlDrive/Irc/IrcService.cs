@@ -427,11 +427,14 @@ public class IrcService : IDisposable
         if (_serverConfig.Irc.FishEnabled && FishCipher.IsEncrypted(text))
         {
             var keyEntry = _fishKeyStore.GetKey(effectiveTarget);
+            var prefix = text.StartsWith("+OK *") ? "CBC" : "ECB";
             if (keyEntry != null)
             {
                 var decrypted = FishCipher.Decrypt(text, keyEntry.Key);
                 if (decrypted != null)
                 {
+                    Log.Information("FiSH PM {Target}: prefix={Prefix} cipherLen={CL} keyMask={KM} decrypted={Stats}",
+                        effectiveTarget, prefix, text.Length, MaskKey(keyEntry.Key), TextStats(decrypted));
                     text = decrypted;
                     wasEncrypted = true;
 
@@ -445,6 +448,16 @@ public class IrcService : IDisposable
                             effectiveTarget, keyEntry.Mode, peerMode);
                     }
                 }
+                else
+                {
+                    Log.Warning("FiSH PM {Target}: decrypt returned null. prefix={Prefix} cipherLen={CL} keyMask={KM}",
+                        effectiveTarget, prefix, text.Length, MaskKey(keyEntry.Key));
+                }
+            }
+            else
+            {
+                Log.Information("FiSH PM {Target}: no key stored. prefix={Prefix} cipherLen={CL}",
+                    effectiveTarget, prefix, text.Length);
             }
         }
 
@@ -931,8 +944,25 @@ public class IrcService : IDisposable
 
         var dh = new Dh1080();
         _pendingKeyExchanges[nick] = (dh, DateTime.UtcNow);
-        await _client.NoticeAsync(nick, Dh1080.FormatInit(dh.GetPublicKeyBase64()));
+        var pub = dh.GetPublicKeyBase64();
+        Log.Information("DH1080 INIT send to {Nick}: ourPubLen={Len} ourPubMask={Mask}",
+            nick, pub.Length, MaskMid(pub));
+        await _client.NoticeAsync(nick, Dh1080.FormatInit(pub));
         AddSystemMessage(nick, "DH1080 key exchange initiated");
+    }
+
+    private static string MaskMid(string s) =>
+        s.Length < 12 ? "***" : $"{s[..6]}...{s[^6..]}";
+
+    private static string MaskKey(string k) =>
+        k.Length < 8 ? "***" : $"{k[..4]}...{k[^4..]}";
+
+    private static string TextStats(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return "len=0";
+        var printable = 0;
+        foreach (var c in s) if (c >= 0x20 && c < 0x7F) printable++;
+        return $"len={s.Length},printable={printable}/{s.Length}";
     }
 
     private async Task HandleDh1080InitAsync(string nick, string theirPubKey)
@@ -950,6 +980,9 @@ public class IrcService : IDisposable
             }
             _lastDhInitByNick[nick] = now;
 
+            Log.Information("DH1080 INIT recv from {Nick}: peerPubLen={Len} peerPubMask={Mask}",
+                nick, theirPubKey.Length, MaskMid(theirPubKey));
+
             // Offload ModPow to ThreadPool so the IRC read loop isn't blocked by ~10ms of crypto
             var dh = await Task.Run(() =>
             {
@@ -962,7 +995,11 @@ public class IrcService : IDisposable
             // DH1080 FiSH standard uses CBC mode
             _fishKeyStore.SetKey(nick, sharedSecret, FishMode.CBC);
 
-            await _client.NoticeAsync(nick, Dh1080.FormatFinish(dh.GetPublicKeyBase64()));
+            var ourPub = dh.GetPublicKeyBase64();
+            Log.Information("DH1080 FINISH send to {Nick}: ourPubLen={Len} ourPubMask={Mask} derivedKeyLen={KL} derivedKeyMask={KM}",
+                nick, ourPub.Length, MaskMid(ourPub), sharedSecret.Length, MaskKey(sharedSecret));
+
+            await _client.NoticeAsync(nick, Dh1080.FormatFinish(ourPub));
             AddSystemMessage(nick, $"DH1080 key exchange completed (initiated by {nick}) — CBC mode");
         }
         catch (Exception ex)
@@ -977,10 +1014,16 @@ public class IrcService : IDisposable
         {
             if (!_pendingKeyExchanges.TryGetValue(nick, out var entry)) return;
 
+            Log.Information("DH1080 FINISH recv from {Nick}: peerPubLen={Len} peerPubMask={Mask}",
+                nick, theirPubKey.Length, MaskMid(theirPubKey));
+
             var sharedSecret = entry.dh.ComputeSharedSecret(theirPubKey);
             // DH1080 FiSH standard uses CBC mode
             _fishKeyStore.SetKey(nick, sharedSecret, FishMode.CBC);
             _pendingKeyExchanges.Remove(nick);
+
+            Log.Information("DH1080 derived for {Nick}: derivedKeyLen={KL} derivedKeyMask={KM}",
+                nick, sharedSecret.Length, MaskKey(sharedSecret));
 
             AddSystemMessage(nick, "DH1080 key exchange completed — CBC mode");
         }
