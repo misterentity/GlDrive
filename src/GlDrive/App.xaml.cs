@@ -124,7 +124,9 @@ public partial class App
 
         // Init logging
         SerilogSetup.Configure(config.Logging);
-        Log.Information("GlDrive starting...");
+        var asmVersion = System.Reflection.Assembly.GetExecutingAssembly()
+            .GetName().Version?.ToString() ?? "unknown";
+        Log.Information("GlDrive starting... version={Version}", asmVersion);
 
         // Initialize AI agent telemetry recorder
         TelemetryRecorder = new GlDrive.AiAgent.TelemetryRecorder(ConfigManager.AppDataPath, config.Agent.TelemetryMaxFileMB);
