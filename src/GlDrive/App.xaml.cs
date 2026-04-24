@@ -23,6 +23,7 @@ public partial class App
     public static GlDrive.AiAgent.HealthRollup? HealthRollup { get; private set; }
     public static GlDrive.AiAgent.SectionActivityRollup? SectionActivityRollup { get; private set; }
     public static GlDrive.AiAgent.TelemetryRetention? TelemetryRetention { get; private set; }
+    public static GlDrive.AiAgent.NukePoller? NukePoller { get; private set; }
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -169,6 +170,12 @@ public partial class App
             Path.Combine(ConfigManager.AppDataPath, "ai-data"),
             config.Agent.GzipAfterDays,
             config.Agent.DeleteAfterDays);
+        var nukeCursors = new GlDrive.AiAgent.NukeCursorStore(
+            Path.Combine(ConfigManager.AppDataPath, "ai-data"));
+        NukePoller = new GlDrive.AiAgent.NukePoller(
+            TelemetryRecorder, _serverManager, nukeCursors,
+            Path.Combine(ConfigManager.AppDataPath, "ai-data"),
+            config.Agent.NukePollIntervalHours);
 
         // Init tray
         _trayViewModel = new TrayViewModel(_serverManager, config, notificationStore);
@@ -272,6 +279,8 @@ public partial class App
         Log.Information("GlDrive shutting down...");
         try { GlDrive.Logging.SerilogSetup.AgentSink.Flush(); }
         catch (Exception ex) { Log.Debug(ex, "AgentSink final flush failed"); }
+        NukePoller?.Dispose();
+        NukePoller = null;
         HealthRollup?.Dispose();
         HealthRollup = null;
         SectionActivityRollup?.Dispose();
