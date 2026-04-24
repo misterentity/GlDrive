@@ -1410,6 +1410,11 @@
             <TabItem Header="Streems">
                 <ui:WebViewHost x:Name="StreemsHost"/>
             </TabItem>
+
+            <!-- AI Agent Tab -->
+            <TabItem Header="AI Agent">
+                <ui:AgentView/>
+            </TabItem>
         </TabControl>
 
         <!-- Status Bar -->
