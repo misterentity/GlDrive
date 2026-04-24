@@ -188,6 +188,59 @@ public class SettingsViewModel : INotifyPropertyChanged
         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = path, UseShellExecute = true });
     });
 
+    public ICommand PanicRevertAllCommand => new RelayCommand(() =>
+    {
+        if (System.Windows.MessageBox.Show(
+            "Revert EVERY change the AI agent has ever made? This cannot be undone easily.",
+            "DANGER",
+            System.Windows.MessageBoxButton.YesNo,
+            System.Windows.MessageBoxImage.Warning) != System.Windows.MessageBoxResult.Yes) return;
+        if (App.AuditTrail is null || App.ChangeApplier is null) return;
+
+        var runs = App.AuditTrail.ReadAll().Where(r => r.Applied && !r.Undone)
+            .GroupBy(r => r.RunId).Select(g => g.Key).ToList();
+        foreach (var runId in runs)
+        {
+            var rows = App.AuditTrail.ReadAll()
+                .Where(r => r.RunId == runId && r.Applied && !r.Undone).Reverse().ToList();
+            foreach (var r in rows)
+            {
+                var inverse = new GlDrive.AiAgent.AgentChange
+                {
+                    Category = r.Category,
+                    Target = r.Target,
+                    Before = r.After,
+                    After = r.Before,
+                    Reasoning = "Panic revert all",
+                    EvidenceRef = "panic-all",
+                    Confidence = 1.0
+                };
+                App.ChangeApplier.Apply(new[] { inverse }, _config, _config.Agent,
+                    "panic-" + Guid.NewGuid().ToString()[..8], dryRun: false);
+                App.AuditTrail.MarkUndone(r.RunId, r.Target, "panic-all");
+            }
+        }
+        GlDrive.Config.ConfigManager.Save(_config);
+        System.Windows.MessageBox.Show($"Reverted {runs.Count} runs.");
+    });
+
+    public ICommand RestoreFromSnapshotCommand => new RelayCommand(() =>
+    {
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            InitialDirectory = System.IO.Path.Combine(
+                GlDrive.Config.ConfigManager.AppDataPath, "ai-data", "ai-snapshots"),
+            Filter = "Snapshot (*.json)|*.json"
+        };
+        if (dlg.ShowDialog() != true) return;
+        if (System.Windows.MessageBox.Show(
+            $"Restore config from {System.IO.Path.GetFileName(dlg.FileName)}? A pre-restore snapshot will be saved.",
+            "Confirm restore",
+            System.Windows.MessageBoxButton.YesNo) != System.Windows.MessageBoxResult.Yes) return;
+        App.SnapshotStore?.Restore(dlg.FileName, GlDrive.Config.ConfigManager.ConfigPath);
+        System.Windows.MessageBox.Show("Restored. Restart the app to pick up the change.");
+    });
+
     public string[] LogLevels { get; } = ["Verbose", "Debug", "Information", "Warning", "Error"];
     public string[] QualityOptions { get; } = ["Any", "SD", "720p", "1080p", "2160p"];
     public string[] ThemeOptions { get; } = ["Dark", "Light", "System"];
