@@ -40,6 +40,7 @@ public class WishlistMatcher
             {
                 foreach (var item in _wishlist.Items)
                 {
+                    if (item.Dead) continue;
                     if (item.Status == WishlistStatus.Paused || item.Status == WishlistStatus.Completed)
                         continue;
 
