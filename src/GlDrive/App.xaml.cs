@@ -25,6 +25,12 @@ public partial class App
     public static GlDrive.AiAgent.TelemetryRetention? TelemetryRetention { get; private set; }
     public static GlDrive.AiAgent.NukePoller? NukePoller { get; private set; }
     public static GlDrive.AiAgent.FreezeStore? FreezeStore { get; private set; }
+    public static GlDrive.AiAgent.AuditTrail? AuditTrail { get; private set; }
+    public static GlDrive.AiAgent.SnapshotStore? SnapshotStore { get; private set; }
+    public static GlDrive.AiAgent.AgentMemo? AgentMemo { get; private set; }
+    public static GlDrive.AiAgent.ChangeApplier? ChangeApplier { get; private set; }
+    public static GlDrive.AiAgent.LogDigester? LogDigester { get; private set; }
+    public static GlDrive.AiAgent.AgentRunner? AgentRunner { get; private set; }
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -125,6 +131,43 @@ public partial class App
         SerilogSetup.AgentSink.Recorder = TelemetryRecorder;
         FreezeStore = new GlDrive.AiAgent.FreezeStore(
             System.IO.Path.Combine(ConfigManager.AppDataPath, "ai-data"));
+        AuditTrail = new GlDrive.AiAgent.AuditTrail(
+            System.IO.Path.Combine(ConfigManager.AppDataPath, "ai-data"));
+        SnapshotStore = new GlDrive.AiAgent.SnapshotStore(
+            System.IO.Path.Combine(ConfigManager.AppDataPath, "ai-data"),
+            config.Agent.SnapshotRetentionCount);
+        AgentMemo = new GlDrive.AiAgent.AgentMemo(
+            System.IO.Path.Combine(ConfigManager.AppDataPath, "ai-data"));
+
+        var validators = new List<GlDrive.AiAgent.IChangeValidator>
+        {
+            new GlDrive.AiAgent.SkiplistValidator(),
+            new GlDrive.AiAgent.PriorityValidator(),
+            new GlDrive.AiAgent.SectionMappingValidator(),
+            new GlDrive.AiAgent.AnnounceRuleValidator(),
+            new GlDrive.AiAgent.ExcludedCategoriesValidator(),
+            new GlDrive.AiAgent.WishlistPruneValidator(),
+            new GlDrive.AiAgent.PoolSizingValidator(),
+            new GlDrive.AiAgent.BlacklistValidator(),
+            new GlDrive.AiAgent.AffilsValidator(),
+            new GlDrive.AiAgent.ErrorReportValidator(
+                System.IO.Path.Combine(ConfigManager.AppDataPath, "ai-data"))
+        };
+        ChangeApplier = new GlDrive.AiAgent.ChangeApplier(validators, FreezeStore!, AuditTrail!);
+        LogDigester = new GlDrive.AiAgent.LogDigester(
+            System.IO.Path.Combine(ConfigManager.AppDataPath, "ai-data"));
+        AgentRunner = new GlDrive.AiAgent.AgentRunner(
+            LogDigester,
+            AgentMemo,
+            FreezeStore!,
+            ChangeApplier,
+            AuditTrail!,
+            SnapshotStore!,
+            ConfigManager.ConfigPath,
+            cfg => ConfigManager.Save(cfg),
+            () => ConfigManager.Load(),
+            System.IO.Path.Combine(ConfigManager.AppDataPath, "ai-data"));
+        AgentRunner.Start();
 
         // Check first run
         if (!ConfigManager.ConfigExists || config.Servers.Count == 0)
@@ -282,6 +325,8 @@ public partial class App
         Log.Information("GlDrive shutting down...");
         try { GlDrive.Logging.SerilogSetup.AgentSink.Flush(); }
         catch (Exception ex) { Log.Debug(ex, "AgentSink final flush failed"); }
+        AgentRunner?.Dispose();
+        AgentRunner = null;
         NukePoller?.Dispose();
         NukePoller = null;
         HealthRollup?.Dispose();
