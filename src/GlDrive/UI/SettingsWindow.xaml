@@ -1,6 +1,7 @@
 <Window x:Class="GlDrive.UI.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:aia="clr-namespace:GlDrive.AiAgent"
         Title="GlDrive Settings" Width="600" Height="500"
         WindowStartupLocation="CenterScreen" ResizeMode="NoResize"
         Background="{DynamicResource BackgroundBrush}"
@@ -186,7 +187,8 @@
                                  Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
                         <TextBlock Text="Max Concurrent Races:" Margin="0,0,0,4"/>
                         <TextBox Text="{Binding SpreadMaxConcurrent, UpdateSourceTrigger=PropertyChanged}"
-                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"
+                                 aia:AiAgentAttached.FreezablePath="/spread/maxConcurrentRaces"/>
                         <CheckBox Content="Auto-race when new releases are detected"
                                   IsChecked="{Binding SpreadAutoRace}" Margin="0,0,0,4"/>
                         <CheckBox Content="Show tray notification on race completion"
