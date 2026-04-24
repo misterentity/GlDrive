@@ -21,6 +21,8 @@ public class WishlistItem
     public string? Plot { get; set; }
     public string? Rating { get; set; }
     public string? Genres { get; set; }
+    /// <summary>Soft-deleted by AI agent pruning — excluded from auto-matching but retained for history.</summary>
+    public bool Dead { get; set; }
 }
 
 public class DownloadItem
