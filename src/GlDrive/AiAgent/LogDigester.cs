@@ -21,9 +21,8 @@ public sealed class LogDigester
             WindowEnd = now.ToString("O")
         };
 
-        // Per-stream digest assembly lives here. Tasks 4.3 and 4.4 each wire one
-        // sub-digester into this method. Today the bundle returns with empty
-        // per-stream sections — still useful for evidence pointers + debug.
+        bundle.Races = new RacesDigester().Build(
+            ReadStream<RaceOutcomeEvent>("races", windowStart, now));
 
         bundle.EvidencePointers = new Dictionary<string, string>
         {
