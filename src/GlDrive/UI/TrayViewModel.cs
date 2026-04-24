@@ -289,6 +289,35 @@ public class TrayViewModel : INotifyPropertyChanged
     public ICommand ExitCommand { get; }
     public ICommand UpdateCommand { get; }
 
+    public ICommand BuildDigestDebugCommand => new RelayCommand(() =>
+    {
+        try
+        {
+            var aiData = Path.Combine(ConfigManager.AppDataPath, "ai-data");
+            Directory.CreateDirectory(aiData);
+            var windowDays = _config.Agent.WindowDays;
+            var digester = new GlDrive.AiAgent.LogDigester(aiData);
+            var bundle = digester.Build(windowDays);
+            var outPath = Path.Combine(aiData, "last-digest.json");
+            var json = System.Text.Json.JsonSerializer.Serialize(bundle,
+                new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(outPath, json);
+            var approxTokens = new FileInfo(outPath).Length / 4;
+            MessageBox.Show(
+                $"Digest written to:\n{outPath}\n\nApprox tokens: {approxTokens:N0}\nWindow: {windowDays}d",
+                "Build digest (debug)",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("Digest failed: " + ex.Message,
+                "Build digest (debug)",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+    });
+
     public GitHubRelease? AvailableUpdate
     {
         get => _availableUpdate;
