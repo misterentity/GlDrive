@@ -150,15 +150,18 @@ public sealed class AgentClient : IDisposable
     /// Adapted from OpenRouterClient.RepairTruncatedJson.
     /// </summary>
     /// <summary>
-    /// Finds the first complete balanced JSON object in <paramref name="msg"/> by tracking
-    /// brace depth + string escapes. Safer than IndexOf('{') + LastIndexOf('}') which can
-    /// span multiple objects when the model's response includes markdown explanation, code
-    /// fences, or example snippets before the real payload.
-    /// Returns null if no balanced object is found.
+    /// Scans the message for ALL balanced top-level JSON objects and returns the LARGEST.
+    /// Models (especially Sonnet) often emit chain-of-thought + multiple draft JSON blocks
+    /// before the real payload — taking the first yields a tiny sketch with placeholder
+    /// values, and taking "first { to last }" yields invalid concatenated objects.
+    /// Largest-by-length is a reliable heuristic since the real response dwarfs any sketch.
+    /// Falls back to "first { to last }" for truncation repair if no balanced object found.
     /// </summary>
     internal static string? ExtractFirstBalancedJsonObject(string msg)
     {
         if (string.IsNullOrEmpty(msg)) return null;
+        string? best = null;
+        int bestLen = 0;
         int start = -1;
         int depth = 0;
         bool inString = false;
@@ -177,19 +180,23 @@ public sealed class AgentClient : IDisposable
             }
             else if (c == '}')
             {
-                if (depth == 0) continue; // stray closing brace
+                if (depth == 0) continue;
                 depth--;
                 if (depth == 0 && start >= 0)
-                    return msg[start..(i + 1)];
+                {
+                    var candidate = msg[start..(i + 1)];
+                    if (candidate.Length > bestLen) { best = candidate; bestLen = candidate.Length; }
+                    start = -1;
+                }
             }
         }
-        // No balanced object completed. If we opened one but never closed it,
-        // fall back to "first { to last }" so RepairJson downstream can try to fix truncation.
-        if (start >= 0)
-        {
-            var lastBrace = msg.LastIndexOf('}');
-            if (lastBrace > start) return msg[start..(lastBrace + 1)];
-        }
+        if (best != null) return best;
+        // No balanced object completed — possibly truncated. Fall back to first { to last } so
+        // RepairJson downstream can try to close it.
+        int firstBrace = msg.IndexOf('{');
+        int lastBrace = msg.LastIndexOf('}');
+        if (firstBrace >= 0 && lastBrace > firstBrace) return msg[firstBrace..(lastBrace + 1)];
+        if (firstBrace >= 0) return msg[firstBrace..];  // totally unclosed — let RepairJson try
         return null;
     }
 
