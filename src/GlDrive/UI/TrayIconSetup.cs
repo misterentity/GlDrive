@@ -242,6 +242,42 @@ public static class TrayIconSetup
         update.Click += (_, _) => vm.UpdateCommand.Execute(null);
         menu.Items.Add(update);
 
+        // AI Agent submenu
+        var agentRoot = new MenuItem { Header = "AI Agent" };
+
+        var enabledItem = new MenuItem
+        {
+            Header = "Enabled",
+            IsCheckable = true,
+            IsChecked = vm.AgentEnabled
+        };
+        enabledItem.Click += (_, __) => vm.ToggleAgentEnabledCommand.Execute(null);
+        agentRoot.Items.Add(enabledItem);
+
+        var runNow = new MenuItem { Header = "Run now" };
+        runNow.Click += (_, __) => vm.AgentRunNowCommand.Execute(null);
+        agentRoot.Items.Add(runNow);
+
+        var openDash = new MenuItem { Header = "Open dashboard..." };
+        openDash.Click += (_, __) => vm.OpenDashboardToAgentCommand.Execute(null);
+        agentRoot.Items.Add(openDash);
+
+        var pause = new MenuItem { Header = "Pause 24h" };
+        pause.Click += (_, __) => vm.PauseAgent24hCommand.Execute(null);
+        agentRoot.Items.Add(pause);
+
+        agentRoot.Items.Add(new Separator());
+
+        var revertN = new MenuItem { Header = "Revert last N runs..." };
+        revertN.Click += (_, __) => vm.RevertLastNCommand.Execute(null);
+        agentRoot.Items.Add(revertN);
+
+        var panic = new MenuItem { Header = "Panic: revert last run" };
+        panic.Click += (_, __) => vm.PanicRevertLastRunCommand.Execute(null);
+        agentRoot.Items.Add(panic);
+
+        menu.Items.Add(agentRoot);
+
         menu.Items.Add(new Separator());
 
         // Exit

@@ -289,6 +289,111 @@ public class TrayViewModel : INotifyPropertyChanged
     public ICommand ExitCommand { get; }
     public ICommand UpdateCommand { get; }
 
+    // ── AI Agent tray commands ─────────────────────────────────────────────
+
+    public bool AgentEnabled
+    {
+        get => _config.Agent.Enabled;
+        set
+        {
+            if (value && !_config.Agent.HasAcceptedConsent)
+            {
+                var dlg = new FirstRunAgentConsentDialog(_config.Agent.ModelId)
+                {
+                    Owner = System.Windows.Application.Current.MainWindow
+                };
+                if (dlg.ShowDialog() != true)
+                {
+                    OnPropertyChanged();
+                    return;
+                }
+                _config.Agent.HasAcceptedConsent = true;
+            }
+            _config.Agent.Enabled = value;
+            GlDrive.Config.ConfigManager.Save(_config);
+            if (value) App.AgentRunner?.Start();
+            else       App.AgentRunner?.Stop();
+            OnPropertyChanged();
+        }
+    }
+
+    public ICommand ToggleAgentEnabledCommand => new RelayCommand(() => AgentEnabled = !AgentEnabled);
+
+    public ICommand AgentRunNowCommand => new RelayCommand(async () =>
+    {
+        if (App.AgentRunner != null) await App.AgentRunner.RunNowAsync();
+    });
+
+    public ICommand OpenDashboardToAgentCommand => new RelayCommand(() =>
+    {
+        DashboardCommand.Execute(null);
+    });
+
+    private System.Threading.Timer? _pauseTimer;
+    public ICommand PauseAgent24hCommand => new RelayCommand(() =>
+    {
+        _config.Agent.Enabled = false;
+        GlDrive.Config.ConfigManager.Save(_config);
+        App.AgentRunner?.Stop();
+        _pauseTimer?.Dispose();
+        _pauseTimer = new System.Threading.Timer(_ =>
+        {
+            _config.Agent.Enabled = true;
+            GlDrive.Config.ConfigManager.Save(_config);
+            App.AgentRunner?.Start();
+        }, null, TimeSpan.FromHours(24), System.Threading.Timeout.InfiniteTimeSpan);
+        System.Windows.MessageBox.Show("AI agent paused. Will re-enable in 24 hours.");
+    });
+
+    public ICommand PanicRevertLastRunCommand => new RelayCommand(() =>
+    {
+        var last = App.AuditTrail?.ReadAll().Where(r => r.Applied && !r.Undone).LastOrDefault()?.RunId;
+        if (last is null)
+        {
+            System.Windows.MessageBox.Show("No recent applied changes to revert.");
+            return;
+        }
+        if (System.Windows.MessageBox.Show(
+            $"Revert every change from run {last[..Math.Min(8, last.Length)]}?",
+            "Confirm revert",
+            System.Windows.MessageBoxButton.YesNo) != System.Windows.MessageBoxResult.Yes) return;
+        RevertRun(last);
+    });
+
+    public ICommand RevertLastNCommand => new RelayCommand(() =>
+    {
+        var dlg = new RevertRunsDialog();
+        if (dlg.ShowDialog() != true || dlg.SelectedRunIds.Count == 0) return;
+        foreach (var id in dlg.SelectedRunIds) RevertRun(id);
+    });
+
+    internal void RevertRun(string runId)
+    {
+        if (App.AuditTrail is null || App.ChangeApplier is null) return;
+        var rows = App.AuditTrail.ReadAll()
+            .Where(r => r.RunId == runId && r.Applied && !r.Undone)
+            .Reverse().ToList();
+        foreach (var r in rows)
+        {
+            var inverse = new GlDrive.AiAgent.AgentChange
+            {
+                Category = r.Category,
+                Target = r.Target,
+                Before = r.After,
+                After = r.Before,
+                Reasoning = "Panic revert",
+                EvidenceRef = "panic-revert",
+                Confidence = 1.0
+            };
+            App.ChangeApplier.Apply(new[] { inverse }, _config, _config.Agent,
+                "panic-" + Guid.NewGuid().ToString()[..8], dryRun: false);
+            App.AuditTrail.MarkUndone(r.RunId, r.Target, "panic-revert");
+        }
+        GlDrive.Config.ConfigManager.Save(_config);
+    }
+
+    // ── end AI Agent tray commands ─────────────────────────────────────────
+
     public ICommand BuildDigestDebugCommand => new RelayCommand(() =>
     {
         try
