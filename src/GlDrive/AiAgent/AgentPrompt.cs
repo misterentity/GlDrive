@@ -34,7 +34,15 @@ public sealed class AgentPrompt
         FROZEN PATHS list is provided below. Producing any change whose target is frozen (or a descendant
         of a frozen path) is a bug — such changes will be rejected with reason "frozen".
 
-        Respond with ONLY a JSON object (no markdown fences, no text outside):
+        OUTPUT CONTRACT (non-negotiable):
+        - Your ENTIRE response must be a single JSON object. Nothing else.
+        - NO analysis before the JSON. NO explanation. NO draft blocks. NO markdown fences.
+        - NO thinking-out-loud paragraphs like "Let me analyze..." or "Key observations:".
+        - NO multiple JSON blocks (drafts + finals). Emit exactly ONE JSON object.
+        - Do all your reasoning internally; the brief_markdown field is where your findings go.
+        - Start your response with `{` and end with `}`. No preamble, no postamble.
+
+        Schema:
         {
           "memo_update": "...full replacement for agent-memo.md (your long-running beliefs)...",
           "changes": [ AgentChange, ... ],
