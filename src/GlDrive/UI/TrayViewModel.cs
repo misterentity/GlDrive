@@ -296,6 +296,19 @@ public class TrayViewModel : INotifyPropertyChanged
         get => _config.Agent.Enabled;
         set
         {
+            if (value && !_config.Agent.HasAcceptedConsent)
+            {
+                var dlg = new FirstRunAgentConsentDialog(_config.Agent.ModelId)
+                {
+                    Owner = System.Windows.Application.Current.MainWindow
+                };
+                if (dlg.ShowDialog() != true)
+                {
+                    OnPropertyChanged();
+                    return;
+                }
+                _config.Agent.HasAcceptedConsent = true;
+            }
             _config.Agent.Enabled = value;
             GlDrive.Config.ConfigManager.Save(_config);
             if (value) App.AgentRunner?.Start();

@@ -1,0 +1,51 @@
+<Window x:Class="GlDrive.UI.FirstRunAgentConsentDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="AI Agent — First-run consent" Width="560" Height="420"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner">
+  <Grid Margin="16">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+    <TextBlock Text="Enable nightly AI Agent?" FontSize="16" FontWeight="Bold" Margin="0,0,0,10"/>
+    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+      <StackPanel>
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,10">
+          The agent reviews 7 days of local telemetry each night and sends a compact digest to your
+          configured model (<Run FontWeight="Bold" Text="{Binding ModelId, Mode=OneWay}"/>) via OpenRouter.
+        </TextBlock>
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,10" FontWeight="Bold">
+          What is sent:
+        </TextBlock>
+        <TextBlock TextWrapping="Wrap" Margin="10,0,0,10">
+          • Server names (as configured locally)<LineBreak/>
+          • Release names (scene/p2p release titles)<LineBreak/>
+          • IRC channel names<LineBreak/>
+          • Section keys + error signatures (normalized, no paths/IDs)
+        </TextBlock>
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,10" FontWeight="Bold">
+          What is NOT sent:
+        </TextBlock>
+        <TextBlock TextWrapping="Wrap" Margin="10,0,0,10">
+          • Passwords or API keys<LineBreak/>
+          • Certificate material<LineBreak/>
+          • Raw log files
+        </TextBlock>
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,10">
+          Data stays on disk under %AppData%\GlDrive\ai-data\. Only the nightly digest is transmitted.
+        </TextBlock>
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,10">
+          The first 3 runs are DRY-RUN — changes are proposed and logged, but not applied. Review them
+          in Dashboard → AI Agent before the agent goes live.
+        </TextBlock>
+      </StackPanel>
+    </ScrollViewer>
+    <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+      <Button Content="Cancel" Width="80" Margin="0,0,8,0" Click="Cancel_Click"/>
+      <Button Content="I accept, enable" Width="160" Click="Accept_Click"/>
+    </StackPanel>
+  </Grid>
+</Window>
