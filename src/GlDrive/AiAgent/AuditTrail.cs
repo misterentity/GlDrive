@@ -1,3 +1,8 @@
+using System.IO;
+using System.Text;
+using System.Text.Json;
+using Serilog;
+
 namespace GlDrive.AiAgent;
 
 public class AuditRow
@@ -19,16 +24,71 @@ public class AuditRow
     public string? UndoneReason { get; set; }
 }
 
-/// <summary>
-/// Stub. Full implementation (append to jsonl, ReadAll, MarkUndone) lands in Task 8.1.
-/// ChangeApplier calls Append; for now we just log at Debug so the dispatcher is testable
-/// ahead of persistence.
-/// </summary>
 public class AuditTrail
 {
+    private readonly string _path;
+    private readonly object _lock = new();
+    private static readonly JsonSerializerOptions JsonOpts = new()
+    {
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+    };
+
+    public AuditTrail(string aiDataRoot)
+    {
+        Directory.CreateDirectory(aiDataRoot);
+        _path = Path.Combine(aiDataRoot, "ai-audit.jsonl");
+    }
+
+    // Parameterless constructor kept for compatibility with any code that still
+    // used the stub. Can be removed once all callers pass aiDataRoot explicitly.
+    public AuditTrail() : this(
+        Path.Combine(GlDrive.Config.ConfigManager.AppDataPath, "ai-data")) { }
+
     public virtual void Append(AuditRow row)
     {
-        Serilog.Log.Debug("AUDIT [stub]: {Category} target={Target} applied={Applied} reason={Reason} confidence={Confidence:F2}",
-            row.Category, row.Target, row.Applied, row.RejectionReason ?? "-", row.Confidence);
+        try
+        {
+            lock (_lock)
+                File.AppendAllText(_path,
+                    JsonSerializer.Serialize(row, JsonOpts) + "\n", Encoding.UTF8);
+        }
+        catch (Exception ex) { Log.Warning(ex, "AuditTrail append failed"); }
+    }
+
+    public IEnumerable<AuditRow> ReadAll()
+    {
+        if (!File.Exists(_path)) yield break;
+        foreach (var line in File.ReadLines(_path))
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            AuditRow? row = null;
+            try { row = JsonSerializer.Deserialize<AuditRow>(line, JsonOpts); }
+            catch { continue; }
+            if (row != null) yield return row;
+        }
+    }
+
+    /// <summary>Marks all applied rows matching (runId, target) as undone. Rewrites the whole file.</summary>
+    public void MarkUndone(string runId, string target, string reason)
+    {
+        lock (_lock)
+        {
+            var rows = ReadAll().ToList();
+            var updated = false;
+            for (int i = 0; i < rows.Count; i++)
+            {
+                if (rows[i].RunId == runId && rows[i].Target == target && rows[i].Applied && !rows[i].Undone)
+                {
+                    rows[i].Undone = true;
+                    rows[i].UndoneAt = DateTime.UtcNow.ToString("O");
+                    rows[i].UndoneReason = reason;
+                    updated = true;
+                }
+            }
+            if (!updated) return;
+            var sb = new StringBuilder();
+            foreach (var r in rows) sb.AppendLine(JsonSerializer.Serialize(r, JsonOpts));
+            File.WriteAllText(_path, sb.ToString(), Encoding.UTF8);
+        }
     }
 }
