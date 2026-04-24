@@ -100,7 +100,11 @@ public sealed class AgentClient : IDisposable
 
             if (result is null)
             {
-                // Persist raw response for user inspection so "failed-to-parse-json" is debuggable.
+                // Log first 400 chars of the response so the failure is visible in-log without opening a dump file.
+                var preview = msg.Length > 400 ? msg[..400].Replace("\n", "\\n") : msg.Replace("\n", "\\n");
+                Log.Warning("AgentClient parse failed — response preview (first 400 chars): {Preview}", preview);
+
+                // Persist full raw response for user inspection.
                 try
                 {
                     var dumpDir = Path.Combine(GlDrive.Config.ConfigManager.AppDataPath, "ai-data");
@@ -109,7 +113,7 @@ public sealed class AgentClient : IDisposable
                         $"last-response-{DateTime.Now:yyyyMMdd-HHmmss}.txt");
                     File.WriteAllText(dumpPath,
                         $"# model: {_model}\n# tokens: {inputTok} in / {outputTok} out\n\n{msg}");
-                    Log.Warning("AgentClient parse failed — raw response dumped to {Path}", dumpPath);
+                    Log.Warning("AgentClient parse failed — full response dumped to {Path}", dumpPath);
                 }
                 catch { /* best-effort */ }
             }

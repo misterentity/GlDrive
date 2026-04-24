@@ -117,6 +117,8 @@ public sealed class AgentRunner : IDisposable
         var briefPath = Path.Combine(_briefsDir, $"{started:yyyyMMdd-HHmmss}-{runId[..8]}.md");
         string status = "ok";
 
+        Log.Information("AgentRunner run {Id} STARTED (manual={Manual})", runId, manualTrigger);
+
         try
         {
             var cfg = _getConfig();
