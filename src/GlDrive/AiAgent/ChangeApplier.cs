@@ -32,6 +32,12 @@ public sealed class ChangeApplier
 
         foreach (var change in changes)
         {
+            // STJ deserializes "target": null as null even though the property has = "" default.
+            // Validators dereference Target via StartsWith etc. without null-checks; normalize once
+            // here so a sloppy AI response can't NRE the whole run.
+            change.Target ??= "";
+            change.Category ??= "";
+
             string? reject = null;
 
             if (_freeze.IsFrozen(change.Target))
