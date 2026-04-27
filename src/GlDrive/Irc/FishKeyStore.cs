@@ -10,6 +10,14 @@ namespace GlDrive.Irc;
 public class FishKeyEntry
 {
     public string Key { get; set; } = "";
+    /// <summary>
+    /// Alternate-alphabet derived key (DH1080-only). Empty for manually-set keys.
+    /// Standard base64 alphabet is the primary; FiSH ECB alphabet is the alt
+    /// (or vice-versa after a successful alt-decrypt swap). On incoming decrypt,
+    /// if Key fails we try AltKey; if AltKey works we swap them so subsequent
+    /// encrypts use the alphabet peer's client expects.
+    /// </summary>
+    public string AltKey { get; set; } = "";
     public FishMode Mode { get; set; } = FishMode.CBC;
     public DateTime SetAt { get; set; } = DateTime.UtcNow;
 }
@@ -39,7 +47,13 @@ public class FishKeyStore
 
     public void SetKey(string target, string key, FishMode mode = FishMode.ECB)
     {
-        _keys[target] = new FishKeyEntry { Key = key, Mode = mode, SetAt = DateTime.UtcNow };
+        _keys[target] = new FishKeyEntry { Key = key, AltKey = "", Mode = mode, SetAt = DateTime.UtcNow };
+        Save();
+    }
+
+    public void SetKeyWithAlt(string target, string key, string altKey, FishMode mode)
+    {
+        _keys[target] = new FishKeyEntry { Key = key, AltKey = altKey, Mode = mode, SetAt = DateTime.UtcNow };
         Save();
     }
 

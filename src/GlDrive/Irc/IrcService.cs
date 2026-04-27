@@ -430,11 +430,20 @@ public class IrcService : IDisposable
             var prefix = text.StartsWith("+OK *") ? "CBC" : "ECB";
             if (keyEntry != null)
             {
-                var decrypted = FishCipher.Decrypt(text, keyEntry.Key);
+                var (decrypted, usedAlt) = FishCipher.DecryptWithFallback(text, keyEntry.Key, keyEntry.AltKey);
                 if (decrypted != null)
                 {
-                    Log.Information("FiSH PM {Target}: prefix={Prefix} cipherLen={CL} keyMask={KM} decrypted={Stats}",
-                        effectiveTarget, prefix, text.Length, MaskKey(keyEntry.Key), TextStats(decrypted));
+                    Log.Information("FiSH PM {Target}: prefix={Prefix} cipherLen={CL} keyMask={KM} usedAlt={UA} decrypted={Stats}",
+                        effectiveTarget, prefix, text.Length, MaskKey(keyEntry.Key), usedAlt, TextStats(decrypted));
+
+                    // If alt-alphabet key won, swap so future encrypts/decrypts use it primary.
+                    if (usedAlt)
+                    {
+                        _fishKeyStore.SetKeyWithAlt(effectiveTarget, keyEntry.AltKey, keyEntry.Key, keyEntry.Mode);
+                        Log.Information("FiSH alphabet swap for {Target}: alt-key promoted to primary", effectiveTarget);
+                        keyEntry = _fishKeyStore.GetKey(effectiveTarget)!;
+                    }
+
                     text = decrypted;
                     wasEncrypted = true;
 
@@ -443,7 +452,7 @@ public class IrcService : IDisposable
                     var peerMode = msg.Trailing!.StartsWith("+OK *") ? FishMode.CBC : FishMode.ECB;
                     if (keyEntry.Mode != peerMode)
                     {
-                        _fishKeyStore.SetKey(effectiveTarget, keyEntry.Key, peerMode);
+                        _fishKeyStore.SetKeyWithAlt(effectiveTarget, keyEntry.Key, keyEntry.AltKey, peerMode);
                         Log.Information("FiSH mode updated for {Target}: {OldMode} → {NewMode}",
                             effectiveTarget, keyEntry.Mode, peerMode);
                     }
@@ -490,16 +499,22 @@ public class IrcService : IDisposable
             var keyEntry = _fishKeyStore.GetKey(effectiveTarget);
             if (keyEntry != null)
             {
-                var decrypted = FishCipher.Decrypt(text, keyEntry.Key);
+                var (decrypted, usedAlt) = FishCipher.DecryptWithFallback(text, keyEntry.Key, keyEntry.AltKey);
                 if (decrypted != null)
                 {
+                    if (usedAlt)
+                    {
+                        _fishKeyStore.SetKeyWithAlt(effectiveTarget, keyEntry.AltKey, keyEntry.Key, keyEntry.Mode);
+                        keyEntry = _fishKeyStore.GetKey(effectiveTarget)!;
+                    }
+
                     text = decrypted;
                     wasEncrypted = true;
 
                     // Auto-detect peer's mode and update
                     var peerMode = msg.Trailing!.StartsWith("+OK *") ? FishMode.CBC : FishMode.ECB;
                     if (keyEntry.Mode != peerMode)
-                        _fishKeyStore.SetKey(effectiveTarget, keyEntry.Key, peerMode);
+                        _fishKeyStore.SetKeyWithAlt(effectiveTarget, keyEntry.Key, keyEntry.AltKey, peerMode);
                 }
             }
         }
@@ -991,13 +1006,15 @@ public class IrcService : IDisposable
                 return d;
             });
 
-            var sharedSecret = dh.ComputeSharedSecret(theirPubKey);
-            // DH1080 FiSH standard uses CBC mode
-            _fishKeyStore.SetKey(nick, sharedSecret, FishMode.CBC);
+            var (primaryKey, altKey) = dh.ComputeSharedSecretBoth(theirPubKey);
+            // DH1080 FiSH standard uses CBC mode. Store BOTH alphabet variants of the
+            // derived key — peer's client may use standard base64 (fish-irssi family)
+            // or FiSH ECB alphabet (older mIRC fish_inj.dll); first decrypt picks.
+            _fishKeyStore.SetKeyWithAlt(nick, primaryKey, altKey, FishMode.CBC);
 
             var ourPub = dh.GetPublicKeyBase64();
-            Log.Information("DH1080 FINISH send to {Nick}: ourPubLen={Len} ourPubMask={Mask} derivedKeyLen={KL} derivedKeyMask={KM}",
-                nick, ourPub.Length, MaskMid(ourPub), sharedSecret.Length, MaskKey(sharedSecret));
+            Log.Information("DH1080 FINISH send to {Nick}: ourPubLen={Len} ourPubMask={Mask} primaryKey={KM} altKey={AM}",
+                nick, ourPub.Length, MaskMid(ourPub), MaskKey(primaryKey), MaskKey(altKey));
 
             await _client.NoticeAsync(nick, Dh1080.FormatFinish(ourPub));
             AddSystemMessage(nick, $"DH1080 key exchange completed (initiated by {nick}) — CBC mode");
@@ -1017,13 +1034,13 @@ public class IrcService : IDisposable
             Log.Information("DH1080 FINISH recv from {Nick}: peerPubLen={Len} peerPubMask={Mask}",
                 nick, theirPubKey.Length, MaskMid(theirPubKey));
 
-            var sharedSecret = entry.dh.ComputeSharedSecret(theirPubKey);
-            // DH1080 FiSH standard uses CBC mode
-            _fishKeyStore.SetKey(nick, sharedSecret, FishMode.CBC);
+            var (primaryKey, altKey) = entry.dh.ComputeSharedSecretBoth(theirPubKey);
+            // Store both alphabet variants — see HandleDh1080InitAsync for why.
+            _fishKeyStore.SetKeyWithAlt(nick, primaryKey, altKey, FishMode.CBC);
             _pendingKeyExchanges.Remove(nick);
 
-            Log.Information("DH1080 derived for {Nick}: derivedKeyLen={KL} derivedKeyMask={KM}",
-                nick, sharedSecret.Length, MaskKey(sharedSecret));
+            Log.Information("DH1080 derived for {Nick}: primaryKey={KM} altKey={AM}",
+                nick, MaskKey(primaryKey), MaskKey(altKey));
 
             AddSystemMessage(nick, "DH1080 key exchange completed — CBC mode");
         }
