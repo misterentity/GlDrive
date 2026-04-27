@@ -68,11 +68,32 @@ public sealed class AgentClient : IDisposable
                 return new AgentRunOutcome { ErrorMessage = $"HTTP {(int)resp.StatusCode}" };
 
             using var doc = JsonDocument.Parse(responseBody);
-            var msg = doc.RootElement.GetProperty("choices")[0]
-                         .GetProperty("message").GetProperty("content").GetString() ?? "";
+            var root = doc.RootElement;
+
+            // OpenRouter sometimes returns upstream errors as HTTP 200 with an `error` envelope
+            // (free-tier rate limits, provider failures). Surface those instead of crashing on missing `choices`.
+            if (root.TryGetProperty("error", out var err))
+            {
+                var em = err.TryGetProperty("message", out var m) ? m.GetString() : "unknown";
+                var code = err.TryGetProperty("code", out var c) ? c.ToString() : "?";
+                Log.Warning("AgentClient upstream error code={Code} msg={Msg}", code, em);
+                return new AgentRunOutcome { ErrorMessage = $"upstream:{code}:{em}" };
+            }
+
+            if (!root.TryGetProperty("choices", out var choices)
+                || choices.ValueKind != JsonValueKind.Array
+                || choices.GetArrayLength() == 0
+                || !choices[0].TryGetProperty("message", out var messageEl)
+                || !messageEl.TryGetProperty("content", out var contentEl))
+            {
+                var preview = responseBody.Length > 400 ? responseBody[..400] : responseBody;
+                Log.Warning("AgentClient unexpected response shape, body preview: {Preview}", preview);
+                return new AgentRunOutcome { ErrorMessage = "malformed-response" };
+            }
+            var msg = contentEl.GetString() ?? "";
 
             int inputTok = 0, outputTok = 0;
-            if (doc.RootElement.TryGetProperty("usage", out var u))
+            if (root.TryGetProperty("usage", out var u))
             {
                 if (u.TryGetProperty("prompt_tokens", out var pt)) inputTok = pt.GetInt32();
                 if (u.TryGetProperty("completion_tokens", out var ot)) outputTok = ot.GetInt32();
