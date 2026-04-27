@@ -75,6 +75,36 @@ public class Dh1080
         return Convert.ToBase64String(padded) + "A";
     }
 
+    /// <summary>
+    /// Returns both alphabet variants of the derived FiSH key:
+    ///   standard: A-Za-z0-9+/   (fish-irssi, HexChat FiSH, KVIrc, mIRC fish10)
+    ///   fish:     ./0-9a-zA-Z   (older mIRC fish_inj.dll, common on scene IRC)
+    /// Same SHA-256 hash → different alphabet → different Blowfish key bytes.
+    /// We don't know which variant peer's client uses until first decrypt attempt;
+    /// caller stores both and tries-both-on-decrypt to interop with either.
+    /// </summary>
+    public (string Standard, string Fish) ComputeSharedSecretBoth(string theirPubKeyBase64)
+    {
+        var standard = ComputeSharedSecret(theirPubKeyBase64);
+        return (standard, MapStandardToFishAlphabet(standard));
+    }
+
+    private const string StdB64Alphabet  = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    private const string FishB64Alphabet = "./0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+    private static string MapStandardToFishAlphabet(string standardB64)
+    {
+        var sb = new System.Text.StringBuilder(standardB64.Length);
+        foreach (var c in standardB64)
+        {
+            if (c == '=') continue;
+            var idx = StdB64Alphabet.IndexOf(c);
+            if (idx < 0) throw new CryptographicException($"Unexpected non-base64 char '{c}' in derived key");
+            sb.Append(FishB64Alphabet[idx]);
+        }
+        return sb.ToString();
+    }
+
     public string ComputeSharedSecret(string theirPubKeyBase64)
     {
         // Normalize the incoming pubkey to match fish-irssi b64toh semantics:

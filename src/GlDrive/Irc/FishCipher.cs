@@ -38,6 +38,46 @@ public static class FishCipher
     public static bool IsEncrypted(string message) =>
         message.StartsWith(EcbPrefix) || message.StartsWith(CbcPrefix);
 
+    /// <summary>
+    /// Try primaryKey first. If it produces low-quality output (likely garbage from
+    /// alphabet mismatch) and altKey is non-empty, try altKey. Returns the better
+    /// candidate plus a flag indicating whether altKey was the one that worked, so
+    /// the caller can swap primary↔alt for future encrypts.
+    /// </summary>
+    public static (string? Text, bool UsedAlt) DecryptWithFallback(string ciphertext, string primaryKey, string altKey)
+    {
+        var first = Decrypt(ciphertext, primaryKey);
+        if (string.IsNullOrEmpty(altKey))
+            return (first, false);
+
+        var firstQ = Quality(first);
+        // Primary already looks like real text — don't bother with alt.
+        if (firstQ >= 0.85) return (first, false);
+
+        var second = Decrypt(ciphertext, altKey);
+        var secondQ = Quality(second);
+        return secondQ > firstQ + 0.15 ? (second, true) : (first, false);
+    }
+
+    /// <summary>
+    /// Fraction of chars that are printable ASCII or common IRC formatting codes.
+    /// Real plaintext is typically &gt;0.85; AES/Blowfish on wrong key produces
+    /// random bytes that UTF-8-decode to a mix of valid chars and U+FFFD
+    /// replacement chars, scoring ~0.30–0.50.
+    /// </summary>
+    private static double Quality(string? s)
+    {
+        if (string.IsNullOrEmpty(s)) return 0;
+        var ok = 0;
+        foreach (var c in s)
+        {
+            if (c >= 0x20 && c < 0x7F) ok++;
+            else if (c is '\t' or '\n' or '\r' or '\x02' or '\x03' or '\x0F'
+                          or '\x16' or '\x1D' or '\x1E' or '\x1F') ok++;
+        }
+        return (double)ok / s.Length;
+    }
+
     public static string EncryptEcb(string plaintext, string key)
     {
         var keyBytes = Encoding.UTF8.GetBytes(key);
