@@ -53,6 +53,7 @@ public class IrcService : IDisposable
     // Pending channel joins waiting for INVITE (channel → retry count)
     private readonly Dictionary<string, int> _pendingInviteJoins = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _invitedChannels = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _decryptFailHintSent = new(StringComparer.OrdinalIgnoreCase);
 
     // Liveness: periodic PING to detect dead connections
     private Timer? _pingTimer;
@@ -473,6 +474,7 @@ public class IrcService : IDisposable
                         primaryQ, altQ, keyEntry.Manual);
                     text = $"🔒 [FiSH decrypt failed — {prefix}, cipher {ch}]";
                     wasEncrypted = false;
+                    PostDecryptFailureHint(effectiveTarget, keyEntry, prefix);
                 }
             }
             else
@@ -540,6 +542,7 @@ public class IrcService : IDisposable
                         primaryQ, altQ, keyEntry.Manual);
                     text = $"🔒 [FiSH decrypt failed — {prefix}, cipher {ch}]";
                     wasEncrypted = false;
+                    PostDecryptFailureHint(effectiveTarget, keyEntry, prefix);
                 }
             }
         }
@@ -1008,6 +1011,24 @@ public class IrcService : IDisposable
     /// <summary>Short stable hash of a ciphertext for triage logs (does not leak plaintext).</summary>
     private static string CipherHash(string cipher) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(cipher)))[..16].ToLowerInvariant();
+
+    /// <summary>
+    /// Posts a one-time actionable hint to the affected tab when DH1080 keys are stored
+    /// but decryption is failing. Most common cause: peer's client uses separate static
+    /// keys per cipher mode; DH1080 only filled the CBC slot, so ECB messages encrypt
+    /// with whatever stale key is in the peer's ECB slot. Workaround is a manual /key.
+    /// </summary>
+    private void PostDecryptFailureHint(string target, FishKeyEntry keyEntry, string prefix)
+    {
+        if (_decryptFailHintSent.Contains(target)) return;
+        if (keyEntry.Manual) return; // manual key already in use — user knows what they did
+        if (string.IsNullOrEmpty(keyEntry.AltKey)) return; // no DH1080 — likely no-key situation, different problem
+
+        _decryptFailHintSent.Add(target);
+        AddSystemMessage(target,
+            $"⚠ DH1080 succeeded but {prefix} decrypt is failing. Peer's client likely uses a separate static key for {prefix} mode. " +
+            $"Ask {target} for a passphrase, then run /key {target} <passphrase> on both sides. /unkey {target} to retry /keyx later.");
+    }
 
     private async Task HandleDh1080InitAsync(string nick, string theirPubKey)
     {
