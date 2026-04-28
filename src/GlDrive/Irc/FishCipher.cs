@@ -39,30 +39,43 @@ public static class FishCipher
         message.StartsWith(EcbPrefix) || message.StartsWith(CbcPrefix);
 
     /// <summary>
-    /// Try primaryKey first. If it produces low-quality output (likely garbage from
-    /// alphabet mismatch) and altKey is non-empty, try altKey. Returns the better
-    /// candidate plus a flag indicating whether altKey was the one that worked, so
-    /// the caller can swap primary↔alt for future encrypts. Also returns both
-    /// quality scores so callers can detect the both-keys-garbage case (peer using
-    /// a different KDF or static key) and surface a clean "decrypt failed" marker
-    /// instead of pasting mojibake into the UI.
+    /// Try primary key first; if its quality is below the high-confidence threshold,
+    /// also try each non-empty alternate key and pick whichever beats primary by the
+    /// swap margin (0.15). Returns the chosen text, the index of the winning key
+    /// (0 = primary), and per-key quality scores for diagnostics.
     /// </summary>
-    public static (string? Text, bool UsedAlt, double PrimaryQuality, double AltQuality)
-        DecryptWithFallback(string ciphertext, string primaryKey, string altKey)
+    public static (string? Text, int WinningKeyIndex, double[] Qualities)
+        DecryptWithFallback(string ciphertext, params string[] keys)
     {
-        var first = Decrypt(ciphertext, primaryKey);
-        var firstQ = Quality(first);
-        if (string.IsNullOrEmpty(altKey))
-            return (first, false, firstQ, 0);
+        if (keys.Length == 0) return (null, -1, Array.Empty<double>());
 
-        // Primary already looks like real text — don't bother with alt.
-        if (firstQ >= 0.85) return (first, false, firstQ, 0);
+        var qualities = new double[keys.Length];
+        var decrypted = new string?[keys.Length];
 
-        var second = Decrypt(ciphertext, altKey);
-        var secondQ = Quality(second);
-        return secondQ > firstQ + 0.15
-            ? (second, true, firstQ, secondQ)
-            : (first, false, firstQ, secondQ);
+        decrypted[0] = string.IsNullOrEmpty(keys[0]) ? null : Decrypt(ciphertext, keys[0]);
+        qualities[0] = Quality(decrypted[0]);
+
+        // Primary already looks like real text — don't bother with alts.
+        if (qualities[0] >= 0.85)
+            return (decrypted[0], 0, qualities);
+
+        var bestAltIdx = -1;
+        var bestAltQ = 0.0;
+        for (var i = 1; i < keys.Length; i++)
+        {
+            if (string.IsNullOrEmpty(keys[i])) continue;
+            decrypted[i] = Decrypt(ciphertext, keys[i]);
+            qualities[i] = Quality(decrypted[i]);
+            if (qualities[i] > bestAltQ)
+            {
+                bestAltQ = qualities[i];
+                bestAltIdx = i;
+            }
+        }
+
+        return bestAltQ > qualities[0] + 0.15
+            ? (decrypted[bestAltIdx], bestAltIdx, qualities)
+            : (decrypted[0], 0, qualities);
     }
 
     /// <summary>Quality threshold below which both alphabets are presumed garbage (wrong key entirely).</summary>
