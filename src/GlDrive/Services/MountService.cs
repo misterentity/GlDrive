@@ -137,10 +137,6 @@ public class MountService : IDisposable
             };
             _monitor.Start();
 
-            // Kick off an initial stats fetch so the status bar populates fast,
-            // rather than waiting ~5 minutes for the first periodic tick.
-            _ = RefreshStatsAsync();
-
             // Start release monitor
             _releaseMonitor = new NewReleaseMonitor(_pool, _serverConfig.Notifications, () => CurrentState);
             _releaseMonitor.NewReleaseDetected += (category, release, remotePath) => NewReleaseDetected?.Invoke(category, release, remotePath);
@@ -173,6 +169,11 @@ public class MountService : IDisposable
             SetState(MountState.Connected);
             var driveInfo = _serverConfig.Mount.MountDrive ? $"Drive {_serverConfig.Mount.DriveLetter}:" : "No drive";
             Log.Information("{DriveInfo} connected for server {ServerName}", driveInfo, _serverConfig.Name);
+
+            // Kick off an initial stats fetch so the status bar populates fast,
+            // rather than waiting ~5 minutes for the first periodic tick.
+            // Must run AFTER SetState(Connected) — RefreshStatsAsync's guard would otherwise bail.
+            _ = RefreshStatsAsync();
         }
         catch (Exception ex)
         {
