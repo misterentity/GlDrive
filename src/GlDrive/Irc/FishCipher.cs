@@ -70,13 +70,18 @@ public static class FishCipher
 
     /// <summary>
     /// Fraction of chars that are printable ASCII or common IRC formatting codes.
-    /// Real plaintext is typically &gt;0.85; AES/Blowfish on wrong key produces
+    /// Real plaintext is typically &gt;0.85; Blowfish on wrong key produces
     /// random bytes that UTF-8-decode to a mix of valid chars and U+FFFD
-    /// replacement chars, scoring ~0.30–0.50.
+    /// replacement chars. Presence of ANY U+FFFD is a hard fail signal — UTF-8
+    /// decoding only emits FFFD when the byte stream is malformed, which never
+    /// happens for legitimate plaintext. Returning 0 in that case ensures the
+    /// caller treats the result as garbage even if the surviving chars happen
+    /// to push the surface printable-ratio above the threshold.
     /// </summary>
     private static double Quality(string? s)
     {
         if (string.IsNullOrEmpty(s)) return 0;
+        if (s.IndexOf('�') >= 0) return 0;
         var ok = 0;
         foreach (var c in s)
         {
