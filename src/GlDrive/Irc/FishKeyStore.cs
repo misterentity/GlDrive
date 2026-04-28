@@ -18,6 +18,11 @@ public class FishKeyEntry
     /// encrypts use the alphabet peer's client expects.
     /// </summary>
     public string AltKey { get; set; } = "";
+    /// <summary>
+    /// Third DH1080-derived variant: fish-base64 of the RAW shared secret (no SHA256).
+    /// Older mIRC fish_inj.dll forks use this KDF. Empty for manually-set keys.
+    /// </summary>
+    public string Key3 { get; set; } = "";
     public FishMode Mode { get; set; } = FishMode.CBC;
     public DateTime SetAt { get; set; } = DateTime.UtcNow;
 
@@ -59,26 +64,26 @@ public class FishKeyStore
     }
 
     /// <summary>
-    /// Updates a stored key pair — preserves the existing entry's Manual flag if there is one.
+    /// Updates a stored key trio — preserves the existing entry's Manual flag if there is one.
     /// Used for alphabet swap / mode auto-detect; do NOT use for fresh DH1080 results.
     /// </summary>
-    public void SetKeyWithAlt(string target, string key, string altKey, FishMode mode)
+    public void SetKeyWithAlt(string target, string key, string altKey, string key3, FishMode mode)
     {
         var manual = _keys.TryGetValue(target, out var existing) && existing.Manual;
-        _keys[target] = new FishKeyEntry { Key = key, AltKey = altKey, Mode = mode, Manual = manual, SetAt = DateTime.UtcNow };
+        _keys[target] = new FishKeyEntry { Key = key, AltKey = altKey, Key3 = key3, Mode = mode, Manual = manual, SetAt = DateTime.UtcNow };
         Save();
     }
 
     /// <summary>
-    /// Stores a freshly DH1080-derived key pair. Refuses to overwrite a manually-set
+    /// Stores a freshly DH1080-derived key trio. Refuses to overwrite a manually-set
     /// key so /keyx doesn't blow away a working static key the user explicitly set.
     /// Returns true on success, false if a manual key blocked the write.
     /// </summary>
-    public bool SetDh1080Keys(string target, string key, string altKey, FishMode mode)
+    public bool SetDh1080Keys(string target, string key, string altKey, string key3, FishMode mode)
     {
         if (_keys.TryGetValue(target, out var existing) && existing.Manual)
             return false;
-        _keys[target] = new FishKeyEntry { Key = key, AltKey = altKey, Mode = mode, Manual = false, SetAt = DateTime.UtcNow };
+        _keys[target] = new FishKeyEntry { Key = key, AltKey = altKey, Key3 = key3, Mode = mode, Manual = false, SetAt = DateTime.UtcNow };
         Save();
         return true;
     }

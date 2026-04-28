@@ -76,17 +76,34 @@ public class Dh1080
     }
 
     /// <summary>
-    /// Returns both alphabet variants of the derived FiSH key:
-    ///   standard: A-Za-z0-9+/   (fish-irssi, HexChat FiSH, KVIrc, mIRC fish10)
-    ///   fish:     ./0-9a-zA-Z   (older mIRC fish_inj.dll, common on scene IRC)
-    /// Same SHA-256 hash → different alphabet → different Blowfish key bytes.
-    /// We don't know which variant peer's client uses until first decrypt attempt;
-    /// caller stores both and tries-both-on-decrypt to interop with either.
+    /// Returns both alphabet variants of the SHA-256-hashed derived FiSH key.
+    /// Kept for backward compat — prefer <see cref="ComputeAllKeyVariants"/> which
+    /// also returns the raw-shared-secret variant used by older mIRC fish_inj.dll.
     /// </summary>
     public (string Standard, string Fish) ComputeSharedSecretBoth(string theirPubKeyBase64)
     {
-        var standard = ComputeSharedSecret(theirPubKeyBase64);
-        return (standard, MapStandardToFishAlphabet(standard));
+        var (s, f, _) = ComputeAllKeyVariants(theirPubKeyBase64);
+        return (s, f);
+    }
+
+    /// <summary>
+    /// Returns three Blowfish-key-string variants derived from the DH1080 shared secret.
+    /// Different FiSH clients use different KDFs and we don't know which until decrypt
+    /// time, so we try all three:
+    ///   standard: base64(SHA256(shared))                        — fish-irssi, HexChat FiSH, KVIrc, mIRC fish10
+    ///   fish:     fish-base64(SHA256(shared))                   — variant of the above with FiSH ECB alphabet
+    ///   fishRaw:  fish-base64(shared_bytes) (no SHA256)         — older mIRC fish_inj.dll, common on scene IRC
+    /// Caller stores all three and tries-all-on-decrypt; encrypt uses whichever variant
+    /// produced the most recent successful decrypt (alt-promotion swap).
+    /// </summary>
+    public (string Standard, string Fish, string FishRaw) ComputeAllKeyVariants(string theirPubKeyBase64)
+    {
+        var sharedBytes = ComputeSharedSecretBytes(theirPubKeyBase64);
+        var hash = SHA256.HashData(sharedBytes);
+        var standard = Convert.ToBase64String(hash).TrimEnd('=');
+        var fish = MapStandardToFishAlphabet(standard);
+        var fishRaw = MapStandardToFishAlphabet(Convert.ToBase64String(sharedBytes).TrimEnd('='));
+        return (standard, fish, fishRaw);
     }
 
     private const string StdB64Alphabet  = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -107,32 +124,29 @@ public class Dh1080
 
     public string ComputeSharedSecret(string theirPubKeyBase64)
     {
+        var sharedBytes = ComputeSharedSecretBytes(theirPubKeyBase64);
+        var hash = SHA256.HashData(sharedBytes);
+        // fish-irssi's htob64 on 32 bytes (256 bits, not a multiple of 6) produces
+        // 43 chars with no '=' padding. Standard base64 of 32 bytes is 44 chars
+        // ending in one '='. TrimEnd('=') normalizes to the fish-irssi format so
+        // both sides derive the identical FiSH Blowfish key string.
+        return Convert.ToBase64String(hash).TrimEnd('=');
+    }
+
+    private byte[] ComputeSharedSecretBytes(string theirPubKeyBase64)
+    {
         // Normalize the incoming pubkey to match fish-irssi b64toh semantics:
         // strip ALL trailing 'A' chars (B64ABC[0] = 'A', value 0), not just one.
-        // fish-irssi-compatible clients (mIRC fish10, HexChat FiSH, KVIrc, weechat-fish)
-        // emit a quirk trailing 'A' for byte-aligned multi-of-6-bits inputs (135-byte
-        // pubkey → 181 chars). When the pubkey value's natural representation also
-        // ends in zero bytes, htob64 emits MORE trailing 'A' chars from that data.
-        // The canonical b64toh strips them all before bit-stream decoding, so peer
-        // and we agree on a truncated bigint value. If we strip only one, we decode
-        // a different bigint than peer does (for ~1/256 of exchanges), shared secret
-        // diverges, FiSH key mismatches, decryption produces garbled UTF-8.
+        // See class-level comment for the trailing-A interop background.
         var normalized = theirPubKeyBase64;
         while (normalized.Length > 0 && normalized[^1] == 'A')
             normalized = normalized[..^1];
-        // Right-pad to multiple of 4 for Convert.FromBase64String.
         while (normalized.Length % 4 != 0)
             normalized += '=';
 
         byte[] theirBytes;
-        try
-        {
-            theirBytes = Convert.FromBase64String(normalized);
-        }
-        catch (FormatException ex)
-        {
-            throw new CryptographicException("Invalid DH1080 public key encoding", ex);
-        }
+        try { theirBytes = Convert.FromBase64String(normalized); }
+        catch (FormatException ex) { throw new CryptographicException("Invalid DH1080 public key encoding", ex); }
 
         var theirPubKey = new BigInteger(theirBytes, isUnsigned: true, isBigEndian: true);
         if (theirPubKey <= 1 || theirPubKey >= Prime - 1)
@@ -142,16 +156,8 @@ public class Dh1080
         // Hash the shared secret at its NATURAL byte length (no padding) to match
         // fish-irssi: SHA256(BN_bn2bin(shared_key), len). Padding here would
         // produce different hashes than fish-irssi-compatible peers and break
-        // interop for the 0.4% of exchanges whose shared secret has a leading
-        // zero byte. (This is technically a fish-irssi protocol quirk we inherit.)
-        var sharedBytes = shared.ToByteArray(isUnsigned: true, isBigEndian: true);
-        var hash = SHA256.HashData(sharedBytes);
-
-        // fish-irssi's htob64 on 32 bytes (256 bits, not a multiple of 6) produces
-        // 43 chars with no '=' padding. Standard base64 of 32 bytes is 44 chars
-        // ending in one '='. TrimEnd('=') normalizes to the fish-irssi format so
-        // both sides derive the identical FiSH Blowfish key string.
-        return Convert.ToBase64String(hash).TrimEnd('=');
+        // interop for the 0.4% of exchanges whose shared secret has a leading zero byte.
+        return shared.ToByteArray(isUnsigned: true, isBigEndian: true);
     }
 
     public static string FormatInit(string pubKeyBase64) => $"DH1080_INIT {pubKeyBase64}";

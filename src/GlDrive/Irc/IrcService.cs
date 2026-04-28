@@ -433,45 +433,44 @@ public class IrcService : IDisposable
             var prefix = text.StartsWith("+OK *") ? "CBC" : "ECB";
             if (keyEntry != null)
             {
-                var (decrypted, usedAlt, primaryQ, altQ) =
-                    FishCipher.DecryptWithFallback(text, keyEntry.Key, keyEntry.AltKey);
-                var bestQ = Math.Max(primaryQ, altQ);
+                var keys = new[] { keyEntry.Key, keyEntry.AltKey, keyEntry.Key3 };
+                var (decrypted, winIdx, qualities) = FishCipher.DecryptWithFallback(text, keys);
+                var bestQ = winIdx >= 0 ? qualities[winIdx] : 0;
                 if (decrypted != null && bestQ >= FishCipher.FailedDecryptQualityThreshold)
                 {
-                    Log.Information("FiSH PM {Target}: prefix={Prefix} cipherLen={CL} keyMask={KM} usedAlt={UA} decrypted={Stats}",
-                        effectiveTarget, prefix, text.Length, MaskKey(keyEntry.Key), usedAlt, TextStats(decrypted));
+                    Log.Information("FiSH PM {Target}: prefix={Prefix} cipherLen={CL} keyMask={KM} winKey={Idx} decrypted={Stats}",
+                        effectiveTarget, prefix, text.Length, MaskKey(keyEntry.Key), winIdx, TextStats(decrypted));
 
-                    // If alt-alphabet key won, swap so future encrypts/decrypts use it primary.
-                    if (usedAlt)
+                    // If a non-primary key won, swap so future encrypts/decrypts use it primary.
+                    if (winIdx > 0)
                     {
-                        _fishKeyStore.SetKeyWithAlt(effectiveTarget, keyEntry.AltKey, keyEntry.Key, keyEntry.Mode);
-                        Log.Information("FiSH alphabet swap for {Target}: alt-key promoted to primary", effectiveTarget);
+                        var promoted = PromoteKeyToPrimary(keys, winIdx);
+                        _fishKeyStore.SetKeyWithAlt(effectiveTarget, promoted[0], promoted[1], promoted[2], keyEntry.Mode);
+                        Log.Information("FiSH key swap for {Target}: index {Idx} promoted to primary", effectiveTarget, winIdx);
                         keyEntry = _fishKeyStore.GetKey(effectiveTarget)!;
                     }
 
                     text = decrypted;
                     wasEncrypted = true;
 
-                    // Auto-detect peer's encryption mode and update stored key to match
-                    // This ensures our outgoing messages use the same mode they use
                     var peerMode = msg.Trailing!.StartsWith("+OK *") ? FishMode.CBC : FishMode.ECB;
                     if (keyEntry.Mode != peerMode)
                     {
-                        _fishKeyStore.SetKeyWithAlt(effectiveTarget, keyEntry.Key, keyEntry.AltKey, peerMode);
+                        _fishKeyStore.SetKeyWithAlt(effectiveTarget, keyEntry.Key, keyEntry.AltKey, keyEntry.Key3, peerMode);
                         Log.Information("FiSH mode updated for {Target}: {OldMode} → {NewMode}",
                             effectiveTarget, keyEntry.Mode, peerMode);
                     }
                 }
                 else
                 {
-                    // Either Decrypt returned null (malformed cipher) or both alphabets produced
-                    // garbage (wrong key entirely — peer using a different KDF or static key).
-                    // Surface a clean failure marker instead of pasting mojibake.
+                    // All keys produced garbage (wrong key entirely — peer using a different KDF or static key).
                     var ch = CipherHash(text);
-                    Log.Warning("FiSH PM {Target}: decrypt failed. prefix={Prefix} cipherLen={CL} cipherHash={Hash} keyMask={KM} altMask={AM} primaryQ={PQ:F2} altQ={AQ:F2} manual={Manual}",
+                    Log.Warning("FiSH PM {Target}: decrypt failed. prefix={Prefix} cipherLen={CL} cipherHash={Hash} keyMask={KM} qualities=[{Q0:F2},{Q1:F2},{Q2:F2}] manual={Manual}",
                         effectiveTarget, prefix, text.Length, ch, MaskKey(keyEntry.Key),
-                        string.IsNullOrEmpty(keyEntry.AltKey) ? "(none)" : MaskKey(keyEntry.AltKey),
-                        primaryQ, altQ, keyEntry.Manual);
+                        qualities.Length > 0 ? qualities[0] : 0,
+                        qualities.Length > 1 ? qualities[1] : 0,
+                        qualities.Length > 2 ? qualities[2] : 0,
+                        keyEntry.Manual);
                     text = $"🔒 [FiSH decrypt failed — {prefix}, cipher {ch}]";
                     wasEncrypted = false;
                     PostDecryptFailureHint(effectiveTarget, keyEntry, prefix);
@@ -514,32 +513,34 @@ public class IrcService : IDisposable
             var prefix = text.StartsWith("+OK *") ? "CBC" : "ECB";
             if (keyEntry != null)
             {
-                var (decrypted, usedAlt, primaryQ, altQ) =
-                    FishCipher.DecryptWithFallback(text, keyEntry.Key, keyEntry.AltKey);
-                var bestQ = Math.Max(primaryQ, altQ);
+                var keys = new[] { keyEntry.Key, keyEntry.AltKey, keyEntry.Key3 };
+                var (decrypted, winIdx, qualities) = FishCipher.DecryptWithFallback(text, keys);
+                var bestQ = winIdx >= 0 ? qualities[winIdx] : 0;
                 if (decrypted != null && bestQ >= FishCipher.FailedDecryptQualityThreshold)
                 {
-                    if (usedAlt)
+                    if (winIdx > 0)
                     {
-                        _fishKeyStore.SetKeyWithAlt(effectiveTarget, keyEntry.AltKey, keyEntry.Key, keyEntry.Mode);
+                        var promoted = PromoteKeyToPrimary(keys, winIdx);
+                        _fishKeyStore.SetKeyWithAlt(effectiveTarget, promoted[0], promoted[1], promoted[2], keyEntry.Mode);
                         keyEntry = _fishKeyStore.GetKey(effectiveTarget)!;
                     }
 
                     text = decrypted;
                     wasEncrypted = true;
 
-                    // Auto-detect peer's mode and update
                     var peerMode = msg.Trailing!.StartsWith("+OK *") ? FishMode.CBC : FishMode.ECB;
                     if (keyEntry.Mode != peerMode)
-                        _fishKeyStore.SetKeyWithAlt(effectiveTarget, keyEntry.Key, keyEntry.AltKey, peerMode);
+                        _fishKeyStore.SetKeyWithAlt(effectiveTarget, keyEntry.Key, keyEntry.AltKey, keyEntry.Key3, peerMode);
                 }
                 else
                 {
                     var ch = CipherHash(text);
-                    Log.Warning("FiSH NOTICE {Target}: decrypt failed. prefix={Prefix} cipherLen={CL} cipherHash={Hash} keyMask={KM} altMask={AM} primaryQ={PQ:F2} altQ={AQ:F2} manual={Manual}",
+                    Log.Warning("FiSH NOTICE {Target}: decrypt failed. prefix={Prefix} cipherLen={CL} cipherHash={Hash} keyMask={KM} qualities=[{Q0:F2},{Q1:F2},{Q2:F2}] manual={Manual}",
                         effectiveTarget, prefix, text.Length, ch, MaskKey(keyEntry.Key),
-                        string.IsNullOrEmpty(keyEntry.AltKey) ? "(none)" : MaskKey(keyEntry.AltKey),
-                        primaryQ, altQ, keyEntry.Manual);
+                        qualities.Length > 0 ? qualities[0] : 0,
+                        qualities.Length > 1 ? qualities[1] : 0,
+                        qualities.Length > 2 ? qualities[2] : 0,
+                        keyEntry.Manual);
                     text = $"🔒 [FiSH decrypt failed — {prefix}, cipher {ch}]";
                     wasEncrypted = false;
                     PostDecryptFailureHint(effectiveTarget, keyEntry, prefix);
@@ -1013,6 +1014,21 @@ public class IrcService : IDisposable
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(cipher)))[..16].ToLowerInvariant();
 
     /// <summary>
+    /// Reorders a key array so the winning index is at position 0 and the others
+    /// follow in their original order. Used to promote a successful alt key to
+    /// primary so future encrypts use the variant the peer's client expects.
+    /// </summary>
+    private static string[] PromoteKeyToPrimary(string[] keys, int winningIndex)
+    {
+        var result = new string[keys.Length];
+        result[0] = keys[winningIndex];
+        var j = 1;
+        for (var i = 0; i < keys.Length; i++)
+            if (i != winningIndex) result[j++] = keys[i];
+        return result;
+    }
+
+    /// <summary>
     /// Posts a one-time actionable hint to the affected tab when DH1080 keys are stored
     /// but decryption is failing. Most common cause: peer's client uses separate static
     /// keys per cipher mode; DH1080 only filled the CBC slot, so ECB messages encrypt
@@ -1056,12 +1072,13 @@ public class IrcService : IDisposable
                 return d;
             });
 
-            var (primaryKey, altKey) = dh.ComputeSharedSecretBoth(theirPubKey);
-            // DH1080 FiSH standard uses CBC mode. Store BOTH alphabet variants of the
-            // derived key — peer's client may use standard base64 (fish-irssi family)
-            // or FiSH ECB alphabet (older mIRC fish_inj.dll); first decrypt picks.
+            var (primaryKey, altKey, key3) = dh.ComputeAllKeyVariants(theirPubKey);
+            // DH1080 FiSH standard uses CBC mode. Store all three KDF variants of the
+            // derived key — peer's client may use standard-base64-of-SHA256 (fish-irssi
+            // family), fish-base64-of-SHA256, or fish-base64 of the raw shared secret
+            // (older mIRC fish_inj.dll); first decrypt picks the right one.
             // SetDh1080Keys refuses to overwrite a manually-set key.
-            if (!_fishKeyStore.SetDh1080Keys(nick, primaryKey, altKey, FishMode.CBC))
+            if (!_fishKeyStore.SetDh1080Keys(nick, primaryKey, altKey, key3, FishMode.CBC))
             {
                 Log.Warning("DH1080 INIT from {Nick} ignored: manual key already set; not overwriting", nick);
                 AddSystemMessage(nick, "Ignored incoming /keyx — a manual key is already set. Use /unkey first if you want DH1080.");
@@ -1069,8 +1086,8 @@ public class IrcService : IDisposable
             }
 
             var ourPub = dh.GetPublicKeyBase64();
-            Log.Information("DH1080 FINISH send to {Nick}: ourPubLen={Len} ourPubMask={Mask} primaryKey={KM} altKey={AM}",
-                nick, ourPub.Length, MaskMid(ourPub), MaskKey(primaryKey), MaskKey(altKey));
+            Log.Information("DH1080 FINISH send to {Nick}: ourPubLen={Len} ourPubMask={Mask} primaryKey={KM} altKey={AM} key3={K3M}",
+                nick, ourPub.Length, MaskMid(ourPub), MaskKey(primaryKey), MaskKey(altKey), MaskKey(key3));
 
             await _client.NoticeAsync(nick, Dh1080.FormatFinish(ourPub));
             AddSystemMessage(nick, $"DH1080 key exchange completed (initiated by {nick}) — CBC mode");
@@ -1090,19 +1107,19 @@ public class IrcService : IDisposable
             Log.Information("DH1080 FINISH recv from {Nick}: peerPubLen={Len} peerPubMask={Mask}",
                 nick, theirPubKey.Length, MaskMid(theirPubKey));
 
-            var (primaryKey, altKey) = entry.dh.ComputeSharedSecretBoth(theirPubKey);
-            // Store both alphabet variants — see HandleDh1080InitAsync for why.
+            var (primaryKey, altKey, key3) = entry.dh.ComputeAllKeyVariants(theirPubKey);
+            // Store three KDF variants — see HandleDh1080InitAsync for why.
             // SetDh1080Keys refuses to overwrite a manually-set key.
             _pendingKeyExchanges.Remove(nick);
-            if (!_fishKeyStore.SetDh1080Keys(nick, primaryKey, altKey, FishMode.CBC))
+            if (!_fishKeyStore.SetDh1080Keys(nick, primaryKey, altKey, key3, FishMode.CBC))
             {
                 Log.Warning("DH1080 FINISH from {Nick} ignored: manual key already set; not overwriting", nick);
                 AddSystemMessage(nick, "DH1080 response received but a manual key is already set — keeping manual. Use /unkey first if you want DH1080.");
                 return;
             }
 
-            Log.Information("DH1080 derived for {Nick}: primaryKey={KM} altKey={AM}",
-                nick, MaskKey(primaryKey), MaskKey(altKey));
+            Log.Information("DH1080 derived for {Nick}: primaryKey={KM} altKey={AM} key3={K3M}",
+                nick, MaskKey(primaryKey), MaskKey(altKey), MaskKey(key3));
 
             AddSystemMessage(nick, "DH1080 key exchange completed — CBC mode");
         }
