@@ -20,6 +20,13 @@ public class FishKeyEntry
     public string AltKey { get; set; } = "";
     public FishMode Mode { get; set; } = FishMode.CBC;
     public DateTime SetAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>
+    /// True if user set this key manually via /key. False for DH1080-derived keys.
+    /// Manual keys are protected from being overwritten by /keyx so a working
+    /// static key isn't blown away if someone (re)triggers a key exchange.
+    /// </summary>
+    public bool Manual { get; set; }
 }
 
 public class FishKeyStore
@@ -47,14 +54,33 @@ public class FishKeyStore
 
     public void SetKey(string target, string key, FishMode mode = FishMode.ECB)
     {
-        _keys[target] = new FishKeyEntry { Key = key, AltKey = "", Mode = mode, SetAt = DateTime.UtcNow };
+        _keys[target] = new FishKeyEntry { Key = key, AltKey = "", Mode = mode, Manual = true, SetAt = DateTime.UtcNow };
         Save();
     }
 
+    /// <summary>
+    /// Updates a stored key pair — preserves the existing entry's Manual flag if there is one.
+    /// Used for alphabet swap / mode auto-detect; do NOT use for fresh DH1080 results.
+    /// </summary>
     public void SetKeyWithAlt(string target, string key, string altKey, FishMode mode)
     {
-        _keys[target] = new FishKeyEntry { Key = key, AltKey = altKey, Mode = mode, SetAt = DateTime.UtcNow };
+        var manual = _keys.TryGetValue(target, out var existing) && existing.Manual;
+        _keys[target] = new FishKeyEntry { Key = key, AltKey = altKey, Mode = mode, Manual = manual, SetAt = DateTime.UtcNow };
         Save();
+    }
+
+    /// <summary>
+    /// Stores a freshly DH1080-derived key pair. Refuses to overwrite a manually-set
+    /// key so /keyx doesn't blow away a working static key the user explicitly set.
+    /// Returns true on success, false if a manual key blocked the write.
+    /// </summary>
+    public bool SetDh1080Keys(string target, string key, string altKey, FishMode mode)
+    {
+        if (_keys.TryGetValue(target, out var existing) && existing.Manual)
+            return false;
+        _keys[target] = new FishKeyEntry { Key = key, AltKey = altKey, Mode = mode, Manual = false, SetAt = DateTime.UtcNow };
+        Save();
+        return true;
     }
 
     public void RemoveKey(string target)

@@ -42,22 +42,31 @@ public static class FishCipher
     /// Try primaryKey first. If it produces low-quality output (likely garbage from
     /// alphabet mismatch) and altKey is non-empty, try altKey. Returns the better
     /// candidate plus a flag indicating whether altKey was the one that worked, so
-    /// the caller can swap primary↔alt for future encrypts.
+    /// the caller can swap primary↔alt for future encrypts. Also returns both
+    /// quality scores so callers can detect the both-keys-garbage case (peer using
+    /// a different KDF or static key) and surface a clean "decrypt failed" marker
+    /// instead of pasting mojibake into the UI.
     /// </summary>
-    public static (string? Text, bool UsedAlt) DecryptWithFallback(string ciphertext, string primaryKey, string altKey)
+    public static (string? Text, bool UsedAlt, double PrimaryQuality, double AltQuality)
+        DecryptWithFallback(string ciphertext, string primaryKey, string altKey)
     {
         var first = Decrypt(ciphertext, primaryKey);
-        if (string.IsNullOrEmpty(altKey))
-            return (first, false);
-
         var firstQ = Quality(first);
+        if (string.IsNullOrEmpty(altKey))
+            return (first, false, firstQ, 0);
+
         // Primary already looks like real text — don't bother with alt.
-        if (firstQ >= 0.85) return (first, false);
+        if (firstQ >= 0.85) return (first, false, firstQ, 0);
 
         var second = Decrypt(ciphertext, altKey);
         var secondQ = Quality(second);
-        return secondQ > firstQ + 0.15 ? (second, true) : (first, false);
+        return secondQ > firstQ + 0.15
+            ? (second, true, firstQ, secondQ)
+            : (first, false, firstQ, secondQ);
     }
+
+    /// <summary>Quality threshold below which both alphabets are presumed garbage (wrong key entirely).</summary>
+    public const double FailedDecryptQualityThreshold = 0.5;
 
     /// <summary>
     /// Fraction of chars that are printable ASCII or common IRC formatting codes.
