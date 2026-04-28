@@ -25,10 +25,15 @@ public static class SiteStatsCollector
             RegexOptions.Compiled);
 
     // Examples this matches:
-    //   "Ratio: 1:3"     "ratio=UL"    "Ratio Unlimited"    "ratio: inf"
+    //   "Ratio: 1:3"   "ratio=UL"   "Ratios Unlimited - - - -"   "ratio: inf"
     private static readonly Regex RatioRe =
-        new(@"(?i)\bratio\b\s*[:=]?\s*(\d+\s*:\s*\d+|unlimited|UL|inf)",
+        new(@"(?i)\bratios?\b\s*[:=]?\s*(\d+\s*:\s*\d+|unlimited|UL|inf)",
             RegexOptions.Compiled);
+
+    // glftpd ACL denial returns this phrase as the only body line — treat as a parse miss
+    // so the candidate-chain falls through to the next command.
+    private static readonly Regex AccessDeniedRe =
+        new(@"(?i)you do not have access to this command", RegexOptions.Compiled);
 
     public static async Task<SiteStats> RefreshAsync(AsyncFtpClient client, string command, CancellationToken ct)
     {
@@ -43,15 +48,11 @@ public static class SiteStatsCollector
 
     public static SiteStats Parse(string body)
     {
-        string? credits = null;
-        var creditsMatch = CreditsLabelFirst.Match(body);
-        if (!creditsMatch.Success) creditsMatch = CreditsValueFirst.Match(body);
-        if (creditsMatch.Success)
+        // glftpd ACL denial — let the candidate chain keep trying.
+        if (AccessDeniedRe.IsMatch(body))
         {
-            var num = creditsMatch.Groups[1].Value.Replace(",", "");
-            var unit = creditsMatch.Groups[2].Value.ToUpperInvariant().Replace("I", "");
-            if (unit.Length == 1) unit += "B"; // bare K/M/G/T → KB/MB/GB/TB
-            credits = $"{num}{unit}";
+            Log.Information("SiteStatsCollector: ACL-denied response, skipping candidate");
+            return new SiteStats(null, null, DateTime.UtcNow);
         }
 
         string? ratio = null;
@@ -60,6 +61,22 @@ public static class SiteStatsCollector
         {
             var r = Regex.Replace(ratioMatch.Groups[1].Value, @"\s+", "");
             ratio = r.Equals("unlimited", StringComparison.OrdinalIgnoreCase) ? "UL" : r;
+        }
+
+        string? credits = null;
+        // Skip parsing credits when ratio is unlimited: glftpd shows "Credits: 0.0GiB ..."
+        // for leech accounts, which is meaningless and looks like a bug to the user.
+        if (ratio != "UL")
+        {
+            var creditsMatch = CreditsLabelFirst.Match(body);
+            if (!creditsMatch.Success) creditsMatch = CreditsValueFirst.Match(body);
+            if (creditsMatch.Success)
+            {
+                var num = creditsMatch.Groups[1].Value.Replace(",", "");
+                var unit = creditsMatch.Groups[2].Value.ToUpperInvariant().Replace("I", "");
+                if (unit.Length == 1) unit += "B"; // bare K/M/G/T → KB/MB/GB/TB
+                credits = $"{num}{unit}";
+            }
         }
 
         Log.Information("SiteStatsCollector: parsed credits={Credits} ratio={Ratio}",

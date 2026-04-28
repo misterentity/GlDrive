@@ -1734,15 +1734,24 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         }
         StatusBarConnections = connParts.Count > 0 ? string.Join("  |  ", connParts) : "";
 
-        // Per-site credits + ratio (scraped from SITE STATS by MountService)
+        // Per-site credits + ratio (scraped from SITE USER by MountService)
         var siteParts = new List<string>();
         foreach (var server in _serverManager.GetMountedServers())
         {
             var stats = server.Stats;
             if (stats == null || (stats.Credits == null && stats.Ratio == null)) continue;
-            var credits = stats.Credits ?? "?";
-            var ratio = stats.Ratio ?? "?";
-            siteParts.Add($"{server.ServerName} {credits} ({ratio})");
+            string label;
+            if (stats.Ratio == "UL")
+                label = stats.Credits != null
+                    ? $"{server.ServerName} {stats.Credits} (UL)"
+                    : $"{server.ServerName} UL";
+            else if (stats.Credits != null && stats.Ratio != null)
+                label = $"{server.ServerName} {stats.Credits} ({stats.Ratio})";
+            else if (stats.Credits != null)
+                label = $"{server.ServerName} {stats.Credits}";
+            else
+                label = $"{server.ServerName} {stats.Ratio}";
+            siteParts.Add(label);
         }
         StatusBarSites = siteParts.Count > 0 ? string.Join("  |  ", siteParts) : "";
 
