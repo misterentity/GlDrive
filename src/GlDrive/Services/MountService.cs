@@ -31,6 +31,10 @@ public class MountService : IDisposable
     public event Action<MountState>? StateChanged;
     public event Action<string, string, string>? NewReleaseDetected; // category, release, remotePath
     public event Action<string>? BncRateLimitDetected;
+    public event Action? StatsChanged;
+
+    /// <summary>Latest SITE STATS scrape (credits + ratio). Null until first refresh.</summary>
+    public SiteStats? Stats { get; private set; }
 
     public string ServerId => _serverConfig.Id;
     public string ServerName => _serverConfig.Name;
@@ -126,8 +130,16 @@ public class MountService : IDisposable
             _monitor.ConnectionLost += () => SetState(MountState.Reconnecting);
             _monitor.ConnectionRestored += () => SetState(MountState.Connected);
             _monitor.BncRateLimitDetected += msg => BncRateLimitDetected?.Invoke(msg);
-            _monitor.PeriodicMetricsCallback = () => _cache?.LogMetrics();
+            _monitor.PeriodicMetricsCallback = () =>
+            {
+                _cache?.LogMetrics();
+                _ = RefreshStatsAsync();
+            };
             _monitor.Start();
+
+            // Kick off an initial stats fetch so the status bar populates fast,
+            // rather than waiting ~5 minutes for the first periodic tick.
+            _ = RefreshStatsAsync();
 
             // Start release monitor
             _releaseMonitor = new NewReleaseMonitor(_pool, _serverConfig.Notifications, () => CurrentState);
@@ -381,6 +393,25 @@ public class MountService : IDisposable
     {
         CurrentState = state;
         StateChanged?.Invoke(state);
+    }
+
+    public async Task RefreshStatsAsync()
+    {
+        if (_pool == null || CurrentState != MountState.Connected) return;
+        try
+        {
+            await using var conn = await _pool.Borrow(CancellationToken.None);
+            var stats = await SiteStatsCollector.RefreshAsync(
+                conn.Client, _serverConfig.SiteStatsCommand, CancellationToken.None);
+            Stats = stats;
+            Log.Debug("SITE STATS for {Server}: credits={Credits} ratio={Ratio}",
+                _serverConfig.Name, stats.Credits ?? "?", stats.Ratio ?? "?");
+            StatsChanged?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "RefreshStatsAsync failed for {Server}", _serverConfig.Name);
+        }
     }
 
     public void Dispose()
