@@ -77,6 +77,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private string _statusBarQueueCount = "";
     private string _statusBarDiskSpace = "";
     private string _statusBarConnections = "";
+    private string _statusBarSites = "";
     private DispatcherTimer? _statusTimer;
     private DateTime _lastDiskPoll = DateTime.MinValue;
 
@@ -275,6 +276,12 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     {
         get => _statusBarConnections;
         set { _statusBarConnections = value; OnPropertyChanged(); }
+    }
+
+    public string StatusBarSites
+    {
+        get => _statusBarSites;
+        set { _statusBarSites = value; OnPropertyChanged(); }
     }
 
     // Bandwidth graph
@@ -1726,6 +1733,18 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             }
         }
         StatusBarConnections = connParts.Count > 0 ? string.Join("  |  ", connParts) : "";
+
+        // Per-site credits + ratio (scraped from SITE STATS by MountService)
+        var siteParts = new List<string>();
+        foreach (var server in _serverManager.GetMountedServers())
+        {
+            var stats = server.Stats;
+            if (stats == null || (stats.Credits == null && stats.Ratio == null)) continue;
+            var credits = stats.Credits ?? "?";
+            var ratio = stats.Ratio ?? "?";
+            siteParts.Add($"{server.ServerName} {credits} ({ratio})");
+        }
+        StatusBarSites = siteParts.Count > 0 ? string.Join("  |  ", siteParts) : "";
 
         // Update bandwidth graph points
         UpdateSpeedGraph();

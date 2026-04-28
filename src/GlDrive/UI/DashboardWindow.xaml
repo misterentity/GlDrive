@@ -1436,6 +1436,8 @@
                                Margin="20,0,0,0" FontSize="12"/>
                     <TextBlock Text="{Binding StatusBarConnections}" Foreground="{DynamicResource ForegroundDimBrush}"
                                Margin="20,0,0,0" FontSize="12"/>
+                    <TextBlock Text="{Binding StatusBarSites}" Foreground="{DynamicResource ForegroundDimBrush}"
+                               Margin="20,0,0,0" FontSize="12"/>
                 </StackPanel>
             </DockPanel>
         </Border>
