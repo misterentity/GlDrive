@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 using GlDrive.Config;
 using GlDrive.Tls;
@@ -430,8 +432,10 @@ public class IrcService : IDisposable
             var prefix = text.StartsWith("+OK *") ? "CBC" : "ECB";
             if (keyEntry != null)
             {
-                var (decrypted, usedAlt) = FishCipher.DecryptWithFallback(text, keyEntry.Key, keyEntry.AltKey);
-                if (decrypted != null)
+                var (decrypted, usedAlt, primaryQ, altQ) =
+                    FishCipher.DecryptWithFallback(text, keyEntry.Key, keyEntry.AltKey);
+                var bestQ = Math.Max(primaryQ, altQ);
+                if (decrypted != null && bestQ >= FishCipher.FailedDecryptQualityThreshold)
                 {
                     Log.Information("FiSH PM {Target}: prefix={Prefix} cipherLen={CL} keyMask={KM} usedAlt={UA} decrypted={Stats}",
                         effectiveTarget, prefix, text.Length, MaskKey(keyEntry.Key), usedAlt, TextStats(decrypted));
@@ -459,8 +463,16 @@ public class IrcService : IDisposable
                 }
                 else
                 {
-                    Log.Warning("FiSH PM {Target}: decrypt returned null. prefix={Prefix} cipherLen={CL} keyMask={KM}",
-                        effectiveTarget, prefix, text.Length, MaskKey(keyEntry.Key));
+                    // Either Decrypt returned null (malformed cipher) or both alphabets produced
+                    // garbage (wrong key entirely — peer using a different KDF or static key).
+                    // Surface a clean failure marker instead of pasting mojibake.
+                    var ch = CipherHash(text);
+                    Log.Warning("FiSH PM {Target}: decrypt failed. prefix={Prefix} cipherLen={CL} cipherHash={Hash} keyMask={KM} altMask={AM} primaryQ={PQ:F2} altQ={AQ:F2} manual={Manual}",
+                        effectiveTarget, prefix, text.Length, ch, MaskKey(keyEntry.Key),
+                        string.IsNullOrEmpty(keyEntry.AltKey) ? "(none)" : MaskKey(keyEntry.AltKey),
+                        primaryQ, altQ, keyEntry.Manual);
+                    text = $"🔒 [FiSH decrypt failed — {prefix}, cipher {ch}]";
+                    wasEncrypted = false;
                 }
             }
             else
@@ -497,10 +509,13 @@ public class IrcService : IDisposable
         if (_serverConfig.Irc.FishEnabled && FishCipher.IsEncrypted(text))
         {
             var keyEntry = _fishKeyStore.GetKey(effectiveTarget);
+            var prefix = text.StartsWith("+OK *") ? "CBC" : "ECB";
             if (keyEntry != null)
             {
-                var (decrypted, usedAlt) = FishCipher.DecryptWithFallback(text, keyEntry.Key, keyEntry.AltKey);
-                if (decrypted != null)
+                var (decrypted, usedAlt, primaryQ, altQ) =
+                    FishCipher.DecryptWithFallback(text, keyEntry.Key, keyEntry.AltKey);
+                var bestQ = Math.Max(primaryQ, altQ);
+                if (decrypted != null && bestQ >= FishCipher.FailedDecryptQualityThreshold)
                 {
                     if (usedAlt)
                     {
@@ -515,6 +530,16 @@ public class IrcService : IDisposable
                     var peerMode = msg.Trailing!.StartsWith("+OK *") ? FishMode.CBC : FishMode.ECB;
                     if (keyEntry.Mode != peerMode)
                         _fishKeyStore.SetKeyWithAlt(effectiveTarget, keyEntry.Key, keyEntry.AltKey, peerMode);
+                }
+                else
+                {
+                    var ch = CipherHash(text);
+                    Log.Warning("FiSH NOTICE {Target}: decrypt failed. prefix={Prefix} cipherLen={CL} cipherHash={Hash} keyMask={KM} altMask={AM} primaryQ={PQ:F2} altQ={AQ:F2} manual={Manual}",
+                        effectiveTarget, prefix, text.Length, ch, MaskKey(keyEntry.Key),
+                        string.IsNullOrEmpty(keyEntry.AltKey) ? "(none)" : MaskKey(keyEntry.AltKey),
+                        primaryQ, altQ, keyEntry.Manual);
+                    text = $"🔒 [FiSH decrypt failed — {prefix}, cipher {ch}]";
+                    wasEncrypted = false;
                 }
             }
         }
@@ -980,6 +1005,10 @@ public class IrcService : IDisposable
         return $"len={s.Length},printable={printable}/{s.Length}";
     }
 
+    /// <summary>Short stable hash of a ciphertext for triage logs (does not leak plaintext).</summary>
+    private static string CipherHash(string cipher) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(cipher)))[..16].ToLowerInvariant();
+
     private async Task HandleDh1080InitAsync(string nick, string theirPubKey)
     {
         try
@@ -1010,7 +1039,13 @@ public class IrcService : IDisposable
             // DH1080 FiSH standard uses CBC mode. Store BOTH alphabet variants of the
             // derived key — peer's client may use standard base64 (fish-irssi family)
             // or FiSH ECB alphabet (older mIRC fish_inj.dll); first decrypt picks.
-            _fishKeyStore.SetKeyWithAlt(nick, primaryKey, altKey, FishMode.CBC);
+            // SetDh1080Keys refuses to overwrite a manually-set key.
+            if (!_fishKeyStore.SetDh1080Keys(nick, primaryKey, altKey, FishMode.CBC))
+            {
+                Log.Warning("DH1080 INIT from {Nick} ignored: manual key already set; not overwriting", nick);
+                AddSystemMessage(nick, "Ignored incoming /keyx — a manual key is already set. Use /unkey first if you want DH1080.");
+                return;
+            }
 
             var ourPub = dh.GetPublicKeyBase64();
             Log.Information("DH1080 FINISH send to {Nick}: ourPubLen={Len} ourPubMask={Mask} primaryKey={KM} altKey={AM}",
@@ -1036,8 +1071,14 @@ public class IrcService : IDisposable
 
             var (primaryKey, altKey) = entry.dh.ComputeSharedSecretBoth(theirPubKey);
             // Store both alphabet variants — see HandleDh1080InitAsync for why.
-            _fishKeyStore.SetKeyWithAlt(nick, primaryKey, altKey, FishMode.CBC);
+            // SetDh1080Keys refuses to overwrite a manually-set key.
             _pendingKeyExchanges.Remove(nick);
+            if (!_fishKeyStore.SetDh1080Keys(nick, primaryKey, altKey, FishMode.CBC))
+            {
+                Log.Warning("DH1080 FINISH from {Nick} ignored: manual key already set; not overwriting", nick);
+                AddSystemMessage(nick, "DH1080 response received but a manual key is already set — keeping manual. Use /unkey first if you want DH1080.");
+                return;
+            }
 
             Log.Information("DH1080 derived for {Nick}: primaryKey={KM} altKey={AM}",
                 nick, MaskKey(primaryKey), MaskKey(altKey));
@@ -1057,7 +1098,15 @@ public class IrcService : IDisposable
         _fishKeyStore.SetKey(target, key, mode);
         if (_channels.TryGetValue(target, out var ch))
             ch.HasFishKey = true;
-        AddSystemMessage(target, $"FiSH key set ({mode})");
+        AddSystemMessage(target, $"FiSH key set ({mode}, manual)");
+    }
+
+    public void RemoveFishKey(string target)
+    {
+        _fishKeyStore.RemoveKey(target);
+        if (_channels.TryGetValue(target, out var ch))
+            ch.HasFishKey = false;
+        AddSystemMessage(target, "FiSH key removed");
     }
 
     // Helpers

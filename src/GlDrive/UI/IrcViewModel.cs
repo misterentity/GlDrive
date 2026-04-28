@@ -483,6 +483,15 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
                     await irc.InitiateKeyExchange(args.Trim());
                 break;
 
+            case "/unkey":
+                // /unkey [target] — remove stored FiSH key (so /keyx can replace a manual key)
+                var unkeyTarget = string.IsNullOrWhiteSpace(args)
+                    ? _selectedChannel?.Name
+                    : args.Trim();
+                if (!string.IsNullOrEmpty(unkeyTarget))
+                    irc.RemoveFishKey(unkeyTarget);
+                break;
+
             case "/notice":
                 var noticeParts = args.Split(' ', 2);
                 if (noticeParts.Length >= 2)
@@ -501,8 +510,9 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
                 AddLocalSystem("  /me action            — Send an action");
                 AddLocalSystem("  /topic text           — Set channel topic");
                 AddLocalSystem("  /notice target text   — Send a notice");
-                AddLocalSystem("  /key [target] key     — Set FiSH key");
+                AddLocalSystem("  /key [target] key     — Set FiSH key (manual; /keyx won't overwrite)");
                 AddLocalSystem("  /keyx nick            — Initiate DH1080 key exchange");
+                AddLocalSystem("  /unkey [target]       — Remove FiSH key");
                 AddLocalSystem("  /quit                 — Disconnect from IRC");
                 AddLocalSystem("  /help                 — Show this help");
                 AddLocalSystem("  /command ...          — Any other /command sent as raw IRC");
