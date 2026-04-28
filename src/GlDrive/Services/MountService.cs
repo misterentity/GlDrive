@@ -448,6 +448,30 @@ public class MountService : IDisposable
                 }
             }
 
+            // Last resort: many BNCs (SuperBNC, zSBNC variants) don't expose credits via any
+            // SITE command — they append them to the 226 trailer of every directory listing.
+            // Trigger a small LIST and parse client.LastReply, which holds that trailer.
+            if (best == null || (best.Credits == null && best.Ratio == null))
+            {
+                Log.Information("RefreshStatsAsync falling back to LIST trailer for {Server}", _serverConfig.Name);
+                try
+                {
+                    await conn.Client.GetListing(_serverConfig.Connection.RootPath, CancellationToken.None);
+                    var reply = conn.Client.LastReply;
+                    var body = (reply.InfoMessages ?? string.Empty) + "\n" + (reply.Message ?? string.Empty);
+                    Log.Information("LIST trailer for {Server} bodyLen={Len} body={Body}",
+                        _serverConfig.Name, body.Length, body.Length > 600 ? body[..600] + "...(truncated)" : body);
+                    var trailer = SiteStatsCollector.Parse(body);
+                    if (trailer.Credits != null || trailer.Ratio != null)
+                        best = trailer;
+                }
+                catch (Exception listEx)
+                {
+                    Log.Information("LIST trailer fallback failed for {Server}: {Msg}",
+                        _serverConfig.Name, listEx.Message);
+                }
+            }
+
             Stats = best;
             Log.Information("SITE STATS result for {Server}: credits={Credits} ratio={Ratio}",
                 _serverConfig.Name, best?.Credits ?? "(null)", best?.Ratio ?? "(null)");
