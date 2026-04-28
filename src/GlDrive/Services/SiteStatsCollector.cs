@@ -11,13 +11,17 @@ namespace GlDrive.Services;
 /// </summary>
 public static class SiteStatsCollector
 {
+    // Size unit pattern: K/M/G/T optionally followed by B/iB (KiB/MiB/GiB/TiB common in glftpd themes).
+    // Bare K/M/G/T also accepted; "B" alone (raw bytes) intentionally excluded.
+    private const string SizeUnit = @"([KMGT](?:i?B)?)";
+
     // Examples this matches:
-    //   "Credits: 12.3 GB"      "Cr 12.3GB"      "12.3GB credits"      "CR(12.3GB)"
+    //   "Credits: 12.3 GB"   "Credits: 12.3 GiB"   "Cr 12.3GB"   "CR(12.3GB)"
     private static readonly Regex CreditsLabelFirst =
-        new(@"(?i)\b(?:credits?|cr)\b\s*[:=()\s]+([\d.,]+)\s*([KMGT]?B)\b",
+        new(@"(?i)\b(?:credits?|cr)\b\s*[:=()|\s]+([\d.,]+)\s*" + SizeUnit + @"\b",
             RegexOptions.Compiled);
     private static readonly Regex CreditsValueFirst =
-        new(@"(?i)\b([\d.,]+)\s*([KMGT]?B)\b\s*(?:credits?|cr)\b",
+        new(@"(?i)\b([\d.,]+)\s*" + SizeUnit + @"\b\s*(?:credits?|cr)\b",
             RegexOptions.Compiled);
 
     // Examples this matches:
@@ -45,7 +49,7 @@ public static class SiteStatsCollector
         if (creditsMatch.Success)
         {
             var num = creditsMatch.Groups[1].Value.Replace(",", "");
-            var unit = creditsMatch.Groups[2].Value.ToUpperInvariant();
+            var unit = creditsMatch.Groups[2].Value.ToUpperInvariant().Replace("I", "");
             if (unit.Length == 1) unit += "B"; // bare K/M/G/T → KB/MB/GB/TB
             credits = $"{num}{unit}";
         }

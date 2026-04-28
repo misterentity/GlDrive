@@ -406,9 +406,18 @@ public class MountService : IDisposable
         }
 
         // Try the configured command first, then fall back through common glftpd variants
-        // until one yields parsed credits or ratio.
+        // until one yields parsed credits or ratio. SITE USER <self> is the only command
+        // that reliably exposes per-user credits/ratio on glftpd; the others are site totals.
+        var user = _serverConfig.Connection.Username;
         var candidates = new List<string> { _serverConfig.SiteStatsCommand };
-        foreach (var fallback in new[] { "SITE STATS", "STAT", "SITE TRAFFIC", "SITE USER" })
+        var fallbacks = new List<string>();
+        if (!string.IsNullOrWhiteSpace(user))
+        {
+            fallbacks.Add($"SITE USER {user}");
+            fallbacks.Add($"SITE STATS {user}");
+        }
+        fallbacks.AddRange(new[] { "SITE STATS", "SITE TRAFFIC", "SITE USER" });
+        foreach (var fallback in fallbacks)
         {
             if (!candidates.Contains(fallback, StringComparer.OrdinalIgnoreCase))
                 candidates.Add(fallback);
