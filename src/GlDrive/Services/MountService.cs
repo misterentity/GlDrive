@@ -398,20 +398,55 @@ public class MountService : IDisposable
 
     public async Task RefreshStatsAsync()
     {
-        if (_pool == null || CurrentState != MountState.Connected) return;
+        if (_pool == null || CurrentState != MountState.Connected)
+        {
+            Log.Information("RefreshStatsAsync skipped for {Server}: pool={HasPool} state={State}",
+                _serverConfig.Name, _pool != null, CurrentState);
+            return;
+        }
+
+        // Try the configured command first, then fall back through common glftpd variants
+        // until one yields parsed credits or ratio.
+        var candidates = new List<string> { _serverConfig.SiteStatsCommand };
+        foreach (var fallback in new[] { "SITE STATS", "STAT", "SITE TRAFFIC", "SITE USER" })
+        {
+            if (!candidates.Contains(fallback, StringComparer.OrdinalIgnoreCase))
+                candidates.Add(fallback);
+        }
+
         try
         {
             await using var conn = await _pool.Borrow(CancellationToken.None);
-            var stats = await SiteStatsCollector.RefreshAsync(
-                conn.Client, _serverConfig.SiteStatsCommand, CancellationToken.None);
-            Stats = stats;
-            Log.Debug("SITE STATS for {Server}: credits={Credits} ratio={Ratio}",
-                _serverConfig.Name, stats.Credits ?? "?", stats.Ratio ?? "?");
+            SiteStats? best = null;
+            foreach (var cmd in candidates)
+            {
+                Log.Information("RefreshStatsAsync running for {Server} via '{Cmd}'", _serverConfig.Name, cmd);
+                try
+                {
+                    var stats = await SiteStatsCollector.RefreshAsync(
+                        conn.Client, cmd, CancellationToken.None);
+                    if (stats.Credits != null || stats.Ratio != null)
+                    {
+                        best = stats;
+                        break;
+                    }
+                    best ??= stats; // remember first attempt for null fallback
+                }
+                catch (Exception cmdEx)
+                {
+                    Log.Information("RefreshStatsAsync candidate '{Cmd}' threw for {Server}: {Msg}",
+                        cmd, _serverConfig.Name, cmdEx.Message);
+                }
+            }
+
+            Stats = best;
+            Log.Information("SITE STATS result for {Server}: credits={Credits} ratio={Ratio}",
+                _serverConfig.Name, best?.Credits ?? "(null)", best?.Ratio ?? "(null)");
             StatsChanged?.Invoke();
         }
         catch (Exception ex)
         {
-            Log.Debug(ex, "RefreshStatsAsync failed for {Server}", _serverConfig.Name);
+            Log.Warning(ex, "RefreshStatsAsync failed for {Server}", _serverConfig.Name);
         }
     }
 

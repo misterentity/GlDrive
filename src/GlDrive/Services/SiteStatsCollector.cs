@@ -31,6 +31,9 @@ public static class SiteStatsCollector
         var reply = await client.Execute(command, ct);
         // FluentFTP gives us the multi-line response in InfoMessages; fall back to ErrorMessage.
         var body = (reply.InfoMessages ?? string.Empty) + "\n" + (reply.Message ?? string.Empty);
+        Log.Information("SiteStatsCollector: cmd={Cmd} success={Success} bodyLen={Len} body={Body}",
+            command, reply.Success, body.Length,
+            body.Length > 600 ? body[..600] + "...(truncated)" : body);
         return Parse(body);
     }
 
@@ -55,9 +58,8 @@ public static class SiteStatsCollector
             ratio = r.Equals("unlimited", StringComparison.OrdinalIgnoreCase) ? "UL" : r;
         }
 
-        if (credits == null && ratio == null)
-            Log.Debug("SiteStatsCollector: no credits/ratio matched. Body preview: {Preview}",
-                body.Length > 300 ? body[..300] : body);
+        Log.Information("SiteStatsCollector: parsed credits={Credits} ratio={Ratio}",
+            credits ?? "(null)", ratio ?? "(null)");
 
         return new SiteStats(credits, ratio, DateTime.UtcNow);
     }
