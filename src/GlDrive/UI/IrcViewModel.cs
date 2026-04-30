@@ -492,6 +492,17 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
                     irc.RemoveFishKey(unkeyTarget);
                 break;
 
+            case "/ecb":
+            case "/cbc":
+                // /ecb [target] | /cbc [target] — flip cipher mode for an existing key.
+                // Useful when a peer's client only supports one mode (mIRC fish_inj.dll = ECB).
+                var modeTarget = string.IsNullOrWhiteSpace(args)
+                    ? _selectedChannel?.Name
+                    : args.Trim();
+                if (!string.IsNullOrEmpty(modeTarget))
+                    irc.SetFishMode(modeTarget, cmd == "/cbc" ? FishMode.CBC : FishMode.ECB);
+                break;
+
             case "/notice":
                 var noticeParts = args.Split(' ', 2);
                 if (noticeParts.Length >= 2)
@@ -513,6 +524,8 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
                 AddLocalSystem("  /key [target] key     — Set FiSH key (manual; /keyx won't overwrite)");
                 AddLocalSystem("  /keyx nick            — Initiate DH1080 key exchange");
                 AddLocalSystem("  /unkey [target]       — Remove FiSH key");
+                AddLocalSystem("  /ecb [target]         — Switch FiSH key to ECB mode (mIRC fish_inj.dll compat)");
+                AddLocalSystem("  /cbc [target]         — Switch FiSH key to CBC mode (default for modern clients)");
                 AddLocalSystem("  /quit                 — Disconnect from IRC");
                 AddLocalSystem("  /help                 — Show this help");
                 AddLocalSystem("  /command ...          — Any other /command sent as raw IRC");

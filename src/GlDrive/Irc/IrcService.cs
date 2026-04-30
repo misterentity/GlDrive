@@ -431,8 +431,23 @@ public class IrcService : IDisposable
         {
             var keyEntry = _fishKeyStore.GetKey(effectiveTarget);
             var prefix = text.StartsWith("+OK *") ? "CBC" : "ECB";
+            // The +OK / +OK * prefix is plaintext FiSH protocol signaling — reliable
+            // regardless of whether decryption succeeds. Sync stored mode to match the
+            // peer so our outgoing encrypts use the cipher mode they can decrypt.
+            // Previously this only ran on successful decrypts, leaving us stuck in CBC
+            // when a peer's ECB-only client (mIRC fish_inj.dll etc.) sent us ECB messages
+            // we couldn't decrypt.
             if (keyEntry != null)
             {
+                var peerMode = prefix == "CBC" ? FishMode.CBC : FishMode.ECB;
+                if (keyEntry.Mode != peerMode)
+                {
+                    _fishKeyStore.SetKeyWithAlt(effectiveTarget, keyEntry.Key, keyEntry.AltKey, keyEntry.Key3, peerMode);
+                    Log.Information("FiSH mode updated for {Target}: {OldMode} → {NewMode} (from incoming prefix)",
+                        effectiveTarget, keyEntry.Mode, peerMode);
+                    keyEntry = _fishKeyStore.GetKey(effectiveTarget)!;
+                }
+
                 var keys = new[] { keyEntry.Key, keyEntry.AltKey, keyEntry.Key3 };
                 var (decrypted, winIdx, qualities) = FishCipher.DecryptWithFallback(text, keys);
                 var bestQ = winIdx >= 0 ? qualities[winIdx] : 0;
@@ -447,19 +462,10 @@ public class IrcService : IDisposable
                         var promoted = PromoteKeyToPrimary(keys, winIdx);
                         _fishKeyStore.SetKeyWithAlt(effectiveTarget, promoted[0], promoted[1], promoted[2], keyEntry.Mode);
                         Log.Information("FiSH key swap for {Target}: index {Idx} promoted to primary", effectiveTarget, winIdx);
-                        keyEntry = _fishKeyStore.GetKey(effectiveTarget)!;
                     }
 
                     text = decrypted;
                     wasEncrypted = true;
-
-                    var peerMode = msg.Trailing!.StartsWith("+OK *") ? FishMode.CBC : FishMode.ECB;
-                    if (keyEntry.Mode != peerMode)
-                    {
-                        _fishKeyStore.SetKeyWithAlt(effectiveTarget, keyEntry.Key, keyEntry.AltKey, keyEntry.Key3, peerMode);
-                        Log.Information("FiSH mode updated for {Target}: {OldMode} → {NewMode}",
-                            effectiveTarget, keyEntry.Mode, peerMode);
-                    }
                 }
                 else
                 {
@@ -513,6 +519,16 @@ public class IrcService : IDisposable
             var prefix = text.StartsWith("+OK *") ? "CBC" : "ECB";
             if (keyEntry != null)
             {
+                // Sync stored mode from incoming prefix even on decrypt failure — see HandlePrivmsg.
+                var peerMode = prefix == "CBC" ? FishMode.CBC : FishMode.ECB;
+                if (keyEntry.Mode != peerMode)
+                {
+                    _fishKeyStore.SetKeyWithAlt(effectiveTarget, keyEntry.Key, keyEntry.AltKey, keyEntry.Key3, peerMode);
+                    Log.Information("FiSH mode updated for {Target}: {OldMode} → {NewMode} (from incoming notice prefix)",
+                        effectiveTarget, keyEntry.Mode, peerMode);
+                    keyEntry = _fishKeyStore.GetKey(effectiveTarget)!;
+                }
+
                 var keys = new[] { keyEntry.Key, keyEntry.AltKey, keyEntry.Key3 };
                 var (decrypted, winIdx, qualities) = FishCipher.DecryptWithFallback(text, keys);
                 var bestQ = winIdx >= 0 ? qualities[winIdx] : 0;
@@ -522,15 +538,10 @@ public class IrcService : IDisposable
                     {
                         var promoted = PromoteKeyToPrimary(keys, winIdx);
                         _fishKeyStore.SetKeyWithAlt(effectiveTarget, promoted[0], promoted[1], promoted[2], keyEntry.Mode);
-                        keyEntry = _fishKeyStore.GetKey(effectiveTarget)!;
                     }
 
                     text = decrypted;
                     wasEncrypted = true;
-
-                    var peerMode = msg.Trailing!.StartsWith("+OK *") ? FishMode.CBC : FishMode.ECB;
-                    if (keyEntry.Mode != peerMode)
-                        _fishKeyStore.SetKeyWithAlt(effectiveTarget, keyEntry.Key, keyEntry.AltKey, keyEntry.Key3, peerMode);
                 }
                 else
                 {
@@ -1073,12 +1084,16 @@ public class IrcService : IDisposable
             });
 
             var (primaryKey, altKey, key3) = dh.ComputeAllKeyVariants(theirPubKey);
-            // DH1080 FiSH standard uses CBC mode. Store all three KDF variants of the
-            // derived key — peer's client may use standard-base64-of-SHA256 (fish-irssi
-            // family), fish-base64-of-SHA256, or fish-base64 of the raw shared secret
-            // (older mIRC fish_inj.dll); first decrypt picks the right one.
+            // Store all three KDF variants of the derived key — peer's client may use
+            // standard-base64-of-SHA256 (fish-irssi family), fish-base64-of-SHA256, or
+            // fish-base64 of the raw shared secret (older mIRC fish_inj.dll); first
+            // decrypt picks the right one.
+            // Mode follows the server's configured FishMode — defaults to ECB on new
+            // configs because older mIRC clients don't support CBC at all. Modern
+            // peers' first incoming message will flip us to CBC via the prefix detector.
             // SetDh1080Keys refuses to overwrite a manually-set key.
-            if (!_fishKeyStore.SetDh1080Keys(nick, primaryKey, altKey, key3, FishMode.CBC))
+            var dhMode = _serverConfig.Irc.FishMode;
+            if (!_fishKeyStore.SetDh1080Keys(nick, primaryKey, altKey, key3, dhMode))
             {
                 Log.Warning("DH1080 INIT from {Nick} ignored: manual key already set; not overwriting", nick);
                 AddSystemMessage(nick, "Ignored incoming /keyx — a manual key is already set. Use /unkey first if you want DH1080.");
@@ -1090,7 +1105,7 @@ public class IrcService : IDisposable
                 nick, ourPub.Length, MaskMid(ourPub), MaskKey(primaryKey), MaskKey(altKey), MaskKey(key3));
 
             await _client.NoticeAsync(nick, Dh1080.FormatFinish(ourPub));
-            AddSystemMessage(nick, $"DH1080 key exchange completed (initiated by {nick}) — CBC mode");
+            AddSystemMessage(nick, $"DH1080 key exchange completed (initiated by {nick}) — {dhMode} mode");
         }
         catch (Exception ex)
         {
@@ -1108,10 +1123,10 @@ public class IrcService : IDisposable
                 nick, theirPubKey.Length, MaskMid(theirPubKey));
 
             var (primaryKey, altKey, key3) = entry.dh.ComputeAllKeyVariants(theirPubKey);
-            // Store three KDF variants — see HandleDh1080InitAsync for why.
-            // SetDh1080Keys refuses to overwrite a manually-set key.
+            // Store three KDF variants — see HandleDh1080InitAsync. Mode follows server config.
             _pendingKeyExchanges.Remove(nick);
-            if (!_fishKeyStore.SetDh1080Keys(nick, primaryKey, altKey, key3, FishMode.CBC))
+            var dhMode = _serverConfig.Irc.FishMode;
+            if (!_fishKeyStore.SetDh1080Keys(nick, primaryKey, altKey, key3, dhMode))
             {
                 Log.Warning("DH1080 FINISH from {Nick} ignored: manual key already set; not overwriting", nick);
                 AddSystemMessage(nick, "DH1080 response received but a manual key is already set — keeping manual. Use /unkey first if you want DH1080.");
@@ -1121,7 +1136,7 @@ public class IrcService : IDisposable
             Log.Information("DH1080 derived for {Nick}: primaryKey={KM} altKey={AM} key3={K3M}",
                 nick, MaskKey(primaryKey), MaskKey(altKey), MaskKey(key3));
 
-            AddSystemMessage(nick, "DH1080 key exchange completed — CBC mode");
+            AddSystemMessage(nick, $"DH1080 key exchange completed — {dhMode} mode");
         }
         catch (Exception ex)
         {
@@ -1145,6 +1160,28 @@ public class IrcService : IDisposable
         if (_channels.TryGetValue(target, out var ch))
             ch.HasFishKey = false;
         AddSystemMessage(target, "FiSH key removed");
+    }
+
+    /// <summary>
+    /// Flip the FiSH cipher mode for an existing key without re-keying. Used when a peer's
+    /// client only supports one mode (e.g. older mIRC fish_inj.dll = ECB-only) and our
+    /// outgoing messages would otherwise be unintelligible to them.
+    /// </summary>
+    public void SetFishMode(string target, FishMode mode)
+    {
+        var entry = _fishKeyStore.GetKey(target);
+        if (entry == null)
+        {
+            AddSystemMessage(target, $"No FiSH key for {target} — set one with /key or /keyx first.");
+            return;
+        }
+        if (entry.Mode == mode)
+        {
+            AddSystemMessage(target, $"FiSH mode for {target} already {mode}");
+            return;
+        }
+        _fishKeyStore.SetKeyWithAlt(target, entry.Key, entry.AltKey, entry.Key3, mode);
+        AddSystemMessage(target, $"FiSH mode for {target} set to {mode}");
     }
 
     // Helpers
