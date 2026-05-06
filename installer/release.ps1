@@ -39,11 +39,15 @@ if ($tagExists) {
 }
 
 # --- Pin winfsp.msi SHA-256 ---
-# Update this constant when upgrading WinFsp (run: Get-FileHash -Algorithm SHA256 installer\deps\winfsp.msi)
+# Update this constant when upgrading WinFsp.
 $WinFspMsiPin = '073A70E00F77423E34BED98B86E600DEF93393BA5822204FAC57A29324DB9F7A'
 $WinFspMsiPath = Join-Path $InstallerDir 'deps\winfsp.msi'
 if (Test-Path $WinFspMsiPath) {
-    $actual = (Get-FileHash -Algorithm SHA256 $WinFspMsiPath).Hash.ToUpper()
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.IO.File]::ReadAllBytes($WinFspMsiPath)
+        $actual = [System.BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-', '').ToUpper()
+    } finally { $sha.Dispose() }
     if ($actual -ne $WinFspMsiPin) {
         Write-Error "winfsp.msi SHA-256 mismatch!`n  Expected: $WinFspMsiPin`n  Actual:   $actual`nUpdate the pin in release.ps1 when intentionally upgrading WinFsp."
         exit 1
