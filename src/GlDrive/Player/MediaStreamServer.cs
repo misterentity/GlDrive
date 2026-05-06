@@ -114,7 +114,8 @@ public class MediaStreamServer : IDisposable
     /// </summary>
     public string? FindCachedVideo(string releaseName)
     {
-        var releaseDir = Path.Combine(LibraryPath, SanitizeName(releaseName));
+        var releaseDir = Path.GetFullPath(Path.Combine(LibraryPath, SanitizeName(releaseName)));
+        if (!IsWithinLibrary(releaseDir)) return null;
         if (!Directory.Exists(releaseDir)) return null;
 
         var files = Directory.GetFiles(releaseDir, "*", SearchOption.AllDirectories);
@@ -144,7 +145,13 @@ public class MediaStreamServer : IDisposable
 
         // Check library cache first
         var fileName = Path.GetFileName(remotePath);
-        var releaseDir = Path.Combine(LibraryPath, SanitizeName(release));
+        var releaseDir = Path.GetFullPath(Path.Combine(LibraryPath, SanitizeName(release)));
+        if (!IsWithinLibrary(releaseDir))
+        {
+            ctx.Response.StatusCode = 400;
+            ctx.Response.Close();
+            return;
+        }
         var cachedFile = Path.Combine(releaseDir, fileName);
 
         if (File.Exists(cachedFile))
@@ -290,7 +297,13 @@ public class MediaStreamServer : IDisposable
         }
 
         var releaseName = Path.GetFileName(releasePath);
-        var releaseDir = Path.Combine(LibraryPath, SanitizeName(releaseName));
+        var releaseDir = Path.GetFullPath(Path.Combine(LibraryPath, SanitizeName(releaseName)));
+        if (!IsWithinLibrary(releaseDir))
+        {
+            ctx.Response.StatusCode = 400;
+            ctx.Response.Close();
+            return;
+        }
 
         // Check if we already have extracted video cached
         var cachedVideo = FindCachedVideo(releaseName);
@@ -548,8 +561,15 @@ public class MediaStreamServer : IDisposable
     private static string SanitizeName(string name)
     {
         var invalid = Path.GetInvalidFileNameChars();
-        return string.Concat(name.Select(c => invalid.Contains(c) ? '_' : c));
+        var sanitized = string.Concat(name.Select(c =>
+            (invalid.Contains(c) || c < 0x20 || c == '/' || c == '\\') ? '_' : c));
+        if (sanitized == "." || sanitized == ".." || sanitized.Contains('/') || sanitized.Contains('\\'))
+            return "_invalid_";
+        return sanitized;
     }
+
+    private bool IsWithinLibrary(string fullPath) =>
+        fullPath.StartsWith(Path.GetFullPath(LibraryPath) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
 
     private static async Task StreamStandard(AsyncFtpClient client, string remotePath, long offset,
         Stream output, CancellationToken ct, FileStream? saveStream = null)
@@ -616,7 +636,8 @@ public class MediaStreamServer : IDisposable
         Action<string, int>? onProgress = null, Action<string>? onPlayReady = null, CancellationToken ct = default)
     {
         var releaseName = Path.GetFileName(releasePath);
-        var releaseDir = Path.Combine(LibraryPath, SanitizeName(releaseName));
+        var releaseDir = Path.GetFullPath(Path.Combine(LibraryPath, SanitizeName(releaseName)));
+        if (!IsWithinLibrary(releaseDir)) return null;
 
         // Check cache — if first .rar or extracted video exists, return it
         var cached = FindCachedVideo(releaseName);

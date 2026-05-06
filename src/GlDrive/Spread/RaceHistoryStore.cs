@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text.Json;
 using GlDrive.Config;
+using GlDrive.Util;
 using Serilog;
 
 namespace GlDrive.Spread;
@@ -70,7 +71,8 @@ public class RaceHistoryStore
             List<RaceHistoryItem> snapshot;
             lock (_lock) snapshot = _items.ToList();
             var json = JsonSerializer.Serialize(snapshot, new JsonSerializerOptions { WriteIndented = false });
-            File.WriteAllText(FilePath, json);
+            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+            SecureFile.WriteAllTextRestricted(FilePath, json);
         }
         catch (Exception ex)
         {

@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using GlDrive.Config;
+using GlDrive.Util;
 using Serilog;
 
 namespace GlDrive.Irc;
@@ -144,6 +145,7 @@ public class FishKeyStore
             var tempPath = _filePath + ".tmp";
             File.WriteAllBytes(tempPath, encrypted);
             File.Move(tempPath, _filePath, overwrite: true);
+            SecureFile.RestrictFilePermissions(_filePath);
         }
         catch (Exception ex)
         {

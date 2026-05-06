@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text.Json;
 using GlDrive.Config;
+using GlDrive.Util;
 using Serilog;
 
 namespace GlDrive.Downloads;
@@ -79,9 +80,7 @@ public class DownloadStore
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
             var json = JsonSerializer.Serialize(snapshot, JsonOptions);
-            var tmp = _filePath + ".tmp";
-            File.WriteAllText(tmp, json);
-            File.Move(tmp, _filePath, overwrite: true);
+            SecureFile.WriteAllTextRestricted(_filePath, json);
         }
         catch (Exception ex)
         {
