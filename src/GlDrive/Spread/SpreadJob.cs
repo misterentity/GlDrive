@@ -89,7 +89,7 @@ public class SpreadJob : IDisposable
     private DateTime _lastScanTime = DateTime.MinValue;
     private Task? _backgroundScan;
     private volatile bool _forceScan;
-    private bool _isNuked;
+    private volatile bool _isNuked;
     private int _completionRetries;
 
     // Pre-computed affil checks (computed once per job)
@@ -165,6 +165,13 @@ public class SpreadJob : IDisposable
     {
         _pools = pools;
     }
+
+    /// <summary>
+    /// Resolves a spread pool from the live SpreadManager registry.
+    /// Set by SpreadManager so the completion sweep reinits through _spreadPools
+    /// (the authoritative registry) rather than the job's stale _pools snapshot.
+    /// </summary>
+    public Func<string, FtpConnectionPool?>? LivePoolResolver { get; set; }
 
     public async Task RunAsync()
     {
@@ -428,7 +435,7 @@ public class SpreadJob : IDisposable
                 }
 
                 // 2. Parse SFV if discovered (non-blocking — fire and forget)
-                if (_pendingSfv is { } sfv && _expectedFileCount == 0)
+                if (_pendingSfv is { } sfv)
                 {
                     _pendingSfv = null;
                     _ = ParseSfvForCount(sfv.serverId, sfv.path);
@@ -512,18 +519,25 @@ public class SpreadJob : IDisposable
                             lastActivity = DateTime.UtcNow;
                             consecutiveEmpty = 0;
 
-                            // Reinitialize exhausted spread pools — kill ghosts and get fresh connections
-                            foreach (var (serverId, pool) in _pools)
+                            // Reinitialize exhausted spread pools via live registry so a
+                            // pool replaced by ReinitDeadPools is not missed here.
+                            var poolIds = _pools.Keys.ToList();
+                            var freshPools = new Dictionary<string, FtpConnectionPool>();
+                            foreach (var serverId in poolIds)
                             {
+                                var livePool = LivePoolResolver?.Invoke(serverId) ?? _pools.GetValueOrDefault(serverId);
+                                if (livePool == null) continue;
                                 try
                                 {
-                                    await pool.Reinitialize(token);
+                                    await livePool.Reinitialize(token);
                                 }
                                 catch (Exception ex)
                                 {
                                     Log.Debug(ex, "Completion sweep: pool reinit failed for {Server}", serverId);
                                 }
+                                freshPools[serverId] = livePool;
                             }
+                            if (freshPools.Count >= 2) UpdatePools(freshPools);
 
                             Log.Information("Spread completion sweep: {Missing} files still missing, " +
                                 "resetting failures and reinitializing pools — {Release}",
@@ -1033,7 +1047,7 @@ public class SpreadJob : IDisposable
                     _fileActions[file.Name] = action;
             }
 
-            if (fileName.EndsWith(".sfv", StringComparison.OrdinalIgnoreCase) && _expectedFileCount == 0)
+            if (fileName.EndsWith(".sfv", StringComparison.OrdinalIgnoreCase))
                 _pendingSfv = (serverId, file.FullPath);
         }
 
@@ -1083,7 +1097,7 @@ public class SpreadJob : IDisposable
 
             lock (_ownershipLock)
             {
-                _expectedFileCount = lineCount + 1; // +1 for the SFV itself
+                _expectedFileCount += lineCount + 1; // +1 for the SFV itself; accumulates across multiple SFVs
             }
         }
         catch (Exception ex)
@@ -1293,8 +1307,9 @@ public class SpreadJob : IDisposable
     private async Task ExecuteTransfer(SpreadFileInfo file, string srcId, string dstId,
         string dstBasePath, CancellationToken ct)
     {
-        var srcPool = _pools[srcId];
-        var dstPool = _pools[dstId];
+        var pools = _pools; // read volatile field once to avoid torn reads from UpdatePools
+        var srcPool = pools[srcId];
+        var dstPool = pools[dstId];
         var mode = FxpModeDetector.Detect(srcPool, dstPool);
 
         // Slots already claimed by TryClaimSlots

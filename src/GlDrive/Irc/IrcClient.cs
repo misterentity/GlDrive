@@ -72,7 +72,7 @@ public class IrcClient : IDisposable
             _stream = _tcp.GetStream();
         }
 
-        _reader = new StreamReader(_stream, Encoding.UTF8);
+        _reader = new StreamReader(_stream, Encoding.Latin1);
         _writer = new StreamWriter(_stream, new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\r\n" };
 
         IsConnected = true;
@@ -177,6 +177,13 @@ public class IrcClient : IDisposable
     public Task QuitAsync(string? message = null) =>
         SendRawAsync(message != null ? $"QUIT :{message}" : "QUIT :GlDrive");
     public Task PongAsync(string token) => SendRawAsync($"PONG :{token}");
+
+    /// <summary>
+    /// Signals the read loop to stop by cancelling the internal CTS without
+    /// immediately disposing streams. The read loop exit path fires Disconnected,
+    /// allowing RunAsync to handle cleanup and reconnect uniformly.
+    /// </summary>
+    public void SignalDisconnect() => _cts?.Cancel();
 
     public async Task DisconnectAsync()
     {

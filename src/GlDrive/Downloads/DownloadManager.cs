@@ -388,17 +388,16 @@ public class DownloadManager : IDisposable
                     var failures = await SfvVerifier.VerifyAsync(item.LocalPath, itemCts.Token);
                     if (failures.Count > 0)
                     {
-                        // NOTE: SFV failures currently fall through to "complete" emit below.
-                        // ClassifyFailure defines "sfv-mismatch" but this path never populates it.
-                        // Deferred: product decision on whether SFV failure should mark download as failed.
-                        // For now, agent cannot distinguish clean completion from SFV-failing completion.
                         foreach (var f in failures)
                             Log.Warning("SFV verification failed: {File}", f);
+                        item.Status = DownloadStatus.Failed;
+                        item.ErrorMessage = $"SFV verification failed: {failures.Count} file(s) corrupt";
+                        _store.Update(item);
+                        DownloadStatusChanged?.Invoke(item);
+                        EmitDownloadOutcome(item, "failed");
+                        return;
                     }
-                    else
-                    {
-                        Log.Information("SFV verification passed for {Release}", item.ReleaseName);
-                    }
+                    Log.Information("SFV verification passed for {Release}", item.ReleaseName);
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
@@ -465,13 +464,15 @@ public class DownloadManager : IDisposable
                 // NOTE: item.RetryCount is post-increment here — means "scheduling retry attempt N".
                 EmitDownloadOutcome(item, "retried");
                 var retryToken = _cts?.Token ?? CancellationToken.None;
+                var capturedSignal = _queueSignal;
                 _ = Task.Run(async () =>
                 {
                     try
                     {
                         await Task.Delay(TimeSpan.FromSeconds(delay), retryToken);
                         lock (_queueLock) _pendingQueue.Add(item);
-                        _queueSignal.Release();
+                        try { capturedSignal.Release(); }
+                        catch (ObjectDisposedException) { /* manager stopped between failure and retry */ }
                     }
                     catch (OperationCanceledException) { }
                 });

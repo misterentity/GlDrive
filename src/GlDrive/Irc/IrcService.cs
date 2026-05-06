@@ -227,7 +227,7 @@ public class IrcService : IDisposable
             if (silence.TotalSeconds > 180)
             {
                 Log.Warning("IRC connection appears dead (no data for {Seconds}s), forcing disconnect", (int)silence.TotalSeconds);
-                try { _client?.Dispose(); } catch { }
+                _client?.SignalDisconnect();
                 return;
             }
 
@@ -771,7 +771,9 @@ public class IrcService : IDisposable
             if (idx >= 0)
             {
                 // Preserve the mode prefix when renaming
-                var prefix = ch.Nicks[idx][..^StripNickPrefix(ch.Nicks[idx]).Length];
+                var orig = ch.Nicks[idx];
+                var stripped = StripNickPrefix(orig);
+                var prefix = orig.Substring(0, orig.Length - stripped.Length);
                 ch.Nicks[idx] = prefix + newNick;
                 NamesUpdated?.Invoke(channel);
                 AddMessage(channel, new IrcMessageItem
@@ -877,13 +879,13 @@ public class IrcService : IDisposable
                 // Explicit mode: [cbc:key] or [ecb:key]
                 var mode = fishMatch.Groups[1].Value.Equals("cbc", StringComparison.OrdinalIgnoreCase)
                     ? FishMode.CBC : FishMode.ECB;
-                _fishKeyStore.SetKey(ch.Name, fishMatch.Groups[2].Value, mode);
+                _fishKeyStore.SetKey(ch.Name, fishMatch.Groups[2].Value, mode, manual: false);
             }
             else if (ch.Key.StartsWith('[') && ch.Key.EndsWith(']') && ch.Key.Length > 2)
             {
                 // Bare brackets: [key] — use server's default FishMode
                 var bareKey = ch.Key[1..^1];
-                _fishKeyStore.SetKey(ch.Name, bareKey, _serverConfig.Irc.FishMode);
+                _fishKeyStore.SetKey(ch.Name, bareKey, _serverConfig.Irc.FishMode, manual: false);
                 Log.Information("FiSH key set for {Channel} using default mode {Mode}", ch.Name, _serverConfig.Irc.FishMode);
             }
             else
@@ -1076,14 +1078,12 @@ public class IrcService : IDisposable
                 nick, theirPubKey.Length, MaskMid(theirPubKey));
 
             // Offload ModPow to ThreadPool so the IRC read loop isn't blocked by ~10ms of crypto
-            var dh = await Task.Run(() =>
+            var (primaryKey, altKey, key3, ourPub) = await Task.Run(() =>
             {
                 var d = new Dh1080();
-                _ = d.ComputeSharedSecret(theirPubKey); // validates peer key early, throws on bad key
-                return d;
+                var v = d.ComputeAllKeyVariants(theirPubKey); // validates peer key and derives all variants
+                return (v.Standard, v.Fish, v.FishRaw, d.GetPublicKeyBase64());
             });
-
-            var (primaryKey, altKey, key3) = dh.ComputeAllKeyVariants(theirPubKey);
             // Store all three KDF variants of the derived key — peer's client may use
             // standard-base64-of-SHA256 (fish-irssi family), fish-base64-of-SHA256, or
             // fish-base64 of the raw shared secret (older mIRC fish_inj.dll); first
@@ -1100,7 +1100,6 @@ public class IrcService : IDisposable
                 return;
             }
 
-            var ourPub = dh.GetPublicKeyBase64();
             Log.Information("DH1080 FINISH send to {Nick}: ourPubLen={Len} ourPubMask={Mask} primaryKey={KM} altKey={AM} key3={K3M}",
                 nick, ourPub.Length, MaskMid(ourPub), MaskKey(primaryKey), MaskKey(altKey), MaskKey(key3));
 

@@ -18,8 +18,9 @@ public class DownloadStore
     };
 
     private List<DownloadItem> _items = [];
+    private readonly object _lock = new();
 
-    public IReadOnlyList<DownloadItem> Items => _items;
+    public IReadOnlyList<DownloadItem> Items { get { lock (_lock) return _items.ToList(); } }
 
     public DownloadStore(string serverId)
     {
@@ -72,10 +73,12 @@ public class DownloadStore
     private void FlushSave()
     {
         _savePending = false;
+        List<DownloadItem> snapshot;
+        lock (_lock) snapshot = _items.ToList();
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
-            var json = JsonSerializer.Serialize(_items, JsonOptions);
+            var json = JsonSerializer.Serialize(snapshot, JsonOptions);
             var tmp = _filePath + ".tmp";
             File.WriteAllText(tmp, json);
             File.Move(tmp, _filePath, overwrite: true);
@@ -88,53 +91,53 @@ public class DownloadStore
 
     public void Add(DownloadItem item)
     {
-        _items.Add(item);
+        lock (_lock) _items.Add(item);
         Save(); // Immediate — new item must persist
     }
 
     public void Update(DownloadItem item)
     {
-        var idx = _items.FindIndex(i => i.Id == item.Id);
-        if (idx >= 0)
+        bool terminal;
+        lock (_lock)
         {
+            var idx = _items.FindIndex(i => i.Id == item.Id);
+            if (idx < 0) return;
             _items[idx] = item;
-            // Debounce progress updates; immediate save for terminal states
-            if (item.Status is DownloadStatus.Completed or DownloadStatus.Failed or DownloadStatus.Cancelled)
-                Save();
-            else
-                ScheduleSave();
+            terminal = item.Status is DownloadStatus.Completed or DownloadStatus.Failed or DownloadStatus.Cancelled;
         }
+        // Debounce progress updates; immediate save for terminal states
+        if (terminal) Save(); else ScheduleSave();
     }
 
     public void Remove(string id)
     {
-        _items.RemoveAll(i => i.Id == id);
+        lock (_lock) _items.RemoveAll(i => i.Id == id);
         Save(); // Immediate — deletion must persist
     }
 
-    public DownloadItem? GetById(string id) => _items.FirstOrDefault(i => i.Id == id);
+    public DownloadItem? GetById(string id) { lock (_lock) return _items.FirstOrDefault(i => i.Id == id); }
 
     public void RemoveCompleted()
     {
-        _items.RemoveAll(i => i.Status == DownloadStatus.Completed);
+        lock (_lock) _items.RemoveAll(i => i.Status == DownloadStatus.Completed);
         Save();
     }
 
     public void RemoveFailed()
     {
-        _items.RemoveAll(i => i.Status == DownloadStatus.Failed);
+        lock (_lock) _items.RemoveAll(i => i.Status == DownloadStatus.Failed);
         Save();
     }
 
     public void RemoveCancelled()
     {
-        _items.RemoveAll(i => i.Status == DownloadStatus.Cancelled);
+        lock (_lock) _items.RemoveAll(i => i.Status == DownloadStatus.Cancelled);
         Save();
     }
 
     public void RemoveFinished()
     {
-        _items.RemoveAll(i => i.Status is DownloadStatus.Completed or DownloadStatus.Failed or DownloadStatus.Cancelled);
+        lock (_lock) _items.RemoveAll(i => i.Status is DownloadStatus.Completed or DownloadStatus.Failed or DownloadStatus.Cancelled);
         Save();
     }
 

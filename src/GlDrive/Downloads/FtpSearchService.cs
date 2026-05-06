@@ -338,8 +338,8 @@ public class FtpSearchService : IDisposable
 
     public void StartIndexer()
     {
-        if (_searchConfig.Method == SearchMethod.LiveCrawl && _searchConfig.Method != SearchMethod.Auto)
-            return; // No indexer needed for pure live crawl (unless Auto which may use it)
+        if (_searchConfig.Method == SearchMethod.LiveCrawl)
+            return; // No indexer needed for pure live crawl
 
         _indexerCts = new CancellationTokenSource();
         _indexerTask = IndexerLoop(_indexerCts.Token);

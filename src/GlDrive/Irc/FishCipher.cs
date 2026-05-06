@@ -107,7 +107,7 @@ public static class FishCipher
 
     public static string EncryptEcb(string plaintext, string key)
     {
-        var keyBytes = Encoding.UTF8.GetBytes(key);
+        var keyBytes = Encoding.Latin1.GetBytes(key);
         var data = Encoding.UTF8.GetBytes(plaintext);
 
         // Pad to 8-byte boundary
@@ -125,7 +125,7 @@ public static class FishCipher
 
     public static string DecryptEcb(string encoded, string key)
     {
-        var keyBytes = Encoding.UTF8.GetBytes(key);
+        var keyBytes = Encoding.Latin1.GetBytes(key);
         var data = FishBase64.Decode(encoded);
 
         var engine = new BlowfishEngine();
@@ -140,7 +140,7 @@ public static class FishCipher
 
     public static string EncryptCbc(string plaintext, string key)
     {
-        var keyBytes = Encoding.UTF8.GetBytes(key);
+        var keyBytes = Encoding.Latin1.GetBytes(key);
         var data = Encoding.UTF8.GetBytes(plaintext);
         var padded = PadToBlock(data);
 
@@ -165,7 +165,7 @@ public static class FishCipher
 
     public static string DecryptCbc(string encoded, string key)
     {
-        var keyBytes = Encoding.UTF8.GetBytes(key);
+        var keyBytes = Encoding.Latin1.GetBytes(key);
         // FiSH CBC uses standard base64, not FiSH base64
         var data = Convert.FromBase64String(encoded);
 

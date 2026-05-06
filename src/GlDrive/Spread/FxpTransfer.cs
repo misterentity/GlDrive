@@ -327,7 +327,7 @@ public class FxpTransfer
             long totalRelayed = 0;
 
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec > 0 ? timeoutSec * 20 : 24000));
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec > 0 ? timeoutSec * 20 : 1200));
 
             var rd = await srcSsl.ReadAsync(buf1, timeoutCts.Token);
             while (rd > 0)

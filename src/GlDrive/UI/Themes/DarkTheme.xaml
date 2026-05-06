@@ -10,5 +10,7 @@
     <SolidColorBrush x:Key="AccentHoverBrush" Color="#FF5252"/>
     <SolidColorBrush x:Key="AccentDimBrush" Color="#4E1A1A"/>
     <SolidColorBrush x:Key="AccentSubtleBrush" Color="#2A1515"/>
+    <SolidColorBrush x:Key="WarningBrush" Color="#FF9800"/>
+    <SolidColorBrush x:Key="ErrorBackgroundBrush" Color="#662222"/>
     <Color x:Key="AccentColor">#E53935</Color>
 </ResourceDictionary>

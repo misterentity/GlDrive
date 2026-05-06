@@ -39,7 +39,7 @@ public class TmdbClient : IDisposable
     public TmdbClient(string apiKey)
     {
         _apiKey = apiKey;
-        _http = new HttpClient { BaseAddress = new Uri("https://api.themoviedb.org/") };
+        _http = new HttpClient { BaseAddress = new Uri("https://api.themoviedb.org/"), Timeout = TimeSpan.FromSeconds(15) };
         _http.DefaultRequestHeaders.Add("User-Agent", "GlDrive/1.0");
     }
 

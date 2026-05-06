@@ -298,7 +298,7 @@
                                         <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding Status}" Value="Extracting">
-                                        <Setter Property="Foreground" Value="#FF9800"/>
+                                        <Setter Property="Foreground" Value="{DynamicResource WarningBrush}"/>
                                     </DataTrigger>
                                 </Style.Triggers>
                             </Style>

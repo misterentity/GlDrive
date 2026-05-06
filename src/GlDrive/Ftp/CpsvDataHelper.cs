@@ -150,7 +150,9 @@ public static class CpsvDataHelper
     {
         Log.Debug("CPSV LIST {Path}", remotePath);
 
-        await client.Execute("TYPE A", ct);
+        var typeReply = await client.Execute("TYPE A", ct);
+        if (typeReply.Code != "200")
+            throw new IOException($"TYPE A failed: {typeReply.Code} {typeReply.Message}");
 
         var tcp = await OpenDataTcp(client, ct);
 
@@ -216,9 +218,7 @@ public static class CpsvDataHelper
                 var completeReply = await client.GetReply(ct);
                 Log.Debug("RETR complete: {Code} {Message}", completeReply.Code, completeReply.Message);
 
-                // Return exact-sized array without extra copy when possible
-                if (ms.TryGetBuffer(out var segment) && segment.Offset == 0 && segment.Count == (int)ms.Length)
-                    return segment.Array!;
+                // Always copy to exactly Length bytes — TryGetBuffer's underlying array can be over-allocated.
                 return ms.ToArray();
             }
             finally

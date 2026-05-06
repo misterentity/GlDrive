@@ -94,14 +94,15 @@ public class NewReleaseMonitor
 
     private async Task PollCycle(CancellationToken ct)
     {
-        await using var conn = await _pool.Borrow(ct);
-
-        // Discover categories
+        // Discover categories with a short-lived connection — release before per-category sleep.
         FtpListItem[] categories;
-        if (_pool.UseCpsv)
-            categories = await CpsvDataHelper.ListDirectory(conn.Client, _config.WatchPath, _pool.ControlHost, ct);
-        else
-            categories = await conn.Client.GetListing(_config.WatchPath, FtpListOption.AllFiles, ct);
+        {
+            await using var listConn = await _pool.Borrow(ct);
+            if (_pool.UseCpsv)
+                categories = await CpsvDataHelper.ListDirectory(listConn.Client, _config.WatchPath, _pool.ControlHost, ct);
+            else
+                categories = await listConn.Client.GetListing(_config.WatchPath, FtpListOption.AllFiles, ct);
+        }
 
         var excluded = _config.ExcludedCategories;
         var categoryDirs = categories
@@ -114,16 +115,17 @@ public class NewReleaseMonitor
         {
             ct.ThrowIfCancellationRequested();
 
-            // Throttle: if other connections are active (downloads), wait before next LIST
-            if (_pool.ActiveCount > 1)
+            // Throttle without holding a pool slot — sleep, then borrow per category.
+            if (_pool.ActiveCount > 0)
                 await Task.Delay(2000, ct);
             else
-                await Task.Delay(200, ct); // Small delay between categories to avoid hammering data connections
+                await Task.Delay(200, ct);
 
             var categoryPath = _config.WatchPath.TrimEnd('/') + "/" + category;
             FtpListItem[] releases;
             try
             {
+                await using var conn = await _pool.Borrow(ct);
                 if (_pool.UseCpsv)
                     releases = await CpsvDataHelper.ListDirectory(conn.Client, categoryPath, _pool.ControlHost, ct);
                 else
