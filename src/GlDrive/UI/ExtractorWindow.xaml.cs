@@ -533,6 +533,8 @@ public partial class ExtractorWindow : Window
             Dispatcher.BeginInvoke(() => item.EntryCount = entries.Count);
 
             var safeDirPath = Path.GetFullPath(outputDir);
+            if (!safeDirPath.EndsWith(Path.DirectorySeparatorChar))
+                safeDirPath += Path.DirectorySeparatorChar;
             var processed = 0;
 
             foreach (var entry in entries)
@@ -863,6 +865,8 @@ public partial class ExtractorWindow : Window
         ReaderOptions options, int overwriteMode, CancellationToken ct)
     {
         var safeDirPath = Path.GetFullPath(outputDir);
+        if (!safeDirPath.EndsWith(Path.DirectorySeparatorChar))
+            safeDirPath += Path.DirectorySeparatorChar;
         var processed = 0;
         var lastProgressUpdate = DateTime.MinValue;
 

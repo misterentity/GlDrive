@@ -60,6 +60,8 @@ public static partial class ArchiveExtractor
     private static void ExtractOnThread(string dirPath, List<FileInfo> rarFiles, CancellationToken ct)
     {
         var safeDirPath = Path.GetFullPath(dirPath);
+        if (!safeDirPath.EndsWith(Path.DirectorySeparatorChar))
+            safeDirPath += Path.DirectorySeparatorChar;
 
         foreach (var rarFile in rarFiles)
         {

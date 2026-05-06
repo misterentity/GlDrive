@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text.Json;
 using GlDrive.Config;
+using GlDrive.Util;
 using Serilog;
 
 namespace GlDrive.Downloads;
@@ -76,9 +77,7 @@ public class NotificationStore
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            var tmp = FilePath + ".tmp";
-            File.WriteAllText(tmp, json);
-            File.Move(tmp, FilePath, overwrite: true);
+            SecureFile.WriteAllTextRestricted(FilePath, json);
         }
         catch (Exception ex)
         {

@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using GlDrive.Util;
 using Serilog;
 
 namespace GlDrive.Config;
@@ -59,9 +60,7 @@ public class ConfigManager
         Directory.CreateDirectory(AppDataFolder);
         string? beforeJson = File.Exists(ConfigFilePath) ? File.ReadAllText(ConfigFilePath) : null;
         var json = JsonSerializer.Serialize(config, JsonOptions);
-        var tempPath = ConfigFilePath + ".tmp";
-        File.WriteAllText(tempPath, json);
-        File.Move(tempPath, ConfigFilePath, overwrite: true);
+        SecureFile.WriteAllTextRestricted(ConfigFilePath, json);
 
         if (beforeJson != null)
         {

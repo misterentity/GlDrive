@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using GlDrive.Services;
 
 namespace GlDrive;
 
@@ -89,11 +90,17 @@ public static class Program
         var crashMarker = Path.Combine(appData, ".running");
         var updateMarker = Path.Combine(appData, ".updating");
 
-        // If an update is in progress, the updater handles restarting — stand down
-        if (File.Exists(updateMarker))
+        // If a valid HMAC-authenticated update marker exists, the updater handles restarting.
+        // Plain markers (no HMAC, expired, or tampered) are treated as missing — not honored.
+        if (UpdateMarkerHmac.IsValid(updateMarker))
         {
             try { File.Delete(updateMarker); } catch { }
             return 0;
+        }
+        // Stale/invalid/plain marker — delete it and fall through to crash-restart logic
+        if (File.Exists(updateMarker))
+        {
+            try { File.Delete(updateMarker); } catch { }
         }
 
         if (!File.Exists(crashMarker))

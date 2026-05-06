@@ -6,6 +6,7 @@ using System.Net.Http.Json;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Text;
 using System.Text.Json.Serialization;
 using Serilog;
 
@@ -278,20 +279,27 @@ public class UpdateChecker : IDisposable
         Log.Information("Launching updater: --apply-update {Pid} \"{ExtractDir}\" \"{InstallDir}\"",
             pid, extractDir, installDir);
 
+        // Write HMAC-protected .updating marker so the watchdog won't restart on clean update exit
+        var appDataUpdating = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "GlDrive", ".updating");
+        UpdateMarkerHmac.Write(appDataUpdating, pid);
+
         try
         {
-            Process.Start(new ProcessStartInfo
+            var psi = new ProcessStartInfo
             {
                 FileName = exePath,
-                Arguments = $"--apply-update {pid} \"{extractDir}\" \"{installDir}\"",
-                // Pin the updater's CWD to the install directory. Without this, the
-                // UAC-elevated process inherits the caller's CWD and becomes vulnerable
-                // to DLL hijacking via side-by-side loads from whatever directory the
-                // caller was in. The install dir is a trusted location so this is safe.
+                // ArgumentList avoids manual quoting and shell-injection via path components
                 WorkingDirectory = installDir,
                 Verb = "runas",
                 UseShellExecute = true
-            });
+            };
+            psi.ArgumentList.Add("--apply-update");
+            psi.ArgumentList.Add(pid.ToString());
+            psi.ArgumentList.Add(extractDir);
+            psi.ArgumentList.Add(installDir);
+            Process.Start(psi);
         }
         catch (Exception ex)
         {
@@ -322,8 +330,13 @@ public class UpdateChecker : IDisposable
 
             if (currentCert == null)
             {
-                Log.Debug("Current binary is unsigned — skipping Authenticode check on update");
+#if DEBUG
+                Log.Warning("Current binary is unsigned (Debug build) — skipping Authenticode check on update");
                 return true;
+#else
+                Log.Warning("Current binary is unsigned — rejecting update to enforce signing in Release builds");
+                return false;
+#endif
             }
 
             // Current binary IS signed — require the update to be signed by the same issuer
@@ -381,10 +394,23 @@ public class UpdateChecker : IDisposable
                 Environment.Exit(1);
             }
 
-            if (!fullInstall.Contains("GlDrive", StringComparison.OrdinalIgnoreCase))
+            // Strict equality: installDir must exactly match the calling process's own exe directory.
+            // Substring "contains GlDrive" is bypassable with a path like C:\evil\GlDrive-trap\.
+            // The elevated child (running from extractDir) re-validates by confirming installDir
+            // already contains a GlDrive.exe — proving it was an existing install, not a planted path.
+            var callerExeDir = Path.GetFullPath(
+                Path.GetDirectoryName(Environment.ProcessPath ?? AppContext.BaseDirectory)!);
+            bool callerIsInstallDir = string.Equals(fullInstall, callerExeDir, StringComparison.OrdinalIgnoreCase);
+            bool installHasExe = File.Exists(Path.Combine(fullInstall, "GlDrive.exe"));
+            if (!callerIsInstallDir && !installHasExe)
             {
-                LogUpdate($"SECURITY: installDir does not look like a GlDrive installation — aborting. installDir={fullInstall}");
+                LogUpdate($"SECURITY: installDir is neither caller's dir nor an existing GlDrive install — aborting. installDir={fullInstall}, callerDir={callerExeDir}");
                 Environment.Exit(1);
+            }
+            if (!callerIsInstallDir && installHasExe)
+            {
+                // Elevated child running from extractDir — installDir validated by pre-existing exe
+                LogUpdate($"Elevated child: installDir validated by pre-existing GlDrive.exe at {fullInstall}");
             }
 
             if (!File.Exists(Path.Combine(fullExtract, "GlDrive.exe")))
@@ -584,5 +610,93 @@ public class UpdateChecker : IDisposable
         StopPeriodicCheck();
         _http.Dispose();
         GC.SuppressFinalize(this);
+    }
+}
+
+/// <summary>
+/// Writes and validates HMAC-SHA256-protected .updating marker files so the watchdog
+/// can reject forged or replayed markers written by unprivileged user-context processes.
+/// Key material is persisted via DPAPI (CurrentUser scope) in a companion .updating-key file.
+/// </summary>
+public static class UpdateMarkerHmac
+{
+    private static readonly string KeyPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "GlDrive", ".updating-key");
+
+    private static byte[] GetOrCreateKey()
+    {
+        if (File.Exists(KeyPath))
+        {
+            try
+            {
+                var enc = File.ReadAllBytes(KeyPath);
+                return ProtectedData.Unprotect(enc, null, DataProtectionScope.CurrentUser);
+            }
+            catch { }
+        }
+
+        var key = RandomNumberGenerator.GetBytes(32);
+        var dir = Path.GetDirectoryName(KeyPath)!;
+        if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+        File.WriteAllBytes(KeyPath, ProtectedData.Protect(key, null, DataProtectionScope.CurrentUser));
+        return key;
+    }
+
+    private static byte[] ComputeHmac(byte[] key, string payload)
+    {
+        using var hmac = new HMACSHA256(key);
+        return hmac.ComputeHash(Encoding.UTF8.GetBytes(payload));
+    }
+
+    public static void Write(string markerPath, int processId)
+    {
+        try
+        {
+            var key = GetOrCreateKey();
+            var payload = $"{processId}|{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}|{Environment.ProcessPath ?? string.Empty}";
+            var mac = Convert.ToHexString(ComputeHmac(key, payload));
+            var dir = Path.GetDirectoryName(markerPath)!;
+            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            File.WriteAllText(markerPath, payload + "\n" + mac);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to write HMAC update marker at {Path}", markerPath);
+        }
+    }
+
+    /// <summary>
+    /// Returns true if the marker exists AND has a valid HMAC AND the embedded timestamp
+    /// is within 5 minutes of now. Plain (non-HMAC) markers from older versions are rejected.
+    /// </summary>
+    public static bool IsValid(string markerPath)
+    {
+        if (!File.Exists(markerPath)) return false;
+
+        try
+        {
+            var text = File.ReadAllText(markerPath).Trim();
+            var nl = text.IndexOf('\n');
+            if (nl < 0) return false; // Plain old-format marker — reject
+
+            var payload = text[..nl].Trim();
+            var storedMac = text[(nl + 1)..].Trim();
+
+            var parts = payload.Split('|');
+            if (parts.Length < 2) return false;
+            if (!long.TryParse(parts[1], out var ts)) return false;
+            if (Math.Abs(DateTimeOffset.UtcNow.ToUnixTimeSeconds() - ts) > 300) return false;
+
+            var key = GetOrCreateKey();
+            var expected = Convert.ToHexString(ComputeHmac(key, payload));
+            var expectedBytes = Convert.FromHexString(expected);
+            var storedBytes = Convert.FromHexString(storedMac);
+            return CryptographicOperations.FixedTimeEquals(expectedBytes, storedBytes);
+        }
+        catch
+        {
+            return false;
+        }
     }
 }

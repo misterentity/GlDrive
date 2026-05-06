@@ -1,4 +1,5 @@
 using System.IO;
+using Microsoft.Win32;
 using Fsp;
 using GlDrive.Config;
 using GlDrive.Downloads;
@@ -27,6 +28,9 @@ public class MountService : IDisposable
     private FtpSearchService? _searchService;
     private WishlistMatcher? _wishlistMatcher;
     private bool _mounted;
+    private static string? _launchctlPath;
+    private static readonly string NetExePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "net.exe");
+    private static readonly string MountvExePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "mountvol.exe");
 
     public event Action<MountState>? StateChanged;
     public event Action<string, string, string>? NewReleaseDetected; // category, release, remotePath
@@ -336,23 +340,27 @@ public class MountService : IDisposable
                 // Try WinFsp launchctl stop first (most reliable for WinFsp mounts)
                 try
                 {
-                    var psi = new System.Diagnostics.ProcessStartInfo(
-                        "launchctl-x64.exe", $"stop GlDrive\\{_serverConfig.Id}")
+                    var launchctl = ResolveLaunchctlPath();
+                    if (launchctl != null)
                     {
-                        CreateNoWindow = true,
-                        UseShellExecute = false,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true
-                    };
-                    using var proc = System.Diagnostics.Process.Start(psi);
-                    proc?.WaitForExit(3000);
+                        var psi = new System.Diagnostics.ProcessStartInfo(
+                            launchctl, $"stop GlDrive\\{_serverConfig.Id}")
+                        {
+                            CreateNoWindow = true,
+                            UseShellExecute = false,
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true
+                        };
+                        using var proc = System.Diagnostics.Process.Start(psi);
+                        proc?.WaitForExit(3000);
+                    }
                 }
                 catch { }
 
                 // Try net use delete
                 if (Directory.Exists(mountPoint))
                 {
-                    var psi = new System.Diagnostics.ProcessStartInfo("net", $"use {driveLetter}: /delete /y")
+                    var psi = new System.Diagnostics.ProcessStartInfo(NetExePath, $"use {driveLetter}: /delete /y")
                     {
                         CreateNoWindow = true,
                         UseShellExecute = false,
@@ -367,7 +375,7 @@ public class MountService : IDisposable
                 if (Directory.Exists(mountPoint))
                 {
                     Log.Warning("Stale mount still present after net use, trying mountvol...");
-                    var psi = new System.Diagnostics.ProcessStartInfo("mountvol", $"{driveLetter}: /P")
+                    var psi = new System.Diagnostics.ProcessStartInfo(MountvExePath, $"{driveLetter}: /P")
                     {
                         CreateNoWindow = true,
                         UseShellExecute = false,
@@ -388,6 +396,22 @@ public class MountService : IDisposable
         {
             Log.Warning(ex, "Stale mount cleanup failed — continuing anyway");
         }
+    }
+
+    private static string? ResolveLaunchctlPath()
+    {
+        if (_launchctlPath != null) return _launchctlPath;
+        var regDir = Registry.LocalMachine.OpenSubKey(@"Software\WinFsp")?.GetValue("InstallDir") as string;
+        var candidate = regDir != null
+            ? Path.Combine(regDir, "bin", "launchctl-x64.exe")
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WinFsp", "bin", "launchctl-x64.exe");
+        if (!File.Exists(candidate))
+        {
+            Log.Warning("launchctl-x64.exe not found at {Path}", candidate);
+            return null;
+        }
+        _launchctlPath = candidate;
+        return _launchctlPath;
     }
 
     private void SetState(MountState state)

@@ -1,10 +1,9 @@
 using System.IO;
-using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
-using System.Security.Principal;
 using System.Text.Json;
 using GlDrive.Config;
+using GlDrive.Util;
 using Serilog;
 
 namespace GlDrive.Tls;
@@ -123,71 +122,7 @@ public class CertificateManager
     {
         Directory.CreateDirectory(Path.GetDirectoryName(_fingerprintFile)!);
         var json = JsonSerializer.Serialize(_trustedCerts, JsonOptions);
-        var tempPath = _fingerprintFile + ".tmp";
-
-        // Write the temp file with a restrictive DACL from the start — this closes
-        // the TOCTOU window between File.Move and RestrictFilePermissions. On NTFS
-        // same-volume moves, the DACL travels with the file.
-        WriteAllTextWithRestrictedAcl(tempPath, json);
-        File.Move(tempPath, _fingerprintFile, overwrite: true);
-
-        // Defense in depth: re-apply the DACL on the final path in case the move
-        // somehow replaced the DACL (e.g., cross-volume move, roaming profile edge case).
-        RestrictFilePermissions(_fingerprintFile);
-    }
-
-    private static void WriteAllTextWithRestrictedAcl(string filePath, string contents)
-    {
-        // Build a FileSecurity that grants only the current user FullControl
-        // and inherits nothing from the parent directory.
-        var security = new FileSecurity();
-        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-        var currentUser = WindowsIdentity.GetCurrent().User!;
-        security.AddAccessRule(new FileSystemAccessRule(
-            currentUser, FileSystemRights.FullControl, AccessControlType.Allow));
-
-        // Delete any stale temp file before creating with new ACL
-        if (File.Exists(filePath))
-        {
-            try { File.Delete(filePath); } catch { }
-        }
-
-        // Create the file with the restrictive DACL atomically via FileSecurity.
-        // FileStream's constructor that takes FileSecurity was removed in modern .NET;
-        // use System.IO.FileSystemAclExtensions.Create instead.
-        using var fs = System.IO.FileSystemAclExtensions.Create(
-            new System.IO.FileInfo(filePath),
-            FileMode.CreateNew,
-            FileSystemRights.WriteData | FileSystemRights.ReadData,
-            FileShare.None,
-            bufferSize: 4096,
-            FileOptions.None,
-            security);
-        using var writer = new StreamWriter(fs, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-        writer.Write(contents);
-    }
-
-    private static void RestrictFilePermissions(string filePath)
-    {
-        try
-        {
-            var fileInfo = new System.IO.FileInfo(filePath);
-            var security = fileInfo.GetAccessControl();
-            security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-            // Remove all existing rules
-            var rules = security.GetAccessRules(true, true, typeof(SecurityIdentifier));
-            foreach (FileSystemAccessRule rule in rules)
-                security.RemoveAccessRule(rule);
-            // Grant full control only to current user
-            var currentUser = WindowsIdentity.GetCurrent().User!;
-            security.AddAccessRule(new FileSystemAccessRule(
-                currentUser, FileSystemRights.FullControl, AccessControlType.Allow));
-            fileInfo.SetAccessControl(security);
-        }
-        catch (Exception ex)
-        {
-            Log.Debug(ex, "Failed to restrict file permissions on {File}", filePath);
-        }
+        SecureFile.WriteAllTextRestricted(_fingerprintFile, json);
     }
 }
 

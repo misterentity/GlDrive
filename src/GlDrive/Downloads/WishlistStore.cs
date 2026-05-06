@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text.Json;
 using GlDrive.Config;
+using GlDrive.Util;
 using Serilog;
 
 namespace GlDrive.Downloads;
@@ -52,11 +53,8 @@ public class WishlistStore
             string json;
             lock (_lock) json = JsonSerializer.Serialize(_items, JsonOptions);
 
-            var dir = Path.GetDirectoryName(FilePath)!;
-            Directory.CreateDirectory(dir);
-            var tmp = FilePath + ".tmp";
-            File.WriteAllText(tmp, json);
-            File.Move(tmp, FilePath, true);
+            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+            SecureFile.WriteAllTextRestricted(FilePath, json);
         }
         catch (Exception ex)
         {
