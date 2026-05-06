@@ -16,7 +16,7 @@ public class FtpConnectionPool : IAsyncDisposable
     private int _created;
     private int _active;
     private bool _disposed;
-    private DateTime _lastGhostKill;
+    private long _lastGhostKillTicks;
 
     // Health counters — flushed hourly by HealthRollup
     public double AvgConnectMs { get; private set; }
@@ -201,10 +201,13 @@ public class FtpConnectionPool : IAsyncDisposable
                 Interlocked.Decrement(ref _created);
                 Log.Warning(ex, "Pool: new connection failed (created={Created}, max={Max})", _created, _maxSize);
 
-                // Kill ghost connections and retry once (throttle to once per 30s)
-                if ((DateTime.UtcNow - _lastGhostKill).TotalSeconds > 30)
+                // Kill ghost connections and retry once (throttle to once per 30s).
+                // CompareExchange ensures only one thread wins the throttle window.
+                var nowTicks = DateTime.UtcNow.Ticks;
+                var lastTicks = Interlocked.Read(ref _lastGhostKillTicks);
+                if (new TimeSpan(nowTicks - lastTicks).TotalSeconds > 30 &&
+                    Interlocked.CompareExchange(ref _lastGhostKillTicks, nowTicks, lastTicks) == lastTicks)
                 {
-                    _lastGhostKill = DateTime.UtcNow;
                     try
                     {
                         await _factory.KillGhosts(ct);

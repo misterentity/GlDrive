@@ -57,9 +57,9 @@ public class FishKeyStore
         return entry;
     }
 
-    public void SetKey(string target, string key, FishMode mode = FishMode.ECB)
+    public void SetKey(string target, string key, FishMode mode = FishMode.ECB, bool manual = true)
     {
-        _keys[target] = new FishKeyEntry { Key = key, AltKey = "", Mode = mode, Manual = true, SetAt = DateTime.UtcNow };
+        _keys[target] = new FishKeyEntry { Key = key, AltKey = "", Mode = mode, Manual = manual, SetAt = DateTime.UtcNow };
         Save();
     }
 

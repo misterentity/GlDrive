@@ -15,9 +15,9 @@ public class ServerManager : IDisposable
     private readonly NotificationStore _notificationStore;
     private readonly ConcurrentDictionary<string, MountService> _servers = new();
     private readonly ConcurrentDictionary<string, IrcService> _ircServices = new();
-    private readonly Dictionary<string, IrcAnnounceListener> _announceListeners = new();
-    private readonly Dictionary<string, IrcPatternDetector> _patternDetectors = new();
-    private readonly Dictionary<string, RequestFiller> _requestFillers = new();
+    private readonly ConcurrentDictionary<string, IrcAnnounceListener> _announceListeners = new();
+    private readonly ConcurrentDictionary<string, IrcPatternDetector> _patternDetectors = new();
+    private readonly ConcurrentDictionary<string, RequestFiller> _requestFillers = new();
     private SpreadManager? _spreadManager;
 
     public SpreadManager? Spread => _spreadManager;
@@ -370,7 +370,7 @@ public class ServerManager : IDisposable
                     _spreadManager?.TryAutoRace(section, release, serverId);
                 }
             };
-            _announceListeners[serverConfig.Id] = listener;
+            _announceListeners.TryAdd(serverConfig.Id, listener);
         }
 
         // Wire auto request filler (RaceTrade-style)
@@ -378,17 +378,17 @@ public class ServerManager : IDisposable
         {
             var filler = new RequestFiller(serverConfig.Id, ircService,
                 serverConfig.Irc.RequestFiller, this, _spreadManager);
-            _requestFillers[serverConfig.Id] = filler;
+            _requestFillers.TryAdd(serverConfig.Id, filler);
         }
     }
 
     private async Task StopIrcService(string serverId)
     {
-        if (_patternDetectors.Remove(serverId, out var detector))
+        if (_patternDetectors.TryRemove(serverId, out var detector))
             detector.Dispose();
-        if (_announceListeners.Remove(serverId, out var listener))
+        if (_announceListeners.TryRemove(serverId, out var listener))
             listener.Dispose();
-        if (_requestFillers.Remove(serverId, out var filler))
+        if (_requestFillers.TryRemove(serverId, out var filler))
             filler.Dispose();
 
         if (!_ircServices.TryGetValue(serverId, out var ircService)) return;
@@ -411,7 +411,7 @@ public class ServerManager : IDisposable
 
         foreach (var irc in _ircServices.Values)
         {
-            try { irc.StopAsync().GetAwaiter().GetResult(); } catch { }
+            try { Task.Run(() => irc.StopAsync()).GetAwaiter().GetResult(); } catch { }
             irc.Dispose();
         }
         _ircServices.Clear();

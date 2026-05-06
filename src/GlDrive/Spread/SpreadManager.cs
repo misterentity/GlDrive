@@ -120,7 +120,7 @@ public class SpreadManager : IDisposable
 
             if (_activeJobs.Count >= maxRaces)
             {
-                _raceQueue.Enqueue(new PendingRace(section, releaseName, serverIds.ToList(), mode));
+                _raceQueue.Enqueue(new PendingRace(section, releaseName, serverIds.ToList(), mode, knownSourceServerId, knownSourcePath));
                 Log.Information("Race queued (max concurrent {Max}): {Release}", maxRaces, releaseName);
                 return null;
             }
@@ -172,18 +172,13 @@ public class SpreadManager : IDisposable
         job.ProgressChanged += j => JobProgressChanged?.Invoke(j);
         job.Completed += j =>
         {
-            lock (_lock) _activeJobs.Remove(j);
-            RecordHistory(j);
             JobCompleted?.Invoke(j);
-            DequeueNextRace();
         };
         job.Error += (j, msg) =>
         {
-            lock (_lock) _activeJobs.Remove(j);
-            RecordHistory(j);
             Log.Warning("Spread job error: {Release} — {Error}", j.ReleaseName, msg);
-            DequeueNextRace();
         };
+        job.LivePoolResolver = id => { lock (_lock) { _spreadPools.TryGetValue(id, out var p); return p; } };
 
         lock (_lock) _activeJobs.Add(job);
         JobStarted?.Invoke(job);
@@ -344,7 +339,8 @@ public class SpreadManager : IDisposable
 
         try
         {
-            StartRaceInternal(next.Section, next.ReleaseName, next.ServerIds, next.Mode);
+            StartRaceInternal(next.Section, next.ReleaseName, next.ServerIds, next.Mode,
+                next.KnownSourceServerId, next.KnownSourcePath);
         }
         catch (Exception ex)
         {
@@ -690,5 +686,6 @@ public class SpreadManager : IDisposable
         string.Equals(releaseA, releaseB, StringComparison.OrdinalIgnoreCase) &&
         string.Equals(sectionA, sectionB, StringComparison.OrdinalIgnoreCase);
 
-    private record PendingRace(string Section, string ReleaseName, List<string> ServerIds, SpreadMode Mode);
+    private record PendingRace(string Section, string ReleaseName, List<string> ServerIds, SpreadMode Mode,
+        string? KnownSourceServerId = null, string? KnownSourcePath = null);
 }

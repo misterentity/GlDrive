@@ -31,7 +31,7 @@ public class NotificationStore
 
     private readonly object _lock = new();
     private List<NotificationItem> _items = [];
-    private volatile bool _saveQueued;
+    private int _saveQueued;
 
     public IReadOnlyList<NotificationItem> Items
     {
@@ -105,12 +105,11 @@ public class NotificationStore
 
     private void ScheduleSave()
     {
-        if (_saveQueued) return;
-        _saveQueued = true;
+        if (Interlocked.Exchange(ref _saveQueued, 1) == 1) return;
         _ = Task.Run(async () =>
         {
             await Task.Delay(500); // debounce rapid adds
-            _saveQueued = false;
+            Interlocked.Exchange(ref _saveQueued, 0);
             Save();
         });
     }

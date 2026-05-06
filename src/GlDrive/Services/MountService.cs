@@ -425,7 +425,8 @@ public class MountService : IDisposable
 
         try
         {
-            await using var conn = await _pool.Borrow(CancellationToken.None);
+            using var statsCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await using var conn = await _pool.Borrow(statsCts.Token);
             SiteStats? best = null;
             foreach (var cmd in candidates)
             {
@@ -433,7 +434,7 @@ public class MountService : IDisposable
                 try
                 {
                     var stats = await SiteStatsCollector.RefreshAsync(
-                        conn.Client, cmd, CancellationToken.None);
+                        conn.Client, cmd, statsCts.Token);
                     if (stats.Credits != null || stats.Ratio != null)
                     {
                         best = stats;

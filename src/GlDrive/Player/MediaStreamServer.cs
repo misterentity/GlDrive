@@ -182,14 +182,31 @@ public class MediaStreamServer : IDisposable
 
         Log.Debug("Streaming {Path} (size={Size}) from server {Server}", remotePath, fileSize, serverId);
 
-        // Parse Range header
+        // Parse Range header — supports `bytes=N-`, `bytes=N-M`, and suffix `bytes=-N` (last N bytes).
+        // Multi-range (`bytes=0-499,600-999`) responds 416 (multipart/byteranges not supported here).
         long offset = 0;
         var rangeHeader = ctx.Request.Headers["Range"];
         if (rangeHeader != null && rangeHeader.StartsWith("bytes="))
         {
-            var parts = rangeHeader[6..].Split('-');
-            if (long.TryParse(parts[0], out var start))
+            var spec = rangeHeader[6..];
+            if (spec.Contains(','))
+            {
+                ctx.Response.StatusCode = 416;
+                if (fileSize > 0) ctx.Response.Headers.Add("Content-Range", $"bytes */{fileSize}");
+                ctx.Response.Close();
+                return;
+            }
+            var parts = spec.Split('-', 2);
+            if (parts.Length == 2 && parts[0].Length == 0)
+            {
+                // Suffix range: last N bytes
+                if (long.TryParse(parts[1], out var suffixLen) && suffixLen > 0 && fileSize > 0)
+                    offset = Math.Max(0, fileSize - suffixLen);
+            }
+            else if (long.TryParse(parts[0], out var start))
+            {
                 offset = start;
+            }
         }
 
         // Set response headers
@@ -220,6 +237,7 @@ public class MediaStreamServer : IDisposable
             catch (Exception ex) { Log.Warning(ex, "Could not open cache file for writing"); }
         }
 
+        bool moveSucceeded = false;
         try
         {
             using var streamCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
@@ -241,6 +259,7 @@ public class MediaStreamServer : IDisposable
                 {
                     if (File.Exists(cachedFile)) File.Delete(cachedFile);
                     File.Move(tempFile, cachedFile);
+                    moveSucceeded = true;
                     Log.Information("Cached video to library: {Path}", cachedFile);
                 }
                 catch (Exception ex) { Log.Warning(ex, "Failed to finalize cache file"); }
@@ -249,8 +268,9 @@ public class MediaStreamServer : IDisposable
         finally
         {
             if (saveStream != null) await saveStream.DisposeAsync();
-            // Clean up partial file on failure
-            try { if (File.Exists(tempFile)) File.Delete(tempFile); } catch { }
+            // Only clean up partial file on failure — on success it was renamed to cachedFile.
+            if (!moveSucceeded)
+                try { if (File.Exists(tempFile)) File.Delete(tempFile); } catch { }
         }
 
         ctx.Response.Close();

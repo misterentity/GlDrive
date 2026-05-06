@@ -55,9 +55,9 @@ public class WebViewHost : ContentControl
             await _initLock.WaitAsync(cts.Token);
             try
             {
-                Content = _webView;
                 var env = await CoreWebView2Environment.CreateAsync(userDataFolder: dataDir);
                 await _webView.EnsureCoreWebView2Async(env);
+                Content = _webView;
             }
             finally
             {
@@ -155,31 +155,34 @@ public class WebViewHost : ContentControl
             MaxWidth = 700
         };
 
-        panel.Children.Add(new TextBlock
+        var titleBlock = new TextBlock
         {
             Text = "WebView2 Runtime Required",
-            Foreground = Brushes.White,
             FontSize = 16,
             FontWeight = FontWeights.SemiBold,
             Margin = new Thickness(0, 0, 0, 8)
-        });
+        };
+        titleBlock.SetResourceReference(TextBlock.ForegroundProperty, "ForegroundBrush");
+        panel.Children.Add(titleBlock);
 
-        panel.Children.Add(new TextBlock
+        var descBlock = new TextBlock
         {
             Text = "This tab requires the Microsoft Edge WebView2 Runtime. It ships with Windows 11 and Edge, but may be missing on some Windows 10 machines.",
-            Foreground = Brushes.Gray,
             FontSize = 13,
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 16)
-        });
+        };
+        descBlock.SetResourceReference(TextBlock.ForegroundProperty, "ForegroundDimBrush");
+        panel.Children.Add(descBlock);
 
-        panel.Children.Add(new TextBlock
+        var instrBlock = new TextBlock
         {
             Text = "Run this in PowerShell (as Administrator):",
-            Foreground = Brushes.Gray,
             FontSize = 12,
             Margin = new Thickness(0, 0, 0, 6)
-        });
+        };
+        instrBlock.SetResourceReference(TextBlock.ForegroundProperty, "ForegroundDimBrush");
+        panel.Children.Add(instrBlock);
 
         var scriptBox = new TextBox
         {
@@ -189,11 +192,11 @@ public class WebViewHost : ContentControl
             FontFamily = new FontFamily("Consolas"),
             FontSize = 12,
             Padding = new Thickness(10),
-            Margin = new Thickness(0, 0, 0, 8),
-            Background = new SolidColorBrush(Color.FromRgb(30, 30, 30)),
-            Foreground = new SolidColorBrush(Color.FromRgb(200, 200, 200)),
-            BorderBrush = new SolidColorBrush(Color.FromRgb(60, 60, 60))
+            Margin = new Thickness(0, 0, 0, 8)
         };
+        scriptBox.SetResourceReference(TextBox.BackgroundProperty, "FallbackCodeBackgroundBrush");
+        scriptBox.SetResourceReference(TextBox.ForegroundProperty, "FallbackCodeForegroundBrush");
+        scriptBox.SetResourceReference(TextBox.BorderBrushProperty, "BorderBrush");
         panel.Children.Add(scriptBox);
 
         var buttonPanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 16) };
@@ -241,12 +244,13 @@ public class WebViewHost : ContentControl
 
         panel.Children.Add(buttonPanel);
 
-        panel.Children.Add(new TextBlock
+        var restartBlock = new TextBlock
         {
             Text = "Restart GlDrive after installation completes.",
-            Foreground = Brushes.Gray,
             FontSize = 12
-        });
+        };
+        restartBlock.SetResourceReference(TextBlock.ForegroundProperty, "ForegroundDimBrush");
+        panel.Children.Add(restartBlock);
 
         Content = panel;
     }

@@ -29,7 +29,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private string _searchStatus = "";
     private bool _isSearching;
     private CancellationTokenSource? _searchCts;
-    private readonly HashSet<string> _subscribedServers = new();
+    private readonly Dictionary<string, MountService> _subscribedServers = new();
     private readonly Action<string, string, MountState> _serverStateHandler;
     private readonly Action<string, string, string, string, string> _newReleaseHandler;
     private WishlistItemVm? _selectedWishlistItem;
@@ -581,10 +581,27 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private void SubscribeToServer(MountService server)
     {
         if (server.Downloads == null) return;
-        // Always re-subscribe since unmount creates new MountService/DownloadManager instances
-        _subscribedServers.Add(server.ServerId);
+        // Detach handlers from any previous MountService for this serverId before re-subscribing,
+        // otherwise remounting leaks two handlers per cycle.
+        if (_subscribedServers.TryGetValue(server.ServerId, out var prev) && prev.Downloads != null)
+        {
+            prev.Downloads.DownloadProgressChanged -= OnDownloadProgress;
+            prev.Downloads.DownloadStatusChanged -= OnDownloadStatusChanged;
+        }
+        _subscribedServers[server.ServerId] = server;
         server.Downloads.DownloadProgressChanged += OnDownloadProgress;
         server.Downloads.DownloadStatusChanged += OnDownloadStatusChanged;
+    }
+
+    private void UnsubscribeAllServers()
+    {
+        foreach (var server in _subscribedServers.Values)
+        {
+            if (server.Downloads == null) continue;
+            server.Downloads.DownloadProgressChanged -= OnDownloadProgress;
+            server.Downloads.DownloadStatusChanged -= OnDownloadStatusChanged;
+        }
+        _subscribedServers.Clear();
     }
 
     private void AddMedia(MediaType type)
@@ -1971,6 +1988,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         _preDbClient.Dispose();
         _serverManager.ServerStateChanged -= _serverStateHandler;
         _serverManager.NewReleaseDetected -= _newReleaseHandler;
+        UnsubscribeAllServers();
         _ircViewModel.Dispose();
     }
 

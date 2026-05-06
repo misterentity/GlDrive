@@ -22,8 +22,8 @@ public class OmdbClient : IDisposable
     public OmdbClient(string apiKey)
     {
         _apiKey = apiKey;
-        _http = new HttpClient { BaseAddress = new Uri("https://www.omdbapi.com/") };
-        _freeHttp = new HttpClient { BaseAddress = new Uri("https://api.imdbapi.dev/") };
+        _http = new HttpClient { BaseAddress = new Uri("https://www.omdbapi.com/"), Timeout = TimeSpan.FromSeconds(15) };
+        _freeHttp = new HttpClient { BaseAddress = new Uri("https://api.imdbapi.dev/"), Timeout = TimeSpan.FromSeconds(15) };
     }
 
     public bool HasApiKey => !string.IsNullOrEmpty(_apiKey);

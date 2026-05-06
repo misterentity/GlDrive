@@ -1049,10 +1049,7 @@ public partial class ServerEditDialog : Window
         // 1. Auto-detect sections
         try
         {
-            AutoDetectSections_Click(sender, e);
-            // Wait for it to finish (it's async void, track via the grid)
-            await Task.Delay(500);
-            while (!SectionMappingsGrid.IsEnabled) await Task.Delay(500);
+            await AutoDetectSectionsAsync();
             results.Add($"Sections: {_sectionMappings.Count} detected");
         }
         catch { results.Add("Sections: detection failed"); }
@@ -1096,6 +1093,9 @@ public partial class ServerEditDialog : Window
     }
 
     private async void AutoDetectSections_Click(object sender, RoutedEventArgs e)
+        => await AutoDetectSectionsAsync();
+
+    private async Task AutoDetectSectionsAsync()
     {
         SectionMappingsGrid.IsEnabled = false;
         TestResultText.Text = "";
