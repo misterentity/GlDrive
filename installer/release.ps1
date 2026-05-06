@@ -97,6 +97,43 @@ $checksumLines | Set-Content -Path $ChecksumFile -Encoding UTF8
 $assets += $ChecksumFile
 Write-Host "Checksums: $ChecksumFile" -ForegroundColor Green
 
+# --- Sign checksums.sha256 with RSA private key (gitignored) ---
+$SigFile = "$ChecksumFile.sig"
+$PrivKeyPath = Join-Path $InstallerDir 'keys\checksum-private.pem'
+if (-not (Test-Path $PrivKeyPath)) {
+    Write-Error "Signing key not found at $PrivKeyPath. Generate one (see installer/keys/README) and ensure it stays gitignored."
+    exit 1
+}
+Write-Host "`n=== Signing checksums.sha256 ===" -ForegroundColor Cyan
+$signerScript = @'
+using System;
+using System.IO;
+using System.Security.Cryptography;
+class S {
+    static int Main(string[] a) {
+        var rsa = RSA.Create();
+        rsa.ImportFromPem(File.ReadAllText(a[0]));
+        var data = File.ReadAllBytes(a[1]);
+        var sig = rsa.SignData(data, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        File.WriteAllText(a[2], Convert.ToBase64String(sig));
+        return 0;
+    }
+}
+'@
+$SignerProj = Join-Path $env:TEMP "gldrive-checksum-signer"
+if (Test-Path $SignerProj) { Remove-Item -Recurse -Force $SignerProj }
+New-Item -ItemType Directory -Path $SignerProj | Out-Null
+$signerScript | Set-Content -Path (Join-Path $SignerProj 'Program.cs')
+'<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>' |
+    Set-Content -Path (Join-Path $SignerProj 'sign.csproj')
+& dotnet run --project $SignerProj -- $PrivKeyPath $ChecksumFile $SigFile
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Failed to sign checksums.sha256"
+    exit 1
+}
+$assets += $SigFile
+Write-Host "Signature: $SigFile" -ForegroundColor Green
+
 # --- Create GitHub release ---
 Write-Host "`n=== Creating GitHub release $Tag ===" -ForegroundColor Cyan
 
