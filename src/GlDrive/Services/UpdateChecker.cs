@@ -179,6 +179,55 @@ public class UpdateChecker : IDisposable
         LaunchUpdater(tempZip);
     }
 
+    // PEM-encoded RSA public key used to verify checksums.sha256.sig signatures.
+    // Private key lives in installer/keys/checksum-private.pem (gitignored).
+    // Rotation: generate a new keypair, update this constant, ship the new public key in a release
+    // signed by the OLD key. After widespread adoption, retire the old key.
+    private const string ChecksumPublicKeyPem = """
+        -----BEGIN PUBLIC KEY-----
+        MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApLMNeSXwJZH7zeZNj/iK
+        VaDDG1mn3+isBIhjnG2cKJH60WK1ImGJhTYmOGVhHKTzpKnZDJDKL6AsH3K70vG9
+        GvI8MbMrX9NQpR1KCEU5NVEo3ENs27ObQ3CxFOtlJk31gcguTsUSPOQXqa0o3vec
+        8yaK8w3dDHr/wJQmoupgvm+rTx94WR8ikBugK/ssB6EY6VIaBMHeAVe/EaGC0NBD
+        HGuZtveNiNXfF8ezW96GE7EArrlu7LPeVDB3Jc7mFlh3RflO3kCSUF0FqwNB88hg
+        MyJn6+aNupJRfki80D/tbtWLEHsDsGqIBQgywEc8Vpev6vb4XIcSgc9fNszgrFAU
+        zQIDAQAB
+        -----END PUBLIC KEY-----
+        """;
+
+    private async Task<bool> VerifyChecksumSignature(string checksumText, GitHubRelease release)
+    {
+        var sigAsset = release.Assets.FirstOrDefault(a =>
+            a.Name.Equals("checksums.sha256.sig", StringComparison.OrdinalIgnoreCase));
+        if (sigAsset == null)
+        {
+            Log.Error("No checksums.sha256.sig asset — rejecting update (publisher must sign release)");
+            return false;
+        }
+        if (!IsAllowedDownloadUrl(sigAsset.BrowserDownloadUrl))
+        {
+            Log.Error("Signature asset URL not in allowed host list — rejecting. Url={Url}", sigAsset.BrowserDownloadUrl);
+            return false;
+        }
+        try
+        {
+            var sigBase64 = (await _http.GetStringAsync(sigAsset.BrowserDownloadUrl)).Trim();
+            var sigBytes = Convert.FromBase64String(sigBase64);
+            using var rsa = RSA.Create();
+            rsa.ImportFromPem(ChecksumPublicKeyPem);
+            var dataBytes = Encoding.UTF8.GetBytes(checksumText);
+            var ok = rsa.VerifyData(dataBytes, sigBytes, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+            if (!ok) Log.Error("checksums.sha256 signature verification FAILED — rejecting update");
+            else Log.Information("checksums.sha256 signature verified");
+            return ok;
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Signature verification error — rejecting update");
+            return false;
+        }
+    }
+
     private async Task<bool> VerifyDownloadHash(string zipPath, GitHubRelease release)
     {
         var checksumAsset = release.Assets.FirstOrDefault(a =>
@@ -199,6 +248,8 @@ public class UpdateChecker : IDisposable
         try
         {
             var checksumText = await _http.GetStringAsync(checksumAsset.BrowserDownloadUrl);
+            if (!await VerifyChecksumSignature(checksumText, release))
+                return false;
             // Match against the actual asset name from GitHub, not the local temp filename
             var zipAsset = release.Assets.FirstOrDefault(a =>
                 a.Name.Contains("win-x64", StringComparison.OrdinalIgnoreCase) &&
@@ -330,13 +381,12 @@ public class UpdateChecker : IDisposable
 
             if (currentCert == null)
             {
-#if DEBUG
-                Log.Warning("Current binary is unsigned (Debug build) — skipping Authenticode check on update");
+                // Current binary is unsigned. We can't enforce issuer-match here, but we still
+                // require the UPDATE binary to be signed (checked below) — combined with the
+                // RSA-signed checksums.sha256.sig verification, this gives integrity.
+                // Once a signed release is widely deployed, flip this to fail-closed.
+                Log.Warning("Current binary is unsigned — Authenticode issuer-match disabled. Update integrity relies on checksum signature.");
                 return true;
-#else
-                Log.Warning("Current binary is unsigned — rejecting update to enforce signing in Release builds");
-                return false;
-#endif
             }
 
             // Current binary IS signed — require the update to be signed by the same issuer

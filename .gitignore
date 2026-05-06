@@ -10,3 +10,7 @@ installer/output/
 
 # Personal scripts
 transfer-movies.ps1
+
+# Signing keys — never commit private keys
+installer/keys/checksum-private.pem
+installer/keys/codesign.pfx
