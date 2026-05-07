@@ -79,7 +79,7 @@ public class CacheConfig
 public class PoolConfig
 {
     public int PoolSize { get; set; } = 3;
-    public int KeepaliveIntervalSeconds { get; set; } = 30;
+    public int KeepaliveIntervalSeconds { get; set; } = 15;
     public int ReconnectInitialDelaySeconds { get; set; } = 5;
     public int ReconnectMaxDelaySeconds { get; set; } = 120;
 }
@@ -141,7 +141,7 @@ public class DownloadConfig
     public string ResolveTmdbKey() => CredentialStore.GetApiKey("tmdb") ?? "";
     /// <summary>Resolve OpenRouter key from Credential Manager only.</summary>
     public string ResolveOpenRouterKey() => CredentialStore.GetApiKey("openrouter") ?? "";
-    public string OpenRouterModel { get; set; } = "openai/gpt-oss-120b:free";
+    public string OpenRouterModel { get; set; } = "anthropic/claude-sonnet-4-6";
     public bool AutoDownloadWishlist { get; set; } = true;
     public bool AutoExtract { get; set; } = true;
     public bool DeleteArchivesAfterExtract { get; set; } = true;

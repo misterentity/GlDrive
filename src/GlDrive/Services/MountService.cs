@@ -452,8 +452,20 @@ public class MountService : IDisposable
             using var statsCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             await using var conn = await _pool.Borrow(statsCts.Token);
             SiteStats? best = null;
+            bool connDied = false;
             foreach (var cmd in candidates)
             {
+                // If the BNC silently dropped this control connection between candidates,
+                // FluentFTP's response parser throws ArgumentOutOfRangeException
+                // ("sourceIndex (-10) must be >= 0") on every subsequent command. Bail out
+                // immediately — the next periodic tick will borrow a fresh connection.
+                if (!conn.Client.IsConnected)
+                {
+                    Log.Information("RefreshStatsAsync: connection dropped before '{Cmd}' for {Server}; aborting candidate loop",
+                        cmd, _serverConfig.Name);
+                    connDied = true;
+                    break;
+                }
                 Log.Information("RefreshStatsAsync running for {Server} via '{Cmd}'", _serverConfig.Name, cmd);
                 try
                 {
@@ -470,13 +482,23 @@ public class MountService : IDisposable
                 {
                     Log.Information("RefreshStatsAsync candidate '{Cmd}' threw for {Server}: {Msg}",
                         cmd, _serverConfig.Name, cmdEx.Message);
+                    // If the connection died mid-command, every remaining candidate will throw
+                    // the same parser error. Poison the conn so the pool discards it on return,
+                    // then break out — don't keep hammering a broken socket.
+                    if (!conn.Client.IsConnected)
+                    {
+                        conn.Poisoned = true;
+                        connDied = true;
+                        break;
+                    }
                 }
             }
 
             // Last resort: many BNCs (SuperBNC, zSBNC variants) don't expose credits via any
             // SITE command — they append them to the 226 trailer of every directory listing.
             // Trigger a small LIST and parse client.LastReply, which holds that trailer.
-            if (best == null || (best.Credits == null && best.Ratio == null))
+            // Skip when the connection already died — LIST will just throw the same parser error.
+            if (!connDied && (best == null || (best.Credits == null && best.Ratio == null)))
             {
                 Log.Information("RefreshStatsAsync falling back to LIST trailer for {Server}", _serverConfig.Name);
                 try
@@ -494,6 +516,7 @@ public class MountService : IDisposable
                 {
                     Log.Information("LIST trailer fallback failed for {Server}: {Msg}",
                         _serverConfig.Name, listEx.Message);
+                    if (!conn.Client.IsConnected) conn.Poisoned = true;
                 }
             }
 
