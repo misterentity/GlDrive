@@ -26,6 +26,10 @@ public sealed class AgentClient : IDisposable
     private readonly HttpClient _http;
     private readonly string _model;
 
+    // Reliable JSON-mode fallback for when a free/flaky model returns malformed JSON.
+    // Matches AppConfig.ResolveAgentModel default.
+    private const string FallbackModel = "anthropic/claude-sonnet-4-6";
+
     public AgentClient(string apiKey, string model)
     {
         _model = model;
@@ -41,9 +45,36 @@ public sealed class AgentClient : IDisposable
 
     public async Task<AgentRunOutcome> RunAsync(string systemPrompt, string userPrompt, CancellationToken ct)
     {
+        var outcome = await RunInternalAsync(_model, systemPrompt, userPrompt, ct);
+
+        // Free models (notably openai/gpt-oss-120b:free) periodically emit malformed JSON —
+        // unescaped newlines mid-key, stray escaped quotes, unbalanced brackets — that no
+        // amount of repair can recover. Auto-retry once with a paid quality model so the
+        // run produces useful output instead of failing.
+        if (outcome.ErrorMessage == "failed-to-parse-json"
+            && _model.Contains(":free", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(_model, FallbackModel, StringComparison.OrdinalIgnoreCase))
+        {
+            Log.Warning("AgentClient: free model {Model} returned malformed JSON — retrying with {Fallback}",
+                _model, FallbackModel);
+            var retry = await RunInternalAsync(FallbackModel, systemPrompt, userPrompt, ct);
+            if (retry.Result is not null)
+            {
+                Log.Information("AgentClient: fallback {Fallback} succeeded after {Primary} parse failure",
+                    FallbackModel, _model);
+                return retry;
+            }
+            Log.Warning("AgentClient: fallback {Fallback} also failed: {Err}", FallbackModel, retry.ErrorMessage);
+        }
+
+        return outcome;
+    }
+
+    private async Task<AgentRunOutcome> RunInternalAsync(string model, string systemPrompt, string userPrompt, CancellationToken ct)
+    {
         var request = new
         {
-            model = _model,
+            model = model,
             messages = new[]
             {
                 new { role = "system", content = systemPrompt },
@@ -62,7 +93,7 @@ public sealed class AgentClient : IDisposable
             var resp = await _http.PostAsync("chat/completions", content, ct);
             var responseBody = await resp.Content.ReadAsStringAsync(ct);
             Log.Information("AgentClient response status={Status} bytes={Bytes} model={Model}",
-                resp.StatusCode, responseBody.Length, _model);
+                resp.StatusCode, responseBody.Length, model);
 
             if (!resp.IsSuccessStatusCode)
                 return new AgentRunOutcome { ErrorMessage = $"HTTP {(int)resp.StatusCode}" };
@@ -133,7 +164,7 @@ public sealed class AgentClient : IDisposable
                     var dumpPath = Path.Combine(dumpDir,
                         $"last-response-{DateTime.Now:yyyyMMdd-HHmmss}.txt");
                     File.WriteAllText(dumpPath,
-                        $"# model: {_model}\n# tokens: {inputTok} in / {outputTok} out\n\n{msg}");
+                        $"# model: {model}\n# tokens: {inputTok} in / {outputTok} out\n\n{msg}");
                     Log.Warning("AgentClient parse failed — full response dumped to {Path}", dumpPath);
                 }
                 catch { /* best-effort */ }
@@ -144,7 +175,7 @@ public sealed class AgentClient : IDisposable
                 Result = result,
                 InputTokens = inputTok,
                 OutputTokens = outputTok,
-                EstimatedCostUsd = EstimateCost(_model, inputTok, outputTok),
+                EstimatedCostUsd = EstimateCost(model, inputTok, outputTok),
                 ErrorMessage = result is null ? "failed-to-parse-json" : null
             };
         }

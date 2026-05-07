@@ -337,7 +337,7 @@ public partial class ServerEditDialog : Window
 
         // Pool
         _serverConfig.Pool.PoolSize = int.TryParse(PoolSizeBox.Text, out var ps) ? Math.Clamp(ps, 1, 10) : 3;
-        _serverConfig.Pool.KeepaliveIntervalSeconds = int.TryParse(KeepaliveBox.Text, out var ka) ? Math.Clamp(ka, 10, 120) : 30;
+        _serverConfig.Pool.KeepaliveIntervalSeconds = int.TryParse(KeepaliveBox.Text, out var ka) ? Math.Clamp(ka, 10, 120) : 15;
 
         // Notifications
         _serverConfig.Notifications.Enabled = NotificationsEnabledBox.IsChecked == true;
