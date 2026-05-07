@@ -94,6 +94,15 @@ public class FtpClientFactory
         // when connections are in a poisoned state (e.g., after failed FXP transfers)
         client.Config.StaleDataCheck = false;
 
+        // Built-in NOOP daemon keeps EVERY pool connection alive, not just whichever
+        // one ConnectionMonitor borrows each cycle. Without this, BNC idle timeouts
+        // killed unused pool conns silently, and the next borrow detected the death
+        // as a "Connection lost" — producing the constant 30s reconnect cycle.
+        // Empirically (superbnc.xxxxx.tw, May 2026), the BNC drops idle conns under
+        // 30s, so we NOOP every 15s of inactivity to stay well under that.
+        client.Config.Noop = true;
+        client.Config.NoopInterval = 15000;
+
         // Skip QUIT+read cycle during Disconnect — prevents GnuTLS from attempting
         // to read from poisoned streams during disposal, which crashes the process
         client.Config.DisconnectWithQuit = false;
