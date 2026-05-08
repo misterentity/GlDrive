@@ -93,7 +93,12 @@ foreach ($a in $assets) {
     $checksumLines += "$hash *$name"
     Write-Host "  $hash  $name"
 }
-$checksumLines | Set-Content -Path $ChecksumFile -Encoding UTF8
+# Write WITHOUT BOM. PS 5.1's `Set-Content -Encoding UTF8` adds a BOM,
+# but the C# verifier downloads via HttpClient.GetStringAsync which strips
+# the BOM during decode → signed bytes (BOM-included) wouldn't match
+# verified bytes (BOM-stripped). Use UTF8Encoding(false) for portability.
+$utf8NoBom = New-Object System.Text.UTF8Encoding $false
+[System.IO.File]::WriteAllText($ChecksumFile, ($checksumLines -join "`n") + "`n", $utf8NoBom)
 $assets += $ChecksumFile
 Write-Host "Checksums: $ChecksumFile" -ForegroundColor Green
 
