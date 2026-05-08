@@ -215,8 +215,19 @@ public class UpdateChecker : IDisposable
             var sigBytes = Convert.FromBase64String(sigBase64);
             using var rsa = RSA.Create();
             rsa.ImportFromPem(ChecksumPublicKeyPem);
-            var dataBytes = Encoding.UTF8.GetBytes(checksumText);
-            var ok = rsa.VerifyData(dataBytes, sigBytes, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+
+            // BOM compatibility: PS 5.1's `Set-Content -Encoding UTF8` writes a BOM,
+            // but HttpClient.GetStringAsync strips it during decode. Older releases
+            // (v1.59–v1.62) signed BOM-included bytes; v1.63+ signs BOM-less bytes.
+            // Try both representations so a verifier on either side of the change
+            // can validate either generation of release.
+            var withoutBom = Encoding.UTF8.GetBytes(checksumText);
+            var withBom = new byte[withoutBom.Length + 3];
+            withBom[0] = 0xEF; withBom[1] = 0xBB; withBom[2] = 0xBF;
+            Buffer.BlockCopy(withoutBom, 0, withBom, 3, withoutBom.Length);
+
+            var ok = rsa.VerifyData(withoutBom, sigBytes, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1)
+                  || rsa.VerifyData(withBom,    sigBytes, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
             if (!ok) Log.Error("checksums.sha256 signature verification FAILED — rejecting update");
             else Log.Information("checksums.sha256 signature verified");
             return ok;
