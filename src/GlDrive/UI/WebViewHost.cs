@@ -51,12 +51,27 @@ public class WebViewHost : ContentControl
             // Serialize initialization AND visual tree attachment — adding a WebView2
             // to the visual tree triggers auto-init; if multiple instances auto-init
             // concurrently they deadlock on the browser process lock.
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            await _initLock.WaitAsync(cts.Token);
+            //
+            // CreateAsync / EnsureCoreWebView2Async don't accept cancellation tokens,
+            // so we race them against a Task.Delay timeout. If the runtime hangs (cold
+            // start of WebView2 host process can hang indefinitely on some machines),
+            // we abandon the lock and surface the fallback UI instead of leaving the
+            // tab content blank and the lock held forever — which previously caused
+            // every subsequent tab to time out at 30s and render blank too.
+            await _initLock.WaitAsync();
             try
             {
-                var env = await CoreWebView2Environment.CreateAsync(userDataFolder: dataDir);
-                await _webView.EnsureCoreWebView2Async(env);
+                var initTask = InitCoreAsync(_webView, dataDir);
+                var timeoutTask = Task.Delay(TimeSpan.FromSeconds(60));
+                var winner = await Task.WhenAny(initTask, timeoutTask);
+                if (winner == timeoutTask)
+                {
+                    Log.Warning("WebView2 initialization timed out for {Url} after 60s", url);
+                    _webView = null;
+                    ShowFallback();
+                    return false;
+                }
+                await initTask; // surface any exception
                 Content = _webView;
             }
             finally
@@ -140,6 +155,12 @@ public class WebViewHost : ContentControl
             ShowFallback();
             return false;
         }
+    }
+
+    private static async Task InitCoreAsync(WebView2 webView, string dataDir)
+    {
+        var env = await CoreWebView2Environment.CreateAsync(userDataFolder: dataDir);
+        await webView.EnsureCoreWebView2Async(env);
     }
 
     private const string InstallScript =
