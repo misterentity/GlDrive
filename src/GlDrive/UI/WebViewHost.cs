@@ -52,16 +52,22 @@ public class WebViewHost : ContentControl
             // to the visual tree triggers auto-init; if multiple instances auto-init
             // concurrently they deadlock on the browser process lock.
             //
-            // CreateAsync / EnsureCoreWebView2Async don't accept cancellation tokens,
-            // so we race them against a Task.Delay timeout. If the runtime hangs (cold
-            // start of WebView2 host process can hang indefinitely on some machines),
-            // we abandon the lock and surface the fallback UI instead of leaving the
-            // tab content blank and the lock held forever — which previously caused
-            // every subsequent tab to time out at 30s and render blank too.
+            // Content = _webView MUST happen before EnsureCoreWebView2Async: a detached
+            // WebView2 has no parent HWND and msedgewebview2.exe can't start without
+            // one, so init hangs forever. (v1.62.0 moved attachment after init while
+            // adding the timeout below; that re-broke what v1.44.83 fixed and caused
+            // every panel to hit the 60s timeout instead of loading.) Attachment also
+            // kicks off auto-init using the CreationProperties set above; the
+            // EnsureCoreWebView2Async call below just awaits its completion.
+            //
+            // EnsureCoreWebView2Async doesn't accept a cancellation token, so we race
+            // it against a 60s Task.Delay via Task.WhenAny. On timeout we abandon the
+            // lock and surface the fallback UI so subsequent tabs aren't blocked.
             await _initLock.WaitAsync();
             try
             {
-                var initTask = InitCoreAsync(_webView, dataDir);
+                Content = _webView;
+                var initTask = _webView.EnsureCoreWebView2Async();
                 var timeoutTask = Task.Delay(TimeSpan.FromSeconds(60));
                 var winner = await Task.WhenAny(initTask, timeoutTask);
                 if (winner == timeoutTask)
@@ -72,7 +78,6 @@ public class WebViewHost : ContentControl
                     return false;
                 }
                 await initTask; // surface any exception
-                Content = _webView;
             }
             finally
             {
@@ -155,12 +160,6 @@ public class WebViewHost : ContentControl
             ShowFallback();
             return false;
         }
-    }
-
-    private static async Task InitCoreAsync(WebView2 webView, string dataDir)
-    {
-        var env = await CoreWebView2Environment.CreateAsync(userDataFolder: dataDir);
-        await webView.EnsureCoreWebView2Async(env);
     }
 
     private const string InstallScript =
