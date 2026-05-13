@@ -296,17 +296,19 @@
                                                                 </Ellipse>
                                                                 <Ellipse Width="64" Height="64" Stroke="{DynamicResource LineDimBrush}" StrokeThickness="1"/>
                                                                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                                                                    <TextBlock Text="{Binding CapacityPercent, StringFormat=N0}" Style="{DynamicResource DisplayTextStyle}"
-                                                                               HorizontalAlignment="Center" FontSize="20"/>
-                                                                    <TextBlock Text="%" Style="{DynamicResource MicroTextStyle}" HorizontalAlignment="Center"/>
+                                                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                                                        <TextBlock Text="{Binding CapacityPercent, StringFormat=N0}" Style="{DynamicResource DisplayTextStyle}"
+                                                                                   HorizontalAlignment="Center" FontSize="20"/>
+                                                                        <TextBlock Text="%" Style="{DynamicResource DisplayTextStyle}" FontSize="14" VerticalAlignment="Bottom" Margin="2,0,0,3"/>
+                                                                    </StackPanel>
+                                                                    <TextBlock Text="POOL" Style="{DynamicResource MicroTextStyle}" HorizontalAlignment="Center"/>
                                                                 </StackPanel>
                                                             </Grid>
                                                             <DockPanel Grid.Column="1" Margin="16,0,0,0" LastChildFill="True">
                                                                 <StackPanel DockPanel.Dock="Top" Orientation="Horizontal">
                                                                     <TextBlock Text="{Binding Name}" Style="{DynamicResource DisplayTextStyle}" FontSize="15"/>
-                                                                    <Border Margin="10,0,0,0" Style="{DynamicResource TagAccentStyle}" VerticalAlignment="Center">
-                                                                        <TextBlock Text="{Binding SiteTag}" Style="{DynamicResource TagTextStyle}"
-                                                                                   Foreground="{DynamicResource AccentBrush}"/>
+                                                                    <Border Margin="10,0,0,0" Style="{DynamicResource ServerStatusTagStyle}" VerticalAlignment="Center">
+                                                                        <TextBlock Text="{Binding SiteTag}" Style="{DynamicResource ServerStatusTextStyle}"/>
                                                                     </Border>
                                                                 </StackPanel>
                                                                 <TextBlock DockPanel.Dock="Top" Text="{Binding Host}" Style="{DynamicResource MicroTextStyle}" Margin="0,2,0,8"/>
@@ -2414,18 +2416,16 @@
                                                                 <Button Content="FLUSH" Style="{DynamicResource CyberpunkButtonStyle}" Margin="0,0,6,0" Padding="14,5"/>
                                                                 <Button Content="UNMOUNT" Style="{DynamicResource DangerButtonStyle}" Padding="14,5"/>
                                                             </StackPanel>
-                                                            <!-- Status tag -->
-                                                            <Border DockPanel.Dock="Bottom" Style="{DynamicResource TagAccentStyle}" HorizontalAlignment="Center" Margin="0,10,0,0">
-                                                                <TextBlock Text="{Binding StatusLine}" Style="{DynamicResource TagTextStyle}" Foreground="{DynamicResource AccentBrush}"/>
+                                                            <!-- Status tag (color-coded by SiteTag: green=alive, cyan=MOUNTED, red=offline) -->
+                                                            <Border DockPanel.Dock="Bottom" Style="{DynamicResource ServerStatusTagStyle}" HorizontalAlignment="Center" Margin="0,10,0,0">
+                                                                <TextBlock Text="{Binding StatusLine}" Style="{DynamicResource ServerStatusTextStyle}"/>
                                                             </Border>
-                                                            <!-- Big disc -->
+                                                            <!-- Big disc (Stroke + glow recoloring driven by SiteTag) -->
                                                             <Grid VerticalAlignment="Center" HorizontalAlignment="Center">
                                                                 <Ellipse Width="130" Height="130" Stroke="{DynamicResource LineDimBrush}" StrokeThickness="2"/>
-                                                                <Ellipse Width="130" Height="130" Stroke="{DynamicResource AccentBrush}" StrokeThickness="3"
+                                                                <Ellipse Width="130" Height="130" StrokeThickness="3"
+                                                                        Style="{DynamicResource ServerStatusRingStyle}"
                                                                         StrokeDashArray="2,1.2" RenderTransformOrigin="0.5,0.5">
-                                                                    <Ellipse.Effect>
-                                                                        <DropShadowEffect Color="#00E5FF" BlurRadius="14" ShadowDepth="0" Opacity="0.55"/>
-                                                                    </Ellipse.Effect>
                                                                     <Ellipse.RenderTransform>
                                                                         <RotateTransform Angle="0"/>
                                                                     </Ellipse.RenderTransform>
@@ -2442,8 +2442,12 @@
                                                                 </Ellipse>
                                                                 <Ellipse Width="92" Height="92" Stroke="{DynamicResource LineDimBrush}" StrokeThickness="1"/>
                                                                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                                                                    <TextBlock Text="{Binding CapacityPercent, StringFormat=N0}" Style="{DynamicResource DisplayTextStyle}" FontSize="28" HorizontalAlignment="Center"/>
-                                                                    <TextBlock Text="%" Style="{DynamicResource MicroTextStyle}" HorizontalAlignment="Center"/>
+                                                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                                                        <TextBlock Text="{Binding CapacityPercent, StringFormat=N0}" Style="{DynamicResource DisplayTextStyle}" FontSize="28" HorizontalAlignment="Center"/>
+                                                                        <TextBlock Text="%" Style="{DynamicResource DisplayTextStyle}" FontSize="18" VerticalAlignment="Bottom" Margin="3,0,0,4"/>
+                                                                    </StackPanel>
+                                                                    <TextBlock Text="{Binding CapacityUsedDisplay}" Style="{DynamicResource MicroTextStyle}" HorizontalAlignment="Center"/>
+                                                                    <TextBlock Text="POOL SLOTS" Style="{DynamicResource MicroTextStyle}" HorizontalAlignment="Center" FontSize="9"/>
                                                                 </StackPanel>
                                                             </Grid>
                                                         </DockPanel>
