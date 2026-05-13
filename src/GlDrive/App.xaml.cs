@@ -164,12 +164,17 @@ public partial class App
         // A recent heartbeat (<90s) at startup means the previous process was alive
         // until it died — instant native crash. A stale heartbeat means it hung first.
         var heartbeatCheck = GlDrive.Services.HeartbeatMonitor.CheckStaleHeartbeat();
+        // TODO(v1.85.x): if stale, surface to user via tray balloon after tray init.
+        TimeSpan? staleHeartbeatAge = null;
         if (heartbeatCheck.HadHeartbeat)
         {
             var age = heartbeatCheck.AgeAtStartup ?? TimeSpan.Zero;
             if (age > TimeSpan.FromSeconds(90))
+            {
                 Log.Warning("Previous instance heartbeat stale at startup — age={AgeSec}s, snapshot={Snapshot}",
                     (int)age.TotalSeconds, heartbeatCheck.RawJson);
+                staleHeartbeatAge = age;
+            }
             else
                 Log.Information("Previous instance shut down cleanly — last heartbeat age={AgeSec}s",
                     (int)age.TotalSeconds);
@@ -241,6 +246,16 @@ public partial class App
         // Apply theme
         ThemeManager.ApplyTheme(config.Downloads.Theme);
 
+        // Re-add the cyberpunk ProgressBar stripe-scroll animation that v1.85.1
+        // pulled from the template. The in-template EventTrigger crashed with a
+        // namescope error ('StripeRect' not in scope) because the template
+        // namescope isn't fully built when the EventTrigger fires. Wiring this
+        // via EventManager.RegisterClassHandler runs the handler AFTER the
+        // template applies, so FindName resolves cleanly. Themes without a
+        // StripeRect element (Dark/Light) just no-op.
+        try { WireProgressBarStripeAnimation(); }
+        catch (Exception ex) { Log.Debug(ex, "WireProgressBarStripeAnimation failed"); }
+
         // Init services — certificates auto-trusted on first connect (TOFU model)
         // Users can clear per-server certs in Settings > Servers > Edit > Clear Certificate
         var certManager = new CertificateManager();
@@ -283,6 +298,26 @@ public partial class App
         _taskbarIcon.DataContext = _trayViewModel;
         TrayIconSetup.Configure(_taskbarIcon, _trayViewModel);
         _taskbarIcon.ForceCreate(false);
+
+        // One-shot tray balloon so the user knows last session likely crashed.
+        // Best-effort: tray init may not have fully wired into the shell yet on
+        // some boots; defer to Background dispatcher tick so the icon is live.
+        if (staleHeartbeatAge is { } staleAge)
+        {
+            var ageSec = (int)staleAge.TotalSeconds;
+            var icon = _taskbarIcon;
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    icon?.ShowNotification(
+                        "GlDrive recovered",
+                        $"Previous session ended unexpectedly ({ageSec}s heartbeat gap). Logs in %AppData%\\GlDrive\\logs.",
+                        H.NotifyIcon.Core.NotificationIcon.Warning);
+                }
+                catch (Exception ex) { Log.Debug(ex, "Heartbeat toast failed"); }
+            }), System.Windows.Threading.DispatcherPriority.Background);
+        }
 
         // Auto-start extractor watch folders if enabled (hidden window)
         AutoStartExtractorWatch();
@@ -369,6 +404,49 @@ public partial class App
             // Warning (not Debug) so failures are visible at default log level
             Log.Warning(ex, "AutoStartExtractorWatch: unexpected failure");
         }
+    }
+
+    /// <summary>
+    /// Re-adds the cyberpunk ProgressBar stripe-scroll animation that v1.85.1
+    /// removed from the template. The in-template EventTrigger crashed with a
+    /// 'StripeRect' namescope error because the template namescope isn't
+    /// fully built when an inline FrameworkElement.LoadedEvent EventTrigger
+    /// fires. RegisterClassHandler runs the handler AFTER the template
+    /// applies, so FindName resolves cleanly. Themes whose template lacks
+    /// StripeRect (Dark/Light) just no-op safely.
+    /// </summary>
+    private static void WireProgressBarStripeAnimation()
+    {
+        EventManager.RegisterClassHandler(
+            typeof(System.Windows.Controls.ProgressBar),
+            FrameworkElement.LoadedEvent,
+            new RoutedEventHandler((sender, _) =>
+            {
+                try
+                {
+                    if (sender is not System.Windows.Controls.ProgressBar pb) return;
+                    pb.ApplyTemplate();
+                    var stripe = pb.Template?.FindName("StripeRect", pb)
+                                 as System.Windows.Shapes.Rectangle;
+                    if (stripe?.Fill is not System.Windows.Media.DrawingBrush brush) return;
+                    if (brush.Transform is not System.Windows.Media.TranslateTransform transform) return;
+                    var anim = new System.Windows.Media.Animation.DoubleAnimation
+                    {
+                        From = 0,
+                        To = 16,
+                        Duration = TimeSpan.FromSeconds(0.8),
+                        RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever
+                    };
+                    transform.BeginAnimation(
+                        System.Windows.Media.TranslateTransform.XProperty,
+                        anim);
+                }
+                catch (Exception ex)
+                {
+                    Log.Debug(ex, "ProgressBar stripe animation hook failed");
+                }
+            }),
+            handledEventsToo: true);
     }
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]

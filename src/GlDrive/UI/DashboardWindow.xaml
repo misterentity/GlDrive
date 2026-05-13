@@ -902,15 +902,24 @@
                                                     Padding="12,6" Margin="0,0,0,4" Style="{StaticResource SecondaryButton}"/>
                                         </WrapPanel>
                                     </Border>
-                                    <DataGrid ItemsSource="{Binding DownloadItems}"
+                                    <ListBox ItemsSource="{Binding DownloadItems}"
                               SelectedItem="{Binding SelectedDownloadItem}"
-                              AutoGenerateColumns="False" IsReadOnly="True"
-                              SelectionMode="Extended" GridLinesVisibility="Horizontal"
-                              HeadersVisibility="Column" CanUserAddRows="False"
+                              SelectionMode="Extended"
                               AllowDrop="True" Drop="Downloads_Drop"
                               x:Name="DownloadsGrid"
-                              SelectionChanged="DownloadsGrid_SelectionChanged">
-                        <DataGrid.ContextMenu>
+                              SelectionChanged="DownloadsGrid_SelectionChanged"
+                              Background="Transparent" BorderThickness="0"
+                              HorizontalContentAlignment="Stretch"
+                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                              ScrollViewer.VerticalScrollBarVisibility="Auto">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
+                                <Setter Property="Padding" Value="0"/>
+                                <Setter Property="Margin" Value="0"/>
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ContextMenu>
                             <ContextMenu>
                                 <MenuItem Header="Cancel" Command="{Binding CancelDownloadCommand}"/>
                                 <MenuItem Header="Retry" Command="{Binding RetryDownloadCommand}"/>
@@ -918,66 +927,60 @@
                                 <Separator/>
                                 <MenuItem Header="Remove Selected" Command="{Binding RemoveSelectedDownloadsCommand}"/>
                             </ContextMenu>
-                        </DataGrid.ContextMenu>
-                        <DataGrid.InputBindings>
+                        </ListBox.ContextMenu>
+                        <ListBox.InputBindings>
                             <KeyBinding Key="Delete" Command="{Binding RemoveSelectedDownloadsCommand}"/>
                             <KeyBinding Key="R" Command="{Binding RetryDownloadCommand}"/>
-                        </DataGrid.InputBindings>
-                        <DataGrid.RowStyle>
-                            <Style TargetType="DataGridRow" BasedOn="{StaticResource {x:Type DataGridRow}}">
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding Status}" Value="Failed">
-                                        <Setter Property="Foreground" Value="#F44336"/>
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding Status}" Value="Cancelled">
-                                        <Setter Property="Foreground" Value="#9E9E9E"/>
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding Status}" Value="Completed">
-                                        <Setter Property="Foreground" Value="#4CAF50"/>
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding Status}" Value="Downloading">
-                                        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding Status}" Value="Extracting">
-                                        <Setter Property="Foreground" Value="{DynamicResource WarningBrush}"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </DataGrid.RowStyle>
-                        <DataGrid.Columns>
-                            <DataGridTextColumn Header="Release" Binding="{Binding ReleaseName}" Width="*"/>
-                            <DataGridTextColumn Header="Server" Binding="{Binding ServerName}" Width="90"/>
-                            <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="80"/>
-                            <DataGridTemplateColumn Header="Status" Width="100">
-                                <DataGridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <Border Style="{DynamicResource DownloadStatusTagStyle}" HorizontalAlignment="Left">
-                                            <TextBlock Text="{Binding Status}"
-                                                       Style="{DynamicResource DownloadStatusTextStyle}"/>
+                        </ListBox.InputBindings>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border Margin="0,0,0,8" Padding="14,10"
+                                        Background="#80050F1A"
+                                        BorderBrush="{DynamicResource LineBrush}" BorderThickness="1">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="110"/>
+                                            <ColumnDefinition Width="110"/>
+                                            <ColumnDefinition Width="90"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+
+                                        <!-- Top row: release name + status chip -->
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding ReleaseName}"
+                                                   Style="{DynamicResource DisplayTextStyle}" FontSize="13"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                        <Border Grid.Row="0" Grid.Column="3"
+                                                Style="{DynamicResource DownloadStatusTagStyle}"
+                                                HorizontalAlignment="Right">
+                                            <TextBlock Text="{Binding Status}" Style="{DynamicResource DownloadStatusTextStyle}"/>
                                         </Border>
-                                    </DataTemplate>
-                                </DataGridTemplateColumn.CellTemplate>
-                            </DataGridTemplateColumn>
-                            <DataGridTextColumn Header="Speed" Binding="{Binding SpeedDisplay}" Width="100"/>
-                            <DataGridTemplateColumn Header="Progress" Width="*">
-                                <DataGridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <Grid>
-                                            <Grid.RowDefinitions>
-                                                <RowDefinition Height="Auto"/>
-                                                <RowDefinition Height="Auto"/>
-                                            </Grid.RowDefinitions>
-                                            <ProgressBar Grid.Row="0" Height="4" Margin="0,4,0,2"
-                                                         Minimum="0" Maximum="100"
-                                                         Value="{Binding ProgressPercent, FallbackValue=0}"/>
-                                            <TextBlock Grid.Row="1" Text="{Binding ProgressText}" FontSize="10"
-                                                       Foreground="{DynamicResource TextDimBrush}"/>
-                                        </Grid>
-                                    </DataTemplate>
-                                </DataGridTemplateColumn.CellTemplate>
-                            </DataGridTemplateColumn>
-                        </DataGrid.Columns>
-                    </DataGrid>
+
+                                        <!-- Middle row: server / category / speed micro-text -->
+                                        <StackPanel Grid.Row="1" Grid.Column="0" Orientation="Horizontal" Margin="0,4,0,8">
+                                            <TextBlock Text="{Binding ServerName}" Style="{DynamicResource AccentTextStyle}" FontSize="11"/>
+                                            <TextBlock Text=" · " Foreground="{DynamicResource TextFaintBrush}"/>
+                                            <TextBlock Text="{Binding Category}" Style="{DynamicResource MicroTextStyle}"/>
+                                            <TextBlock Text=" · " Foreground="{DynamicResource TextFaintBrush}"/>
+                                            <TextBlock Text="{Binding ProgressText}" Style="{DynamicResource MicroTextStyle}"/>
+                                        </StackPanel>
+                                        <TextBlock Grid.Row="1" Grid.Column="3" Text="{Binding SpeedDisplay}"
+                                                   HorizontalAlignment="Right"
+                                                   Style="{DynamicResource AccentTextStyle}" FontSize="11"/>
+
+                                        <!-- Progress bar -->
+                                        <ProgressBar Grid.Row="2" Grid.ColumnSpan="4" Height="5"
+                                                     Minimum="0" Maximum="100"
+                                                     Value="{Binding ProgressPercent, FallbackValue=0}"/>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
                                 </DockPanel>
                             </Grid>
                         </DockPanel>
@@ -1032,6 +1035,30 @@
                     </DockPanel>
                     <TextBlock DockPanel.Dock="Top" Text="{Binding SearchStatus}" Margin="0,0,0,6"
                                Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"/>
+                    <!-- Filter chips row (decorative for now) -->
+                    <Border DockPanel.Dock="Top" Padding="14,6" Margin="0,8,0,8">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="FILTERS" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                            <Border Style="{DynamicResource TagAccentStyle}" Margin="0,0,6,0" Padding="9,3">
+                                <TextBlock Text="ALL QUALITIES" Style="{DynamicResource TagTextStyle}" Foreground="{DynamicResource AccentBrush}"/>
+                            </Border>
+                            <Border Style="{DynamicResource TagStyle}" Margin="0,0,6,0" Padding="9,3">
+                                <TextBlock Text="1080p" Style="{DynamicResource TagTextStyle}"/>
+                            </Border>
+                            <Border Style="{DynamicResource TagStyle}" Margin="0,0,6,0" Padding="9,3">
+                                <TextBlock Text="2160p" Style="{DynamicResource TagTextStyle}"/>
+                            </Border>
+                            <Border Style="{DynamicResource TagStyle}" Margin="0,0,6,0" Padding="9,3">
+                                <TextBlock Text="WEB" Style="{DynamicResource TagTextStyle}"/>
+                            </Border>
+                            <Border Style="{DynamicResource TagStyle}" Margin="0,0,6,0" Padding="9,3">
+                                <TextBlock Text="BLURAY" Style="{DynamicResource TagTextStyle}"/>
+                            </Border>
+                            <Border Style="{DynamicResource TagStyle}" Padding="9,3">
+                                <TextBlock Text="&gt; 1GB" Style="{DynamicResource TagTextStyle}"/>
+                            </Border>
+                        </StackPanel>
+                    </Border>
                     <DockPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
                         <Button Content="Download Selected" Command="{Binding DownloadSearchResultCommand}"
                                 Padding="16,6" Style="{StaticResource PrimaryButton}"
@@ -1780,13 +1807,13 @@
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="180"/>
                                             <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="160"/>
+                                            <ColumnDefinition Width="180"/>
                                         </Grid.ColumnDefinitions>
                                         <!-- Channels inner panel -->
                                         <Border Grid.Column="0" Margin="0,0,6,0" Style="{DynamicResource HudPanelStyle}">
                                             <DockPanel>
                                                 <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                                    <TextBlock Text="CHANNELS" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                                    <TextBlock Text="&gt;&gt; CHANNELS" Style="{DynamicResource SectionHeaderTextStyle}"/>
                                                 </Border>
                                                 <Grid>
                                                     <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -1815,8 +1842,7 @@
                                         <Border Grid.Column="1" Margin="0,0,6,0" Style="{DynamicResource HudPanelStyle}">
                                             <DockPanel>
                                                 <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                                    <TextBlock Text="{Binding Irc.SelectedChannel.SidebarDisplay, FallbackValue=#channel}"
-                                                               Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                                    <TextBlock Text="&gt;&gt; MESSAGES" Style="{DynamicResource SectionHeaderTextStyle}"/>
                                                 </Border>
                                                 <Grid>
                                                     <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -1861,7 +1887,7 @@
                                         <Border Grid.Column="2" Style="{DynamicResource HudPanelStyle}">
                                             <DockPanel>
                                                 <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                                    <TextBlock Text="USERS" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                                    <TextBlock Text="&gt;&gt; USERS" Style="{DynamicResource SectionHeaderTextStyle}"/>
                                                 </Border>
                                                 <Grid>
                                                     <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
