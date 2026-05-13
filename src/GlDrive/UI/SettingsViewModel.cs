@@ -266,7 +266,7 @@ public class SettingsViewModel : INotifyPropertyChanged
 
     public string[] LogLevels { get; } = ["Verbose", "Debug", "Information", "Warning", "Error"];
     public string[] QualityOptions { get; } = ["Any", "SD", "720p", "1080p", "2160p"];
-    public string[] ThemeOptions { get; } = ["Dark", "Light", "System"];
+    public string[] ThemeOptions { get; } = ["Dark", "Light", "Cyberpunk", "System"];
 
     public void ApplyTo(AppConfig config)
     {
