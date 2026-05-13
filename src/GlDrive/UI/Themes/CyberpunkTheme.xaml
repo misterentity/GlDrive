@@ -40,10 +40,38 @@
     <DropShadowEffect x:Key="SignatureGlowSoftEffect" Color="#00E5FF" BlurRadius="22" ShadowDepth="0" Opacity="0.35"/>
 
     <Style TargetType="Window">
-        <Setter Property="Background" Value="{DynamicResource BackgroundBrush}"/>
         <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
         <Setter Property="FontFamily" Value="{DynamicResource MonoFontFamily}"/>
         <Setter Property="FontSize" Value="13"/>
+        <Setter Property="Background">
+            <Setter.Value>
+                <DrawingBrush TileMode="Tile"
+                              Viewport="0,0,48,48"
+                              ViewportUnits="Absolute"
+                              Stretch="None">
+                    <DrawingBrush.Drawing>
+                        <DrawingGroup>
+                            <GeometryDrawing Brush="#03070D">
+                                <GeometryDrawing.Geometry>
+                                    <RectangleGeometry Rect="0,0,48,48"/>
+                                </GeometryDrawing.Geometry>
+                            </GeometryDrawing>
+                            <GeometryDrawing>
+                                <GeometryDrawing.Pen>
+                                    <Pen Brush="#0D2536" Thickness="1"/>
+                                </GeometryDrawing.Pen>
+                                <GeometryDrawing.Geometry>
+                                    <GeometryGroup>
+                                        <LineGeometry StartPoint="48,0" EndPoint="48,48"/>
+                                        <LineGeometry StartPoint="0,48" EndPoint="48,48"/>
+                                    </GeometryGroup>
+                                </GeometryDrawing.Geometry>
+                            </GeometryDrawing>
+                        </DrawingGroup>
+                    </DrawingBrush.Drawing>
+                </DrawingBrush>
+            </Setter.Value>
+        </Setter>
     </Style>
 
     <Style x:Key="CyberpunkButtonStyle" TargetType="Button">
@@ -484,4 +512,279 @@
             <LinearDoubleKeyFrame KeyTime="0:0:4.0" Value="1"/>
         </DoubleAnimationUsingKeyFrames>
     </Storyboard>
+
+    <Style TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
+        <Setter Property="FontFamily" Value="{DynamicResource MonoFontFamily}"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="TextOptions.TextRenderingMode" Value="ClearType"/>
+        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal"/>
+    </Style>
+
+    <Style TargetType="Label">
+        <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
+        <Setter Property="FontFamily" Value="{DynamicResource MonoFontFamily}"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="Padding" Value="0"/>
+    </Style>
+
+    <Style TargetType="Border">
+        <Style.Triggers>
+            <Trigger Property="BorderThickness" Value="1">
+                <Setter Property="BorderBrush" Value="{DynamicResource LineBrush}"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <Style TargetType="ScrollViewer">
+        <Setter Property="Background" Value="Transparent"/>
+    </Style>
+
+    <Style TargetType="Hyperlink">
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+        <Setter Property="TextDecorations" Value="Underline"/>
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Foreground" Value="{DynamicResource AccentHoverBrush}"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <Style TargetType="Slider">
+        <Setter Property="Background" Value="{DynamicResource Background3Brush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource LineBrush}"/>
+    </Style>
+
+    <Style TargetType="RadioButton">
+        <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
+        <Setter Property="FontFamily" Value="{DynamicResource MonoFontFamily}"/>
+        <Setter Property="FontSize" Value="12"/>
+    </Style>
+
+    <Style TargetType="ToggleButton">
+        <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
+        <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource LineDimBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="FontFamily" Value="{DynamicResource MonoFontFamily}"/>
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="Padding" Value="10,5"/>
+        <Style.Triggers>
+            <Trigger Property="IsChecked" Value="True">
+                <Setter Property="Background" Value="{DynamicResource AccentDimBrush}"/>
+                <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+                <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+            </Trigger>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <Style TargetType="ToolTip">
+        <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="FontFamily" Value="{DynamicResource MonoFontFamily}"/>
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="Padding" Value="8,5"/>
+    </Style>
+
+    <Style TargetType="StatusBar">
+        <Setter Property="Background" Value="{DynamicResource Background2Brush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource ForegroundDimBrush}"/>
+        <Setter Property="FontFamily" Value="{DynamicResource MonoFontFamily}"/>
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource LineBrush}"/>
+        <Setter Property="BorderThickness" Value="0,1,0,0"/>
+    </Style>
+
+    <Style x:Key="HudFrameStyle" TargetType="Border">
+        <Setter Property="Background" Value="#CC0B1828"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource LineBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="SnapsToDevicePixels" Value="True"/>
+    </Style>
+
+    <Style x:Key="HudFrameAccentStyle" TargetType="Border" BasedOn="{StaticResource HudFrameStyle}">
+        <Setter Property="BorderBrush" Value="#6600E5FF"/>
+        <Setter Property="Effect">
+            <Setter.Value>
+                <DropShadowEffect Color="#00E5FF" BlurRadius="20" ShadowDepth="0" Opacity="0.18"/>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="HudFrameTitleStyle" TargetType="Border">
+        <Setter Property="Background" Value="#80050F1A"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource LineBrush}"/>
+        <Setter Property="BorderThickness" Value="0,0,0,1"/>
+        <Setter Property="Padding" Value="14,10,14,8"/>
+    </Style>
+
+    <Style x:Key="DisplayTextStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource DisplayFontFamily}"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="FontSize" Value="16"/>
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+    </Style>
+
+    <Style x:Key="DisplayTextGlowStyle" TargetType="TextBlock" BasedOn="{StaticResource DisplayTextStyle}">
+        <Setter Property="Effect">
+            <Setter.Value>
+                <DropShadowEffect Color="#00E5FF" BlurRadius="10" ShadowDepth="0" Opacity="0.65"/>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="MicroTextStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource MonoFontFamily}"/>
+        <Setter Property="FontSize" Value="10"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextDimBrush}"/>
+        <Setter Property="TextOptions.TextRenderingMode" Value="ClearType"/>
+    </Style>
+
+    <Style x:Key="HeaderTextStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource DisplayFontFamily}"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+    </Style>
+
+    <Style x:Key="AccentTextStyle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+        <Setter Property="FontFamily" Value="{DynamicResource MonoFontFamily}"/>
+    </Style>
+
+    <Style x:Key="DimTextStyle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource TextDimBrush}"/>
+        <Setter Property="FontFamily" Value="{DynamicResource MonoFontFamily}"/>
+    </Style>
+
+    <Style x:Key="FaintTextStyle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource TextFaintBrush}"/>
+        <Setter Property="FontFamily" Value="{DynamicResource MonoFontFamily}"/>
+    </Style>
+
+    <Style x:Key="TagStyle" TargetType="Border">
+        <Setter Property="Background" Value="#660F2238"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource LineDimBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="7,2"/>
+    </Style>
+
+    <Style x:Key="TagAccentStyle" TargetType="Border" BasedOn="{StaticResource TagStyle}">
+        <Setter Property="Background" Value="#1500E5FF"/>
+        <Setter Property="BorderBrush" Value="#8000E5FF"/>
+    </Style>
+
+    <Style x:Key="TagGoodStyle" TargetType="Border" BasedOn="{StaticResource TagStyle}">
+        <Setter Property="Background" Value="#157CFF66"/>
+        <Setter Property="BorderBrush" Value="#807CFF66"/>
+    </Style>
+
+    <Style x:Key="TagWarnStyle" TargetType="Border" BasedOn="{StaticResource TagStyle}">
+        <Setter Property="Background" Value="#15FFAB1F"/>
+        <Setter Property="BorderBrush" Value="#80FFAB1F"/>
+    </Style>
+
+    <Style x:Key="TagBadStyle" TargetType="Border" BasedOn="{StaticResource TagStyle}">
+        <Setter Property="Background" Value="#15FF3F63"/>
+        <Setter Property="BorderBrush" Value="#80FF3F63"/>
+    </Style>
+
+    <Style x:Key="TagTextStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource MonoFontFamily}"/>
+        <Setter Property="FontSize" Value="10"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextDimBrush}"/>
+    </Style>
+
+    <Style x:Key="StatusDotStyle" TargetType="Ellipse">
+        <Setter Property="Width" Value="8"/>
+        <Setter Property="Height" Value="8"/>
+        <Setter Property="Fill" Value="{DynamicResource GoodBrush}"/>
+        <Setter Property="Effect">
+            <Setter.Value>
+                <DropShadowEffect Color="#7CFF66" BlurRadius="6" ShadowDepth="0" Opacity="0.9"/>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="StatusDotWarnStyle" TargetType="Ellipse" BasedOn="{StaticResource StatusDotStyle}">
+        <Setter Property="Fill" Value="{DynamicResource WarnBrush}"/>
+        <Setter Property="Effect">
+            <Setter.Value>
+                <DropShadowEffect Color="#FFAB1F" BlurRadius="6" ShadowDepth="0" Opacity="0.9"/>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="StatusDotBadStyle" TargetType="Ellipse" BasedOn="{StaticResource StatusDotStyle}">
+        <Setter Property="Fill" Value="{DynamicResource BadBrush}"/>
+        <Setter Property="Effect">
+            <Setter.Value>
+                <DropShadowEffect Color="#FF3F63" BlurRadius="6" ShadowDepth="0" Opacity="0.9"/>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="StatusDotIdleStyle" TargetType="Ellipse" BasedOn="{StaticResource StatusDotStyle}">
+        <Setter Property="Fill" Value="{DynamicResource TextFaintBrush}"/>
+        <Setter Property="Effect" Value="{x:Null}"/>
+    </Style>
+
+    <Style x:Key="StatusDotAccentStyle" TargetType="Ellipse" BasedOn="{StaticResource StatusDotStyle}">
+        <Setter Property="Fill" Value="{DynamicResource AccentBrush}"/>
+        <Setter Property="Effect">
+            <Setter.Value>
+                <DropShadowEffect Color="#00E5FF" BlurRadius="6" ShadowDepth="0" Opacity="0.9"/>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <DrawingBrush x:Key="ScanlineOverlayBrush"
+                  TileMode="Tile"
+                  Viewport="0,0,1,4"
+                  ViewportUnits="Absolute"
+                  Stretch="None">
+        <DrawingBrush.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Brush="#00000000">
+                    <GeometryDrawing.Geometry>
+                        <RectangleGeometry Rect="0,0,1,2"/>
+                    </GeometryDrawing.Geometry>
+                </GeometryDrawing>
+                <GeometryDrawing Brush="#55000000">
+                    <GeometryDrawing.Geometry>
+                        <RectangleGeometry Rect="0,2,1,1"/>
+                    </GeometryDrawing.Geometry>
+                </GeometryDrawing>
+            </DrawingGroup>
+        </DrawingBrush.Drawing>
+    </DrawingBrush>
+
+    <Style x:Key="DangerButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+        <Setter Property="BorderBrush" Value="{DynamicResource BadBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource BadBrush}"/>
+        <Setter Property="Background" Value="#15FF3F63"/>
+    </Style>
+
+    <Style x:Key="GhostButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource LineBrush}"/>
+    </Style>
+
+    <Style x:Key="PrimaryButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+        <Setter Property="Background" Value="#1A00E5FF"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+    </Style>
+
+    <Style x:Key="XsButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+        <Setter Property="Padding" Value="9,4"/>
+        <Setter Property="FontSize" Value="10"/>
+    </Style>
 </ResourceDictionary>
