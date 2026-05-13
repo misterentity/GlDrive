@@ -951,14 +951,14 @@
                             <DataGridTemplateColumn Header="Status" Width="100">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <Border Style="{DynamicResource TagAccentStyle}" HorizontalAlignment="Left">
+                                        <Border Style="{DynamicResource DownloadStatusTagStyle}" HorizontalAlignment="Left">
                                             <TextBlock Text="{Binding Status}"
-                                                       Style="{DynamicResource TagTextStyle}"
-                                                       Foreground="{DynamicResource AccentBrush}"/>
+                                                       Style="{DynamicResource DownloadStatusTextStyle}"/>
                                         </Border>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
+                            <DataGridTextColumn Header="Speed" Binding="{Binding SpeedDisplay}" Width="100"/>
                             <DataGridTemplateColumn Header="Progress" Width="*">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
@@ -2493,9 +2493,15 @@
                                                             </StackPanel>
                                                             <!-- Action buttons -->
                                                             <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,8,0,0">
-                                                                <Button Content="OPEN" Style="{DynamicResource CyberpunkButtonStyle}" Margin="0,0,6,0" Padding="14,5"/>
-                                                                <Button Content="FLUSH" Style="{DynamicResource CyberpunkButtonStyle}" Margin="0,0,6,0" Padding="14,5"/>
-                                                                <Button Content="UNMOUNT" Style="{DynamicResource DangerButtonStyle}" Padding="14,5"/>
+                                                                <Button Content="OPEN" Style="{DynamicResource CyberpunkButtonStyle}" Margin="0,0,6,0" Padding="14,5"
+                                                                        Command="{Binding DataContext.OpenMountCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                        CommandParameter="{Binding ServerId}"/>
+                                                                <Button Content="FLUSH" Style="{DynamicResource CyberpunkButtonStyle}" Margin="0,0,6,0" Padding="14,5"
+                                                                        Command="{Binding DataContext.FlushMountCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                        CommandParameter="{Binding ServerId}"/>
+                                                                <Button Content="UNMOUNT" Style="{DynamicResource DangerButtonStyle}" Padding="14,5"
+                                                                        Command="{Binding DataContext.UnmountServerCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                        CommandParameter="{Binding ServerId}"/>
                                                             </StackPanel>
                                                             <!-- Status tag (color-coded by SiteTag: green=alive, cyan=MOUNTED, red=offline) -->
                                                             <Border DockPanel.Dock="Bottom" Style="{DynamicResource ServerStatusTagStyle}" HorizontalAlignment="Center" Margin="0,10,0,0">

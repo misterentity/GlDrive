@@ -389,6 +389,19 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                     _liveItemSpeeds.TryRemove(item.Id, out _);
                 else
                     _liveItemSpeeds[item.Id] = progress.BytesPerSecond;
+
+                // Mirror the live speed into the matching DownloadItemVm so
+                // the Downloads grid's SpeedDisplay column shows real
+                // MB/s per row, not just an aggregate.
+                var mbps = progress.BytesPerSecond / (1024.0 * 1024.0);
+                var display = progress.BytesPerSecond <= 0
+                    ? ""
+                    : (mbps >= 1.0 ? $"{mbps:0.0} MB/s" : $"{progress.BytesPerSecond / 1024.0:0} KB/s");
+                Application.Current?.Dispatcher.BeginInvoke(() =>
+                {
+                    var vm = DownloadItems.FirstOrDefault(d => d.Id == item.Id);
+                    if (vm != null) vm.SpeedDisplay = display;
+                });
             };
         }
     }
@@ -402,10 +415,28 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         double rxBytesPerSec = 0;
         foreach (var v in _liveItemSpeeds.Values) rxBytesPerSec += v;
 
+        // TX = aggregate FXP throughput across active spread jobs. Each
+        // SpreadJob's Sites collection has SpeedBps per peer; sum over the
+        // non-source peers since that's the bytes flowing OUT of our app's
+        // perspective. Spread runs server-to-server FXP so "out" here means
+        // bytes the spread engine is pushing to peer destinations.
+        double txBytesPerSec = 0;
+        try
+        {
+            var spread = _serverManager.Spread;
+            if (spread != null)
+            {
+                foreach (var job in spread.ActiveJobs)
+                {
+                    foreach (var s in job.Sites.Values)
+                        if (!s.IsSource) txBytesPerSec += s.SpeedBps;
+                }
+            }
+        }
+        catch { /* spread snapshot is best-effort */ }
+
         var rxMb = rxBytesPerSec / (1024.0 * 1024.0);
-        // TX isn't tracked yet (upload pipeline is FXP, not directly throttled
-        // here). Show 0.0 with a real value when we wire it.
-        var txMb = 0.0;
+        var txMb = txBytesPerSec / (1024.0 * 1024.0);
 
         RxRateDisplay = $"{rxMb:0.0} MB/s";
         TxRateDisplay = $"{txMb:0.0} MB/s";
@@ -760,6 +791,10 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         set { _hasActiveDownload = value; OnPropertyChanged(); }
     }
 
+    // Mounts-tab actions (per-card OPEN / FLUSH / UNMOUNT).
+    public ICommand OpenMountCommand { get; }
+    public ICommand FlushMountCommand { get; }
+    public ICommand UnmountServerCommand { get; }
     public ICommand AddMovieCommand { get; }
     public ICommand AddTvShowCommand { get; }
     public ICommand RemoveWishlistCommand { get; }
@@ -806,6 +841,37 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         _wishlistStore.Load();
 
         _ircViewModel = new IrcViewModel(serverManager, config);
+
+        // Mounts-tab actions.
+        OpenMountCommand = new RelayCommand<string>(serverId =>
+        {
+            if (string.IsNullOrEmpty(serverId)) return;
+            var server = _config.Servers.FirstOrDefault(s => s.Id == serverId);
+            if (server == null) return;
+            var letter = server.Mount?.DriveLetter;
+            // Open the mounted drive in Explorer if the user opted in;
+            // otherwise open the FTP root via the system's default handler.
+            try
+            {
+                if (server.Mount?.MountDrive == true && !string.IsNullOrEmpty(letter))
+                    System.Diagnostics.Process.Start("explorer.exe", $"{letter}:\\");
+            }
+            catch (Exception ex) { Serilog.Log.Warning(ex, "OpenMount failed for {Id}", serverId); }
+        });
+        FlushMountCommand = new RelayCommand<string>(serverId =>
+        {
+            // FLUSH = reinitialize the connection pool (closes idle conns + ghost-kills).
+            if (string.IsNullOrEmpty(serverId)) return;
+            var svc = _serverManager.GetServer(serverId);
+            try { _ = svc?.Pool?.Reinitialize(System.Threading.CancellationToken.None); }
+            catch (Exception ex) { Serilog.Log.Warning(ex, "FlushMount failed for {Id}", serverId); }
+        });
+        UnmountServerCommand = new RelayCommand<string>(serverId =>
+        {
+            if (string.IsNullOrEmpty(serverId)) return;
+            try { _serverManager.UnmountServer(serverId); RefreshOverview(); }
+            catch (Exception ex) { Serilog.Log.Warning(ex, "UnmountServer failed for {Id}", serverId); }
+        });
 
         AddMovieCommand = new RelayCommand(() => AddMedia(MediaType.Movie));
         AddTvShowCommand = new RelayCommand(() => AddMedia(MediaType.TvShow));
@@ -2473,6 +2539,18 @@ public class DownloadItemVm : INotifyPropertyChanged
     public string LocalPath { get; set; } = "";
     public string ServerId { get; set; } = "";
     public string ServerName { get; set; } = "";
+
+    private string _speedDisplay = "";
+    public string SpeedDisplay
+    {
+        get => _speedDisplay;
+        set
+        {
+            if (_speedDisplay == value) return;
+            _speedDisplay = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpeedDisplay)));
+        }
+    }
 
     public event PropertyChangedEventHandler? PropertyChanged;
 }
