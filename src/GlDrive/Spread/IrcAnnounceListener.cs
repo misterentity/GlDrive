@@ -33,6 +33,36 @@ public class IrcAnnounceListener : IDisposable
         RegexOptions.IgnoreCase | RegexOptions.Compiled,
         TimeSpan.FromMilliseconds(200));
 
+    // Common verb / filler words that loose announce regexes accidentally capture
+    // out of racing chatter (e.g. "TeRRaNoVA brings the goods", "switchback leads with 4/8F").
+    // These are NEVER scene release names, so reject them before they reach StartRace.
+    private static readonly HashSet<string> KnownAnnounceVerbs = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "brings", "leads", "racing", "wins", "complete", "completed", "incomplete",
+        "pred", "nuke", "nuked", "unnuke", "unnuked", "delpre", "request", "filled",
+        "the", "from", "for", "with", "and", "now", "new"
+    };
+
+    private static bool IsPlausibleReleaseName(string? candidate)
+    {
+        if (string.IsNullOrWhiteSpace(candidate)) return false;
+        var s = candidate.Trim();
+        if (s.Length < 10) return false;
+        if (KnownAnnounceVerbs.Contains(s)) return false;
+        // Scene names always have at least one of: '.', '-', or a digit
+        bool hasStructure = false;
+        foreach (var c in s)
+        {
+            if (c == '.' || c == '-' || (c >= '0' && c <= '9'))
+            {
+                hasStructure = true;
+                break;
+            }
+        }
+        if (!hasStructure) return false;
+        return true;
+    }
+
     public event Action<string, string, string, bool>? ReleaseAnnounced; // serverId, section, releaseName, autoRace
 
     public IrcAnnounceListener(string serverId, IrcService ircService,
@@ -215,6 +245,16 @@ public class IrcAnnounceListener : IDisposable
 
     private bool TryFireAnnounce(string section, string release, string channel, string msgText, bool autoRace)
     {
+        // Final validation gate — covers both the built-in verbose pattern and custom rules.
+        // Rejects junk like "brings", "leads", "racing" that loose regexes capture out of
+        // racing-chatter messages (e.g. "TeRRaNoVA brings the goods @ 8.39MB/s").
+        if (!IsPlausibleReleaseName(release))
+        {
+            Log.Debug("IRC announce: rejecting implausible release name '{Release}' from {Channel}: {Msg}",
+                release, channel, msgText);
+            return false;
+        }
+
         var dedupeKey = $"{section}|{release}";
         lock (_lock)
         {

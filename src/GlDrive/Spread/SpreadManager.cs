@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO;
 using GlDrive.Config;
 using GlDrive.Downloads;
@@ -20,6 +21,14 @@ public class SpreadManager : IDisposable
     private readonly MetadataFilterService _metadataFilter;
     private readonly Lock _lock = new();
     private bool _disposed;
+
+    // In-memory TTL map of (section, release) -> expiry. Used to suppress
+    // re-queueing of races that just failed with "affil-blocked" — without this,
+    // a notification-driven release that no destination can accept gets re-fired
+    // every poll cycle (observed 214x/day for a single release). Cleared on
+    // process restart — persistence not needed because the restart itself clears
+    // the polling cadence.
+    private readonly ConcurrentDictionary<(string section, string release), DateTime> _affilBlockedUntil = new();
 
     public Func<string, FtpConnectionPool?>? _getMainPool;
 
@@ -118,6 +127,15 @@ public class SpreadManager : IDisposable
                 return null;
             }
 
+            // Issue #4: short-circuit re-queues of a release that recently
+            // failed with "all destinations affil-blocked". The TTL map is
+            // populated by the job.Error handler.
+            if (IsAffilBlockedRecently(section, releaseName))
+            {
+                Log.Debug("Spread: skipping {Release} — recently affil-blocked", releaseName);
+                return null;
+            }
+
             if (_activeJobs.Count >= maxRaces)
             {
                 _raceQueue.Enqueue(new PendingRace(section, releaseName, serverIds.ToList(), mode, knownSourceServerId, knownSourcePath));
@@ -177,6 +195,18 @@ public class SpreadManager : IDisposable
         job.Error += (j, msg) =>
         {
             Log.Warning("Spread job error: {Release} — {Error}", j.ReleaseName, msg);
+
+            // Issue #4: when a race fails because every destination is affil-
+            // blocked, the same release will re-trigger every notification poll
+            // (observed 214 enqueues/day for one release). Park the (section,
+            // release) for 15 minutes so the next StartRace call short-circuits.
+            if (!string.IsNullOrEmpty(msg) &&
+                msg.Contains("affil-blocked", StringComparison.OrdinalIgnoreCase))
+            {
+                var key = AffilBlockKey(j.Section, j.ReleaseName);
+                _affilBlockedUntil[key] = DateTime.UtcNow + TimeSpan.FromMinutes(15);
+                Log.Debug("Spread: parking {Release} on affil-blocked TTL (15min)", j.ReleaseName);
+            }
         };
         job.LivePoolResolver = id => { lock (_lock) { _spreadPools.TryGetValue(id, out var p); return p; } };
 
@@ -685,6 +715,29 @@ public class SpreadManager : IDisposable
     private static bool IsSameRace(string sectionA, string releaseA, string sectionB, string releaseB) =>
         string.Equals(releaseA, releaseB, StringComparison.OrdinalIgnoreCase) &&
         string.Equals(sectionA, sectionB, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Normalize (section, release) to a case-insensitive key for the affil-
+    /// blocked TTL map. Mirrors IsSameRace semantics.
+    /// </summary>
+    private static (string section, string release) AffilBlockKey(string section, string release) =>
+        (section.ToLowerInvariant(), release.ToLowerInvariant());
+
+    /// <summary>
+    /// True iff this (section, release) was recently failed with an
+    /// "affil-blocked" outcome and the cool-down hasn't expired. Expired
+    /// entries are evicted on read.
+    /// </summary>
+    private bool IsAffilBlockedRecently(string section, string release)
+    {
+        var key = AffilBlockKey(section, release);
+        if (!_affilBlockedUntil.TryGetValue(key, out var until))
+            return false;
+        if (until > DateTime.UtcNow)
+            return true;
+        _affilBlockedUntil.TryRemove(key, out _);
+        return false;
+    }
 
     private record PendingRace(string Section, string ReleaseName, List<string> ServerIds, SpreadMode Mode,
         string? KnownSourceServerId = null, string? KnownSourcePath = null);
