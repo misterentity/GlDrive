@@ -6,15 +6,35 @@
         WindowStartupLocation="CenterScreen" ResizeMode="NoResize"
         Background="{DynamicResource BackgroundBrush}"
         Foreground="{DynamicResource ForegroundBrush}">
-    <Grid Margin="12">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
+    <Border Margin="14" Style="{DynamicResource HudPanelStyle}">
+        <DockPanel>
+            <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                <TextBlock Text="&gt;&gt; SETTINGS" Style="{DynamicResource SectionHeaderTextStyle}"/>
+            </Border>
+            <Grid Margin="12">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
 
-        <TabControl Grid.Row="0">
+                <Grid Grid.Row="0">
+                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                    <TabControl TabStripPlacement="Left" Tag="SettingsTabs">
             <!-- Servers Tab -->
-            <TabItem Header="Servers">
+            <TabItem Tag="Servers">
+                <TabItem.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="01" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="SERVERS" VerticalAlignment="Center"/>
+                    </Grid>
+                </TabItem.Header>
                 <DockPanel Margin="12">
                     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,10,0,0">
                         <Button Content="Add Server" Click="AddServer_Click"
@@ -47,7 +67,17 @@
             </TabItem>
 
             <!-- Performance Tab -->
-            <TabItem Header="Performance">
+            <TabItem Tag="Performance">
+                <TabItem.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="02" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="PERFORMANCE" VerticalAlignment="Center"/>
+                    </Grid>
+                </TabItem.Header>
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="12">
                         <!-- Downloads Section -->
@@ -78,7 +108,17 @@
             </TabItem>
 
             <!-- Downloads Tab -->
-            <TabItem Header="Downloads">
+            <TabItem Tag="Downloads">
+                <TabItem.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="03" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="DOWNLOADS" VerticalAlignment="Center"/>
+                    </Grid>
+                </TabItem.Header>
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="12">
                         <TextBlock Text="Default Download Folder:" Margin="0,0,0,4"/>
@@ -173,7 +213,17 @@
             </TabItem>
 
             <!-- Spread Tab -->
-            <TabItem Header="Spread">
+            <TabItem Tag="Spread">
+                <TabItem.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="04" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="SPREAD" VerticalAlignment="Center"/>
+                    </Grid>
+                </TabItem.Header>
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="12">
                         <TextBlock Text="Spread Pool Size (per server):" Margin="0,0,0,4"/>
@@ -225,7 +275,17 @@
             </TabItem>
 
             <!-- AI Agent Tab -->
-            <TabItem Header="AI Agent">
+            <TabItem Tag="AI Agent">
+                <TabItem.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="05" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="AI-AGENT" VerticalAlignment="Center"/>
+                    </Grid>
+                </TabItem.Header>
               <ScrollViewer VerticalScrollBarVisibility="Auto">
                 <StackPanel Margin="12">
                   <TextBlock Text="Nightly AI Agent" FontSize="18" FontWeight="Bold" Margin="0,0,0,8"/>
@@ -294,7 +354,17 @@
             </TabItem>
 
             <!-- Diagnostics Tab -->
-            <TabItem Header="Diagnostics">
+            <TabItem Tag="Diagnostics">
+                <TabItem.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="06" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="DIAGNOSTICS" VerticalAlignment="Center"/>
+                    </Grid>
+                </TabItem.Header>
                 <StackPanel Margin="12">
                     <TextBlock Text="Theme:" Margin="0,0,0,4"/>
                     <ComboBox ItemsSource="{Binding ThemeOptions}"
@@ -313,14 +383,17 @@
                             HorizontalAlignment="Left" Padding="16,6"/>
                 </StackPanel>
             </TabItem>
-        </TabControl>
+                    </TabControl>
+                </Grid>
 
-        <!-- Buttons -->
-        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
-            <Button Content="Save" Click="Save_Click" Padding="20,6" Margin="0,0,8,0"
-                    Style="{StaticResource PrimaryButton}"/>
-            <Button Content="Cancel" Click="Cancel_Click" Padding="20,6"
-                    Style="{StaticResource SecondaryButton}"/>
-        </StackPanel>
-    </Grid>
+                <!-- Buttons -->
+                <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+                    <Button Content="Save" Click="Save_Click" Padding="20,6" Margin="0,0,8,0"
+                            Style="{StaticResource PrimaryButton}"/>
+                    <Button Content="Cancel" Click="Cancel_Click" Padding="20,6"
+                            Style="{StaticResource SecondaryButton}"/>
+                </StackPanel>
+            </Grid>
+        </DockPanel>
+    </Border>
 </Window>

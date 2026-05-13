@@ -81,6 +81,11 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private DispatcherTimer? _statusTimer;
     private DateTime _lastDiskPoll = DateTime.MinValue;
 
+    // Per-server SITE STATS disk capacity cache. Populated by PollServerDiskUsage
+    // (status-bar 30s poll); read by RefreshOverview() so the Overview/Mounts
+    // disc widgets show real disk-space % instead of pool-utilization fallback.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (long totalBytes, long freeBytes)> _serverDiskCache = new();
+
     // Bandwidth graph
     private readonly List<double> _speedHistory = new();
     private PointCollection _speedGraphPoints = new();
@@ -187,9 +192,9 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             var isMounted = isConnected && wantsDrive;
             var driveLetter = server.Mount?.DriveLetter ?? "";
 
-            // Disc widget %: connection-pool utilization for this server
-            // (ActiveCount / MaxSize). Honest with the data we have today;
-            // swap to real SITE QUOTA disk-space % when polling lands.
+            // Disc widget %: prefer real SITE STATS disk-space % (cached by
+            // PollServerDiskUsage every 30s); fall back to connection-pool
+            // utilization when we haven't successfully polled this server yet.
             double poolPct = 0;
             int poolActive = 0, poolMax = 0;
             if (service?.Pool is { } pool && pool.MaxSize > 0)
@@ -197,6 +202,19 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                 poolActive = pool.ActiveCount;
                 poolMax = pool.MaxSize;
                 poolPct = Math.Min(100.0, (double)poolActive / poolMax * 100.0);
+            }
+
+            double capacityPct = poolPct;        // existing pool % is the fallback
+            string usedDisplay = poolMax > 0 ? poolActive.ToString() : "—";
+            string totalDisplay = poolMax > 0 ? poolMax.ToString() : "—";
+
+            // Real disk-space % if we've cached a recent SITE STATS result for this server.
+            if (_serverDiskCache.TryGetValue(server.Id, out var disk) && disk.totalBytes > 0)
+            {
+                var used = disk.totalBytes - disk.freeBytes;
+                capacityPct = used * 100.0 / disk.totalBytes;
+                usedDisplay = FormatSize(used);
+                totalDisplay = FormatSize(disk.totalBytes);
             }
 
             string status;
@@ -216,9 +234,9 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                 Host = $"{server.Connection?.Host}:{server.Connection?.Port}",
                 IsMounted = isMounted,
                 StatusLine = status,
-                CapacityPercent = poolPct,
-                CapacityUsedDisplay = poolMax > 0 ? poolActive.ToString() : "—",
-                CapacityTotalDisplay = poolMax > 0 ? poolMax.ToString() : "—",
+                CapacityPercent = capacityPct,
+                CapacityUsedDisplay = usedDisplay,
+                CapacityTotalDisplay = totalDisplay,
                 IsPrimary = false,
                 SiteTag = isMounted ? "MOUNTED" : (isConnected ? "CONNECTED" : (server.Enabled ? "OFFLINE" : "DISABLED"))
             });
@@ -2237,6 +2255,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             long totalUsed = 0;
             long totalSize = 0;
             var parts = new List<string>();
+            bool anyCacheUpdate = false;
 
             foreach (var server in _serverManager.GetMountedServers())
             {
@@ -2245,6 +2264,10 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                 {
                     var disk = await server.Ftp.GetDiskFree(CancellationToken.None);
                     if (disk == null) continue;
+                    // Cache per-server tuple so RefreshOverview() can compute real
+                    // disk-space % for the Overview/Mounts disc widgets.
+                    _serverDiskCache[server.ServerId] = (disk.Value.totalBytes, disk.Value.freeBytes);
+                    anyCacheUpdate = true;
                     var used = disk.Value.totalBytes - disk.Value.freeBytes;
                     totalUsed += used;
                     totalSize += disk.Value.totalBytes;
@@ -2257,6 +2280,20 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                 StatusBarDiskSpace = $"{FormatSize(totalUsed)} / {FormatSize(totalSize)} used";
             else
                 StatusBarDiskSpace = "";
+
+            // Refresh the Overview tab so the disc widgets pick up the new
+            // disk-space values. RefreshOverview() rebuilds MountedServerStatus
+            // from scratch and reads _serverDiskCache, so a single delegate
+            // call after the poll is enough. Marshalled to the UI dispatcher
+            // because RefreshOverview mutates an ObservableCollection.
+            if (anyCacheUpdate)
+            {
+                try
+                {
+                    Application.Current?.Dispatcher.Invoke(RefreshOverview);
+                }
+                catch { /* dispatcher shut down or VM disposed — ignore */ }
+            }
         }
         catch { }
     }
