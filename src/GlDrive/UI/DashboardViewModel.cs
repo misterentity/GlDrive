@@ -101,6 +101,59 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     public int FailedDownloadCount => DownloadItems.Count(d =>
         d.Status == "Failed" || d.Status == "Cancelled");
     public int CompletedTodayCount => DownloadItems.Count(d => d.Status == "Completed");
+
+    // Overview tab data. RefreshOverview() rebuilds these.
+    public ObservableCollection<OverviewServerVm> MountedServerStatus { get; } = new();
+    public int MountedServerCount => MountedServerStatus.Count;
+    public int ConfiguredServerCount => _config.Servers.Count;
+    public string OperationsLogPreview { get; private set; } = "loading...";
+
+    public void RefreshOverview()
+    {
+        MountedServerStatus.Clear();
+        foreach (var server in _config.Servers)
+        {
+            var mounted = _serverManager.GetServer(server.Id);
+            MountedServerStatus.Add(new OverviewServerVm
+            {
+                ServerId = server.Id,
+                Name = string.IsNullOrEmpty(server.Name) ? server.Connection?.Host ?? "(unnamed)" : server.Name,
+                Host = $"{server.Connection?.Host}:{server.Connection?.Port}",
+                IsMounted = mounted != null,
+                StatusLine = mounted != null ? "MOUNTED" : (server.Enabled ? "OFFLINE" : "DISABLED")
+            });
+        }
+        OnPropertyChanged(nameof(MountedServerCount));
+        OnPropertyChanged(nameof(ConfiguredServerCount));
+
+        try
+        {
+            var logsDir = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "GlDrive", "logs");
+            if (System.IO.Directory.Exists(logsDir))
+            {
+                var latest = new System.IO.DirectoryInfo(logsDir)
+                    .GetFiles("gldrive-*.log")
+                    .OrderByDescending(f => f.LastWriteTimeUtc)
+                    .FirstOrDefault();
+                if (latest != null)
+                {
+                    using var fs = new System.IO.FileStream(latest.FullName,
+                        System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.ReadWrite);
+                    using var sr = new System.IO.StreamReader(fs);
+                    var lines = sr.ReadToEnd().Split('\n');
+                    var tail = lines.Length > 12
+                        ? string.Join('\n', lines.Skip(lines.Length - 12))
+                        : string.Join('\n', lines);
+                    OperationsLogPreview = tail;
+                }
+            }
+        }
+        catch { OperationsLogPreview = "(unable to read log)"; }
+        OnPropertyChanged(nameof(OperationsLogPreview));
+    }
+
     public ObservableCollection<SearchResultVm> SearchResults { get; } = new();
     public ObservableCollection<UpcomingTvEpisodeVm> UpcomingTvEpisodes { get; } = new();
     public ObservableCollection<UpcomingMovieVm> UpcomingMovies { get; } = new();
@@ -2047,6 +2100,15 @@ public class WishlistItemVm
     public string? Plot { get; set; }
     public string? Rating { get; set; }
     public string? Genres { get; set; }
+}
+
+public class OverviewServerVm
+{
+    public string ServerId { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string Host { get; set; } = "";
+    public bool IsMounted { get; set; }
+    public string StatusLine { get; set; } = "";
 }
 
 public class DownloadItemVm : INotifyPropertyChanged

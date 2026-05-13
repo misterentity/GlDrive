@@ -55,20 +55,20 @@ if ($Tab -gt 0) {
     # Approx Y centers of each clickable nav item, relative to top of window
     # client area (after 44px top bar). 1-based indexing.
     $tabYOffsets = @(
-        # 1=Notifications, 2=Wishlist, 3=Downloads
-        120, 158, 196,
+        # 1=Overview, 2=Notifications, 3=Wishlist, 4=Downloads
+        120, 158, 196, 234,
         # group separator skipped
-        # 4=Search, 5=Player, 6=Upcoming
-        266, 304, 342,
+        # 5=Search, 6=Player, 7=Upcoming
+        304, 342, 380,
         # group skipped
-        # 7=IRC, 8=PreDB
-        412, 450,
+        # 8=IRC, 9=PreDB
+        450, 488,
         # group skipped
-        # 9=Spread, 10=Browse
-        520, 558,
+        # 10=Spread, 11=Browse
+        558, 596,
         # group skipped
-        # 11=World Monitor, 12=Discord, 13=Streems, 14=AI Agent
-        628, 666, 704, 742
+        # 12=World Monitor, 13=Discord, 14=Streems, 15=AI Agent
+        666, 704, 742, 780
     )
     if ($Tab -ge 1 -and $Tab -le $tabYOffsets.Count) {
         $clickX = $rect.Left + 90
