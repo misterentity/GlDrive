@@ -29,6 +29,10 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
     public ObservableCollection<string> SpreadSections { get; } = new();
     public ObservableCollection<AutoRaceLogVm> AutoRaceLog { get; } = new();
     public ObservableCollection<RaceHistoryVm> RaceHistory { get; } = new();
+    public ObservableCollection<AutoRaceFeedItem> AutoRaceFeed { get; } = new();
+
+    public int LeaderScore => SpreadJobs.Count > 0 ? SpreadJobs.Max(j => j.Score) : 0;
+    public int QueueDepth => SpreadJobs.Count;
 
     public string SelectedSection
     {
@@ -83,7 +87,10 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         _serverManager.NewReleaseDetected += (serverId, serverName, category, release, remotePath) =>
         {
             Application.Current?.Dispatcher.BeginInvoke(() =>
-                AddAutoRaceLog(category, release, serverName, "Detected"));
+            {
+                AddAutoRaceLog(category, release, serverName, "Detected");
+                AddFeedItem(release, category, "DETECTED", serverName);
+            });
         };
 
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
@@ -228,7 +235,32 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
 
             vm.ProgressPercent = avgOwned;
             vm.Status = job.State.ToString();
+
+            // Card display fields (best-effort population from available data)
+            var srcSite = sites.FirstOrDefault(s => s.FilesOwned > 0 && s.FilesOwned == sites.Max(x => x.FilesOwned));
+            vm.SourceDisplay = srcSite != null && !string.IsNullOrEmpty(srcSite.ServerName) ? srcSite.ServerName : "—";
+
+            var destNames = sites
+                .Where(s => s.ServerId != srcSite?.ServerId && !string.IsNullOrEmpty(s.ServerName))
+                .Select(s => s.ServerName)
+                .ToList();
+            vm.DestDisplay = destNames.Count > 0 ? string.Join(" · ", destNames) : "—";
+
+            var totalOwnedAcross = sites.Sum(s => s.FilesOwned);
+            var aggregateTotal = totalFiles > 0 ? totalFiles * Math.Max(sites.Count, 1) : 0;
+            vm.FilesDoneTotalDisplay = totalFiles > 0
+                ? $"{totalOwnedAcross} / {aggregateTotal}"
+                : "0 / 0";
+
+            vm.IsPaused = job.State == SpreadJobState.Stopped;
+            // IsPred / IsAutoRace / Score / ScoreLabel are not yet plumbed from SpreadJob —
+            // leave defaults; XAML chips will hide via converters when false.
+            if (string.IsNullOrEmpty(vm.ScoreLabel))
+                vm.ScoreLabel = "MANUAL";
         }
+
+        OnPropertyChanged(nameof(LeaderScore));
+        OnPropertyChanged(nameof(QueueDepth));
 
         // Update scoreboard and transfers only if a job is selected
         var selectedId = SelectedSpreadJob?.Id;
@@ -338,15 +370,65 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         if (spread == null) return;
         spread.AutoRaceAttempted += (section, release, result) =>
             Application.Current?.Dispatcher.BeginInvoke(() =>
-                AddAutoRaceLog(section, release, "", result));
-        spread.JobStarted += _ =>
-            Application.Current?.Dispatcher.BeginInvoke(SafeRefresh);
-        spread.JobCompleted += _ =>
+            {
+                AddAutoRaceLog(section, release, "", result);
+                AddFeedItem(release, section, "ATTEMPT", result);
+            });
+        spread.JobStarted += job =>
             Application.Current?.Dispatcher.BeginInvoke(() =>
             {
+                AddFeedItem(job.ReleaseName, job.Section, "STARTED", "");
+                SafeRefresh();
+            });
+        spread.JobCompleted += job =>
+            Application.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                var action = job.State == SpreadJobState.Completed ? "DONE"
+                    : job.State == SpreadJobState.Failed ? "FAILED"
+                    : job.State == SpreadJobState.Stopped ? "PAUSED"
+                    : job.State.ToString().ToUpperInvariant();
+                AddFeedItem(job.ReleaseName, job.Section, action, "");
                 SafeRefresh();
                 RefreshHistory();
             });
+        spread.JobProgressChanged += job =>
+            Application.Current?.Dispatcher.BeginInvoke(() => TickSparkline(job));
+    }
+
+    private void TickSparkline(SpreadJob job)
+    {
+        try
+        {
+            var vm = SpreadJobs.FirstOrDefault(j => j.Id == job.Id);
+            if (vm == null) return;
+            var pts = vm.SparklinePoints;
+            var totalSpeed = job.Sites.Values.Sum(s => s.SpeedBps);
+            var y = Math.Min(40, totalSpeed / 5_000_000.0 * 40.0);
+            // Shift left: drop oldest, re-index remaining, append new
+            if (pts.Count >= 60) pts.RemoveAt(0);
+            // Re-index x coords so polyline doesn't drift right forever
+            for (int i = 0; i < pts.Count; i++)
+                pts[i] = new Point(i, pts[i].Y);
+            pts.Add(new Point(pts.Count, y));
+        }
+        catch
+        {
+            // Sparkline is decorative — never let it break the VM
+        }
+    }
+
+    private void AddFeedItem(string release, string section, string action, string detail)
+    {
+        AutoRaceFeed.Insert(0, new AutoRaceFeedItem
+        {
+            Timestamp = DateTime.Now.ToString("HH:mm:ss"),
+            Release = release ?? "",
+            Section = section ?? "",
+            Action = action ?? "",
+            Detail = detail ?? ""
+        });
+        while (AutoRaceFeed.Count > 50)
+            AutoRaceFeed.RemoveAt(AutoRaceFeed.Count - 1);
     }
 
     private void AddAutoRaceLog(string section, string release, string source, string result)
@@ -455,6 +537,15 @@ public class AutoRaceLogVm
     public string Release { get; set; } = "";
     public string Source { get; set; } = "";
     public string Result { get; set; } = "";
+}
+
+public class AutoRaceFeedItem
+{
+    public string Timestamp { get; set; } = "";  // HH:mm:ss
+    public string Release { get; set; } = "";
+    public string Section { get; set; } = "";
+    public string Action { get; set; } = "";     // STARTED / DONE / PAUSED / FAILED
+    public string Detail { get; set; } = "";
 }
 
 public class RaceHistoryVm
