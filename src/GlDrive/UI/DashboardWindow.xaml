@@ -144,8 +144,9 @@
                 <Border Grid.Column="2" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1,0,0,0"
                         Padding="16,0">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Text="--:--:--" Style="{DynamicResource AccentTextStyle}"
-                                   FontSize="12" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                        <TextBlock x:Name="UtcClockText" Text="--:--:-- UTC" Style="{DynamicResource AccentTextStyle}"
+                                   FontSize="12" VerticalAlignment="Center" Margin="0,0,14,0"
+                                   FontFamily="{DynamicResource MonoFontFamily}"/>
                         <Rectangle Width="10" Height="10" Stroke="{DynamicResource TextFaintBrush}"
                                    StrokeThickness="1" Margin="0,0,5,0"/>
                         <Rectangle Width="10" Height="10" Stroke="{DynamicResource TextFaintBrush}"

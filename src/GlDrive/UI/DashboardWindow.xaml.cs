@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Threading;
 using GlDrive.Config;
 using GlDrive.Downloads;
 using GlDrive.Services;
@@ -26,6 +27,7 @@ public partial class DashboardWindow : Window
     private SpreadViewModel? _spreadVm;
     private BrowseViewModel? _browseVm;
     private Window? _fullscreenWindow;
+    private DispatcherTimer? _clockTimer;
 
     public DashboardWindow(ServerManager serverManager, AppConfig config, NotificationStore notificationStore)
     {
@@ -67,6 +69,22 @@ public partial class DashboardWindow : Window
             }
         };
 
+        // Live UTC clock in the top-right corner. 1-second tick is fine —
+        // resolution-wise this just changes the seconds digit, no animation.
+        _clockTimer = new DispatcherTimer(DispatcherPriority.Render)
+        {
+            Interval = TimeSpan.FromSeconds(1)
+        };
+        _clockTimer.Tick += (_, _) =>
+            UtcClockText.Text = DateTime.UtcNow.ToString("HH:mm:ss") + " UTC";
+        _clockTimer.Start();
+        UtcClockText.Text = DateTime.UtcNow.ToString("HH:mm:ss") + " UTC";
+
+        Closed += (_, _) =>
+        {
+            _clockTimer?.Stop();
+            _clockTimer = null;
+        };
     }
 
     protected override void OnContentRendered(EventArgs e)
