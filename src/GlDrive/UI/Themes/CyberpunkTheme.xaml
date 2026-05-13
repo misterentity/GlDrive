@@ -354,14 +354,50 @@
                                       Background="Transparent"/>
                         </Border>
                         <Border Grid.Column="1"
-                                Background="Transparent"
+                                Background="#CC0A1424"
                                 BorderBrush="{DynamicResource LineBrush}"
                                 BorderThickness="0">
-                            <ContentPresenter x:Name="PART_SelectedContentHost"
-                                              ContentSource="SelectedContent"
-                                              HorizontalAlignment="Stretch"
-                                              VerticalAlignment="Stretch"
-                                              Margin="0"/>
+                            <!-- Inner HUD frame: makes the content panel
+                                 visible even when individual sections inside
+                                 use Background=Transparent. Border thickness
+                                 omitted on the left so it joins flush with
+                                 the sidebar's right border. -->
+                            <Border Background="Transparent"
+                                    BorderBrush="{DynamicResource LineBrush}"
+                                    BorderThickness="0,1,1,1"
+                                    Margin="8,8,8,8">
+                                <Grid>
+                                    <!-- Corner accent brackets: 4 small L-shapes
+                                         clipped to the inner content frame so
+                                         every tab gets the cyberpunk corner-
+                                         bracket treatment from the design. -->
+                                    <Border Width="12" Height="12"
+                                            HorizontalAlignment="Left" VerticalAlignment="Top"
+                                            BorderBrush="{DynamicResource AccentBrush}"
+                                            BorderThickness="1,1,0,0"
+                                            Margin="-1,-1,0,0"/>
+                                    <Border Width="12" Height="12"
+                                            HorizontalAlignment="Right" VerticalAlignment="Top"
+                                            BorderBrush="{DynamicResource AccentBrush}"
+                                            BorderThickness="0,1,1,0"
+                                            Margin="0,-1,-1,0"/>
+                                    <Border Width="12" Height="12"
+                                            HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                                            BorderBrush="{DynamicResource AccentBrush}"
+                                            BorderThickness="1,0,0,1"
+                                            Margin="-1,0,0,-1"/>
+                                    <Border Width="12" Height="12"
+                                            HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                            BorderBrush="{DynamicResource AccentBrush}"
+                                            BorderThickness="0,0,1,1"
+                                            Margin="0,0,-1,-1"/>
+                                    <ContentPresenter x:Name="PART_SelectedContentHost"
+                                                      ContentSource="SelectedContent"
+                                                      HorizontalAlignment="Stretch"
+                                                      VerticalAlignment="Stretch"
+                                                      Margin="0"/>
+                                </Grid>
+                            </Border>
                         </Border>
                     </Grid>
                 </ControlTemplate>
