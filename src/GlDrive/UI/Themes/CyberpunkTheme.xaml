@@ -262,21 +262,31 @@
         </Setter>
     </Style>
 
+    <!-- TabItem: sidebar nav item (left-placement). Accent left-border + cyan
+         text + signature glow on selected. Tall + full-width to match the design's
+         vertical nav. The padding is asymmetric so the left border sits flush. -->
     <Style TargetType="TabItem">
         <Setter Property="Background" Value="Transparent"/>
         <Setter Property="Foreground" Value="{DynamicResource ForegroundDimBrush}"/>
         <Setter Property="FontFamily" Value="{DynamicResource DisplayFontFamily}"/>
         <Setter Property="FontSize" Value="13"/>
         <Setter Property="FontWeight" Value="SemiBold"/>
-        <Setter Property="Padding" Value="14,8"/>
+        <Setter Property="Padding" Value="18,11"/>
+        <Setter Property="HorizontalContentAlignment" Value="Left"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="Cursor" Value="Hand"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="TabItem">
                     <Border x:Name="Bd" Background="{TemplateBinding Background}"
-                            BorderBrush="{DynamicResource AccentBrush}"
-                            BorderThickness="0,0,0,0"
-                            Padding="{TemplateBinding Padding}">
+                            BorderBrush="Transparent"
+                            BorderThickness="2,0,0,0"
+                            Padding="{TemplateBinding Padding}"
+                            HorizontalAlignment="Stretch"
+                            MinWidth="200">
                         <ContentPresenter ContentSource="Header" RecognizesAccessKey="True"
+                                          HorizontalAlignment="Left"
+                                          VerticalAlignment="Center"
                                           TextBlock.Foreground="{TemplateBinding Foreground}"
                                           TextBlock.FontFamily="{TemplateBinding FontFamily}"
                                           TextBlock.FontSize="{TemplateBinding FontSize}"
@@ -285,21 +295,74 @@
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsSelected" Value="True">
                             <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
-                            <Setter TargetName="Bd" Property="BorderThickness" Value="0,0,0,2"/>
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+                            <Setter TargetName="Bd" Property="Background">
+                                <Setter.Value>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                        <GradientStop Offset="0" Color="#3300E5FF"/>
+                                        <GradientStop Offset="1" Color="#0000E5FF"/>
+                                    </LinearGradientBrush>
+                                </Setter.Value>
+                            </Setter>
+                            <Setter Property="Effect">
+                                <Setter.Value>
+                                    <DropShadowEffect Color="#00E5FF" BlurRadius="10" ShadowDepth="0" Opacity="0.45"/>
+                                </Setter.Value>
+                            </Setter>
                         </Trigger>
-                        <Trigger Property="IsMouseOver" Value="True">
+                        <MultiTrigger>
+                            <MultiTrigger.Conditions>
+                                <Condition Property="IsMouseOver" Value="True"/>
+                                <Condition Property="IsSelected" Value="False"/>
+                            </MultiTrigger.Conditions>
                             <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
-                        </Trigger>
+                            <Setter TargetName="Bd" Property="Background" Value="#1500E5FF"/>
+                        </MultiTrigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
     </Style>
 
+    <!-- TabControl: vertical sidebar nav. Moves all tabs to the LEFT side
+         and removes the inner content border. Looks like a proper sidebar
+         + content layout per the design. -->
     <Style TargetType="TabControl">
         <Setter Property="Background" Value="Transparent"/>
         <Setter Property="BorderBrush" Value="{DynamicResource LineBrush}"/>
-        <Setter Property="BorderThickness" Value="0,0,0,1"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="TabStripPlacement" Value="Left"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TabControl">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Border Grid.Column="0"
+                                Background="#CC050F1A"
+                                BorderBrush="{DynamicResource LineBrush}"
+                                BorderThickness="0,0,1,0">
+                            <TabPanel x:Name="HeaderPanel"
+                                      Panel.ZIndex="1"
+                                      IsItemsHost="True"
+                                      KeyboardNavigation.TabIndex="1"
+                                      Background="Transparent"/>
+                        </Border>
+                        <Border Grid.Column="1"
+                                Background="Transparent"
+                                BorderBrush="{DynamicResource LineBrush}"
+                                BorderThickness="0">
+                            <ContentPresenter x:Name="PART_SelectedContentHost"
+                                              ContentSource="SelectedContent"
+                                              Margin="0"/>
+                        </Border>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
     </Style>
 
     <Style TargetType="DataGrid">
@@ -786,5 +849,69 @@
     <Style x:Key="XsButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
         <Setter Property="Padding" Value="9,4"/>
         <Setter Property="FontSize" Value="10"/>
+    </Style>
+
+    <!-- App.xaml-compatible keys: many views use Style="{StaticResource PrimaryButton}"
+         and Style="{StaticResource SecondaryButton}". App.xaml defines those in the
+         main resource dict (which beats merged dicts in WPF). ThemeManager copies
+         these into the main dict at runtime when Cyberpunk is active so existing
+         view XAML auto-restyles without per-view changes. -->
+    <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+        <Setter Property="Background" Value="#1A00E5FF"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+    </Style>
+
+    <Style x:Key="SecondaryButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource LineBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
+        <Setter Property="FontSize" Value="11"/>
+    </Style>
+
+    <!-- Dark theme's keyed ContextMenu used by tray + dashboard popups -->
+    <Style x:Key="DarkContextMenu" TargetType="ContextMenu">
+        <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="FontFamily" Value="{DynamicResource MonoFontFamily}"/>
+    </Style>
+
+    <!-- ComboBoxToggleButton (used by App.xaml's ComboBox template) -->
+    <Style x:Key="ComboBoxToggleButton" TargetType="ToggleButton">
+        <Setter Property="OverridesDefaultStyle" Value="True"/>
+        <Setter Property="IsTabStop" Value="False"/>
+        <Setter Property="Focusable" Value="False"/>
+        <Setter Property="ClickMode" Value="Press"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Border x:Name="Bd" Background="{DynamicResource SurfaceBrush}"
+                            BorderBrush="{DynamicResource LineBrush}"
+                            BorderThickness="1">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition/>
+                                <ColumnDefinition Width="20"/>
+                            </Grid.ColumnDefinitions>
+                            <Path Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                  Data="M 0 0 L 4 4 L 8 0 Z" Fill="{DynamicResource AccentBrush}"/>
+                        </Grid>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentDimBrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
     </Style>
 </ResourceDictionary>
