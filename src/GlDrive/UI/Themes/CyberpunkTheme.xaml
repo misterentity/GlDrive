@@ -353,52 +353,63 @@
                                       KeyboardNavigation.TabIndex="1"
                                       Background="Transparent"/>
                         </Border>
-                        <Border Grid.Column="1"
-                                Background="#CC0A1424"
-                                BorderBrush="{DynamicResource LineBrush}"
-                                BorderThickness="0">
-                            <!-- Inner HUD frame: makes the content panel
-                                 visible even when individual sections inside
-                                 use Background=Transparent. Border thickness
-                                 omitted on the left so it joins flush with
-                                 the sidebar's right border. -->
-                            <Border Background="Transparent"
-                                    BorderBrush="{DynamicResource LineBrush}"
-                                    BorderThickness="0,1,1,1"
-                                    Margin="8,8,8,8">
-                                <Grid>
-                                    <!-- Corner accent brackets: 4 small L-shapes
-                                         clipped to the inner content frame so
-                                         every tab gets the cyberpunk corner-
-                                         bracket treatment from the design. -->
-                                    <Border Width="12" Height="12"
-                                            HorizontalAlignment="Left" VerticalAlignment="Top"
-                                            BorderBrush="{DynamicResource AccentBrush}"
-                                            BorderThickness="1,1,0,0"
-                                            Margin="-1,-1,0,0"/>
-                                    <Border Width="12" Height="12"
-                                            HorizontalAlignment="Right" VerticalAlignment="Top"
-                                            BorderBrush="{DynamicResource AccentBrush}"
-                                            BorderThickness="0,1,1,0"
-                                            Margin="0,-1,-1,0"/>
-                                    <Border Width="12" Height="12"
-                                            HorizontalAlignment="Left" VerticalAlignment="Bottom"
-                                            BorderBrush="{DynamicResource AccentBrush}"
-                                            BorderThickness="1,0,0,1"
-                                            Margin="-1,0,0,-1"/>
-                                    <Border Width="12" Height="12"
-                                            HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                                            BorderBrush="{DynamicResource AccentBrush}"
-                                            BorderThickness="0,0,1,1"
-                                            Margin="0,0,-1,-1"/>
-                                    <ContentPresenter x:Name="PART_SelectedContentHost"
-                                                      ContentSource="SelectedContent"
-                                                      HorizontalAlignment="Stretch"
-                                                      VerticalAlignment="Stretch"
-                                                      Margin="0"/>
-                                </Grid>
-                            </Border>
-                        </Border>
+                        <Grid Grid.Column="1" Background="#CC0A1424">
+                            <!-- Content + decorative HUD chrome share the same
+                                 cell. ContentPresenter is FIRST so it gets the
+                                 default fill, and the decorative borders are
+                                 last so they paint on top but don't constrain
+                                 layout. None of the HUD chrome elements
+                                 contribute to layout measurement of the
+                                 ContentPresenter — they're alignment-pinned
+                                 thin lines. -->
+                            <ContentPresenter x:Name="PART_SelectedContentHost"
+                                              ContentSource="SelectedContent"
+                                              HorizontalAlignment="Stretch"
+                                              VerticalAlignment="Stretch"
+                                              Margin="8"/>
+                            <!-- Frame edge lines (non-interactive, IsHitTestVisible
+                                 false so they never block input). -->
+                            <Rectangle Height="1" VerticalAlignment="Top"
+                                       HorizontalAlignment="Stretch"
+                                       Margin="8,8,8,0"
+                                       Fill="{DynamicResource LineBrush}"
+                                       IsHitTestVisible="False"/>
+                            <Rectangle Height="1" VerticalAlignment="Bottom"
+                                       HorizontalAlignment="Stretch"
+                                       Margin="8,0,8,8"
+                                       Fill="{DynamicResource LineBrush}"
+                                       IsHitTestVisible="False"/>
+                            <Rectangle Width="1" HorizontalAlignment="Right"
+                                       VerticalAlignment="Stretch"
+                                       Margin="0,8,8,8"
+                                       Fill="{DynamicResource LineBrush}"
+                                       IsHitTestVisible="False"/>
+                            <!-- Corner accent brackets, also IsHitTestVisible false. -->
+                            <Border Width="12" Height="12"
+                                    HorizontalAlignment="Left" VerticalAlignment="Top"
+                                    BorderBrush="{DynamicResource AccentBrush}"
+                                    BorderThickness="1,1,0,0"
+                                    Margin="7,7,0,0"
+                                    IsHitTestVisible="False"/>
+                            <Border Width="12" Height="12"
+                                    HorizontalAlignment="Right" VerticalAlignment="Top"
+                                    BorderBrush="{DynamicResource AccentBrush}"
+                                    BorderThickness="0,1,1,0"
+                                    Margin="0,7,7,0"
+                                    IsHitTestVisible="False"/>
+                            <Border Width="12" Height="12"
+                                    HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                                    BorderBrush="{DynamicResource AccentBrush}"
+                                    BorderThickness="1,0,0,1"
+                                    Margin="7,0,0,7"
+                                    IsHitTestVisible="False"/>
+                            <Border Width="12" Height="12"
+                                    HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                    BorderBrush="{DynamicResource AccentBrush}"
+                                    BorderThickness="0,0,1,1"
+                                    Margin="0,0,7,7"
+                                    IsHitTestVisible="False"/>
+                        </Grid>
                     </Grid>
                 </ControlTemplate>
             </Setter.Value>
