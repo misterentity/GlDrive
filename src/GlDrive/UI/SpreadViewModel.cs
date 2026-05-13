@@ -253,10 +253,20 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
                 : "0 / 0";
 
             vm.IsPaused = job.State == SpreadJobState.Stopped;
-            // IsPred / IsAutoRace / Score / ScoreLabel are not yet plumbed from SpreadJob —
-            // leave defaults; XAML chips will hide via converters when false.
-            if (string.IsNullOrEmpty(vm.ScoreLabel))
-                vm.ScoreLabel = "MANUAL";
+            // Real wiring (v1.90): SpreadJob now exposes IsAutoRace / IsPred /
+            // Score directly. ScoreLabel encodes a one-word state line
+            // (PRED takes precedence; auto-race vs manual otherwise; STOPPED
+            // overrides). The big-score card pulls from vm.Score.
+            vm.IsAutoRace = job.IsAutoRace;
+            vm.IsPred = job.IsPred;
+            vm.Score = job.Score;
+            vm.ScoreLabel = job.State switch
+            {
+                SpreadJobState.Stopped   => "STOPPED",
+                SpreadJobState.Failed    => "FAILED",
+                SpreadJobState.Completed => "DONE",
+                _ => job.IsPred ? "PRE" : (job.IsAutoRace ? "AUTO RACE" : "MANUAL")
+            };
         }
 
         OnPropertyChanged(nameof(LeaderScore));

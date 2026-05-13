@@ -112,6 +112,45 @@ public class SpreadJob : IDisposable
     public SpreadJobState State { get; private set; } = SpreadJobState.Running;
     public DateTime StartedAt { get; } = DateTime.UtcNow;
     public IReadOnlyDictionary<string, SiteProgress> Sites => _siteProgress;
+
+    // True when this race was triggered by an auto-race (announce listener
+    // or notification poll) rather than a manual New Race click. The
+    // constructor flags it via the optional knownSourceServerId param —
+    // auto-race always provides a source hint; manual races don't.
+    public bool IsAutoRace => _knownSourceServerId != null;
+
+    // Pred heuristic: scene "predder" sections live under /pre/ or contain
+    // the "pre" segment, and the release name often has PRED tag noise.
+    // Surface for the UI card chip without committing to a strict format.
+    public bool IsPred =>
+        Section.Contains("/pre/", StringComparison.OrdinalIgnoreCase) ||
+        Section.StartsWith("/pre", StringComparison.OrdinalIgnoreCase) ||
+        ReleaseName.Contains("-PRE-", StringComparison.OrdinalIgnoreCase) ||
+        ReleaseName.EndsWith("-PRE", StringComparison.OrdinalIgnoreCase);
+
+    // Race score 0-65535 derived from best destination's transfer progress.
+    // Matches the design's scoreboard style (p3.png shows scores like
+    // 65,536 / 58,430 / 42,160 / 38,211 per active race). The "best dest"
+    // is the destination with the most files owned so far; that ratio
+    // scaled to 0-65535 makes a stable, monotonically increasing number
+    // for the duration of the race.
+    public int Score
+    {
+        get
+        {
+            var sites = _siteProgress.Values;
+            if (sites.Count == 0) return 0;
+            int maxTotal = 0;
+            int maxDestOwned = 0;
+            foreach (var s in sites)
+            {
+                if (s.FilesTotal > maxTotal) maxTotal = s.FilesTotal;
+                if (!s.IsSource && s.FilesOwned > maxDestOwned) maxDestOwned = s.FilesOwned;
+            }
+            if (maxTotal == 0) return 0;
+            return (int)Math.Min(65535L, (long)maxDestOwned * 65535L / maxTotal);
+        }
+    }
     public IReadOnlyList<ActiveTransferInfo> ActiveTransferList
     {
         get { lock (_progressLock) return _activeTransfers.Values.ToList(); }
