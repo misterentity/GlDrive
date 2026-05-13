@@ -30,6 +30,12 @@ public static class ThemeManager
 
         mergedDicts.Insert(0, newTheme);
         _currentTheme = newTheme;
+
+        // Apply or remove cyberpunk window chrome (scanline overlay)
+        if (resolved == "Cyberpunk")
+            CyberpunkChrome.Attach();
+        else
+            CyberpunkChrome.Detach();
     }
 
     private static bool IsWindowsDarkMode()

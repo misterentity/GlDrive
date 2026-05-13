@@ -154,7 +154,7 @@ public class DownloadConfig
     public int ScheduleEndHour { get; set; } = 6;
     public bool VerifySfv { get; set; } = true;
     public bool PlaySoundOnComplete { get; set; }
-    public string Theme { get; set; } = "Dark";
+    public string Theme { get; set; } = "Cyberpunk";
 }
 
 public class AgentConfig
