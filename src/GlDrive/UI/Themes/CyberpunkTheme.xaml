@@ -333,6 +333,8 @@
         <Setter Property="BorderThickness" Value="0"/>
         <Setter Property="TabStripPlacement" Value="Left"/>
         <Setter Property="Padding" Value="0"/>
+        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+        <Setter Property="VerticalContentAlignment" Value="Stretch"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="TabControl">
@@ -357,6 +359,8 @@
                                 BorderThickness="0">
                             <ContentPresenter x:Name="PART_SelectedContentHost"
                                               ContentSource="SelectedContent"
+                                              HorizontalAlignment="Stretch"
+                                              VerticalAlignment="Stretch"
                                               Margin="0"/>
                         </Border>
                     </Grid>
