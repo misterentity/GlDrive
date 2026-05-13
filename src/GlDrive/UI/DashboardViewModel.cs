@@ -173,28 +173,48 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         MountedServerStatus.Clear();
         foreach (var server in _config.Servers)
         {
-            var mounted = _serverManager.GetServer(server.Id);
-            var isMounted = mounted != null;
+            // CONNECTED = ServerManager has a live MountService (FTP session up).
+            // MOUNTED  = connected AND the user opted into a Windows drive letter
+            //            via Mount.MountDrive in the per-server config.
+            // Earlier versions conflated the two — every connected server showed
+            // as MOUNTED. Now: if MountDrive is off, we say CONNECTED.
+            var service = _serverManager.GetServer(server.Id);
+            var isConnected = service != null;
+            var wantsDrive = server.Mount?.MountDrive ?? false;
+            var isMounted = isConnected && wantsDrive;
+            var driveLetter = server.Mount?.DriveLetter ?? "";
+            string status;
+            if (isMounted)
+                status = string.IsNullOrEmpty(driveLetter) ? "MOUNTED" : $"MOUNTED  {driveLetter}:";
+            else if (isConnected)
+                status = "CONNECTED";
+            else if (server.Enabled)
+                status = "OFFLINE";
+            else
+                status = "DISABLED";
+
             MountedServerStatus.Add(new OverviewServerVm
             {
                 ServerId = server.Id,
                 Name = string.IsNullOrEmpty(server.Name) ? server.Connection?.Host ?? "(unnamed)" : server.Name,
                 Host = $"{server.Connection?.Host}:{server.Connection?.Port}",
                 IsMounted = isMounted,
-                StatusLine = isMounted ? "MOUNTED" : (server.Enabled ? "OFFLINE" : "DISABLED"),
+                StatusLine = status,
                 CapacityPercent = 0,
                 CapacityUsedDisplay = "—",
                 CapacityTotalDisplay = "—",
                 IsPrimary = false,
-                SiteTag = isMounted ? "MOUNTED" : (server.Enabled ? "OFFLINE" : "DISABLED")
+                SiteTag = isMounted ? "MOUNTED" : (isConnected ? "CONNECTED" : (server.Enabled ? "OFFLINE" : "DISABLED"))
             });
         }
 
-        // Tag the first mounted server as PRIMARY, subsequent mounted as PEER.
+        // Tag the first connected (mounted or just connected) server as PRIMARY,
+        // subsequent connected as PEER. Pure-offline servers keep their offline tag.
         bool primaryAssigned = false;
         foreach (var vm in MountedServerStatus)
         {
-            if (vm.IsMounted)
+            // Only the visually "alive" servers get PRIMARY/PEER treatment.
+            if (vm.SiteTag == "MOUNTED" || vm.SiteTag == "CONNECTED")
             {
                 if (!primaryAssigned)
                 {
