@@ -120,6 +120,9 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     public int ConfiguredServerCount => _config.Servers.Count;
     public string OperationsLogPreview { get; private set; } = "loading...";
 
+    // Mounts tab: TOFU trusted-cert list. RefreshMounts() rebuilds.
+    public ObservableCollection<TrustedCertVm> TrustedCerts { get; } = new();
+
     // Overview throughput sparkline (rolling 60 samples; Y in [0..40] relative
     // to a 40px chart height). Mutated each DispatcherTimer tick.
     // Setters must be public (not private) for WPF bindings to bind, even
@@ -262,6 +265,59 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         RefreshTelemetry();
         EnsureThroughputSeed();
         StartOverviewLive();
+    }
+
+    // Mounts tab: reload the trusted-cert TOFU list from disk.
+    // The on-disk format (see CertificateManager) is a dict keyed by "host:port"
+    // mapping to { fingerprint, trustedAt }. We accept both camelCase
+    // (current format) and PascalCase (defensive) property names.
+    public void RefreshMounts()
+    {
+        TrustedCerts.Clear();
+        var path = System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "GlDrive", "trusted_certs.json");
+        if (!System.IO.File.Exists(path)) return;
+        try
+        {
+            var json = System.IO.File.ReadAllText(path);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object) return;
+            foreach (var entry in doc.RootElement.EnumerateObject())
+            {
+                var hostKey = entry.Name;
+                var node = entry.Value;
+                if (node.ValueKind != System.Text.Json.JsonValueKind.Object) continue;
+
+                string fp = TryGetString(node, "fingerprint", "Fingerprint");
+                string subj = TryGetString(node, "subject", "Subject");
+                string issuer = TryGetString(node, "issuer", "Issuer");
+                string notAfter = TryGetString(node, "notAfter", "NotAfter");
+                // Current format only persists trustedAt — surface it when NotAfter isn't set.
+                if (string.IsNullOrEmpty(notAfter))
+                    notAfter = TryGetString(node, "trustedAt", "TrustedAt");
+
+                TrustedCerts.Add(new TrustedCertVm
+                {
+                    HostKey = hostKey,
+                    Fingerprint = fp,
+                    Subject = subj,
+                    Issuer = issuer,
+                    NotAfter = notAfter
+                });
+            }
+        }
+        catch { /* corrupt JSON — leave list empty */ }
+    }
+
+    private static string TryGetString(System.Text.Json.JsonElement node, params string[] names)
+    {
+        foreach (var n in names)
+        {
+            if (node.TryGetProperty(n, out var el) && el.ValueKind == System.Text.Json.JsonValueKind.String)
+                return el.GetString() ?? "";
+        }
+        return "";
     }
 
     // Seed the throughput sparkline with 60 baseline points (Y = 20, the
@@ -2361,6 +2417,15 @@ public class OverviewServerVm
     public string CapacityTotalDisplay { get; set; } = "—";
     public bool IsPrimary { get; set; } = false;
     public string SiteTag { get; set; } = "MOUNTED";
+}
+
+public class TrustedCertVm
+{
+    public string HostKey { get; set; } = "";
+    public string Fingerprint { get; set; } = "";
+    public string Subject { get; set; } = "";
+    public string Issuer { get; set; } = "";
+    public string NotAfter { get; set; } = "";
 }
 
 public class DownloadItemVm : INotifyPropertyChanged

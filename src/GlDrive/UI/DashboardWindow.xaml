@@ -1532,6 +1532,20 @@
 
                         <!-- Video area -->
                         <Grid Background="Black" x:Name="PlayerVideoArea" MouseLeftButtonDown="VideoArea_MouseDown">
+                            <!-- NO SIGNAL overlay (rendered behind VideoView; visible when video is idle) -->
+                            <Grid IsHitTestVisible="False">
+                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.85">
+                                    <TextBlock Text="NO SIGNAL" FontFamily="{DynamicResource DisplayFontFamily}" FontWeight="Bold"
+                                               FontSize="48" Foreground="{DynamicResource AccentBrush}" HorizontalAlignment="Center">
+                                        <TextBlock.Effect>
+                                            <DropShadowEffect Color="#00E5FF" BlurRadius="18" ShadowDepth="0" Opacity="0.8"/>
+                                        </TextBlock.Effect>
+                                    </TextBlock>
+                                    <TextBlock Text="WAITING FOR A SOURCE..." Style="{DynamicResource MicroTextStyle}"
+                                               FontSize="11" Foreground="{DynamicResource TextFaintBrush}"
+                                               HorizontalAlignment="Center" Margin="0,8,0,0"/>
+                                </StackPanel>
+                            </Grid>
                             <vlc:VideoView x:Name="PlayerVideoView"/>
                             <!-- Buffering overlay -->
                             <Border Background="#CC000000" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
@@ -2048,6 +2062,59 @@
                         <KeyBinding Key="Escape" Command="{Binding StopJobCommand}"/>
                         <KeyBinding Gesture="Ctrl+R" Command="{Binding StartRaceCommand}"/>
                     </DockPanel.InputBindings>
+                    <!-- Stats cards row -->
+                    <Border DockPanel.Dock="Top" Margin="0,0,0,12">
+                        <StackPanel Orientation="Horizontal">
+                            <Border Style="{DynamicResource StatCardStyle}">
+                                <Grid>
+                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                    <StackPanel Margin="4">
+                                        <TextBlock Text="ACTIVE RACES" Style="{DynamicResource StatCardLabelStyle}"/>
+                                        <TextBlock Text="{Binding ActiveJobs.Count, FallbackValue=0}" Style="{DynamicResource StatCardValueStyle}"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                            <Border Style="{DynamicResource StatCardStyle}">
+                                <Grid>
+                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                    <StackPanel Margin="4">
+                                        <TextBlock Text="LEADER" Style="{DynamicResource StatCardLabelStyle}"/>
+                                        <TextBlock Text="{Binding LeaderScore, FallbackValue=—}" Style="{DynamicResource StatCardValueStyle}"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                            <Border Style="{DynamicResource StatCardStyle}">
+                                <Grid>
+                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                    <StackPanel Margin="4">
+                                        <TextBlock Text="QUEUE" Style="{DynamicResource StatCardLabelStyle}"/>
+                                        <TextBlock Text="{Binding QueueDepth, FallbackValue=0}" Style="{DynamicResource StatCardValueStyle}"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                            <Border Style="{DynamicResource StatCardStyle}">
+                                <Grid>
+                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                    <StackPanel Margin="4">
+                                        <TextBlock Text="HISTORY" Style="{DynamicResource StatCardLabelStyle}"/>
+                                        <TextBlock Text="{Binding History.Count, FallbackValue=0}" Style="{DynamicResource StatCardValueStyle}"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </StackPanel>
+                    </Border>
                     <!-- Toolbar -->
                     <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
                             CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
@@ -2294,6 +2361,129 @@
                 </TabItem.Header>
             </TabItem>
 
+            <!-- Mounts Tab -->
+            <TabItem x:Name="MountsTab">
+                <TabItem.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="12" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="Mounts" VerticalAlignment="Center"/>
+                    </Grid>
+                </TabItem.Header>
+                <DockPanel Margin="12">
+                    <!-- Top: Mount cards row -->
+                    <Border DockPanel.Dock="Top" Margin="0,0,0,12" Style="{DynamicResource HudPanelStyle}">
+                        <DockPanel>
+                            <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                                <TextBlock Text="&gt;&gt; MOUNT POINTS" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                            </Border>
+                            <Grid>
+                                <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                                    <ItemsControl ItemsSource="{Binding MountedServerStatus}" Margin="14">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <StackPanel Orientation="Horizontal"/>
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Width="280" Height="280" Margin="0,0,12,0"
+                                                        Background="#80050F1A" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1">
+                                                    <Grid>
+                                                        <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                                        <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                                        <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                                        <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                                        <DockPanel Margin="16">
+                                                            <!-- Title -->
+                                                            <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
+                                                                <TextBlock Text="{Binding Name}" Style="{DynamicResource DisplayTextStyle}" FontSize="15"/>
+                                                                <TextBlock Text="{Binding Host}" Style="{DynamicResource MicroTextStyle}" Margin="0,2,0,0"/>
+                                                            </StackPanel>
+                                                            <!-- Action buttons -->
+                                                            <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,8,0,0">
+                                                                <Button Content="OPEN" Style="{DynamicResource CyberpunkButtonStyle}" Margin="0,0,6,0" Padding="14,5"/>
+                                                                <Button Content="FLUSH" Style="{DynamicResource CyberpunkButtonStyle}" Margin="0,0,6,0" Padding="14,5"/>
+                                                                <Button Content="UNMOUNT" Style="{DynamicResource DangerButtonStyle}" Padding="14,5"/>
+                                                            </StackPanel>
+                                                            <!-- Status tag -->
+                                                            <Border DockPanel.Dock="Bottom" Style="{DynamicResource TagAccentStyle}" HorizontalAlignment="Center" Margin="0,10,0,0">
+                                                                <TextBlock Text="{Binding StatusLine}" Style="{DynamicResource TagTextStyle}" Foreground="{DynamicResource AccentBrush}"/>
+                                                            </Border>
+                                                            <!-- Big disc -->
+                                                            <Grid VerticalAlignment="Center" HorizontalAlignment="Center">
+                                                                <Ellipse Width="130" Height="130" Stroke="{DynamicResource LineDimBrush}" StrokeThickness="2"/>
+                                                                <Ellipse Width="130" Height="130" Stroke="{DynamicResource AccentBrush}" StrokeThickness="3"
+                                                                        StrokeDashArray="2,1.2" RenderTransformOrigin="0.5,0.5">
+                                                                    <Ellipse.Effect>
+                                                                        <DropShadowEffect Color="#00E5FF" BlurRadius="14" ShadowDepth="0" Opacity="0.55"/>
+                                                                    </Ellipse.Effect>
+                                                                    <Ellipse.RenderTransform>
+                                                                        <RotateTransform Angle="0"/>
+                                                                    </Ellipse.RenderTransform>
+                                                                    <Ellipse.Triggers>
+                                                                        <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                                                                            <BeginStoryboard>
+                                                                                <Storyboard>
+                                                                                    <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
+                                                                                                     From="0" To="360" Duration="0:0:16" RepeatBehavior="Forever"/>
+                                                                                </Storyboard>
+                                                                            </BeginStoryboard>
+                                                                        </EventTrigger>
+                                                                    </Ellipse.Triggers>
+                                                                </Ellipse>
+                                                                <Ellipse Width="92" Height="92" Stroke="{DynamicResource LineDimBrush}" StrokeThickness="1"/>
+                                                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                                                    <TextBlock Text="{Binding CapacityPercent, StringFormat=N0}" Style="{DynamicResource DisplayTextStyle}" FontSize="28" HorizontalAlignment="Center"/>
+                                                                    <TextBlock Text="%" Style="{DynamicResource MicroTextStyle}" HorizontalAlignment="Center"/>
+                                                                </StackPanel>
+                                                            </Grid>
+                                                        </DockPanel>
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </Grid>
+                        </DockPanel>
+                    </Border>
+                    <!-- Bottom: Trusted certs table -->
+                    <Border Style="{DynamicResource HudPanelStyle}">
+                        <DockPanel>
+                            <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                                <TextBlock Text="&gt;&gt; TRUSTED CERTS - TOFU" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                            </Border>
+                            <Grid>
+                                <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                <DataGrid ItemsSource="{Binding TrustedCerts}" AutoGenerateColumns="False"
+                                          Margin="14" Background="Transparent" HeadersVisibility="Column"
+                                          CanUserAddRows="False" CanUserDeleteRows="False" IsReadOnly="True">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="HOST" Binding="{Binding HostKey}" Width="240"/>
+                                        <DataGridTextColumn Header="SUBJECT" Binding="{Binding Subject}" Width="*"/>
+                                        <DataGridTextColumn Header="ISSUER" Binding="{Binding Issuer}" Width="*"/>
+                                        <DataGridTextColumn Header="FINGERPRINT (SHA-256)" Binding="{Binding Fingerprint}" Width="220"/>
+                                        <DataGridTextColumn Header="NOT AFTER" Binding="{Binding NotAfter}" Width="160"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </Grid>
+                        </DockPanel>
+                    </Border>
+                </DockPanel>
+            </TabItem>
+
             <!-- World Monitor Tab -->
             <TabItem>
                 <TabItem.Header>
@@ -2303,7 +2493,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="12" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="13" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="World Monitor" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
@@ -2319,7 +2509,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="13" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="14" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="Discord" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
@@ -2335,7 +2525,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="14" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="15" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="Streems" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
@@ -2351,7 +2541,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="15" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="16" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="AI Agent" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>

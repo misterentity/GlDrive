@@ -67,8 +67,8 @@ if ($Tab -gt 0) {
         # 10=Spread, 11=Browse
         558, 596,
         # group skipped
-        # 12=World Monitor, 13=Discord, 14=Streems, 15=AI Agent
-        666, 704, 742, 780
+        # 12=Mounts, 13=World Monitor, 14=Discord, 15=Streems, 16=AI Agent
+        666, 704, 742, 780, 818
     )
     if ($Tab -ge 1 -and $Tab -le $tabYOffsets.Count) {
         $clickX = $rect.Left + 90
