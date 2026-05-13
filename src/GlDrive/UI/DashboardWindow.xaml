@@ -2052,7 +2052,7 @@
                             Style="{DynamicResource HudPanelStyle}">
                         <DockPanel>
                             <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                <TextBlock Text="&gt;&gt; SPREAD ENGINE" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                <TextBlock Text="&gt;&gt; AUTO RACES" Style="{DynamicResource SectionHeaderTextStyle}"/>
                             </Border>
                             <Grid>
                                 <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -2143,104 +2143,185 @@
                     <TextBlock DockPanel.Dock="Top" Text="{Binding SpreadStatus}" FontSize="12"
                                Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,8"
                                TextWrapping="Wrap"/>
-                    <!-- Activity & History (bottom) -->
-                    <Border DockPanel.Dock="Bottom" Height="180"
-                            Background="{DynamicResource SurfaceBrush}"
-                            BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
-                            CornerRadius="6" Margin="0,10,0,0" Padding="0">
-                        <TabControl>
-                            <TabItem Header="Activity">
-                                <DataGrid ItemsSource="{Binding AutoRaceLog}"
-                                          AutoGenerateColumns="False" IsReadOnly="True"
-                                          SelectionMode="Single" GridLinesVisibility="None"
-                                          HeadersVisibility="Column" CanUserAddRows="False"
-                                          FontSize="11">
-                                    <DataGrid.Columns>
-                                        <DataGridTextColumn Header="Time" Binding="{Binding Time}" Width="65"/>
-                                        <DataGridTextColumn Header="Section" Binding="{Binding Section}" Width="90"/>
-                                        <DataGridTextColumn Header="Release" Binding="{Binding Release}" Width="*"/>
-                                        <DataGridTextColumn Header="Result" Binding="{Binding Result}" Width="180"/>
-                                    </DataGrid.Columns>
-                                </DataGrid>
-                            </TabItem>
-                            <TabItem Header="History">
-                                <DataGrid ItemsSource="{Binding RaceHistory}"
-                                          AutoGenerateColumns="False" IsReadOnly="True"
-                                          SelectionMode="Single" GridLinesVisibility="None"
-                                          HeadersVisibility="Column" CanUserAddRows="False"
-                                          FontSize="11">
-                                    <DataGrid.InputBindings>
-                                        <MouseBinding Gesture="LeftDoubleClick"
-                                                      Command="{Binding ShowRaceDetailCommand}"
-                                                      CommandParameter="{Binding SelectedItem, RelativeSource={RelativeSource AncestorType=DataGrid}}"/>
-                                    </DataGrid.InputBindings>
-                                    <DataGrid.Columns>
-                                        <DataGridTextColumn Header="Time" Binding="{Binding Time}" Width="90"/>
-                                        <DataGridTextColumn Header="Release" Binding="{Binding Release}" Width="*"/>
-                                        <DataGridTextColumn Header="Section" Binding="{Binding Section}" Width="70"/>
-                                        <DataGridTextColumn Header="Result" Binding="{Binding Result}" Width="70"/>
-                                        <DataGridTextColumn Header="Skiplist" Binding="{Binding SkiplistResult}" Width="140"/>
-                                        <DataGridTextColumn Header="Files" Binding="{Binding Files}" Width="45"/>
-                                        <DataGridTextColumn Header="Size" Binding="{Binding Size}" Width="70"/>
-                                        <DataGridTextColumn Header="Duration" Binding="{Binding Duration}" Width="65"/>
-                                        <DataGridTextColumn Header="Sites" Binding="{Binding Sites}" Width="140"/>
-                                    </DataGrid.Columns>
-                                </DataGrid>
-                            </TabItem>
-                        </TabControl>
-                    </Border>
-                    <!-- Scoreboard -->
-                    <Border DockPanel.Dock="Bottom" Height="160"
-                            Background="{DynamicResource SurfaceBrush}"
-                            BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
-                            CornerRadius="6" Margin="0,10,0,0" Padding="0">
-                        <DataGrid ItemsSource="{Binding SpreadScoreboard}"
-                                  AutoGenerateColumns="False" IsReadOnly="True"
-                                  SelectionMode="Single" GridLinesVisibility="Horizontal"
-                                  HeadersVisibility="Column" CanUserAddRows="False">
-                            <DataGrid.Columns>
-                                <DataGridTextColumn Header="Site" Binding="{Binding SiteName}" Width="140"/>
-                                <DataGridTextColumn Header="Files" Binding="{Binding FilesOwned}" Width="60"/>
-                                <DataGridTextColumn Header="Total" Binding="{Binding FilesTotal}" Width="60"/>
-                                <DataGridTextColumn Header="Owned %" Binding="{Binding OwnedPercent, StringFormat=F1}" Width="80"/>
-                                <DataGridTextColumn Header="Speed" Binding="{Binding SpeedFormatted}" Width="100"/>
-                                <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="*"/>
-                            </DataGrid.Columns>
-                        </DataGrid>
-                    </Border>
-                    <!-- Center: Job List (left) + File Transfers (right) -->
+                    <!-- Main 2-row layout: AUTO RACES (top, 2*) + SITE SCOREBOARD + AUTO-RACE FEED (bottom, 1*) -->
                     <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="280"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-                        <!-- Job List -->
-                        <DataGrid Grid.Column="0" ItemsSource="{Binding SpreadJobs}"
-                                  SelectedItem="{Binding SelectedSpreadJob}"
-                                  AutoGenerateColumns="False" IsReadOnly="True"
-                                  SelectionMode="Single" GridLinesVisibility="Horizontal"
-                                  HeadersVisibility="Column" CanUserAddRows="False"
-                                  Margin="0,0,10,0">
-                            <DataGrid.Columns>
-                                <DataGridTextColumn Header="Release" Binding="{Binding Release}" Width="*"/>
-                                <DataGridTextColumn Header="%" Binding="{Binding ProgressPercent, StringFormat=F0}" Width="40"/>
-                                <DataGridTextColumn Header="State" Binding="{Binding Status}" Width="70"/>
-                            </DataGrid.Columns>
-                        </DataGrid>
-                        <!-- File Transfers -->
-                        <DataGrid Grid.Column="1" ItemsSource="{Binding SpreadFileTransfers}"
-                                  AutoGenerateColumns="False" IsReadOnly="True"
-                                  SelectionMode="Single" GridLinesVisibility="Horizontal"
-                                  HeadersVisibility="Column" CanUserAddRows="False">
-                            <DataGrid.Columns>
-                                <DataGridTextColumn Header="File" Binding="{Binding FileName}" Width="*"/>
-                                <DataGridTextColumn Header="Size" Binding="{Binding SizeFormatted}" Width="80"/>
-                                <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="100"/>
-                                <DataGridTextColumn Header="Dest" Binding="{Binding Dest}" Width="100"/>
-                                <DataGridTextColumn Header="Speed" Binding="{Binding SpeedFormatted}" Width="90"/>
-                                <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="80"/>
-                            </DataGrid.Columns>
-                        </DataGrid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="2*"/>
+                            <RowDefinition Height="1*"/>
+                        </Grid.RowDefinitions>
+                        <!-- AUTO RACES panel -->
+                        <Border Grid.Row="0" Style="{DynamicResource HudPanelStyle}" Margin="0,0,0,10">
+                            <DockPanel>
+                                <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                                    <TextBlock Text="&gt;&gt; AUTO RACES" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                </Border>
+                                <Grid>
+                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="14">
+                                        <ItemsControl ItemsSource="{Binding SpreadJobs}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Margin="0,0,0,10" Background="#80050F1A"
+                                                            BorderBrush="{DynamicResource LineBrush}" BorderThickness="1"
+                                                            Padding="14,12">
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="160"/>
+                                                                <ColumnDefinition Width="*"/>
+                                                                <ColumnDefinition Width="260"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <!-- Big score on the left -->
+                                                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                                                <TextBlock Text="{Binding Score, FallbackValue=0, StringFormat=N0}"
+                                                                           FontFamily="{DynamicResource DisplayFontFamily}"
+                                                                           FontWeight="Bold" FontSize="42"
+                                                                           Foreground="{DynamicResource AccentBrush}">
+                                                                    <TextBlock.Effect>
+                                                                        <DropShadowEffect Color="#00E5FF" BlurRadius="10" ShadowDepth="0" Opacity="0.45"/>
+                                                                    </TextBlock.Effect>
+                                                                </TextBlock>
+                                                                <TextBlock Text="{Binding ScoreLabel, FallbackValue=AUTO RACE}"
+                                                                           Style="{DynamicResource MicroTextStyle}"
+                                                                           Margin="0,-4,0,0"/>
+                                                            </StackPanel>
+                                                            <!-- Center: release + section/files + source/dest + chips -->
+                                                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="14,0,14,0">
+                                                                <TextBlock Text="{Binding Release}" Style="{DynamicResource DisplayTextStyle}" FontSize="14"/>
+                                                                <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                                                    <TextBlock Text="{Binding Section}" Style="{DynamicResource MicroTextStyle}"/>
+                                                                    <TextBlock Text=" · " Foreground="{DynamicResource TextFaintBrush}"/>
+                                                                    <TextBlock Text="{Binding FilesDoneTotalDisplay, FallbackValue=0 / 0}" Style="{DynamicResource MicroTextStyle}"/>
+                                                                </StackPanel>
+                                                                <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                                                    <TextBlock Text="{Binding SourceDisplay, FallbackValue=—}" Style="{DynamicResource AccentTextStyle}" FontSize="11"/>
+                                                                    <TextBlock Text=" → " Foreground="{DynamicResource TextDimBrush}" Margin="6,0"/>
+                                                                    <TextBlock Text="{Binding DestDisplay, FallbackValue=—}" Style="{DynamicResource AccentTextStyle}" FontSize="11" Foreground="{DynamicResource Signature2Brush}"/>
+                                                                </StackPanel>
+                                                                <!-- Tag chips row -->
+                                                                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                                                    <Border Style="{DynamicResource TagAccentStyle}" Margin="0,0,6,0"
+                                                                            Visibility="{Binding IsAutoRace, Converter={StaticResource BoolToVisibility}, FallbackValue=Collapsed}">
+                                                                        <TextBlock Text="AUTO" Style="{DynamicResource TagTextStyle}" Foreground="{DynamicResource AccentBrush}"/>
+                                                                    </Border>
+                                                                    <Border Style="{DynamicResource TagAccentStyle}" Margin="0,0,6,0"
+                                                                            Visibility="{Binding IsPred, Converter={StaticResource BoolToVisibility}, FallbackValue=Collapsed}">
+                                                                        <TextBlock Text="PRED" Style="{DynamicResource TagTextStyle}" Foreground="{DynamicResource AccentBrush}"/>
+                                                                    </Border>
+                                                                    <Border Style="{DynamicResource TagWarnStyle}" Margin="0,0,6,0"
+                                                                            Visibility="{Binding IsPaused, Converter={StaticResource BoolToVisibility}, FallbackValue=Collapsed}">
+                                                                        <TextBlock Text="PAUSED" Style="{DynamicResource TagTextStyle}" Foreground="{DynamicResource WarnBrush}"/>
+                                                                    </Border>
+                                                                    <Border Style="{DynamicResource TagGoodStyle}">
+                                                                        <TextBlock Text="{Binding Status, FallbackValue=ACTIVE}" Style="{DynamicResource TagTextStyle}" Foreground="{DynamicResource GoodBrush}"/>
+                                                                    </Border>
+                                                                </StackPanel>
+                                                            </StackPanel>
+                                                            <!-- Sparkline -->
+                                                            <Border Grid.Column="2" Height="60" VerticalAlignment="Center"
+                                                                    Background="#80070F1C" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1" ClipToBounds="True">
+                                                                <Polyline Points="{Binding SparklinePoints}"
+                                                                          Stroke="{DynamicResource AccentBrush}" StrokeThickness="1.4"
+                                                                          Stretch="Fill">
+                                                                    <Polyline.Effect>
+                                                                        <DropShadowEffect Color="#00E5FF" BlurRadius="6" ShadowDepth="0" Opacity="0.7"/>
+                                                                    </Polyline.Effect>
+                                                                </Polyline>
+                                                            </Border>
+                                                            <!-- Actions -->
+                                                            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
+                                                                <Button Content="STOP"
+                                                                        Command="{Binding DataContext.StopJobCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                        CommandParameter="{Binding}"
+                                                                        Style="{DynamicResource DangerButtonStyle}" Padding="12,5"/>
+                                                            </StackPanel>
+                                                        </Grid>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </ScrollViewer>
+                                </Grid>
+                            </DockPanel>
+                        </Border>
+                        <!-- Bottom split: Scoreboard + AutoRaceFeed -->
+                        <Grid Grid.Row="1">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <!-- SITE SCOREBOARD -->
+                            <Border Grid.Column="0" Style="{DynamicResource HudPanelStyle}" Margin="0,0,5,0">
+                                <DockPanel>
+                                    <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                                        <TextBlock Text="&gt;&gt; SITE SCOREBOARD" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                    </Border>
+                                    <Grid>
+                                        <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                        <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                        <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                        <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                        <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="14">
+                                            <ItemsControl ItemsSource="{Binding SpreadScoreboard}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Grid Margin="0,4,0,4">
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="160"/>
+                                                                <ColumnDefinition Width="*"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <TextBlock Grid.Column="0" Text="{Binding SiteName}" Style="{DynamicResource DisplayTextStyle}" FontSize="13"/>
+                                                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                                                <TextBlock Style="{DynamicResource MicroTextStyle}">
+                                                                    <Run Text="{Binding FilesOwned}"/><Run Text=" / "/><Run Text="{Binding FilesTotal}"/>
+                                                                </TextBlock>
+                                                            </StackPanel>
+                                                            <TextBlock Grid.Column="2" Text="{Binding SpeedFormatted, FallbackValue=—}"
+                                                                       Style="{DynamicResource MicroTextStyle}" Margin="0,0,8,0"/>
+                                                            <Border Grid.Column="3" Style="{DynamicResource TagAccentStyle}">
+                                                                <TextBlock Text="{Binding Status, FallbackValue=READY}" Style="{DynamicResource TagTextStyle}"/>
+                                                            </Border>
+                                                        </Grid>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </ScrollViewer>
+                                    </Grid>
+                                </DockPanel>
+                            </Border>
+                            <!-- AUTO-RACE FEED -->
+                            <Border Grid.Column="1" Style="{DynamicResource HudPanelStyle}" Margin="5,0,0,0">
+                                <DockPanel>
+                                    <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                                        <TextBlock Text="&gt;&gt; AUTO-RACE FEED" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                    </Border>
+                                    <Grid>
+                                        <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                        <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                        <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                        <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                        <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="14">
+                                            <ItemsControl ItemsSource="{Binding AutoRaceFeed}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <StackPanel Orientation="Horizontal" Margin="0,2,0,2">
+                                                            <TextBlock Text="{Binding Timestamp}" Style="{DynamicResource MicroTextStyle}" Width="70"/>
+                                                            <TextBlock Text="{Binding Action}" Style="{DynamicResource AccentTextStyle}" FontSize="11" Width="80"/>
+                                                            <TextBlock Text="{Binding Release}" Style="{DynamicResource MicroTextStyle}" Foreground="{DynamicResource ForegroundBrush}"/>
+                                                        </StackPanel>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </ScrollViewer>
+                                    </Grid>
+                                </DockPanel>
+                            </Border>
+                        </Grid>
                     </Grid>
                                 </DockPanel>
                             </Grid>

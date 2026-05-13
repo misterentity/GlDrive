@@ -1,5 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using System.Windows;
+using System.Windows.Media;
 
 namespace GlDrive.Spread;
 
@@ -10,6 +12,15 @@ public class SpreadJobVm : INotifyPropertyChanged
     private SpreadJobState _state;
     private double _progressPercent;
     private string _status = "";
+    private int _score;
+    private string _sourceDisplay = "";
+    private string _destDisplay = "";
+    private string _filesDoneTotalDisplay = "";
+    private bool _isPaused;
+    private bool _isPred;
+    private bool _isAutoRace;
+    private string _scoreLabel = "";
+    private PointCollection _sparklinePoints = new();
 
     public string Id { get; set; } = "";
     public string Release { get => _release; set { _release = value; OnPropertyChanged(); } }
@@ -17,6 +28,66 @@ public class SpreadJobVm : INotifyPropertyChanged
     public SpreadJobState State { get => _state; set { _state = value; OnPropertyChanged(); } }
     public double ProgressPercent { get => _progressPercent; set { _progressPercent = value; OnPropertyChanged(); } }
     public string Status { get => _status; set { _status = value; OnPropertyChanged(); } }
+
+    public int Score
+    {
+        get => _score;
+        set { if (_score == value) return; _score = value; OnPropertyChanged(); }
+    }
+
+    public string SourceDisplay
+    {
+        get => _sourceDisplay;
+        set { if (_sourceDisplay == value) return; _sourceDisplay = value; OnPropertyChanged(); }
+    }
+
+    public string DestDisplay
+    {
+        get => _destDisplay;
+        set { if (_destDisplay == value) return; _destDisplay = value; OnPropertyChanged(); }
+    }
+
+    public string FilesDoneTotalDisplay
+    {
+        get => _filesDoneTotalDisplay;
+        set { if (_filesDoneTotalDisplay == value) return; _filesDoneTotalDisplay = value; OnPropertyChanged(); }
+    }
+
+    public bool IsPaused
+    {
+        get => _isPaused;
+        set { if (_isPaused == value) return; _isPaused = value; OnPropertyChanged(); }
+    }
+
+    public bool IsPred
+    {
+        get => _isPred;
+        set { if (_isPred == value) return; _isPred = value; OnPropertyChanged(); }
+    }
+
+    public bool IsAutoRace
+    {
+        get => _isAutoRace;
+        set { if (_isAutoRace == value) return; _isAutoRace = value; OnPropertyChanged(); }
+    }
+
+    public string ScoreLabel
+    {
+        get => _scoreLabel;
+        set { if (_scoreLabel == value) return; _scoreLabel = value; OnPropertyChanged(); }
+    }
+
+    public PointCollection SparklinePoints
+    {
+        get => _sparklinePoints;
+        set { _sparklinePoints = value; OnPropertyChanged(); }
+    }
+
+    public SpreadJobVm()
+    {
+        for (int i = 0; i < 60; i++)
+            _sparklinePoints.Add(new Point(i, 20));
+    }
 
     public event PropertyChangedEventHandler? PropertyChanged;
     protected void OnPropertyChanged([CallerMemberName] string? name = null) =>
