@@ -13,6 +13,17 @@ public class WebViewHost : ContentControl
     private WebView2? _webView;
     private static readonly SemaphoreSlim _initLock = new(1, 1);
 
+    public WebViewHost()
+    {
+        // ContentControl defaults to Left/Top content alignment, which leaves the
+        // inner WebView2 sized to its (zero) natural width inside the host tab.
+        // Stretch fills the available panel.
+        HorizontalContentAlignment = HorizontalAlignment.Stretch;
+        VerticalContentAlignment = VerticalAlignment.Stretch;
+        HorizontalAlignment = HorizontalAlignment.Stretch;
+        VerticalAlignment = VerticalAlignment.Stretch;
+    }
+
     public static bool IsRuntimeAvailable()
     {
         try
