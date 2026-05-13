@@ -432,7 +432,7 @@
         <Setter Property="AlternatingRowBackground" Value="#070F1C"/>
         <Setter Property="FontFamily" Value="{DynamicResource MonoFontFamily}"/>
         <Setter Property="FontSize" Value="12"/>
-        <Setter Property="RowHeight" Value="26"/>
+        <Setter Property="RowHeight" Value="40"/>
     </Style>
 
     <Style TargetType="DataGridColumnHeader">
@@ -808,27 +808,32 @@
         <Setter Property="Background" Value="#CC0B1828"/>
         <Setter Property="BorderBrush" Value="{DynamicResource LineBrush}"/>
         <Setter Property="BorderThickness" Value="1"/>
-        <Setter Property="Padding" Value="14,10"/>
-        <Setter Property="MinWidth" Value="140"/>
-        <Setter Property="Margin" Value="0,0,10,0"/>
+        <Setter Property="Padding" Value="18,12"/>
+        <Setter Property="MinWidth" Value="160"/>
+        <Setter Property="MinHeight" Value="80"/>
+        <Setter Property="Margin" Value="0,0,12,0"/>
         <Setter Property="SnapsToDevicePixels" Value="True"/>
     </Style>
 
     <Style x:Key="StatCardLabelStyle" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{DynamicResource MonoFontFamily}"/>
-        <Setter Property="FontSize" Value="10"/>
-        <Setter Property="Foreground" Value="{DynamicResource TextFaintBrush}"/>
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextDimBrush}"/>
         <Setter Property="TextOptions.TextRenderingMode" Value="ClearType"/>
+        <Setter Property="Margin" Value="0,0,0,4"/>
     </Style>
 
     <Style x:Key="StatCardValueStyle" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{DynamicResource DisplayFontFamily}"/>
-        <Setter Property="FontWeight" Value="SemiBold"/>
-        <Setter Property="FontSize" Value="28"/>
+        <Setter Property="FontWeight" Value="Bold"/>
+        <Setter Property="FontSize" Value="34"/>
         <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+        <!-- Glow softened so the value reads crisply. Earlier 0.6 opacity at
+             8px blur made the number look hazy + ghostly against the dark card. -->
         <Setter Property="Effect">
             <Setter.Value>
-                <DropShadowEffect Color="#00E5FF" BlurRadius="8" ShadowDepth="0" Opacity="0.6"/>
+                <DropShadowEffect Color="#00E5FF" BlurRadius="6" ShadowDepth="0" Opacity="0.3"/>
             </Setter.Value>
         </Setter>
     </Style>
