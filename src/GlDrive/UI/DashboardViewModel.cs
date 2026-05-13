@@ -122,45 +122,50 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     // Overview throughput sparkline (rolling 60 samples; Y in [0..40] relative
     // to a 40px chart height). Mutated each DispatcherTimer tick.
+    // Setters must be public (not private) for WPF bindings to bind, even
+    // when the binding direction is OneWay — the binding engine reflects on
+    // the property and rejects it as read-only otherwise (XamlParseException
+    // "A TwoWay or OneWayToSource binding cannot work on the read-only
+    // property" surfaced in v1.85 crash logs).
     public PointCollection ThroughputPoints
     {
         get => _throughputPoints;
-        private set { _throughputPoints = value; OnPropertyChanged(); }
+        set { _throughputPoints = value; OnPropertyChanged(); }
     }
     public string RxRateDisplay
     {
         get => _rxRateDisplay;
-        private set { if (_rxRateDisplay == value) return; _rxRateDisplay = value; OnPropertyChanged(); }
+        set { if (_rxRateDisplay == value) return; _rxRateDisplay = value; OnPropertyChanged(); }
     }
     public string TxRateDisplay
     {
         get => _txRateDisplay;
-        private set { if (_txRateDisplay == value) return; _txRateDisplay = value; OnPropertyChanged(); }
+        set { if (_txRateDisplay == value) return; _txRateDisplay = value; OnPropertyChanged(); }
     }
     public double TelemetryCpuPercent
     {
         get => _telemetryCpuPercent;
-        private set { if (Math.Abs(_telemetryCpuPercent - value) < 0.01) return; _telemetryCpuPercent = value; OnPropertyChanged(); }
+        set { if (Math.Abs(_telemetryCpuPercent - value) < 0.01) return; _telemetryCpuPercent = value; OnPropertyChanged(); }
     }
     public double TelemetryMemoryMb
     {
         get => _telemetryMemoryMb;
-        private set { if (Math.Abs(_telemetryMemoryMb - value) < 0.01) return; _telemetryMemoryMb = value; OnPropertyChanged(); }
+        set { if (Math.Abs(_telemetryMemoryMb - value) < 0.01) return; _telemetryMemoryMb = value; OnPropertyChanged(); }
     }
     public double TelemetryPoolUtilization
     {
         get => _telemetryPoolUtilization;
-        private set { if (Math.Abs(_telemetryPoolUtilization - value) < 0.01) return; _telemetryPoolUtilization = value; OnPropertyChanged(); }
+        set { if (Math.Abs(_telemetryPoolUtilization - value) < 0.01) return; _telemetryPoolUtilization = value; OnPropertyChanged(); }
     }
     public string TelemetryUptime
     {
         get => _telemetryUptime;
-        private set { if (_telemetryUptime == value) return; _telemetryUptime = value; OnPropertyChanged(); }
+        set { if (_telemetryUptime == value) return; _telemetryUptime = value; OnPropertyChanged(); }
     }
     public int TelemetryThreadCount
     {
         get => _telemetryThreadCount;
-        private set { if (_telemetryThreadCount == value) return; _telemetryThreadCount = value; OnPropertyChanged(); }
+        set { if (_telemetryThreadCount == value) return; _telemetryThreadCount = value; OnPropertyChanged(); }
     }
 
     public void RefreshOverview()

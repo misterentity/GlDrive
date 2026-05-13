@@ -559,17 +559,17 @@
                             </Rectangle>
                         </Grid>
                     </Border>
-                    <ControlTemplate.Triggers>
-                        <EventTrigger RoutedEvent="FrameworkElement.Loaded">
-                            <BeginStoryboard>
-                                <Storyboard>
-                                    <DoubleAnimation Storyboard.TargetName="StripeRect"
-                                                     Storyboard.TargetProperty="(Rectangle.Fill).(DrawingBrush.Transform).(TranslateTransform.X)"
-                                                     From="0" To="16" Duration="0:0:0.8" RepeatBehavior="Forever"/>
-                                </Storyboard>
-                            </BeginStoryboard>
-                        </EventTrigger>
-                    </ControlTemplate.Triggers>
+                    <!-- v1.85 crash fix: removed the stripe-scroll EventTrigger.
+                         The targeted (Rectangle.Fill).(DrawingBrush.Transform).
+                         (TranslateTransform.X) animation crashed with
+                         "'StripeRect' name cannot be found in the name scope of
+                         'System.Windows.Controls.ControlTemplate'" — the
+                         FrameworkElement.Loaded EventTrigger inside
+                         ControlTemplate.Triggers couldn't resolve template-named
+                         children reliably under WPF's namescope rules. The
+                         static stripe pattern still renders, just doesn't scroll.
+                         Follow-up: move the animation to a code-behind hook on
+                         the ProgressBar's Loaded event when we want it back. -->
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
