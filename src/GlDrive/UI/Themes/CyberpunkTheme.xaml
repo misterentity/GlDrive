@@ -476,8 +476,43 @@
                                     <DropShadowEffect Color="#00E5FF" BlurRadius="8" ShadowDepth="0" Opacity="0.7"/>
                                 </Rectangle.Effect>
                             </Rectangle>
+                            <Rectangle x:Name="StripeRect" HorizontalAlignment="Stretch" IsHitTestVisible="False">
+                                <Rectangle.Fill>
+                                    <DrawingBrush TileMode="Tile" Viewport="0,0,16,16" ViewportUnits="Absolute" Stretch="None">
+                                        <DrawingBrush.Transform>
+                                            <TranslateTransform X="0"/>
+                                        </DrawingBrush.Transform>
+                                        <DrawingBrush.Drawing>
+                                            <GeometryDrawing Brush="#22000000">
+                                                <GeometryDrawing.Geometry>
+                                                    <PathGeometry>
+                                                        <PathGeometry.Figures>
+                                                            <PathFigure StartPoint="0,16" IsClosed="True">
+                                                                <LineSegment Point="8,0"/>
+                                                                <LineSegment Point="12,0"/>
+                                                                <LineSegment Point="4,16"/>
+                                                            </PathFigure>
+                                                        </PathGeometry.Figures>
+                                                    </PathGeometry>
+                                                </GeometryDrawing.Geometry>
+                                            </GeometryDrawing>
+                                        </DrawingBrush.Drawing>
+                                    </DrawingBrush>
+                                </Rectangle.Fill>
+                            </Rectangle>
                         </Grid>
                     </Border>
+                    <ControlTemplate.Triggers>
+                        <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                            <BeginStoryboard>
+                                <Storyboard>
+                                    <DoubleAnimation Storyboard.TargetName="StripeRect"
+                                                     Storyboard.TargetProperty="(Rectangle.Fill).(DrawingBrush.Transform).(TranslateTransform.X)"
+                                                     From="0" To="16" Duration="0:0:0.8" RepeatBehavior="Forever"/>
+                                </Storyboard>
+                            </BeginStoryboard>
+                        </EventTrigger>
+                    </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
@@ -808,6 +843,31 @@
         </Setter>
     </Style>
 
+    <!-- Top bar logo block background (cyan-tinted horizontal fade) -->
+    <LinearGradientBrush x:Key="TopBarLogoBrush" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Offset="0" Color="#2000E5FF"/>
+        <GradientStop Offset="1" Color="#0000E5FF"/>
+    </LinearGradientBrush>
+
+    <!-- Top bar background (vertical gradient bg-2 -> bg-1) -->
+    <LinearGradientBrush x:Key="TopBarBackgroundBrush" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Offset="0" Color="#0B1828"/>
+        <GradientStop Offset="1" Color="#070F1C"/>
+    </LinearGradientBrush>
+
+    <!-- Bottom marquee background (vertical gradient bg-1 -> bg-0) -->
+    <LinearGradientBrush x:Key="MarqueeBackgroundBrush" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Offset="0" Color="#070F1C"/>
+        <GradientStop Offset="1" Color="#03070D"/>
+    </LinearGradientBrush>
+
+    <!-- Marquee scroll storyboard: continuously translates X from 0 to -2400 over 60s.
+         Target a TranslateTransform on the marquee TextBlock via RenderTransform. -->
+    <Storyboard x:Key="MarqueeStoryboard" RepeatBehavior="Forever">
+        <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.X)"
+                        From="0" To="-2400" Duration="0:1:00"/>
+    </Storyboard>
+
     <DrawingBrush x:Key="ScanlineOverlayBrush"
                   TileMode="Tile"
                   Viewport="0,0,1,4"
@@ -909,6 +969,44 @@
                             <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
                             <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentDimBrush}"/>
                         </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="CyberpunkSpinnerStyle" TargetType="ProgressBar">
+        <Setter Property="IsIndeterminate" Value="True"/>
+        <Setter Property="Width" Value="22"/>
+        <Setter Property="Height" Value="22"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ProgressBar">
+                    <Grid>
+                        <Path Stroke="{DynamicResource AccentBrush}" StrokeThickness="2" Fill="Transparent"
+                              Width="22" Height="22"
+                              Data="M 11 2 A 9 9 0 0 1 20 11"
+                              RenderTransformOrigin="0.5,0.5">
+                            <Path.RenderTransform>
+                                <RotateTransform x:Name="SpinXform" CenterX="11" CenterY="11" Angle="0"/>
+                            </Path.RenderTransform>
+                            <Path.Effect>
+                                <DropShadowEffect Color="#00E5FF" BlurRadius="6" ShadowDepth="0" Opacity="0.8"/>
+                            </Path.Effect>
+                        </Path>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                            <BeginStoryboard>
+                                <Storyboard>
+                                    <DoubleAnimation Storyboard.TargetName="SpinXform"
+                                                     Storyboard.TargetProperty="Angle"
+                                                     From="0" To="360" Duration="0:0:1" RepeatBehavior="Forever"/>
+                                </Storyboard>
+                            </BeginStoryboard>
+                        </EventTrigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>

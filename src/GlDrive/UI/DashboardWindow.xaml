@@ -51,12 +51,135 @@
     </Window.Resources>
     <Grid Margin="0">
         <Grid.RowDefinitions>
+            <RowDefinition Height="44"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="26"/>
         </Grid.RowDefinitions>
-        <TabControl Grid.Row="0" Padding="0">
+
+        <!-- ============================================================== -->
+        <!-- TOP BAR (cyberpunk shell chrome)                                -->
+        <!-- ============================================================== -->
+        <Border Grid.Row="0" Background="{DynamicResource TopBarBackgroundBrush}"
+                BorderBrush="{DynamicResource LineBrush}" BorderThickness="0,0,0,1">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="220"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Logo block -->
+                <Border Grid.Column="0" Background="{DynamicResource TopBarLogoBrush}"
+                        BorderBrush="{DynamicResource LineBrush}" BorderThickness="0,0,1,0"
+                        Padding="16,0">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Grid Width="22" Height="22" Margin="0,0,10,0">
+                            <Path Stroke="{DynamicResource AccentBrush}" StrokeThickness="1.5"
+                                  Effect="{DynamicResource SignatureGlowEffect}"
+                                  Data="M 2,12 L 12,2 L 22,12 L 12,22 Z"/>
+                            <Path Stroke="{DynamicResource AccentBrush}" StrokeThickness="1"
+                                  Fill="#6600E5FF"
+                                  Data="M 7,12 L 12,7 L 17,12 L 12,17 Z"/>
+                            <Ellipse Width="3" Height="3" Fill="{DynamicResource Signature2Brush}"
+                                     HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Grid>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="GLDRIVE" Style="{DynamicResource DisplayTextGlowStyle}"
+                                       FontSize="16" Foreground="{DynamicResource AccentBrush}"
+                                       LineHeight="14"/>
+                            <TextBlock Text="v1.71 // KERNEL.MOUNT" Style="{DynamicResource MicroTextStyle}"
+                                       FontSize="9" Foreground="{DynamicResource TextFaintBrush}"
+                                       Margin="0,2,0,0"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- Breadcrumb + status tags -->
+                <Grid Grid.Column="1" Margin="16,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Column="0" Text="NODE:" Style="{DynamicResource MicroTextStyle}"
+                               Foreground="{DynamicResource TextFaintBrush}" VerticalAlignment="Center"
+                               Margin="0,0,6,0"/>
+                    <Border Grid.Column="1" BorderBrush="{DynamicResource LineDimBrush}" BorderThickness="1"
+                            Padding="6,2" VerticalAlignment="Center">
+                        <TextBlock Text="CRADLE.GLFTPD" Foreground="{DynamicResource AccentBrush}"
+                                   FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"/>
+                    </Border>
+                    <TextBlock Grid.Column="2" Text="SECT/" Style="{DynamicResource MicroTextStyle}"
+                               Foreground="{DynamicResource TextFaintBrush}" VerticalAlignment="Center"
+                               Margin="14,0,8,0"/>
+                    <TextBlock Grid.Column="3" Style="{DynamicResource DisplayTextStyle}"
+                               FontSize="14" Foreground="{DynamicResource ForegroundBrush}"
+                               VerticalAlignment="Center"
+                               Text="DASHBOARD"/>
+
+                    <StackPanel Grid.Column="5" Orientation="Horizontal" VerticalAlignment="Center"
+                                Margin="0,0,10,0">
+                        <Border Style="{DynamicResource TagGoodStyle}" Padding="7,2" Margin="0,0,6,0">
+                            <StackPanel Orientation="Horizontal">
+                                <Ellipse Width="6" Height="6" Fill="{DynamicResource GoodBrush}"
+                                         VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                <TextBlock Text="TLS 1.2 // PROT P" Style="{DynamicResource TagTextStyle}"
+                                           Foreground="{DynamicResource GoodBrush}"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{DynamicResource TagAccentStyle}" Padding="7,2">
+                            <TextBlock Text="FXP RELAY ACTIVE" Style="{DynamicResource TagTextStyle}"
+                                       Foreground="{DynamicResource AccentBrush}"/>
+                        </Border>
+                    </StackPanel>
+                </Grid>
+
+                <!-- Clock + window-control glyphs -->
+                <Border Grid.Column="2" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1,0,0,0"
+                        Padding="16,0">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="--:--:--" Style="{DynamicResource AccentTextStyle}"
+                                   FontSize="12" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                        <Rectangle Width="10" Height="10" Stroke="{DynamicResource TextFaintBrush}"
+                                   StrokeThickness="1" Margin="0,0,5,0"/>
+                        <Rectangle Width="10" Height="10" Stroke="{DynamicResource TextFaintBrush}"
+                                   StrokeThickness="1" Margin="0,0,5,0"/>
+                        <Rectangle Width="10" Height="10" Stroke="{DynamicResource BadBrush}"
+                                   StrokeThickness="1"/>
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Border>
+
+        <TabControl Grid.Row="1" Padding="0">
+
+            <!-- ===== DASHBOARD group ===== -->
+            <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,12,14,4">
+                <TabItem.Header>
+                    <TextBlock Text="&#x25B8; DASHBOARD" FontFamily="{DynamicResource MonoFontFamily}"
+                               FontSize="9" Foreground="{DynamicResource TextFaintBrush}" Margin="0,8,0,0"/>
+                </TabItem.Header>
+            </TabItem>
+
             <!-- Notifications Tab -->
-            <TabItem Header="Notifications">
+            <TabItem>
+                <TabItem.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="01" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="Notifications" VerticalAlignment="Center"/>
+                    </Grid>
+                </TabItem.Header>
                 <DockPanel Margin="12">
                     <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
                             CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
@@ -145,7 +268,18 @@
             </TabItem>
 
             <!-- Wishlist Tab -->
-            <TabItem Header="Wishlist">
+            <TabItem>
+                <TabItem.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="02" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="Wishlist" VerticalAlignment="Center"/>
+                    </Grid>
+                </TabItem.Header>
                 <DockPanel Margin="12">
                     <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
                             CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
@@ -222,7 +356,18 @@
             </TabItem>
 
             <!-- Downloads Tab -->
-            <TabItem Header="Downloads">
+            <TabItem>
+                <TabItem.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="03" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="Downloads" VerticalAlignment="Center"/>
+                    </Grid>
+                </TabItem.Header>
                 <DockPanel Margin="12">
                     <Border DockPanel.Dock="Top" Margin="0,0,0,8" Padding="10,6"
                             Background="{DynamicResource SurfaceBrush}" CornerRadius="4"
@@ -230,12 +375,41 @@
                         <TextBlock Text="{Binding ActiveDownloadSummary}" FontSize="12"
                                    Foreground="{DynamicResource ForegroundBrush}" TextWrapping="Wrap"/>
                     </Border>
-                    <Canvas DockPanel.Dock="Top" Height="40" Margin="0,0,0,6" ClipToBounds="True"
-                            Background="{DynamicResource SurfaceBrush}"
+                    <Border DockPanel.Dock="Top" Height="56" Margin="0,0,0,6"
+                            Background="{DynamicResource Background1Brush}"
+                            BorderBrush="{DynamicResource LineBrush}" BorderThickness="1"
+                            ClipToBounds="True"
                             Visibility="{Binding HasActiveDownload, Converter={StaticResource BoolToVisibility}}">
-                        <Polyline Points="{Binding SpeedGraphPoints}" Stroke="{DynamicResource AccentBrush}"
-                                  StrokeThickness="1.5" Canvas.Left="0" Canvas.Top="0"/>
-                    </Canvas>
+                        <Grid>
+                            <Rectangle>
+                                <Rectangle.Fill>
+                                    <DrawingBrush TileMode="Tile" Viewport="0,0,24,12" ViewportUnits="Absolute" Stretch="None">
+                                        <DrawingBrush.Drawing>
+                                            <DrawingGroup>
+                                                <GeometryDrawing>
+                                                    <GeometryDrawing.Pen>
+                                                        <Pen Brush="#1C4368" Thickness="1"/>
+                                                    </GeometryDrawing.Pen>
+                                                    <GeometryDrawing.Geometry>
+                                                        <GeometryGroup>
+                                                            <LineGeometry StartPoint="24,0" EndPoint="24,12"/>
+                                                            <LineGeometry StartPoint="0,12" EndPoint="24,12"/>
+                                                        </GeometryGroup>
+                                                    </GeometryDrawing.Geometry>
+                                                </GeometryDrawing>
+                                            </DrawingGroup>
+                                        </DrawingBrush.Drawing>
+                                    </DrawingBrush>
+                                </Rectangle.Fill>
+                            </Rectangle>
+                            <Polyline Points="{Binding SpeedGraphPoints}" Stroke="{DynamicResource AccentBrush}"
+                                      StrokeThickness="1.6" StrokeLineJoin="Round">
+                                <Polyline.Effect>
+                                    <DropShadowEffect Color="#00E5FF" BlurRadius="6" ShadowDepth="0" Opacity="0.85"/>
+                                </Polyline.Effect>
+                            </Polyline>
+                        </Grid>
+                    </Border>
                     <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
                             CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
                         <WrapPanel>
@@ -307,15 +481,60 @@
                             <DataGridTextColumn Header="Release" Binding="{Binding ReleaseName}" Width="*"/>
                             <DataGridTextColumn Header="Server" Binding="{Binding ServerName}" Width="90"/>
                             <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="80"/>
-                            <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="90"/>
-                            <DataGridTextColumn Header="Progress" Binding="{Binding ProgressText}" Width="*"/>
+                            <DataGridTemplateColumn Header="Status" Width="100">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Border Style="{DynamicResource TagAccentStyle}" HorizontalAlignment="Left">
+                                            <TextBlock Text="{Binding Status}"
+                                                       Style="{DynamicResource TagTextStyle}"
+                                                       Foreground="{DynamicResource AccentBrush}"/>
+                                        </Border>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="Progress" Width="*">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Grid>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                            </Grid.RowDefinitions>
+                                            <ProgressBar Grid.Row="0" Height="4" Margin="0,4,0,2"
+                                                         Minimum="0" Maximum="100"
+                                                         Value="{Binding ProgressPercent, FallbackValue=0}"/>
+                                            <TextBlock Grid.Row="1" Text="{Binding ProgressText}" FontSize="10"
+                                                       Foreground="{DynamicResource TextDimBrush}"/>
+                                        </Grid>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                         </DataGrid.Columns>
                     </DataGrid>
                 </DockPanel>
             </TabItem>
 
+            <!-- ===== MEDIA group ===== -->
+            <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,12,14,4">
+                <TabItem.Header>
+                    <TextBlock Text="&#x25B8; MEDIA" FontFamily="{DynamicResource MonoFontFamily}"
+                               FontSize="9" Foreground="{DynamicResource TextFaintBrush}" Margin="0,8,0,0"/>
+                </TabItem.Header>
+            </TabItem>
+
             <!-- Search Tab -->
-            <TabItem Header="Search">
+            <TabItem>
+                <TabItem.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="04" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="Search" VerticalAlignment="Center"/>
+                    </Grid>
+                </TabItem.Header>
                 <DockPanel Margin="12">
                     <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
                         <Button DockPanel.Dock="Right" Content="Cancel" Command="{Binding CancelSearchCommand}"
@@ -366,7 +585,18 @@
             </TabItem>
 
             <!-- Player Tab -->
-            <TabItem Header="Player">
+            <TabItem>
+                <TabItem.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="05" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="Player" VerticalAlignment="Center"/>
+                    </Grid>
+                </TabItem.Header>
                 <Grid x:Name="PlayerTab" DataContext="{Binding Player}">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" MinWidth="260" MaxWidth="420"/>
@@ -840,7 +1070,18 @@
             </TabItem>
 
             <!-- Upcoming Tab -->
-            <TabItem Header="Upcoming">
+            <TabItem>
+                <TabItem.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="06" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="Upcoming" VerticalAlignment="Center"/>
+                    </Grid>
+                </TabItem.Header>
                 <DockPanel Margin="12">
                     <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
                             CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
@@ -961,8 +1202,27 @@
                 </DockPanel>
             </TabItem>
 
+            <!-- ===== COMMS group ===== -->
+            <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,12,14,4">
+                <TabItem.Header>
+                    <TextBlock Text="&#x25B8; COMMS" FontFamily="{DynamicResource MonoFontFamily}"
+                               FontSize="9" Foreground="{DynamicResource TextFaintBrush}" Margin="0,8,0,0"/>
+                </TabItem.Header>
+            </TabItem>
+
             <!-- IRC Tab -->
-            <TabItem Header="IRC">
+            <TabItem>
+                <TabItem.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="07" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="IRC" VerticalAlignment="Center"/>
+                    </Grid>
+                </TabItem.Header>
                 <DockPanel Margin="0">
                     <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
                             BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
@@ -1072,7 +1332,18 @@
             </TabItem>
 
             <!-- PreDB Tab -->
-            <TabItem Header="PreDB">
+            <TabItem>
+                <TabItem.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="08" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="PreDB" VerticalAlignment="Center"/>
+                    </Grid>
+                </TabItem.Header>
                 <DockPanel Margin="12">
                     <!-- Search bar -->
                     <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
@@ -1147,8 +1418,27 @@
                 </DockPanel>
             </TabItem>
 
+            <!-- ===== TRANSFERS group ===== -->
+            <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,12,14,4">
+                <TabItem.Header>
+                    <TextBlock Text="&#x25B8; TRANSFERS" FontFamily="{DynamicResource MonoFontFamily}"
+                               FontSize="9" Foreground="{DynamicResource TextFaintBrush}" Margin="0,8,0,0"/>
+                </TabItem.Header>
+            </TabItem>
+
             <!-- Spread Tab -->
-            <TabItem Header="Spread" x:Name="SpreadTab">
+            <TabItem x:Name="SpreadTab">
+                <TabItem.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="09" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="Spread" VerticalAlignment="Center"/>
+                    </Grid>
+                </TabItem.Header>
                 <Grid Margin="12">
                     <!-- Setup Guide (shown when no sections configured) -->
                     <Border Visibility="{Binding NeedSetup, Converter={StaticResource BoolToVisibility}}"
@@ -1315,7 +1605,18 @@
             </TabItem>
 
             <!-- Browse Tab -->
-            <TabItem Header="Browse" x:Name="BrowseTab">
+            <TabItem x:Name="BrowseTab">
+                <TabItem.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="10" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="Browse" VerticalAlignment="Center"/>
+                    </Grid>
+                </TabItem.Header>
                 <DockPanel Margin="12">
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -1396,29 +1697,81 @@
                 </DockPanel>
             </TabItem>
 
+            <!-- ===== SYSTEM group ===== -->
+            <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,12,14,4">
+                <TabItem.Header>
+                    <TextBlock Text="&#x25B8; SYSTEM" FontFamily="{DynamicResource MonoFontFamily}"
+                               FontSize="9" Foreground="{DynamicResource TextFaintBrush}" Margin="0,8,0,0"/>
+                </TabItem.Header>
+            </TabItem>
+
             <!-- World Monitor Tab -->
-            <TabItem Header="World Monitor">
+            <TabItem>
+                <TabItem.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="11" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="World Monitor" VerticalAlignment="Center"/>
+                    </Grid>
+                </TabItem.Header>
                 <ui:WebViewHost x:Name="WorldMonitorHost"/>
             </TabItem>
 
             <!-- Discord Tab -->
-            <TabItem Header="Discord">
+            <TabItem>
+                <TabItem.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="12" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="Discord" VerticalAlignment="Center"/>
+                    </Grid>
+                </TabItem.Header>
                 <ui:WebViewHost x:Name="DiscordHost"/>
             </TabItem>
 
             <!-- Streems Tab -->
-            <TabItem Header="Streems">
+            <TabItem>
+                <TabItem.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="13" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="Streems" VerticalAlignment="Center"/>
+                    </Grid>
+                </TabItem.Header>
                 <ui:WebViewHost x:Name="StreemsHost"/>
             </TabItem>
 
             <!-- AI Agent Tab -->
-            <TabItem Header="AI Agent">
+            <TabItem>
+                <TabItem.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="14" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="AI Agent" VerticalAlignment="Center"/>
+                    </Grid>
+                </TabItem.Header>
                 <ui:AgentView/>
             </TabItem>
         </TabControl>
 
         <!-- Status Bar -->
-        <Border Grid.Row="1" Background="{DynamicResource SurfaceBrush}"
+        <Border Grid.Row="2" Background="{DynamicResource SurfaceBrush}"
                 BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0"
                 Padding="12,6">
             <DockPanel>
@@ -1440,6 +1793,71 @@
                                Margin="20,0,0,0" FontSize="12"/>
                 </StackPanel>
             </DockPanel>
+        </Border>
+
+        <!-- ============================================================== -->
+        <!-- BOTTOM MARQUEE STRIP (scrolling status feed)                    -->
+        <!-- ============================================================== -->
+        <Border Grid.Row="3" Background="{DynamicResource MarqueeBackgroundBrush}"
+                BorderBrush="{DynamicResource LineBrush}" BorderThickness="0,1,0,0"
+                ClipToBounds="True">
+            <Border.Resources>
+                <Storyboard x:Key="MarqueeLocalStoryboard" RepeatBehavior="Forever">
+                    <DoubleAnimation Storyboard.TargetName="MarqueeText"
+                                    Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.X)"
+                                    From="0" To="-2400" Duration="0:1:00"/>
+                </Storyboard>
+            </Border.Resources>
+            <Border.Triggers>
+                <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                    <BeginStoryboard Storyboard="{StaticResource MarqueeLocalStoryboard}"/>
+                </EventTrigger>
+            </Border.Triggers>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center"
+                            Margin="14,0,0,0">
+                    <Ellipse Width="6" Height="6" Fill="{DynamicResource GoodBrush}" Margin="0,0,6,0"
+                             VerticalAlignment="Center"/>
+                    <TextBlock Text="SYS:ONLINE" FontFamily="{DynamicResource MonoFontFamily}"
+                               FontSize="10" Foreground="{DynamicResource TextDimBrush}"/>
+                </StackPanel>
+
+                <Canvas Grid.Column="1" ClipToBounds="True" Margin="18,0">
+                    <TextBlock x:Name="MarqueeText"
+                               Canvas.Top="6"
+                               TextWrapping="NoWrap"
+                               FontFamily="{DynamicResource MonoFontFamily}"
+                               FontSize="10"
+                               Foreground="{DynamicResource TextDimBrush}"
+                               Text="[RX] 12.4 MB/s  //  [TX] 4.1 MB/s  //  ZEPHYR RTT 38ms  //  SUPERBNC RTT 14ms  //  SPREAD ACTIVE: 4  //  POOL 18/24  //  NODE CRADLE ENGAGED  //  KERNEL OK  //  [RX] 12.4 MB/s  //  [TX] 4.1 MB/s  //  ZEPHYR RTT 38ms  //  SUPERBNC RTT 14ms  //  SPREAD ACTIVE: 4  //  POOL 18/24  //  NODE CRADLE ENGAGED  //  KERNEL OK  //  ">
+                        <TextBlock.RenderTransform>
+                            <TranslateTransform X="0" Y="0"/>
+                        </TextBlock.RenderTransform>
+                    </TextBlock>
+                </Canvas>
+
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
+                            Margin="0,0,14,0">
+                    <TextBlock Text="RTT " FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                               Foreground="{DynamicResource TextDimBrush}"/>
+                    <TextBlock Text="38ms" FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                               Foreground="{DynamicResource AccentBrush}" Margin="0,0,14,0"/>
+                    <TextBlock Text="&#x2193; " FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                               Foreground="{DynamicResource TextDimBrush}"/>
+                    <TextBlock Text="12.4 MB/s" FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                               Foreground="{DynamicResource GoodBrush}" Margin="0,0,8,0"/>
+                    <TextBlock Text="&#x2191; " FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                               Foreground="{DynamicResource TextDimBrush}"/>
+                    <TextBlock Text="1.2 MB/s" FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                               Foreground="{DynamicResource AccentBrush}"/>
+                </StackPanel>
+            </Grid>
         </Border>
     </Grid>
 </Window>

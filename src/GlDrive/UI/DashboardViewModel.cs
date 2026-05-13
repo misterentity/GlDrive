@@ -1615,6 +1615,13 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                         DownloadStatus.Completed => "Done",
                         _ => ""
                     },
+                    ProgressPercent = item.Status switch
+                    {
+                        DownloadStatus.Downloading when item.TotalBytes > 0
+                            => (double)item.DownloadedBytes / item.TotalBytes * 100.0,
+                        DownloadStatus.Completed => 100.0,
+                        _ => 0.0
+                    },
                     LocalPath = item.LocalPath,
                     ServerId = server.ServerId,
                     ServerName = server.ServerName
@@ -2031,6 +2038,7 @@ public class WishlistItemVm
 public class DownloadItemVm : INotifyPropertyChanged
 {
     private string _progressText = "";
+    private double _progressPercent;
 
     public string Id { get; set; } = "";
     public string ReleaseName { get; set; } = "";
@@ -2044,6 +2052,16 @@ public class DownloadItemVm : INotifyPropertyChanged
             if (_progressText == value) return;
             _progressText = value;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ProgressText)));
+        }
+    }
+    public double ProgressPercent
+    {
+        get => _progressPercent;
+        set
+        {
+            if (Math.Abs(_progressPercent - value) < 0.01) return;
+            _progressPercent = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ProgressPercent)));
         }
     }
     public string LocalPath { get; set; } = "";
