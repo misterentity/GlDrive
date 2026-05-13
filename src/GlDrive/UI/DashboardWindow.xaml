@@ -305,7 +305,17 @@
                         <TextBlock Grid.Column="1" Text="Wishlist" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
-                <DockPanel Margin="12">
+                <Border Margin="14" Style="{DynamicResource HudPanelStyle}">
+                    <DockPanel>
+                        <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                            <TextBlock Text="&gt;&gt; WISHLIST" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                        </Border>
+                        <Grid>
+                            <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                            <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                            <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                            <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                            <DockPanel Margin="12">
                     <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
                             CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
                         <StackPanel Orientation="Horizontal">
@@ -377,7 +387,10 @@
                             <DataGridTextColumn Header="Grabbed" Binding="{Binding GrabbedCount}" Width="65"/>
                         </DataGrid.Columns>
                     </DataGrid>
-                </DockPanel>
+                            </DockPanel>
+                        </Grid>
+                    </DockPanel>
+                </Border>
             </TabItem>
 
             <!-- Downloads Tab -->
@@ -629,7 +642,17 @@
                         <TextBlock Grid.Column="1" Text="Search" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
-                <DockPanel Margin="12">
+                <Border Margin="14" Style="{DynamicResource HudPanelStyle}">
+                    <DockPanel>
+                        <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                            <TextBlock Text="&gt;&gt; SEARCH" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                        </Border>
+                        <Grid>
+                            <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                            <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                            <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                            <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                            <DockPanel Margin="12">
                     <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
                         <Button DockPanel.Dock="Right" Content="Cancel" Command="{Binding CancelSearchCommand}"
                                 Padding="12,6" Margin="6,0,0,0" Style="{StaticResource SecondaryButton}"
@@ -675,7 +698,10 @@
                             <DataGridTextColumn Header="Size" Binding="{Binding SizeText}" Width="80"/>
                         </DataGrid.Columns>
                     </DataGrid>
-                </DockPanel>
+                            </DockPanel>
+                        </Grid>
+                    </DockPanel>
+                </Border>
             </TabItem>
 
             <!-- Player Tab -->
@@ -1176,7 +1202,17 @@
                         <TextBlock Grid.Column="1" Text="Upcoming" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
-                <DockPanel Margin="12">
+                <Border Margin="14" Style="{DynamicResource HudPanelStyle}">
+                    <DockPanel>
+                        <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                            <TextBlock Text="&gt;&gt; UPCOMING RELEASES" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                        </Border>
+                        <Grid>
+                            <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                            <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                            <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                            <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                            <DockPanel Margin="12">
                     <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
                             CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
                         <StackPanel Orientation="Horizontal">
@@ -1293,7 +1329,10 @@
                             </DataGrid>
                         </DockPanel>
                     </Grid>
-                </DockPanel>
+                            </DockPanel>
+                        </Grid>
+                    </DockPanel>
+                </Border>
             </TabItem>
 
             <!-- ===== COMMS group ===== -->
@@ -1493,7 +1532,17 @@
                         <TextBlock Grid.Column="1" Text="PreDB" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
-                <DockPanel Margin="12">
+                <Border Margin="14" Style="{DynamicResource HudPanelStyle}">
+                    <DockPanel>
+                        <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                            <TextBlock Text="&gt;&gt; PREDB" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                        </Border>
+                        <Grid>
+                            <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                            <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                            <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                            <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                            <DockPanel Margin="12">
                     <!-- Search bar -->
                     <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
                         <Button DockPanel.Dock="Right" Content="Cancel" Command="{Binding CancelPreDbSearchCommand}"
@@ -1564,7 +1613,10 @@
                             <DataGridTextColumn Header="Time" Binding="{Binding Time}" Width="90"/>
                         </DataGrid.Columns>
                     </DataGrid>
-                </DockPanel>
+                            </DockPanel>
+                        </Grid>
+                    </DockPanel>
+                </Border>
             </TabItem>
 
             <!-- ===== TRANSFERS group ===== -->
@@ -1618,8 +1670,18 @@
                         </StackPanel>
                     </Border>
                     <!-- Main spread UI (shown when sections exist) -->
-                    <DockPanel Visibility="{Binding HasSections, Converter={StaticResource BoolToVisibility}}"
-                               Focusable="True">
+                    <Border Visibility="{Binding HasSections, Converter={StaticResource BoolToVisibility}}"
+                            Style="{DynamicResource HudPanelStyle}">
+                        <DockPanel>
+                            <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                                <TextBlock Text="&gt;&gt; SPREAD ENGINE" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                            </Border>
+                            <Grid>
+                                <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                <DockPanel Focusable="True">
                     <DockPanel.InputBindings>
                         <KeyBinding Key="Escape" Command="{Binding StopJobCommand}"/>
                         <KeyBinding Gesture="Ctrl+R" Command="{Binding StartRaceCommand}"/>
@@ -1749,7 +1811,10 @@
                             </DataGrid.Columns>
                         </DataGrid>
                     </Grid>
-                </DockPanel>
+                                </DockPanel>
+                            </Grid>
+                        </DockPanel>
+                    </Border>
                 </Grid>
             </TabItem>
 
@@ -1766,7 +1831,17 @@
                         <TextBlock Grid.Column="1" Text="Browse" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
-                <DockPanel Margin="12">
+                <Border Margin="14" Style="{DynamicResource HudPanelStyle}">
+                    <DockPanel>
+                        <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                            <TextBlock Text="&gt;&gt; BROWSE" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                        </Border>
+                        <Grid>
+                            <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                            <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                            <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                            <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                            <DockPanel Margin="12">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
@@ -1843,7 +1918,10 @@
                             </DataGrid>
                         </DockPanel>
                     </Grid>
-                </DockPanel>
+                            </DockPanel>
+                        </Grid>
+                    </DockPanel>
+                </Border>
             </TabItem>
 
             <!-- ===== SYSTEM group ===== -->
