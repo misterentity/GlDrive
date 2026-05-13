@@ -239,17 +239,22 @@
                             </Border>
                         </StackPanel>
                     </Border>
-                    <!-- Main 2-column body: server discs (left), ops log (right) -->
+                    <!-- Main 2x2 body: volumes (TL), throughput (TR), telemetry (BL), ops log (BR) -->
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="2*"/>
                             <ColumnDefinition Width="3*"/>
                         </Grid.ColumnDefinitions>
-                        <!-- Mounted server discs -->
-                        <Border Grid.Column="0" Style="{DynamicResource HudPanelStyle}" Margin="0,0,6,0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="3*"/>
+                            <RowDefinition Height="2*"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- Top-left: Mounted Volumes -->
+                        <Border Grid.Row="0" Grid.Column="0" Style="{DynamicResource HudPanelStyle}" Margin="0,0,6,6">
                             <DockPanel>
                                 <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                    <TextBlock Text="&gt;&gt; MOUNTED NODES" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                    <TextBlock Text="&gt;&gt; MOUNTED VOLUMES" Style="{DynamicResource SectionHeaderTextStyle}"/>
                                 </Border>
                                 <Grid>
                                     <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -261,18 +266,20 @@
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate>
                                                     <Border Background="#80050F1A" BorderBrush="{DynamicResource LineBrush}"
-                                                            BorderThickness="1" Padding="14,12" Margin="0,0,0,10">
+                                                            BorderThickness="1" Padding="14" Margin="0,0,0,12">
                                                         <Grid>
                                                             <Grid.ColumnDefinitions>
-                                                                <ColumnDefinition Width="50"/>
+                                                                <ColumnDefinition Width="100"/>
                                                                 <ColumnDefinition Width="*"/>
-                                                                <ColumnDefinition Width="Auto"/>
                                                             </Grid.ColumnDefinitions>
-                                                            <!-- Small disc glyph -->
-                                                            <Grid Grid.Column="0" Width="42" Height="42" VerticalAlignment="Center">
-                                                                <Ellipse Width="40" Height="40" Stroke="{DynamicResource LineDimBrush}" StrokeThickness="2"/>
-                                                                <Ellipse Width="40" Height="40" Stroke="{DynamicResource AccentBrush}" StrokeThickness="2"
-                                                                         StrokeDashArray="2,1.2" RenderTransformOrigin="0.5,0.5">
+                                                            <!-- Large filled-arc capacity disc -->
+                                                            <Grid Grid.Column="0" Width="86" Height="86" VerticalAlignment="Center">
+                                                                <Ellipse Width="86" Height="86" Stroke="{DynamicResource LineDimBrush}" StrokeThickness="2"/>
+                                                                <Ellipse Width="86" Height="86" Stroke="{DynamicResource AccentBrush}" StrokeThickness="3"
+                                                                         StrokeDashArray="2,1" RenderTransformOrigin="0.5,0.5">
+                                                                    <Ellipse.Effect>
+                                                                        <DropShadowEffect Color="#00E5FF" BlurRadius="10" ShadowDepth="0" Opacity="0.6"/>
+                                                                    </Ellipse.Effect>
                                                                     <Ellipse.RenderTransform>
                                                                         <RotateTransform Angle="0"/>
                                                                     </Ellipse.RenderTransform>
@@ -281,22 +288,51 @@
                                                                             <BeginStoryboard>
                                                                                 <Storyboard>
                                                                                     <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
-                                                                                                     From="0" To="360" Duration="0:0:8" RepeatBehavior="Forever"/>
+                                                                                                     From="0" To="360" Duration="0:0:14" RepeatBehavior="Forever"/>
                                                                                 </Storyboard>
                                                                             </BeginStoryboard>
                                                                         </EventTrigger>
                                                                     </Ellipse.Triggers>
                                                                 </Ellipse>
-                                                                <Ellipse Width="6" Height="6" Fill="{DynamicResource Signature2Brush}"/>
+                                                                <Ellipse Width="64" Height="64" Stroke="{DynamicResource LineDimBrush}" StrokeThickness="1"/>
+                                                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                                                    <TextBlock Text="{Binding CapacityPercent, StringFormat=N0}" Style="{DynamicResource DisplayTextStyle}"
+                                                                               HorizontalAlignment="Center" FontSize="20"/>
+                                                                    <TextBlock Text="%" Style="{DynamicResource MicroTextStyle}" HorizontalAlignment="Center"/>
+                                                                </StackPanel>
                                                             </Grid>
-                                                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="14,0,0,0">
-                                                                <TextBlock Text="{Binding Name}" Style="{DynamicResource DisplayTextStyle}" FontSize="14"/>
-                                                                <TextBlock Text="{Binding Host}" Style="{DynamicResource MicroTextStyle}" Margin="0,2,0,0"/>
-                                                            </StackPanel>
-                                                            <Border Grid.Column="2" Style="{DynamicResource TagAccentStyle}" VerticalAlignment="Center">
-                                                                <TextBlock Text="{Binding StatusLine}" Style="{DynamicResource TagTextStyle}"
-                                                                           Foreground="{DynamicResource AccentBrush}"/>
-                                                            </Border>
+                                                            <DockPanel Grid.Column="1" Margin="16,0,0,0" LastChildFill="True">
+                                                                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal">
+                                                                    <TextBlock Text="{Binding Name}" Style="{DynamicResource DisplayTextStyle}" FontSize="15"/>
+                                                                    <Border Margin="10,0,0,0" Style="{DynamicResource TagAccentStyle}" VerticalAlignment="Center">
+                                                                        <TextBlock Text="{Binding SiteTag}" Style="{DynamicResource TagTextStyle}"
+                                                                                   Foreground="{DynamicResource AccentBrush}"/>
+                                                                    </Border>
+                                                                </StackPanel>
+                                                                <TextBlock DockPanel.Dock="Top" Text="{Binding Host}" Style="{DynamicResource MicroTextStyle}" Margin="0,2,0,8"/>
+                                                                <Border DockPanel.Dock="Top" Height="6" Background="{DynamicResource Background3Brush}" Margin="0,0,0,6">
+                                                                    <Border HorizontalAlignment="Left" Background="{DynamicResource AccentBrush}"
+                                                                            Width="{Binding CapacityPercent}">
+                                                                        <Border.Effect>
+                                                                            <DropShadowEffect Color="#00E5FF" BlurRadius="6" ShadowDepth="0" Opacity="0.7"/>
+                                                                        </Border.Effect>
+                                                                    </Border>
+                                                                </Border>
+                                                                <Grid DockPanel.Dock="Top">
+                                                                    <Grid.ColumnDefinitions>
+                                                                        <ColumnDefinition Width="*"/>
+                                                                        <ColumnDefinition Width="Auto"/>
+                                                                    </Grid.ColumnDefinitions>
+                                                                    <TextBlock Grid.Column="0" FontFamily="{DynamicResource MonoFontFamily}" FontSize="11">
+                                                                        <Run Text="{Binding CapacityUsedDisplay}" Foreground="{DynamicResource ForegroundBrush}"/>
+                                                                        <Run Text=" / " Foreground="{DynamicResource TextFaintBrush}"/>
+                                                                        <Run Text="{Binding CapacityTotalDisplay}" Foreground="{DynamicResource TextDimBrush}"/>
+                                                                    </TextBlock>
+                                                                    <Border Grid.Column="1" Style="{DynamicResource TagStyle}">
+                                                                        <TextBlock Text="{Binding StatusLine}" Style="{DynamicResource TagTextStyle}"/>
+                                                                    </Border>
+                                                                </Grid>
+                                                            </DockPanel>
                                                         </Grid>
                                                     </Border>
                                                 </DataTemplate>
@@ -306,8 +342,169 @@
                                 </Grid>
                             </DockPanel>
                         </Border>
-                        <!-- Operations log -->
-                        <Border Grid.Column="1" Style="{DynamicResource HudPanelStyle}" Margin="6,0,0,0">
+
+                        <!-- Top-right: Throughput -->
+                        <Border Grid.Row="0" Grid.Column="1" Style="{DynamicResource HudPanelStyle}" Margin="6,0,0,6">
+                            <DockPanel>
+                                <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                                    <TextBlock Text="&gt;&gt; THROUGHPUT" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                </Border>
+                                <Grid>
+                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                    <DockPanel Margin="14">
+                                        <!-- Rx / Tx numbers -->
+                                        <Grid DockPanel.Dock="Top" Margin="0,0,0,10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0">
+                                                <TextBlock Text="RX" Style="{DynamicResource MicroTextStyle}"/>
+                                                <TextBlock Text="{Binding RxRateDisplay}" Style="{DynamicResource DisplayTextStyle}"
+                                                           FontSize="24" Foreground="{DynamicResource AccentBrush}"/>
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="1">
+                                                <TextBlock Text="TX" Style="{DynamicResource MicroTextStyle}"/>
+                                                <TextBlock Text="{Binding TxRateDisplay}" Style="{DynamicResource DisplayTextStyle}"
+                                                           FontSize="24" Foreground="{DynamicResource Signature2Brush}"/>
+                                            </StackPanel>
+                                        </Grid>
+                                        <!-- Area chart -->
+                                        <Border Height="120" Background="#80050F1A" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1">
+                                            <Border.Resources>
+                                                <DrawingBrush x:Key="ChartGridBrush" TileMode="Tile" Stretch="None"
+                                                              Viewport="0,0,24,12" ViewportUnits="Absolute">
+                                                    <DrawingBrush.Drawing>
+                                                        <DrawingGroup>
+                                                            <GeometryDrawing>
+                                                                <GeometryDrawing.Pen>
+                                                                    <Pen Brush="{DynamicResource LineDimBrush}" Thickness="1"/>
+                                                                </GeometryDrawing.Pen>
+                                                                <GeometryDrawing.Geometry>
+                                                                    <GeometryGroup>
+                                                                        <LineGeometry StartPoint="0,0" EndPoint="24,0"/>
+                                                                        <LineGeometry StartPoint="0,0" EndPoint="0,12"/>
+                                                                    </GeometryGroup>
+                                                                </GeometryDrawing.Geometry>
+                                                            </GeometryDrawing>
+                                                        </DrawingGroup>
+                                                    </DrawingBrush.Drawing>
+                                                </DrawingBrush>
+                                            </Border.Resources>
+                                            <Grid>
+                                                <Rectangle Fill="{StaticResource ChartGridBrush}" Opacity="0.6"/>
+                                                <Polyline Points="{Binding ThroughputPoints}"
+                                                          Stroke="{DynamicResource AccentBrush}" StrokeThickness="1.6"
+                                                          Stretch="Fill">
+                                                    <Polyline.Effect>
+                                                        <DropShadowEffect Color="#00E5FF" BlurRadius="8" ShadowDepth="0" Opacity="0.7"/>
+                                                    </Polyline.Effect>
+                                                </Polyline>
+                                            </Grid>
+                                        </Border>
+                                    </DockPanel>
+                                </Grid>
+                            </DockPanel>
+                        </Border>
+
+                        <!-- Bottom-left: Kernel Telemetry -->
+                        <Border Grid.Row="1" Grid.Column="0" Style="{DynamicResource HudPanelStyle}" Margin="0,6,6,0">
+                            <DockPanel>
+                                <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                                    <TextBlock Text="&gt;&gt; KERNEL TELEMETRY" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                </Border>
+                                <Grid>
+                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                    <StackPanel Margin="14">
+                                        <!-- CPU row -->
+                                        <Grid Margin="0,0,0,10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="80"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="CPU" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                                            <Border Grid.Column="1" Height="8" Background="{DynamicResource Background3Brush}" VerticalAlignment="Center">
+                                                <Border HorizontalAlignment="Left" Background="{DynamicResource AccentBrush}"
+                                                        Width="{Binding TelemetryCpuPercent}">
+                                                    <Border.Effect>
+                                                        <DropShadowEffect Color="#00E5FF" BlurRadius="6" ShadowDepth="0" Opacity="0.6"/>
+                                                    </Border.Effect>
+                                                </Border>
+                                            </Border>
+                                            <TextBlock Grid.Column="2" Margin="8,0,0,0" VerticalAlignment="Center"
+                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="11"
+                                                       Foreground="{DynamicResource ForegroundBrush}">
+                                                <Run Text="{Binding TelemetryCpuPercent, StringFormat=N0}"/><Run Text="%"/>
+                                            </TextBlock>
+                                        </Grid>
+                                        <!-- MEM row (text only) -->
+                                        <Grid Margin="0,0,0,10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="80"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="MEM" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                                            <TextBlock Grid.Column="1" VerticalAlignment="Center"
+                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="11"
+                                                       Foreground="{DynamicResource ForegroundBrush}">
+                                                <Run Text="{Binding TelemetryMemoryMb, StringFormat=N0}"/><Run Text=" MB"/>
+                                            </TextBlock>
+                                        </Grid>
+                                        <!-- POOL row -->
+                                        <Grid Margin="0,0,0,14">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="80"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="POOL" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                                            <Border Grid.Column="1" Height="8" Background="{DynamicResource Background3Brush}" VerticalAlignment="Center">
+                                                <Border HorizontalAlignment="Left" Background="{DynamicResource Signature2Brush}"
+                                                        Width="{Binding TelemetryPoolUtilization}">
+                                                    <Border.Effect>
+                                                        <DropShadowEffect Color="#FF2AB8" BlurRadius="6" ShadowDepth="0" Opacity="0.6"/>
+                                                    </Border.Effect>
+                                                </Border>
+                                            </Border>
+                                            <TextBlock Grid.Column="2" Margin="8,0,0,0" VerticalAlignment="Center"
+                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="11"
+                                                       Foreground="{DynamicResource ForegroundBrush}">
+                                                <Run Text="{Binding TelemetryPoolUtilization, StringFormat=N0}"/><Run Text="%"/>
+                                            </TextBlock>
+                                        </Grid>
+                                        <!-- Uptime + threads -->
+                                        <Grid Margin="0,4,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0">
+                                                <TextBlock Text="UPTIME" Style="{DynamicResource MicroTextStyle}"/>
+                                                <TextBlock Text="{Binding TelemetryUptime}"
+                                                           FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
+                                                           Foreground="{DynamicResource ForegroundBrush}"/>
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="1">
+                                                <TextBlock Text="THREADS" Style="{DynamicResource MicroTextStyle}"/>
+                                                <TextBlock Text="{Binding TelemetryThreadCount}"
+                                                           FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
+                                                           Foreground="{DynamicResource ForegroundBrush}"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </StackPanel>
+                                </Grid>
+                            </DockPanel>
+                        </Border>
+
+                        <!-- Bottom-right: Operations Log -->
+                        <Border Grid.Row="1" Grid.Column="1" Style="{DynamicResource HudPanelStyle}" Margin="6,6,0,0">
                             <DockPanel>
                                 <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
                                     <TextBlock Text="&gt;&gt; OPERATIONS LOG" Style="{DynamicResource SectionHeaderTextStyle}"/>

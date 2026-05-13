@@ -86,6 +86,18 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private PointCollection _speedGraphPoints = new();
     private readonly Dictionary<string, double> _serverSpeeds = new();
 
+    // Overview live telemetry (v1.85)
+    private DispatcherTimer? _overviewTimer;
+    private PointCollection _throughputPoints = new();
+    private string _rxRateDisplay = "-- MB/s";
+    private string _txRateDisplay = "-- MB/s";
+    private double _telemetryCpuPercent;
+    private double _telemetryMemoryMb;
+    private double _telemetryPoolUtilization;
+    private string _telemetryUptime = "0m 00s";
+    private int _telemetryThreadCount;
+    private readonly Random _overviewRng = new();
+
     public IrcViewModel Irc => _ircViewModel;
 
     public ObservableCollection<NotificationItemVm> NotificationItems { get; } = new();
@@ -108,21 +120,90 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     public int ConfiguredServerCount => _config.Servers.Count;
     public string OperationsLogPreview { get; private set; } = "loading...";
 
+    // Overview throughput sparkline (rolling 60 samples; Y in [0..40] relative
+    // to a 40px chart height). Mutated each DispatcherTimer tick.
+    public PointCollection ThroughputPoints
+    {
+        get => _throughputPoints;
+        private set { _throughputPoints = value; OnPropertyChanged(); }
+    }
+    public string RxRateDisplay
+    {
+        get => _rxRateDisplay;
+        private set { if (_rxRateDisplay == value) return; _rxRateDisplay = value; OnPropertyChanged(); }
+    }
+    public string TxRateDisplay
+    {
+        get => _txRateDisplay;
+        private set { if (_txRateDisplay == value) return; _txRateDisplay = value; OnPropertyChanged(); }
+    }
+    public double TelemetryCpuPercent
+    {
+        get => _telemetryCpuPercent;
+        private set { if (Math.Abs(_telemetryCpuPercent - value) < 0.01) return; _telemetryCpuPercent = value; OnPropertyChanged(); }
+    }
+    public double TelemetryMemoryMb
+    {
+        get => _telemetryMemoryMb;
+        private set { if (Math.Abs(_telemetryMemoryMb - value) < 0.01) return; _telemetryMemoryMb = value; OnPropertyChanged(); }
+    }
+    public double TelemetryPoolUtilization
+    {
+        get => _telemetryPoolUtilization;
+        private set { if (Math.Abs(_telemetryPoolUtilization - value) < 0.01) return; _telemetryPoolUtilization = value; OnPropertyChanged(); }
+    }
+    public string TelemetryUptime
+    {
+        get => _telemetryUptime;
+        private set { if (_telemetryUptime == value) return; _telemetryUptime = value; OnPropertyChanged(); }
+    }
+    public int TelemetryThreadCount
+    {
+        get => _telemetryThreadCount;
+        private set { if (_telemetryThreadCount == value) return; _telemetryThreadCount = value; OnPropertyChanged(); }
+    }
+
     public void RefreshOverview()
     {
         MountedServerStatus.Clear();
         foreach (var server in _config.Servers)
         {
             var mounted = _serverManager.GetServer(server.Id);
+            var isMounted = mounted != null;
             MountedServerStatus.Add(new OverviewServerVm
             {
                 ServerId = server.Id,
                 Name = string.IsNullOrEmpty(server.Name) ? server.Connection?.Host ?? "(unnamed)" : server.Name,
                 Host = $"{server.Connection?.Host}:{server.Connection?.Port}",
-                IsMounted = mounted != null,
-                StatusLine = mounted != null ? "MOUNTED" : (server.Enabled ? "OFFLINE" : "DISABLED")
+                IsMounted = isMounted,
+                StatusLine = isMounted ? "MOUNTED" : (server.Enabled ? "OFFLINE" : "DISABLED"),
+                CapacityPercent = 0,
+                CapacityUsedDisplay = "—",
+                CapacityTotalDisplay = "—",
+                IsPrimary = false,
+                SiteTag = isMounted ? "MOUNTED" : (server.Enabled ? "OFFLINE" : "DISABLED")
             });
         }
+
+        // Tag the first mounted server as PRIMARY, subsequent mounted as PEER.
+        bool primaryAssigned = false;
+        foreach (var vm in MountedServerStatus)
+        {
+            if (vm.IsMounted)
+            {
+                if (!primaryAssigned)
+                {
+                    vm.IsPrimary = true;
+                    vm.SiteTag = "PRIMARY";
+                    primaryAssigned = true;
+                }
+                else
+                {
+                    vm.SiteTag = "PEER";
+                }
+            }
+        }
+
         OnPropertyChanged(nameof(MountedServerCount));
         OnPropertyChanged(nameof(ConfiguredServerCount));
 
@@ -152,6 +233,82 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         }
         catch { OperationsLogPreview = "(unable to read log)"; }
         OnPropertyChanged(nameof(OperationsLogPreview));
+
+        RefreshTelemetry();
+        EnsureThroughputSeed();
+        StartOverviewLive();
+    }
+
+    // Seed the throughput sparkline with 60 baseline points (Y = 20, the
+    // midpoint of a 40px chart) so the Polyline has geometry on first paint.
+    private void EnsureThroughputSeed()
+    {
+        if (_throughputPoints.Count == 60) return;
+        var seed = new PointCollection();
+        for (int i = 0; i < 60; i++) seed.Add(new Point(i, 20));
+        ThroughputPoints = seed;
+    }
+
+    public void StartOverviewLive()
+    {
+        if (_overviewTimer != null) return;
+        _overviewTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromSeconds(2)
+        };
+        _overviewTimer.Tick += (_, _) => TickOverview();
+        _overviewTimer.Start();
+    }
+
+    public void StopOverviewLive()
+    {
+        _overviewTimer?.Stop();
+        _overviewTimer = null;
+    }
+
+    private void TickOverview()
+    {
+        // Shift the sparkline left by one sample. WPF Polyline.Points only
+        // re-renders reliably when the PointCollection reference changes, so
+        // we allocate a fresh collection each tick.
+        var next = new PointCollection();
+        for (int i = 1; i < _throughputPoints.Count; i++)
+        {
+            next.Add(new Point(i - 1, _throughputPoints[i].Y));
+        }
+        // New sample: randomized in [5..35] until a real throughput hook lands.
+        var newY = 5 + _overviewRng.NextDouble() * 30;
+        next.Add(new Point(59, newY));
+        ThroughputPoints = next;
+
+        // Placeholder Rx/Tx demo values (1..15 MB/s). Real wiring later.
+        var rx = 1.0 + _overviewRng.NextDouble() * 14.0;
+        var tx = 1.0 + _overviewRng.NextDouble() * 14.0;
+        RxRateDisplay = $"{rx:0.0} MB/s";
+        TxRateDisplay = $"{tx:0.0} MB/s";
+
+        RefreshTelemetry();
+    }
+
+    private void RefreshTelemetry()
+    {
+        try
+        {
+            var proc = Process.GetCurrentProcess();
+            TelemetryMemoryMb = proc.WorkingSet64 / (1024.0 * 1024.0);
+            TelemetryThreadCount = proc.Threads.Count;
+            var uptime = DateTime.UtcNow - proc.StartTime.ToUniversalTime();
+            TelemetryUptime = uptime.TotalHours >= 1
+                ? $"{(int)uptime.TotalHours}h {uptime.Minutes:D2}m"
+                : $"{uptime.Minutes}m {uptime.Seconds:D2}s";
+            // Placeholder CPU: scaled from thread count. Real CPU% requires
+            // sampling prev/current TotalProcessorTime over a window.
+            TelemetryCpuPercent = Math.Min(100, TelemetryThreadCount * 1.5);
+            TelemetryPoolUtilization = MountedServerStatus.Count > 0
+                ? Math.Min(100, MountedServerStatus.Count * 25.0)
+                : 0;
+        }
+        catch { /* telemetry is best-effort */ }
     }
 
     public ObservableCollection<SearchResultVm> SearchResults { get; } = new();
@@ -2051,6 +2208,8 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     public void Dispose()
     {
         _statusTimer?.Stop();
+        _overviewTimer?.Stop();
+        _overviewTimer = null;
         _preDbRefreshTimer?.Stop();
         _preDbCountdownTimer?.Stop();
         _searchCts?.Cancel();
@@ -2109,6 +2268,11 @@ public class OverviewServerVm
     public string Host { get; set; } = "";
     public bool IsMounted { get; set; }
     public string StatusLine { get; set; } = "";
+    public double CapacityPercent { get; set; } = 0;
+    public string CapacityUsedDisplay { get; set; } = "—";
+    public string CapacityTotalDisplay { get; set; } = "—";
+    public bool IsPrimary { get; set; } = false;
+    public string SiteTag { get; set; } = "MOUNTED";
 }
 
 public class DownloadItemVm : INotifyPropertyChanged
