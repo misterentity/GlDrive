@@ -157,7 +157,7 @@
             </Grid>
         </Border>
 
-        <TabControl Grid.Row="1" Padding="0">
+        <TabControl x:Name="MainTabControl" Grid.Row="1" Padding="0">
 
             <!-- ===== DASHBOARD group ===== -->
             <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,12,14,4">
