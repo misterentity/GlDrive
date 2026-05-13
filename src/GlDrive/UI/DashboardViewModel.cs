@@ -291,26 +291,64 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         _overviewTimer = null;
     }
 
+    // CPU sampling: track previous TotalProcessorTime + wall-clock snapshot so
+    // we can compute % over the last tick interval. cores normalizes to a
+    // 0-100 (single-core) range visualizable in the telemetry bar.
+    private TimeSpan _prevCpuTime;
+    private DateTime _prevCpuSampleAt;
+    private readonly int _cpuCores = Math.Max(1, Environment.ProcessorCount);
+
+    // Latest reported download speed per item (key = item Id, value = BytesPerSecond).
+    // Populated by DownloadProgressChanged subscriptions in WireLiveSpeedTracking,
+    // cleared on download completion.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, double> _liveItemSpeeds = new();
+    private readonly HashSet<string> _wiredManagerIds = new();
+
+    private void EnsureLiveSpeedSubscriptions()
+    {
+        // Subscribe to each connected server's DownloadManager.DownloadProgressChanged
+        // exactly once. Cheap to call repeatedly — the HashSet de-dupes.
+        foreach (var srv in _serverManager.GetMountedServers())
+        {
+            var dm = srv.Downloads;
+            if (dm == null) continue;
+            if (!_wiredManagerIds.Add(srv.ServerId)) continue;
+            dm.DownloadProgressChanged += (item, progress) =>
+            {
+                if (item == null) return;
+                if (progress.BytesPerSecond <= 0)
+                    _liveItemSpeeds.TryRemove(item.Id, out _);
+                else
+                    _liveItemSpeeds[item.Id] = progress.BytesPerSecond;
+            };
+        }
+    }
+
     private void TickOverview()
     {
-        // Shift the sparkline left by one sample. WPF Polyline.Points only
-        // re-renders reliably when the PointCollection reference changes, so
-        // we allocate a fresh collection each tick.
+        // Make sure we're subscribed to every active server's progress feed.
+        EnsureLiveSpeedSubscriptions();
+
+        // Sum the latest reported speeds across all active items.
+        double rxBytesPerSec = 0;
+        foreach (var v in _liveItemSpeeds.Values) rxBytesPerSec += v;
+
+        var rxMb = rxBytesPerSec / (1024.0 * 1024.0);
+        // TX isn't tracked yet (upload pipeline is FXP, not directly throttled
+        // here). Show 0.0 with a real value when we wire it.
+        var txMb = 0.0;
+
+        RxRateDisplay = $"{rxMb:0.0} MB/s";
+        TxRateDisplay = $"{txMb:0.0} MB/s";
+
+        // Sparkline Y range is 0..40 (chart height). Scale rxMb against a soft
+        // upper bound of 50 MB/s; anything above clamps to the top of the chart.
+        var newY = 40.0 - Math.Min(40.0, rxMb / 50.0 * 40.0);
         var next = new PointCollection();
         for (int i = 1; i < _throughputPoints.Count; i++)
-        {
             next.Add(new Point(i - 1, _throughputPoints[i].Y));
-        }
-        // New sample: randomized in [5..35] until a real throughput hook lands.
-        var newY = 5 + _overviewRng.NextDouble() * 30;
         next.Add(new Point(59, newY));
         ThroughputPoints = next;
-
-        // Placeholder Rx/Tx demo values (1..15 MB/s). Real wiring later.
-        var rx = 1.0 + _overviewRng.NextDouble() * 14.0;
-        var tx = 1.0 + _overviewRng.NextDouble() * 14.0;
-        RxRateDisplay = $"{rx:0.0} MB/s";
-        TxRateDisplay = $"{tx:0.0} MB/s";
 
         RefreshTelemetry();
     }
@@ -326,12 +364,37 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             TelemetryUptime = uptime.TotalHours >= 1
                 ? $"{(int)uptime.TotalHours}h {uptime.Minutes:D2}m"
                 : $"{uptime.Minutes}m {uptime.Seconds:D2}s";
-            // Placeholder CPU: scaled from thread count. Real CPU% requires
-            // sampling prev/current TotalProcessorTime over a window.
-            TelemetryCpuPercent = Math.Min(100, TelemetryThreadCount * 1.5);
-            TelemetryPoolUtilization = MountedServerStatus.Count > 0
-                ? Math.Min(100, MountedServerStatus.Count * 25.0)
-                : 0;
+
+            // Real CPU%: delta(TotalProcessorTime) / delta(wallClock) / cores * 100.
+            // First tick has no previous sample → CPU stays at 0 until the second.
+            var nowWall = DateTime.UtcNow;
+            var nowCpu = proc.TotalProcessorTime;
+            if (_prevCpuSampleAt != default)
+            {
+                var wallDelta = (nowWall - _prevCpuSampleAt).TotalMilliseconds;
+                var cpuDelta = (nowCpu - _prevCpuTime).TotalMilliseconds;
+                if (wallDelta > 0)
+                {
+                    var pct = cpuDelta / wallDelta / _cpuCores * 100.0;
+                    TelemetryCpuPercent = Math.Min(100, Math.Max(0, pct));
+                }
+            }
+            _prevCpuTime = nowCpu;
+            _prevCpuSampleAt = nowWall;
+
+            // Real pool utilization: average of ActiveCount/MaxSize across
+            // mounted servers. ActiveCount is connections currently borrowed
+            // (not idle in the channel).
+            double sum = 0;
+            int count = 0;
+            foreach (var srv in _serverManager.GetMountedServers())
+            {
+                var p = srv.Pool;
+                if (p == null || p.MaxSize <= 0) continue;
+                sum += (double)p.ActiveCount / p.MaxSize * 100.0;
+                count++;
+            }
+            TelemetryPoolUtilization = count > 0 ? sum / count : 0;
         }
         catch { /* telemetry is best-effort */ }
     }
