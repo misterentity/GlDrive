@@ -135,6 +135,12 @@ public partial class DashboardWindow : Window
             vm.RefreshOverview();
         }
 
+        if (header == "Mounts" && vm != null)
+        {
+            vm.RefreshMounts();
+            vm.RefreshOverview();  // capacity placeholders share the OverviewServerVm
+        }
+
         if (header == "Upcoming" && !_upcomingLoaded)
         {
             _upcomingLoaded = true;
