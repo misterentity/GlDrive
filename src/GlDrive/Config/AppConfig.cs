@@ -155,6 +155,7 @@ public class DownloadConfig
     public bool VerifySfv { get; set; } = true;
     public bool PlaySoundOnComplete { get; set; }
     public string Theme { get; set; } = "Cyberpunk";
+    public bool CyberpunkPromoted { get; set; }
 }
 
 public class AgentConfig

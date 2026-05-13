@@ -46,6 +46,7 @@ public class ConfigManager
             MigrateApiKeys(json, result);
             MigrateSectionsToMappings(result);
             MigrateSlotDefaults(result);
+            MigrateThemeToCyberpunk(result);
             return result;
         }
         catch (Exception ex)
@@ -230,6 +231,25 @@ public class ConfigManager
         catch (Exception ex)
         {
             Log.Debug(ex, "API key migration check failed");
+        }
+    }
+
+    private static void MigrateThemeToCyberpunk(AppConfig config)
+    {
+        try
+        {
+            if (config.Downloads.CyberpunkPromoted) return;
+            config.Downloads.CyberpunkPromoted = true;
+            if (config.Downloads.Theme == "Dark")
+            {
+                config.Downloads.Theme = "Cyberpunk";
+                Log.Information("Theme migrated: Dark -> Cyberpunk (one-time)");
+            }
+            Save(config);
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Theme migration failed");
         }
     }
 }
