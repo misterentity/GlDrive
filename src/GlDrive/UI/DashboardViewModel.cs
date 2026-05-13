@@ -518,6 +518,55 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     }
 
     public ObservableCollection<SearchResultVm> SearchResults { get; } = new();
+
+    // Search filter state — controls the CollectionView wrapping SearchResults.
+    // The 6 chip buttons in the Search tab toolbar call ToggleSearchFilterCommand
+    // with a "quality:1080p" / "source:WEB" / "size:1GB" / "clear" parameter.
+    private string _searchFilterQuality = "";   // "" / "1080p" / "2160p"
+    private string _searchFilterSource = "";    // "" / "WEB" / "BLURAY"
+    private bool _searchFilterBigSize;          // true = require >= 1 GB
+    public string SearchFilterQuality
+    {
+        get => _searchFilterQuality;
+        set { _searchFilterQuality = value; OnPropertyChanged(); RefreshSearchView(); }
+    }
+    public string SearchFilterSource
+    {
+        get => _searchFilterSource;
+        set { _searchFilterSource = value; OnPropertyChanged(); RefreshSearchView(); }
+    }
+    public bool SearchFilterBigSize
+    {
+        get => _searchFilterBigSize;
+        set { _searchFilterBigSize = value; OnPropertyChanged(); RefreshSearchView(); }
+    }
+    public bool SearchFilterAnyActive =>
+        !string.IsNullOrEmpty(_searchFilterQuality) || !string.IsNullOrEmpty(_searchFilterSource) || _searchFilterBigSize;
+
+    private System.ComponentModel.ICollectionView? _searchResultsView;
+    private void EnsureSearchView()
+    {
+        if (_searchResultsView != null) return;
+        _searchResultsView = System.Windows.Data.CollectionViewSource.GetDefaultView(SearchResults);
+        _searchResultsView.Filter = obj =>
+        {
+            if (obj is not SearchResultVm vm) return false;
+            var name = vm.ReleaseName?.ToLowerInvariant() ?? "";
+            if (!string.IsNullOrEmpty(_searchFilterQuality) && !name.Contains(_searchFilterQuality.ToLowerInvariant()))
+                return false;
+            if (!string.IsNullOrEmpty(_searchFilterSource) && !name.Contains(_searchFilterSource.ToLowerInvariant()))
+                return false;
+            if (_searchFilterBigSize && vm.Size < 1L * 1024 * 1024 * 1024)
+                return false;
+            return true;
+        };
+    }
+    private void RefreshSearchView()
+    {
+        EnsureSearchView();
+        _searchResultsView?.Refresh();
+        OnPropertyChanged(nameof(SearchFilterAnyActive));
+    }
     public ObservableCollection<UpcomingTvEpisodeVm> UpcomingTvEpisodes { get; } = new();
     public ObservableCollection<UpcomingMovieVm> UpcomingMovies { get; } = new();
     public ObservableCollection<PreDbItemVm> PreDbItems { get; } = new();
@@ -813,6 +862,8 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     public ICommand OpenMountCommand { get; }
     public ICommand FlushMountCommand { get; }
     public ICommand UnmountServerCommand { get; }
+    // Search filter chips — pass "quality:1080p" / "source:WEB" / "size:1GB" / "clear".
+    public ICommand ToggleSearchFilterCommand { get; }
     public ICommand AddMovieCommand { get; }
     public ICommand AddTvShowCommand { get; }
     public ICommand RemoveWishlistCommand { get; }
@@ -889,6 +940,34 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             if (string.IsNullOrEmpty(serverId)) return;
             try { _serverManager.UnmountServer(serverId); RefreshOverview(); }
             catch (Exception ex) { Serilog.Log.Warning(ex, "UnmountServer failed for {Id}", serverId); }
+        });
+
+        ToggleSearchFilterCommand = new RelayCommand<string>(arg =>
+        {
+            if (string.IsNullOrEmpty(arg)) return;
+            if (arg == "clear")
+            {
+                SearchFilterQuality = "";
+                SearchFilterSource = "";
+                SearchFilterBigSize = false;
+                return;
+            }
+            var idx = arg.IndexOf(':');
+            if (idx < 0) return;
+            var kind = arg.Substring(0, idx);
+            var value = arg.Substring(idx + 1);
+            switch (kind)
+            {
+                case "quality":
+                    SearchFilterQuality = SearchFilterQuality == value ? "" : value;
+                    break;
+                case "source":
+                    SearchFilterSource = SearchFilterSource == value ? "" : value;
+                    break;
+                case "size":
+                    SearchFilterBigSize = !SearchFilterBigSize;
+                    break;
+            }
         });
 
         AddMovieCommand = new RelayCommand(() => AddMedia(MediaType.Movie));
@@ -1202,6 +1281,10 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         IsSearching = true;
         SearchStatus = "Searching...";
         SearchResults.Clear();
+        // Ensure the CollectionView wrapper is initialized so filter chips
+        // affect the DataGrid bound to SearchResults (DataGrid implicitly
+        // uses GetDefaultView, which is what EnsureSearchView caches).
+        EnsureSearchView();
 
         var progress = new Progress<string>(msg =>
             Application.Current?.Dispatcher.BeginInvoke(() => SearchStatus = msg));

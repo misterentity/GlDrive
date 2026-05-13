@@ -1035,28 +1035,141 @@
                     </DockPanel>
                     <TextBlock DockPanel.Dock="Top" Text="{Binding SearchStatus}" Margin="0,0,0,6"
                                Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"/>
-                    <!-- Filter chips row (decorative for now) -->
+                    <!-- Filter chips row — each chip is a Button bound to
+                         ToggleSearchFilterCommand. Visual "active" state is
+                         driven by the corresponding VM property via the chip's
+                         ControlTemplate DataTrigger. -->
                     <Border DockPanel.Dock="Top" Padding="14,6" Margin="0,8,0,8">
+                        <Border.Resources>
+                            <!-- One Style for all six filter-chip buttons. The
+                                 active appearance is set per-button via the
+                                 chip's own DataTrigger (see each Button below). -->
+                            <Style x:Key="FilterChipBase" TargetType="Button">
+                                <Setter Property="Margin" Value="0,0,6,0"/>
+                                <Setter Property="Padding" Value="0"/>
+                                <Setter Property="BorderThickness" Value="0"/>
+                                <Setter Property="Background" Value="Transparent"/>
+                                <Setter Property="Cursor" Value="Hand"/>
+                                <Setter Property="Command" Value="{Binding ToggleSearchFilterCommand}"/>
+                            </Style>
+                        </Border.Resources>
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="FILTERS" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                            <Border Style="{DynamicResource TagAccentStyle}" Margin="0,0,6,0" Padding="9,3">
-                                <TextBlock Text="ALL QUALITIES" Style="{DynamicResource TagTextStyle}" Foreground="{DynamicResource AccentBrush}"/>
-                            </Border>
-                            <Border Style="{DynamicResource TagStyle}" Margin="0,0,6,0" Padding="9,3">
-                                <TextBlock Text="1080p" Style="{DynamicResource TagTextStyle}"/>
-                            </Border>
-                            <Border Style="{DynamicResource TagStyle}" Margin="0,0,6,0" Padding="9,3">
-                                <TextBlock Text="2160p" Style="{DynamicResource TagTextStyle}"/>
-                            </Border>
-                            <Border Style="{DynamicResource TagStyle}" Margin="0,0,6,0" Padding="9,3">
-                                <TextBlock Text="WEB" Style="{DynamicResource TagTextStyle}"/>
-                            </Border>
-                            <Border Style="{DynamicResource TagStyle}" Margin="0,0,6,0" Padding="9,3">
-                                <TextBlock Text="BLURAY" Style="{DynamicResource TagTextStyle}"/>
-                            </Border>
-                            <Border Style="{DynamicResource TagStyle}" Padding="9,3">
-                                <TextBlock Text="&gt; 1GB" Style="{DynamicResource TagTextStyle}"/>
-                            </Border>
+                            <!-- ALL QUALITIES — clears filter state -->
+                            <Button Style="{StaticResource FilterChipBase}" CommandParameter="clear">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border x:Name="bd" Padding="9,3" BorderThickness="1"
+                                                Background="#1500E5FF" BorderBrush="#8000E5FF">
+                                            <TextBlock x:Name="tb" Text="ALL QUALITIES"
+                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                                                       Foreground="{DynamicResource AccentBrush}"/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <DataTrigger Binding="{Binding SearchFilterAnyActive}" Value="True">
+                                                <Setter TargetName="bd" Property="Background" Value="#660F2238"/>
+                                                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource LineDimBrush}"/>
+                                                <Setter TargetName="tb" Property="Foreground" Value="{DynamicResource TextDimBrush}"/>
+                                            </DataTrigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Button.Template>
+                            </Button>
+                            <Button Style="{StaticResource FilterChipBase}" CommandParameter="quality:1080p">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border x:Name="bd" Padding="9,3" BorderThickness="1"
+                                                Background="#660F2238" BorderBrush="{DynamicResource LineDimBrush}">
+                                            <TextBlock x:Name="tb" Text="1080p"
+                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                                                       Foreground="{DynamicResource TextDimBrush}"/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <DataTrigger Binding="{Binding SearchFilterQuality}" Value="1080p">
+                                                <Setter TargetName="bd" Property="Background" Value="#1500E5FF"/>
+                                                <Setter TargetName="bd" Property="BorderBrush" Value="#8000E5FF"/>
+                                                <Setter TargetName="tb" Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+                                            </DataTrigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Button.Template>
+                            </Button>
+                            <Button Style="{StaticResource FilterChipBase}" CommandParameter="quality:2160p">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border x:Name="bd" Padding="9,3" BorderThickness="1"
+                                                Background="#660F2238" BorderBrush="{DynamicResource LineDimBrush}">
+                                            <TextBlock x:Name="tb" Text="2160p"
+                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                                                       Foreground="{DynamicResource TextDimBrush}"/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <DataTrigger Binding="{Binding SearchFilterQuality}" Value="2160p">
+                                                <Setter TargetName="bd" Property="Background" Value="#1500E5FF"/>
+                                                <Setter TargetName="bd" Property="BorderBrush" Value="#8000E5FF"/>
+                                                <Setter TargetName="tb" Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+                                            </DataTrigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Button.Template>
+                            </Button>
+                            <Button Style="{StaticResource FilterChipBase}" CommandParameter="source:WEB">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border x:Name="bd" Padding="9,3" BorderThickness="1"
+                                                Background="#660F2238" BorderBrush="{DynamicResource LineDimBrush}">
+                                            <TextBlock x:Name="tb" Text="WEB"
+                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                                                       Foreground="{DynamicResource TextDimBrush}"/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <DataTrigger Binding="{Binding SearchFilterSource}" Value="WEB">
+                                                <Setter TargetName="bd" Property="Background" Value="#1500E5FF"/>
+                                                <Setter TargetName="bd" Property="BorderBrush" Value="#8000E5FF"/>
+                                                <Setter TargetName="tb" Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+                                            </DataTrigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Button.Template>
+                            </Button>
+                            <Button Style="{StaticResource FilterChipBase}" CommandParameter="source:BLURAY">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border x:Name="bd" Padding="9,3" BorderThickness="1"
+                                                Background="#660F2238" BorderBrush="{DynamicResource LineDimBrush}">
+                                            <TextBlock x:Name="tb" Text="BLURAY"
+                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                                                       Foreground="{DynamicResource TextDimBrush}"/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <DataTrigger Binding="{Binding SearchFilterSource}" Value="BLURAY">
+                                                <Setter TargetName="bd" Property="Background" Value="#1500E5FF"/>
+                                                <Setter TargetName="bd" Property="BorderBrush" Value="#8000E5FF"/>
+                                                <Setter TargetName="tb" Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+                                            </DataTrigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Button.Template>
+                            </Button>
+                            <Button Style="{StaticResource FilterChipBase}" CommandParameter="size:1GB">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border x:Name="bd" Padding="9,3" BorderThickness="1"
+                                                Background="#660F2238" BorderBrush="{DynamicResource LineDimBrush}">
+                                            <TextBlock x:Name="tb" Text="&gt; 1GB"
+                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                                                       Foreground="{DynamicResource TextDimBrush}"/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <DataTrigger Binding="{Binding SearchFilterBigSize}" Value="True">
+                                                <Setter TargetName="bd" Property="Background" Value="#1500E5FF"/>
+                                                <Setter TargetName="bd" Property="BorderBrush" Value="#8000E5FF"/>
+                                                <Setter TargetName="tb" Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+                                            </DataTrigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Button.Template>
+                            </Button>
                         </StackPanel>
                     </Border>
                     <DockPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
