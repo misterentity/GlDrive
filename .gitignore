@@ -14,3 +14,6 @@ transfer-movies.ps1
 # Signing keys — never commit private keys
 installer/keys/checksum-private.pem
 installer/keys/codesign.pfx
+
+# Design package reference (decompressed from claude.ai/design)
+.design-package/

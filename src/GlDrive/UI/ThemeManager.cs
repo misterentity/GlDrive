@@ -14,9 +14,12 @@ public static class ThemeManager
         if (string.Equals(theme, "System", StringComparison.OrdinalIgnoreCase))
             resolved = IsWindowsDarkMode() ? "Dark" : "Light";
 
-        var uri = resolved == "Light"
-            ? new Uri("pack://application:,,,/UI/Themes/LightTheme.xaml")
-            : new Uri("pack://application:,,,/UI/Themes/DarkTheme.xaml");
+        var uri = resolved switch
+        {
+            "Light" => new Uri("pack://application:,,,/UI/Themes/LightTheme.xaml"),
+            "Cyberpunk" => new Uri("pack://application:,,,/UI/Themes/CyberpunkTheme.xaml"),
+            _ => new Uri("pack://application:,,,/UI/Themes/DarkTheme.xaml"),
+        };
 
         var newTheme = new ResourceDictionary { Source = uri };
 
