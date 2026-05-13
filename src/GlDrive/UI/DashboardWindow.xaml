@@ -301,7 +301,7 @@
                                                                                    HorizontalAlignment="Center" FontSize="20"/>
                                                                         <TextBlock Text="%" Style="{DynamicResource DisplayTextStyle}" FontSize="14" VerticalAlignment="Bottom" Margin="2,0,0,3"/>
                                                                     </StackPanel>
-                                                                    <TextBlock Text="POOL" Style="{DynamicResource MicroTextStyle}" HorizontalAlignment="Center"/>
+                                                                    <TextBlock Text="DISK" Style="{DynamicResource MicroTextStyle}" HorizontalAlignment="Center"/>
                                                                 </StackPanel>
                                                             </Grid>
                                                             <DockPanel Grid.Column="1" Margin="16,0,0,0" LastChildFill="True">
@@ -2560,7 +2560,7 @@
                                                                         <TextBlock Text="%" Style="{DynamicResource DisplayTextStyle}" FontSize="18" VerticalAlignment="Bottom" Margin="3,0,0,4"/>
                                                                     </StackPanel>
                                                                     <TextBlock Text="{Binding CapacityUsedDisplay}" Style="{DynamicResource MicroTextStyle}" HorizontalAlignment="Center"/>
-                                                                    <TextBlock Text="POOL SLOTS" Style="{DynamicResource MicroTextStyle}" HorizontalAlignment="Center" FontSize="9"/>
+                                                                    <TextBlock Text="DISK" Style="{DynamicResource MicroTextStyle}" HorizontalAlignment="Center" FontSize="9"/>
                                                                 </StackPanel>
                                                             </Grid>
                                                         </DockPanel>
