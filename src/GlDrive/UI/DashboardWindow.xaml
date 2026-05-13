@@ -2078,7 +2078,7 @@
                             Style="{DynamicResource HudPanelStyle}">
                         <DockPanel>
                             <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                <TextBlock Text="&gt;&gt; AUTO RACES" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                <TextBlock Text="&gt;&gt; SPREAD ENGINE" Style="{DynamicResource SectionHeaderTextStyle}"/>
                             </Border>
                             <Grid>
                                 <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
