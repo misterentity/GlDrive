@@ -128,6 +128,13 @@ public partial class DashboardWindow : Window
         var header = GetTabName(tab);
         var vm = DataContext as DashboardViewModel;
 
+        if (header == "Overview" && vm != null)
+        {
+            // Refresh whenever the tab becomes active — cheap (a directory scan
+            // + log tail) and keeps the operations log preview current.
+            vm.RefreshOverview();
+        }
+
         if (header == "Upcoming" && !_upcomingLoaded)
         {
             _upcomingLoaded = true;

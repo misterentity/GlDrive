@@ -168,6 +168,170 @@
                 </TabItem.Header>
             </TabItem>
 
+            <!-- Overview Tab -->
+            <TabItem x:Name="OverviewTab">
+                <TabItem.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="01" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="Overview" VerticalAlignment="Center"/>
+                    </Grid>
+                </TabItem.Header>
+                <DockPanel Margin="12">
+                    <!-- Stat cards row -->
+                    <Border DockPanel.Dock="Top" Margin="0,0,0,12">
+                        <StackPanel Orientation="Horizontal">
+                            <Border Style="{DynamicResource StatCardStyle}">
+                                <Grid>
+                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                    <StackPanel Margin="4">
+                                        <TextBlock Text="SERVERS" Style="{DynamicResource StatCardLabelStyle}"/>
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding MountedServerCount}" Style="{DynamicResource StatCardValueStyle}"/>
+                                            <TextBlock Text="/" Style="{DynamicResource StatCardValueStyle}" Foreground="{DynamicResource TextFaintBrush}" Margin="6,0"/>
+                                            <TextBlock Text="{Binding ConfiguredServerCount}" Style="{DynamicResource StatCardValueStyle}" Foreground="{DynamicResource TextDimBrush}"/>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                            <Border Style="{DynamicResource StatCardStyle}">
+                                <Grid>
+                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                    <StackPanel Margin="4">
+                                        <TextBlock Text="ACTIVE DL" Style="{DynamicResource StatCardLabelStyle}"/>
+                                        <TextBlock Text="{Binding ActiveDownloadCount, FallbackValue=0}" Style="{DynamicResource StatCardValueStyle}"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                            <Border Style="{DynamicResource StatCardStyle}">
+                                <Grid>
+                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                    <StackPanel Margin="4">
+                                        <TextBlock Text="QUEUED" Style="{DynamicResource StatCardLabelStyle}"/>
+                                        <TextBlock Text="{Binding QueuedDownloadCount, FallbackValue=0}" Style="{DynamicResource StatCardValueStyle}"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                            <Border Style="{DynamicResource StatCardStyle}">
+                                <Grid>
+                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                    <StackPanel Margin="4">
+                                        <TextBlock Text="DONE TODAY" Style="{DynamicResource StatCardLabelStyle}"/>
+                                        <TextBlock Text="{Binding CompletedTodayCount, FallbackValue=0}" Style="{DynamicResource StatCardValueStyle}"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+                    <!-- Main 2-column body: server discs (left), ops log (right) -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="2*"/>
+                            <ColumnDefinition Width="3*"/>
+                        </Grid.ColumnDefinitions>
+                        <!-- Mounted server discs -->
+                        <Border Grid.Column="0" Style="{DynamicResource HudPanelStyle}" Margin="0,0,6,0">
+                            <DockPanel>
+                                <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                                    <TextBlock Text="&gt;&gt; MOUNTED NODES" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                </Border>
+                                <Grid>
+                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                        <ItemsControl ItemsSource="{Binding MountedServerStatus}" Margin="14">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Background="#80050F1A" BorderBrush="{DynamicResource LineBrush}"
+                                                            BorderThickness="1" Padding="14,12" Margin="0,0,0,10">
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="50"/>
+                                                                <ColumnDefinition Width="*"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <!-- Small disc glyph -->
+                                                            <Grid Grid.Column="0" Width="42" Height="42" VerticalAlignment="Center">
+                                                                <Ellipse Width="40" Height="40" Stroke="{DynamicResource LineDimBrush}" StrokeThickness="2"/>
+                                                                <Ellipse Width="40" Height="40" Stroke="{DynamicResource AccentBrush}" StrokeThickness="2"
+                                                                         StrokeDashArray="2,1.2" RenderTransformOrigin="0.5,0.5">
+                                                                    <Ellipse.RenderTransform>
+                                                                        <RotateTransform Angle="0"/>
+                                                                    </Ellipse.RenderTransform>
+                                                                    <Ellipse.Triggers>
+                                                                        <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                                                                            <BeginStoryboard>
+                                                                                <Storyboard>
+                                                                                    <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
+                                                                                                     From="0" To="360" Duration="0:0:8" RepeatBehavior="Forever"/>
+                                                                                </Storyboard>
+                                                                            </BeginStoryboard>
+                                                                        </EventTrigger>
+                                                                    </Ellipse.Triggers>
+                                                                </Ellipse>
+                                                                <Ellipse Width="6" Height="6" Fill="{DynamicResource Signature2Brush}"/>
+                                                            </Grid>
+                                                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="14,0,0,0">
+                                                                <TextBlock Text="{Binding Name}" Style="{DynamicResource DisplayTextStyle}" FontSize="14"/>
+                                                                <TextBlock Text="{Binding Host}" Style="{DynamicResource MicroTextStyle}" Margin="0,2,0,0"/>
+                                                            </StackPanel>
+                                                            <Border Grid.Column="2" Style="{DynamicResource TagAccentStyle}" VerticalAlignment="Center">
+                                                                <TextBlock Text="{Binding StatusLine}" Style="{DynamicResource TagTextStyle}"
+                                                                           Foreground="{DynamicResource AccentBrush}"/>
+                                                            </Border>
+                                                        </Grid>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </ScrollViewer>
+                                </Grid>
+                            </DockPanel>
+                        </Border>
+                        <!-- Operations log -->
+                        <Border Grid.Column="1" Style="{DynamicResource HudPanelStyle}" Margin="6,0,0,0">
+                            <DockPanel>
+                                <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                                    <TextBlock Text="&gt;&gt; OPERATIONS LOG" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                </Border>
+                                <Grid>
+                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+                                        <TextBlock Text="{Binding OperationsLogPreview}"
+                                                   FontFamily="{DynamicResource MonoFontFamily}"
+                                                   FontSize="11"
+                                                   Foreground="{DynamicResource TextDimBrush}"
+                                                   TextWrapping="NoWrap"
+                                                   Margin="14"/>
+                                    </ScrollViewer>
+                                </Grid>
+                            </DockPanel>
+                        </Border>
+                    </Grid>
+                </DockPanel>
+            </TabItem>
+
             <!-- Notifications Tab -->
             <TabItem>
                 <TabItem.Header>
@@ -177,7 +341,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="01" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="02" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="Notifications" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
@@ -302,7 +466,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="02" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="03" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="Wishlist" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
@@ -403,7 +567,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="03" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="04" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="Downloads" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
@@ -639,7 +803,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="04" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="05" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="Search" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
@@ -714,7 +878,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="05" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="06" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="Player" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
@@ -1199,7 +1363,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="06" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="07" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="Upcoming" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
@@ -1353,7 +1517,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="07" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="08" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="IRC" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
@@ -1529,7 +1693,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="08" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="09" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="PreDB" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
@@ -1637,7 +1801,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="09" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="10" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="Spread" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
@@ -1828,7 +1992,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="10" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="11" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="Browse" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
@@ -1942,7 +2106,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="11" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="12" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="World Monitor" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
@@ -1958,7 +2122,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="12" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="13" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="Discord" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
@@ -1974,7 +2138,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="13" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="14" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="Streems" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
@@ -1990,7 +2154,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="14" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="15" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="AI Agent" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
