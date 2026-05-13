@@ -2,8 +2,9 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:aia="clr-namespace:GlDrive.AiAgent"
-        Title="GlDrive Settings" Width="600" Height="500"
-        WindowStartupLocation="CenterScreen" ResizeMode="NoResize"
+        Title="GlDrive Settings" Width="1100" Height="780"
+        MinWidth="900" MinHeight="600"
+        WindowStartupLocation="CenterScreen" ResizeMode="CanResize"
         Background="{DynamicResource BackgroundBrush}"
         Foreground="{DynamicResource ForegroundBrush}">
     <Border Margin="14" Style="{DynamicResource HudPanelStyle}">

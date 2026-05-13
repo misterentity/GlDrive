@@ -204,18 +204,14 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                 poolPct = Math.Min(100.0, (double)poolActive / poolMax * 100.0);
             }
 
-            double capacityPct = poolPct;        // existing pool % is the fallback
+            // Disc widget % always shows pool utilization. SITE STATS-based
+            // disk% was tried in v1.92c but only one server (superbnc) returned
+            // data; the others showed 0% which was worse UX than the consistent
+            // pool reading. _serverDiskCache is still populated (used by the
+            // status-bar disk-space string) but no longer drives the disc widget.
+            double capacityPct = poolPct;
             string usedDisplay = poolMax > 0 ? poolActive.ToString() : "—";
             string totalDisplay = poolMax > 0 ? poolMax.ToString() : "—";
-
-            // Real disk-space % if we've cached a recent SITE STATS result for this server.
-            if (_serverDiskCache.TryGetValue(server.Id, out var disk) && disk.totalBytes > 0)
-            {
-                var used = disk.totalBytes - disk.freeBytes;
-                capacityPct = used * 100.0 / disk.totalBytes;
-                usedDisplay = FormatSize(used);
-                totalDisplay = FormatSize(disk.totalBytes);
-            }
 
             string status;
             if (isMounted)
