@@ -92,20 +92,32 @@ public partial class App
         DispatcherUnhandledException += (_, args) =>
         {
             Log.Fatal(args.Exception, "Unhandled UI exception");
+            WriteCrashDump(args.Exception, "dispatcher");
             Log.CloseAndFlush();
             args.Handled = true; // Prevent crash for non-fatal UI exceptions
         };
 
         AppDomain.CurrentDomain.UnhandledException += (_, args) =>
         {
-            if (args.ExceptionObject is Exception ex)
+            var ex = args.ExceptionObject as Exception;
+            if (ex != null)
                 Log.Fatal(ex, "Unhandled domain exception (terminating={Terminating})", args.IsTerminating);
+            WriteCrashDump(ex, "appdomain");
             Log.CloseAndFlush();
         };
 
         TaskScheduler.UnobservedTaskException += (_, args) =>
         {
-            Log.Error(args.Exception, "Unobserved task exception");
+            // FluentFTP's NoopDaemon races with client disposal and throws NRE from a
+            // finalizer-rethrown task. Harmless (we SetObserved), but spams [ERR] logs.
+            // Suppress to Debug if any inner exception matches that signature.
+            var isNoopDaemonNre = args.Exception.Flatten().InnerExceptions.Any(any =>
+                any.GetType() == typeof(NullReferenceException) &&
+                (any.StackTrace?.Contains("BaseFtpClient.NoopDaemon", StringComparison.Ordinal) ?? false));
+            if (isNoopDaemonNre)
+                Log.Debug(args.Exception, "Unobserved NoopDaemon NRE (suppressed)");
+            else
+                Log.Error(args.Exception, "Unobserved task exception");
             args.SetObserved(); // Prevent process termination
         };
 
@@ -321,6 +333,55 @@ public partial class App
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     private static extern int RegisterApplicationRestart(string? commandLine, int flags);
+
+    /// <summary>
+    /// Best-effort crash dump writer — captures the exception chain plus the last 100
+    /// lines of today's log into a timestamped file under %AppData%\GlDrive\logs.
+    /// Never throws — all I/O is swallowed.
+    /// </summary>
+    private static void WriteCrashDump(Exception? ex, string source)
+    {
+        try
+        {
+            var logsDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "GlDrive", "logs");
+            try { Directory.CreateDirectory(logsDir); } catch { }
+
+            var now = DateTime.Now;
+            var dumpPath = Path.Combine(logsDir, $"crashdump-{now:yyyyMMdd-HHmmss}.log");
+            var pid = Process.GetCurrentProcess().Id;
+
+            using var sw = new StreamWriter(dumpPath, append: false);
+            sw.WriteLine($"CRASH source={source} pid={pid} time={DateTime.UtcNow:o}");
+            sw.WriteLine(ex?.ToString() ?? "<no exception object>");
+            sw.WriteLine("--- recent log tail ---");
+
+            var todayLogPath = Path.Combine(logsDir, $"gldrive-{now:yyyyMMdd}.log");
+            try
+            {
+                if (File.Exists(todayLogPath))
+                {
+                    var lines = File.ReadAllLines(todayLogPath);
+                    var tail = lines.Length > 100 ? lines[(lines.Length - 100)..] : lines;
+                    foreach (var line in tail)
+                        sw.WriteLine(line);
+                }
+                else
+                {
+                    sw.WriteLine($"<today's log not found at {todayLogPath}>");
+                }
+            }
+            catch (Exception logEx)
+            {
+                sw.WriteLine($"<failed to read today's log: {logEx.Message}>");
+            }
+        }
+        catch
+        {
+            // Best-effort — never let the crash dumper itself crash.
+        }
+    }
 
     protected override void OnExit(ExitEventArgs e)
     {

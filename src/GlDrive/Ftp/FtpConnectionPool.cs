@@ -86,6 +86,21 @@ public class FtpConnectionPool : IAsyncDisposable
         return copy[idx];
     }
 
+    /// <summary>
+    /// Walk the exception chain looking for a "simultaneous logins" message — the BNC's
+    /// explicit signal that the account has hit its login cap and ghosts should be killed.
+    /// </summary>
+    private static bool HasLoginLimitError(Exception? ex)
+    {
+        while (ex is not null)
+        {
+            if (ex.Message?.Contains("simultaneous logins", StringComparison.OrdinalIgnoreCase) == true)
+                return true;
+            ex = ex.InnerException;
+        }
+        return false;
+    }
+
     public FtpConnectionPool(FtpClientFactory factory, int maxSize = 3)
     {
         _factory = factory;
@@ -201,6 +216,23 @@ public class FtpConnectionPool : IAsyncDisposable
                 Interlocked.Decrement(ref _created);
                 Log.Warning(ex, "Pool: new connection failed (created={Created}, max={Max})", _created, _maxSize);
 
+                // BNC explicitly said we're out of logins — bypass throttle and kill ghosts NOW.
+                if (HasLoginLimitError(ex))
+                {
+                    try
+                    {
+                        await _factory.KillGhosts(ct);
+                        IncrementGhostKill();
+                        Interlocked.Exchange(ref _lastGhostKillTicks, DateTime.UtcNow.Ticks);
+                        Log.Information("Pool: ghost kill triggered by login-limit error from BNC");
+                    }
+                    catch (Exception ghostEx)
+                    {
+                        Log.Debug(ghostEx, "Pool: forced ghost kill (login-limit) failed");
+                    }
+                }
+                else
+                {
                 // Kill ghost connections and retry once (throttle to once per 30s).
                 // CompareExchange ensures only one thread wins the throttle window.
                 var nowTicks = DateTime.UtcNow.Ticks;
@@ -237,6 +269,7 @@ public class FtpConnectionPool : IAsyncDisposable
                     {
                         Log.Debug(ghostEx, "Pool: ghost kill failed");
                     }
+                }
                 }
             }
         }

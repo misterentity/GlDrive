@@ -77,6 +77,16 @@ public class SpreadJob : IDisposable
     private readonly Dictionary<string, int> _destFailureCount = new();
     private readonly Dictionary<string, DateTime> _destRetryAt = new();
 
+    // Issue #6: per-dest set of base paths denied by glftpd's dirscript ("553
+    // MKD Denied by dirscript"). dirscript runs at MKD time and applies a
+    // per-section path filter; if it has denied a path once for this dest, it
+    // will deny it every time, so re-attempting the MKD just spams the log
+    // (~26 MKD-denied warnings/day in production). Per-job scope only — when
+    // the SpreadJob disposes, the set vanishes. All access is guarded by
+    // _ownershipLock (the main FindBestTransfer scan loop already holds it).
+    private readonly Dictionary<string, HashSet<string>> _destDirscriptDenied =
+        new(StringComparer.Ordinal);
+
     // Set to true when the race terminates due to a skiplist/blacklist denial.
     // Used by EmitRaceOutcome to emit "blacklisted" instead of "aborted".
     private bool _blacklisted = false;
@@ -1211,7 +1221,7 @@ public class SpreadJob : IDisposable
 
                 foreach (var srcId in owners)
                 {
-                    foreach (var (dstId, _) in sitePaths)
+                    foreach (var (dstId, dstBasePath) in sitePaths)
                     {
                         if (srcId == dstId) continue;
                         if (owners.Contains(dstId)) { skippedOwned++; continue; }
@@ -1222,6 +1232,25 @@ public class SpreadJob : IDisposable
                         // this race entirely (blew the backoff ladder).
                         if (retrySnapshot.TryGetValue(dstId, out var until) && now < until)
                         { skippedBackoff++; continue; }
+
+                        // Issue #6: if dirscript already denied any prefix of
+                        // this dest's base path during the current job, don't
+                        // try again — dirscript is deterministic and re-MKDing
+                        // just spams 553 "Denied by dirscript" warnings.
+                        // Treated identically to a backoff skip.
+                        if (_destDirscriptDenied.TryGetValue(dstId, out var deniedSet))
+                        {
+                            var blocked = false;
+                            foreach (var denied in deniedSet)
+                            {
+                                if (dstBasePath.StartsWith(denied, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    blocked = true;
+                                    break;
+                                }
+                            }
+                            if (blocked) { skippedBackoff++; continue; }
+                        }
 
                         // SFV-first: block non-SFV files until SFV is delivered to this dest
                         if (destsNeedingSfv != null && destsNeedingSfv.Contains(dstId) &&
@@ -1288,11 +1317,11 @@ public class SpreadJob : IDisposable
         {
             if (_fileInfos.Count > 0 && candidateCount == 0)
             {
-                Log.Warning("FindBestTransfer: {Files} files, 0 candidates. Skipped: owned={Owned} downloadOnly={DL} affil={Affil} slots={Slots} failures={Fail} backoff={BO}",
+                Log.Debug("FindBestTransfer: {Files} files, 0 candidates. Skipped: owned={Owned} downloadOnly={DL} affil={Affil} slots={Slots} failures={Fail} backoff={BO}",
                     _fileInfos.Count, skippedOwned, skippedDownloadOnly, skippedAffil,
                     skippedSlots, skippedFailures, skippedBackoff);
                 if (skippedSlots > 0 && skippedOwned == 0)
-                    Log.Warning("FindBestTransfer slot details: {SlotInfo}",
+                    Log.Debug("FindBestTransfer slot details: {SlotInfo}",
                         string.Join(", ", activeTransferSnapshot.Select(kv =>
                         {
                             var cfg = _serverConfigs.GetValueOrDefault(kv.Key);
@@ -1557,7 +1586,15 @@ public class SpreadJob : IDisposable
             {
                 coalesced = false;
                 _destFailureCount.TryGetValue(dstId, out var prev);
-                newCount = prev + 1;
+                // Issue #8: "forcibly closed by the remote host" signals BNC
+                // throttling — repeat reconnects just deepen the throttle. Skip
+                // a rung on the backoff ladder so the dest gets parked longer
+                // faster than a one-off 550 would.
+                var bump = !string.IsNullOrEmpty(errorMessage) &&
+                    errorMessage.Contains("forcibly closed by the remote host",
+                        StringComparison.OrdinalIgnoreCase)
+                    ? 2 : 1;
+                newCount = prev + bump;
                 _destFailureCount[dstId] = newCount;
                 if (newCount > BackoffLadder.Length)
                 {
@@ -1800,6 +1837,7 @@ public class SpreadJob : IDisposable
         if (!ok)
         {
             RecordIfPermanent(dstId, basePath, code, msg);
+            RecordDirscriptDenialIfMatch(dstId, basePath, msg);
             throw new IOException($"MKD failed for {basePath}");
         }
 
@@ -1816,8 +1854,32 @@ public class SpreadJob : IDisposable
             if (!okSub)
             {
                 RecordIfPermanent(dstId, current, codeSub, msgSub);
+                RecordDirscriptDenialIfMatch(dstId, current, msgSub);
                 throw new IOException($"MKD failed for {current}");
             }
+        }
+    }
+
+    /// <summary>
+    /// Issue #6: if the MKD reply mentions "Denied by dirscript" (glftpd's
+    /// section path filter), remember this base path for the rest of the job
+    /// so FindBestTransfer stops picking dest candidates that route through it.
+    /// dirscript is deterministic — once it has said NO for a path on this dest,
+    /// it will keep saying NO. Logging another WRN every time helps no one.
+    /// </summary>
+    private void RecordDirscriptDenialIfMatch(string dstId, string basePath, string? msg)
+    {
+        if (string.IsNullOrEmpty(msg)) return;
+        if (!msg.Contains("Denied by dirscript", StringComparison.OrdinalIgnoreCase)) return;
+
+        lock (_ownershipLock)
+        {
+            if (!_destDirscriptDenied.TryGetValue(dstId, out var set))
+            {
+                set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                _destDirscriptDenied[dstId] = set;
+            }
+            set.Add(basePath);
         }
     }
 
