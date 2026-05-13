@@ -186,6 +186,19 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             var wantsDrive = server.Mount?.MountDrive ?? false;
             var isMounted = isConnected && wantsDrive;
             var driveLetter = server.Mount?.DriveLetter ?? "";
+
+            // Disc widget %: connection-pool utilization for this server
+            // (ActiveCount / MaxSize). Honest with the data we have today;
+            // swap to real SITE QUOTA disk-space % when polling lands.
+            double poolPct = 0;
+            int poolActive = 0, poolMax = 0;
+            if (service?.Pool is { } pool && pool.MaxSize > 0)
+            {
+                poolActive = pool.ActiveCount;
+                poolMax = pool.MaxSize;
+                poolPct = Math.Min(100.0, (double)poolActive / poolMax * 100.0);
+            }
+
             string status;
             if (isMounted)
                 status = string.IsNullOrEmpty(driveLetter) ? "MOUNTED" : $"MOUNTED  {driveLetter}:";
@@ -203,9 +216,9 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                 Host = $"{server.Connection?.Host}:{server.Connection?.Port}",
                 IsMounted = isMounted,
                 StatusLine = status,
-                CapacityPercent = 0,
-                CapacityUsedDisplay = "—",
-                CapacityTotalDisplay = "—",
+                CapacityPercent = poolPct,
+                CapacityUsedDisplay = poolMax > 0 ? poolActive.ToString() : "—",
+                CapacityTotalDisplay = poolMax > 0 ? poolMax.ToString() : "—",
                 IsPrimary = false,
                 SiteTag = isMounted ? "MOUNTED" : (isConnected ? "CONNECTED" : (server.Enabled ? "OFFLINE" : "DISABLED"))
             });

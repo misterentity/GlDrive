@@ -959,6 +959,121 @@
         <Setter Property="Foreground" Value="{DynamicResource TextDimBrush}"/>
     </Style>
 
+    <!-- State-aware tag chip — swaps green / cyan / red based on the bound
+         SiteTag string. Default = green (CONNECTED / PRIMARY / PEER); cyan
+         for MOUNTED (drive letter active, special); red for OFFLINE / DISABLED.
+         Use inside ItemTemplates where the DataContext is an OverviewServerVm. -->
+    <Style x:Key="ServerStatusTagStyle" TargetType="Border" BasedOn="{StaticResource TagStyle}">
+        <Setter Property="Background" Value="#157CFF66"/>
+        <Setter Property="BorderBrush" Value="#807CFF66"/>
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding SiteTag}" Value="MOUNTED">
+                <Setter Property="Background" Value="#1500E5FF"/>
+                <Setter Property="BorderBrush" Value="#8000E5FF"/>
+            </DataTrigger>
+            <DataTrigger Binding="{Binding SiteTag}" Value="OFFLINE">
+                <Setter Property="Background" Value="#15FF3F63"/>
+                <Setter Property="BorderBrush" Value="#80FF3F63"/>
+            </DataTrigger>
+            <DataTrigger Binding="{Binding SiteTag}" Value="DISABLED">
+                <Setter Property="Background" Value="#15FF3F63"/>
+                <Setter Property="BorderBrush" Value="#80FF3F63"/>
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+
+    <Style x:Key="ServerStatusTextStyle" TargetType="TextBlock" BasedOn="{StaticResource TagTextStyle}">
+        <Setter Property="Foreground" Value="{DynamicResource GoodBrush}"/>
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding SiteTag}" Value="MOUNTED">
+                <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+            </DataTrigger>
+            <DataTrigger Binding="{Binding SiteTag}" Value="OFFLINE">
+                <Setter Property="Foreground" Value="{DynamicResource BadBrush}"/>
+            </DataTrigger>
+            <DataTrigger Binding="{Binding SiteTag}" Value="DISABLED">
+                <Setter Property="Foreground" Value="{DynamicResource BadBrush}"/>
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- Disc widget ring stroke + glow recoloring. Ellipse children inside
+         a mount-card pick this up to render green/red/cyan rings matching
+         the server's live state. -->
+    <Style x:Key="ServerStatusRingStyle" TargetType="Ellipse">
+        <Setter Property="Stroke" Value="{DynamicResource GoodBrush}"/>
+        <Setter Property="Effect">
+            <Setter.Value>
+                <DropShadowEffect Color="#7CFF66" BlurRadius="10" ShadowDepth="0" Opacity="0.55"/>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding SiteTag}" Value="MOUNTED">
+                <Setter Property="Stroke" Value="{DynamicResource AccentBrush}"/>
+                <Setter Property="Effect">
+                    <Setter.Value>
+                        <DropShadowEffect Color="#00E5FF" BlurRadius="14" ShadowDepth="0" Opacity="0.55"/>
+                    </Setter.Value>
+                </Setter>
+            </DataTrigger>
+            <DataTrigger Binding="{Binding SiteTag}" Value="OFFLINE">
+                <Setter Property="Stroke" Value="{DynamicResource BadBrush}"/>
+                <Setter Property="Effect">
+                    <Setter.Value>
+                        <DropShadowEffect Color="#FF3F63" BlurRadius="6" ShadowDepth="0" Opacity="0.4"/>
+                    </Setter.Value>
+                </Setter>
+            </DataTrigger>
+            <DataTrigger Binding="{Binding SiteTag}" Value="DISABLED">
+                <Setter Property="Stroke" Value="{DynamicResource TextFaintBrush}"/>
+                <Setter Property="Effect" Value="{x:Null}"/>
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- Downloads grid Status chip — same idea but driven by the
+         DownloadItemVm.Status string. -->
+    <Style x:Key="DownloadStatusTagStyle" TargetType="Border" BasedOn="{StaticResource TagStyle}">
+        <Setter Property="Background" Value="#1500E5FF"/>
+        <Setter Property="BorderBrush" Value="#8000E5FF"/>
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding Status}" Value="Completed">
+                <Setter Property="Background" Value="#157CFF66"/>
+                <Setter Property="BorderBrush" Value="#807CFF66"/>
+            </DataTrigger>
+            <DataTrigger Binding="{Binding Status}" Value="Failed">
+                <Setter Property="Background" Value="#15FF3F63"/>
+                <Setter Property="BorderBrush" Value="#80FF3F63"/>
+            </DataTrigger>
+            <DataTrigger Binding="{Binding Status}" Value="Cancelled">
+                <Setter Property="Background" Value="#15FF3F63"/>
+                <Setter Property="BorderBrush" Value="#80FF3F63"/>
+            </DataTrigger>
+            <DataTrigger Binding="{Binding Status}" Value="Queued">
+                <Setter Property="Background" Value="#15FFAB1F"/>
+                <Setter Property="BorderBrush" Value="#80FFAB1F"/>
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+
+    <Style x:Key="DownloadStatusTextStyle" TargetType="TextBlock" BasedOn="{StaticResource TagTextStyle}">
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding Status}" Value="Completed">
+                <Setter Property="Foreground" Value="{DynamicResource GoodBrush}"/>
+            </DataTrigger>
+            <DataTrigger Binding="{Binding Status}" Value="Failed">
+                <Setter Property="Foreground" Value="{DynamicResource BadBrush}"/>
+            </DataTrigger>
+            <DataTrigger Binding="{Binding Status}" Value="Cancelled">
+                <Setter Property="Foreground" Value="{DynamicResource BadBrush}"/>
+            </DataTrigger>
+            <DataTrigger Binding="{Binding Status}" Value="Queued">
+                <Setter Property="Foreground" Value="{DynamicResource WarnBrush}"/>
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+
     <Style x:Key="StatusDotStyle" TargetType="Ellipse">
         <Setter Property="Width" Value="8"/>
         <Setter Property="Height" Value="8"/>
