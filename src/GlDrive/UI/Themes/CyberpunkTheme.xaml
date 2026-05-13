@@ -272,8 +272,14 @@
         <Setter Property="FontSize" Value="13"/>
         <Setter Property="FontWeight" Value="SemiBold"/>
         <Setter Property="Padding" Value="18,11"/>
-        <Setter Property="HorizontalContentAlignment" Value="Left"/>
-        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <!-- These govern how the TabItem's CONTENT (the body shown in the
+             TabControl's ContentPresenter) is aligned, not the header.
+             Must be Stretch so each tab's inner DockPanel/Grid fills the
+             content panel instead of sitting natural-sized + centered. The
+             header rendering is independent (alignment hardcoded inside the
+             Template's header ContentPresenter). -->
+        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+        <Setter Property="VerticalContentAlignment" Value="Stretch"/>
         <Setter Property="Cursor" Value="Hand"/>
         <Setter Property="Template">
             <Setter.Value>
