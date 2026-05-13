@@ -73,18 +73,41 @@ public partial class DashboardWindow : Window
     {
         base.OnContentRendered(e);
 
-        // Find the TabControl and subscribe to selection changes
-        if (Content is Grid grid && grid.Children[0] is TabControl tabControl)
+        // Find the named TabControl directly. The outer Window content may be wrapped
+        // (e.g. by CyberpunkChrome.AttachToWindow which adds a scanline-overlay
+        // Grid around the original content), so walking Content.Children[0] is
+        // unreliable — name lookup is.
+        MainTabControl.SelectionChanged += TabControl_SelectionChanged;
+    }
+
+    // The v1.72 sidebar nav uses structured Grid headers (number prefix + label)
+    // instead of plain string headers. tab.Header?.ToString() now returns
+    // "System.Windows.Controls.Grid", which broke every `header == "..."`
+    // comparison below. Walk the Grid to find the label TextBlock and return its
+    // text. Fallback to ToString() for any TabItem that still uses string Header.
+    private static string? GetTabName(TabItem tab)
+    {
+        if (tab.Header is string s) return s;
+        if (tab.Header is System.Windows.Controls.Grid g)
         {
-            tabControl.SelectionChanged += TabControl_SelectionChanged;
+            foreach (var child in g.Children)
+            {
+                if (child is TextBlock tb && !string.IsNullOrEmpty(tb.Text))
+                {
+                    // The number prefix is 2 digits like "07"; the label is what we want.
+                    if (tb.Text.Length > 2 || !char.IsDigit(tb.Text[0]))
+                        return tb.Text;
+                }
+            }
         }
+        return tab.Header?.ToString();
     }
 
     private async void TabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (e.Source is not TabControl tc) return;
         if (tc.SelectedItem is not TabItem tab) return;
-        var header = tab.Header?.ToString();
+        var header = GetTabName(tab);
         var vm = DataContext as DashboardViewModel;
 
         if (header == "Upcoming" && !_upcomingLoaded)
