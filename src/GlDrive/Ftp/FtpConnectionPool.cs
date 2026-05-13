@@ -214,7 +214,10 @@ public class FtpConnectionPool : IAsyncDisposable
             catch (Exception ex)
             {
                 Interlocked.Decrement(ref _created);
-                Log.Warning(ex, "Pool: new connection failed (created={Created}, max={Max})", _created, _maxSize);
+                if (_created >= _maxSize)
+                    Log.Debug(ex, "Pool: new connection failed (at capacity, created={Created}, max={Max})", _created, _maxSize);
+                else
+                    Log.Warning(ex, "Pool: new connection failed (created={Created}, max={Max})", _created, _maxSize);
 
                 // BNC explicitly said we're out of logins — bypass throttle and kill ghosts NOW.
                 if (HasLoginLimitError(ex))

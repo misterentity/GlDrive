@@ -22,13 +22,19 @@ public class SpreadManager : IDisposable
     private readonly Lock _lock = new();
     private bool _disposed;
 
-    // In-memory TTL map of (section, release) -> expiry. Used to suppress
-    // re-queueing of races that just failed with "affil-blocked" — without this,
-    // a notification-driven release that no destination can accept gets re-fired
-    // every poll cycle (observed 214x/day for a single release). Cleared on
-    // process restart — persistence not needed because the restart itself clears
-    // the polling cadence.
-    private readonly ConcurrentDictionary<(string section, string release), DateTime> _affilBlockedUntil = new();
+    // TTL constants for the dead-race short-circuit map. Tunable here.
+    private static readonly TimeSpan AffilBlockedTtl = TimeSpan.FromMinutes(15);
+    private static readonly TimeSpan ReleaseNotFoundTtl = TimeSpan.FromMinutes(60);
+    private static readonly TimeSpan NoActivityTtl = TimeSpan.FromMinutes(30);
+
+    // In-memory TTL map of (section, release) -> (expiry, reason). Used to suppress
+    // re-queueing of races that just failed with a known dead-end class (originally
+    // "affil-blocked", later expanded to cover release-not-found and no-activity
+    // stalls). Without this, a notification-driven release that no destination can
+    // accept gets re-fired every poll cycle (observed 214x/day for one release,
+    // 1200x for Law.and.Order.S08E11). Cleared on process restart — persistence
+    // not needed because the restart itself clears the polling cadence.
+    private readonly ConcurrentDictionary<(string section, string release), (DateTime expiry, string reason)> _recentlyDeadRaces = new();
 
     public Func<string, FtpConnectionPool?>? _getMainPool;
 
@@ -127,12 +133,13 @@ public class SpreadManager : IDisposable
                 return null;
             }
 
-            // Issue #4: short-circuit re-queues of a release that recently
-            // failed with "all destinations affil-blocked". The TTL map is
-            // populated by the job.Error handler.
-            if (IsAffilBlockedRecently(section, releaseName))
+            // Issue #4 (+ v1.66 expansion): short-circuit re-queues of a release
+            // that recently failed with a known dead-end class (affil-blocked,
+            // release-not-found, no-activity). The TTL map is populated by the
+            // job.Error handler via ClassifyDeadRace.
+            if (IsRecentlyDeadRace(section, releaseName, out var deadReason))
             {
-                Log.Debug("Spread: skipping {Release} — recently affil-blocked", releaseName);
+                Log.Debug("Spread: skipping {Release} — recently failed: {Reason}", releaseName, deadReason);
                 return null;
             }
 
@@ -196,16 +203,17 @@ public class SpreadManager : IDisposable
         {
             Log.Warning("Spread job error: {Release} — {Error}", j.ReleaseName, msg);
 
-            // Issue #4: when a race fails because every destination is affil-
-            // blocked, the same release will re-trigger every notification poll
-            // (observed 214 enqueues/day for one release). Park the (section,
-            // release) for 15 minutes so the next StartRace call short-circuits.
-            if (!string.IsNullOrEmpty(msg) &&
-                msg.Contains("affil-blocked", StringComparison.OrdinalIgnoreCase))
+            // Issue #4 (+ v1.66 expansion): when a race fails with a known dead-
+            // end class, park (section, release) on a TTL so notification polling
+            // can't re-fire it. ClassifyDeadRace picks the right TTL per class;
+            // null => not a class we suppress, fall through (still logged above).
+            var classified = ClassifyDeadRace(msg);
+            if (classified is { } c)
             {
-                var key = AffilBlockKey(j.Section, j.ReleaseName);
-                _affilBlockedUntil[key] = DateTime.UtcNow + TimeSpan.FromMinutes(15);
-                Log.Debug("Spread: parking {Release} on affil-blocked TTL (15min)", j.ReleaseName);
+                var key = DeadRaceKey(j.Section, j.ReleaseName);
+                _recentlyDeadRaces[key] = (DateTime.UtcNow + c.ttl, c.reason);
+                Log.Debug("Spread: parking {Release} on dead-race TTL ({Reason}, {Minutes}min)",
+                    j.ReleaseName, c.reason, (int)c.ttl.TotalMinutes);
             }
         };
         job.LivePoolResolver = id => { lock (_lock) { _spreadPools.TryGetValue(id, out var p); return p; } };
@@ -717,26 +725,57 @@ public class SpreadManager : IDisposable
         string.Equals(sectionA, sectionB, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Normalize (section, release) to a case-insensitive key for the affil-
-    /// blocked TTL map. Mirrors IsSameRace semantics.
+    /// Normalize (section, release) to a case-insensitive key for the dead-race
+    /// TTL map. Mirrors IsSameRace semantics. (Was AffilBlockKey pre-v1.66.)
     /// </summary>
-    private static (string section, string release) AffilBlockKey(string section, string release) =>
+    private static (string section, string release) DeadRaceKey(string section, string release) =>
         (section.ToLowerInvariant(), release.ToLowerInvariant());
 
     /// <summary>
-    /// True iff this (section, release) was recently failed with an
-    /// "affil-blocked" outcome and the cool-down hasn't expired. Expired
-    /// entries are evicted on read.
+    /// True iff this (section, release) was recently failed with a class we
+    /// suppress and the cool-down hasn't expired. Outputs the matching reason
+    /// for diagnostic logging. Expired entries are evicted on read.
     /// </summary>
-    private bool IsAffilBlockedRecently(string section, string release)
+    private bool IsRecentlyDeadRace(string section, string release, out string? reason)
     {
-        var key = AffilBlockKey(section, release);
-        if (!_affilBlockedUntil.TryGetValue(key, out var until))
+        var key = DeadRaceKey(section, release);
+        if (!_recentlyDeadRaces.TryGetValue(key, out var entry))
+        {
+            reason = null;
             return false;
-        if (until > DateTime.UtcNow)
+        }
+        if (entry.expiry > DateTime.UtcNow)
+        {
+            reason = entry.reason;
             return true;
-        _affilBlockedUntil.TryRemove(key, out _);
+        }
+        _recentlyDeadRaces.TryRemove(key, out _);
+        reason = null;
         return false;
+    }
+
+    /// <summary>
+    /// Classify a job error message into a dead-race TTL + reason tag, or null
+    /// if the message isn't a known dead-end class. Reason strings double as
+    /// log tags. Case-insensitive matching throughout.
+    /// </summary>
+    private static (TimeSpan ttl, string reason)? ClassifyDeadRace(string? errorMessage)
+    {
+        if (string.IsNullOrEmpty(errorMessage)) return null;
+
+        if (errorMessage.Contains("affil-blocked", StringComparison.OrdinalIgnoreCase))
+            return (AffilBlockedTtl, "affil-blocked");
+
+        if (errorMessage.Contains("Release not found on any server", StringComparison.OrdinalIgnoreCase))
+            return (ReleaseNotFoundTtl, "release-not-found");
+
+        // Require BOTH substrings so we don't catch unrelated "no activity"
+        // mentions (e.g. log lines about idle sites that aren't job errors).
+        if (errorMessage.Contains("No activity for", StringComparison.OrdinalIgnoreCase) &&
+            errorMessage.Contains("no viable transfers", StringComparison.OrdinalIgnoreCase))
+            return (NoActivityTtl, "no-activity");
+
+        return null;
     }
 
     private record PendingRace(string Section, string ReleaseName, List<string> ServerIds, SpreadMode Mode,

@@ -18,6 +18,7 @@ public partial class App
     private ServerManager? _serverManager;
     private TrayViewModel? _trayViewModel;
     private H.NotifyIcon.TaskbarIcon? _taskbarIcon;
+    private GlDrive.Services.HeartbeatMonitor? _heartbeat;
 
     public static GlDrive.AiAgent.TelemetryRecorder? TelemetryRecorder { get; private set; }
     public static GlDrive.AiAgent.HealthRollup? HealthRollup { get; private set; }
@@ -108,14 +109,32 @@ public partial class App
 
         TaskScheduler.UnobservedTaskException += (_, args) =>
         {
-            // FluentFTP's NoopDaemon races with client disposal and throws NRE from a
-            // finalizer-rethrown task. Harmless (we SetObserved), but spams [ERR] logs.
-            // Suppress to Debug if any inner exception matches that signature.
-            var isNoopDaemonNre = args.Exception.Flatten().InnerExceptions.Any(any =>
-                any.GetType() == typeof(NullReferenceException) &&
-                (any.StackTrace?.Contains("BaseFtpClient.NoopDaemon", StringComparison.Ordinal) ?? false));
-            if (isNoopDaemonNre)
-                Log.Debug(args.Exception, "Unobserved NoopDaemon NRE (suppressed)");
+            // Background FTP exceptions we observe but don't action:
+            // 1. FluentFTP's NoopDaemon races with client disposal and throws NRE from a
+            //    finalizer-rethrown task.
+            // 2. FluentFTP.GnuTLS surfaces GnuTlsException (e.g. -50 INVALID_REQUEST,
+            //    -9 TLS_PACKET_DECODING_ERROR) from background reads after a BNC drops us.
+            // Both are harmless (we SetObserved) but spam [ERR] logs. Suppress to Debug.
+            // Type-check by name to avoid taking a using-reference on FluentFTP.GnuTLS.
+            var inner = args.Exception?.Flatten().InnerExceptions
+                ?? (IEnumerable<Exception>)Array.Empty<Exception>();
+            bool suppress = false;
+            foreach (var ex in inner)
+            {
+                if (ex is NullReferenceException &&
+                    (ex.StackTrace?.Contains("BaseFtpClient.NoopDaemon", StringComparison.Ordinal) ?? false))
+                {
+                    suppress = true;
+                    break;
+                }
+                if (ex.GetType().Name == "GnuTlsException")
+                {
+                    suppress = true;
+                    break;
+                }
+            }
+            if (suppress)
+                Log.Debug(args.Exception, "Unobserved background-FTP exception (suppressed)");
             else
                 Log.Error(args.Exception, "Unobserved task exception");
             args.SetObserved(); // Prevent process termination
@@ -139,6 +158,27 @@ public partial class App
         var asmVersion = System.Reflection.Assembly.GetExecutingAssembly()
             .GetName().Version?.ToString() ?? "unknown";
         Log.Information("GlDrive starting... version={Version}", asmVersion);
+
+        // Heartbeat diagnostic: inspect the previous instance's last heartbeat BEFORE
+        // starting a new one (the new monitor overwrites the file on first tick).
+        // A recent heartbeat (<90s) at startup means the previous process was alive
+        // until it died — instant native crash. A stale heartbeat means it hung first.
+        var heartbeatCheck = GlDrive.Services.HeartbeatMonitor.CheckStaleHeartbeat();
+        if (heartbeatCheck.HadHeartbeat)
+        {
+            var age = heartbeatCheck.AgeAtStartup ?? TimeSpan.Zero;
+            if (age > TimeSpan.FromSeconds(90))
+                Log.Warning("Previous instance heartbeat stale at startup — age={AgeSec}s, snapshot={Snapshot}",
+                    (int)age.TotalSeconds, heartbeatCheck.RawJson);
+            else
+                Log.Information("Previous instance shut down cleanly — last heartbeat age={AgeSec}s",
+                    (int)age.TotalSeconds);
+        }
+        else
+        {
+            Log.Information("No previous heartbeat file found (first run or clean shutdown)");
+        }
+        _heartbeat = new GlDrive.Services.HeartbeatMonitor();
 
         // Initialize AI agent telemetry recorder
         TelemetryRecorder = new GlDrive.AiAgent.TelemetryRecorder(ConfigManager.AppDataPath, config.Agent.TelemetryMaxFileMB);
@@ -386,6 +426,8 @@ public partial class App
     protected override void OnExit(ExitEventArgs e)
     {
         Log.Information("GlDrive shutting down...");
+        _heartbeat?.Dispose();
+        _heartbeat = null;
         try { GlDrive.Logging.SerilogSetup.AgentSink.Flush(); }
         catch (Exception ex) { Log.Debug(ex, "AgentSink final flush failed"); }
         AgentRunner?.Dispose();
