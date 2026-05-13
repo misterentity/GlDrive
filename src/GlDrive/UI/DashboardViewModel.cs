@@ -91,6 +91,16 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     public ObservableCollection<NotificationItemVm> NotificationItems { get; } = new();
     public ObservableCollection<WishlistItemVm> WishlistItems { get; } = new();
     public ObservableCollection<DownloadItemVm> DownloadItems { get; } = new();
+
+    // Stat card values for the Downloads tab. Computed live each time the
+    // download collection refreshes; the dashboard polls these via property
+    // change notifications fired after RefreshDownloads().
+    public int ActiveDownloadCount => DownloadItems.Count(d =>
+        d.Status == "Downloading" || d.Status == "Extracting" || d.Status == "Verifying");
+    public int QueuedDownloadCount => DownloadItems.Count(d => d.Status == "Queued");
+    public int FailedDownloadCount => DownloadItems.Count(d =>
+        d.Status == "Failed" || d.Status == "Cancelled");
+    public int CompletedTodayCount => DownloadItems.Count(d => d.Status == "Completed");
     public ObservableCollection<SearchResultVm> SearchResults { get; } = new();
     public ObservableCollection<UpcomingTvEpisodeVm> UpcomingTvEpisodes { get; } = new();
     public ObservableCollection<UpcomingMovieVm> UpcomingMovies { get; } = new();
@@ -1628,6 +1638,10 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                 });
             }
         }
+        OnPropertyChanged(nameof(ActiveDownloadCount));
+        OnPropertyChanged(nameof(QueuedDownloadCount));
+        OnPropertyChanged(nameof(FailedDownloadCount));
+        OnPropertyChanged(nameof(CompletedTodayCount));
     }
 
     private void OpenFolder()
