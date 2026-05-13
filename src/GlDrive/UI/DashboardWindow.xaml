@@ -181,6 +181,7 @@
                     </Grid>
                 </TabItem.Header>
                 <DockPanel Margin="12">
+                    <!-- Toolbar (preserved as-is) -->
                     <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
                             CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
                         <StackPanel Orientation="Horizontal">
@@ -202,68 +203,92 @@
                                       Width="110" ToolTip="Filter by server"/>
                         </StackPanel>
                     </Border>
-                    <!-- Detail panel -->
-                    <Border DockPanel.Dock="Bottom" Height="155"
-                            Background="{DynamicResource SurfaceBrush}"
-                            BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
-                            CornerRadius="6" Margin="0,10,0,0" Padding="14"
+                    <!-- DETAIL HUD panel -->
+                    <Border DockPanel.Dock="Bottom" Height="180" Margin="0,10,0,0"
+                            Style="{DynamicResource HudPanelStyle}"
                             Visibility="{Binding HasNotificationSelection, Converter={StaticResource BoolToVisibility}}">
                         <DockPanel>
-                            <Border DockPanel.Dock="Left" Width="95" Margin="0,0,16,0"
-                                    CornerRadius="4" ClipToBounds="True"
-                                    Background="{DynamicResource SurfaceLightBrush}"
-                                    Visibility="{Binding HasNotificationPoster, Converter={StaticResource BoolToVisibility}}">
-                                <Image Stretch="UniformToFill" VerticalAlignment="Top"
-                                       RenderOptions.BitmapScalingMode="HighQuality"
-                                       Source="{Binding NotificationPosterUrl, Converter={StaticResource ImageUrlConverter}, ConverterParameter=120}"/>
+                            <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                                <TextBlock Text="&gt;&gt; DETAIL" Style="{DynamicResource SectionHeaderTextStyle}"/>
                             </Border>
-                            <StackPanel VerticalAlignment="Top">
-                                <TextBlock FontWeight="Bold" FontSize="16"
-                                           Foreground="White"
-                                           Text="{Binding SelectedNotificationItem.ReleaseName}"/>
-                                <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
-                                    <TextBlock Text="{Binding NotificationRating}" FontSize="13"
-                                               FontWeight="SemiBold"
-                                               Foreground="{DynamicResource AccentBrush}"/>
-                                    <TextBlock Text="{Binding NotificationGenres}" FontSize="12.5"
-                                               Foreground="{DynamicResource ForegroundDimBrush}"
-                                               Margin="14,0,0,0"/>
-                                </StackPanel>
-                                <TextBlock Text="{Binding NotificationPlot}" TextWrapping="Wrap"
-                                           MaxHeight="65" FontSize="12.5" Margin="0,8,0,0"
-                                           LineHeight="18"
-                                           Foreground="{DynamicResource ForegroundDimBrush}"
-                                           TextTrimming="CharacterEllipsis"/>
-                            </StackPanel>
+                            <Grid>
+                                <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                <DockPanel Margin="14">
+                                    <Border DockPanel.Dock="Left" Width="95" Margin="0,0,16,0"
+                                            CornerRadius="4" ClipToBounds="True"
+                                            Background="{DynamicResource SurfaceLightBrush}"
+                                            Visibility="{Binding HasNotificationPoster, Converter={StaticResource BoolToVisibility}}">
+                                        <Image Stretch="UniformToFill" VerticalAlignment="Top"
+                                               RenderOptions.BitmapScalingMode="HighQuality"
+                                               Source="{Binding NotificationPosterUrl, Converter={StaticResource ImageUrlConverter}, ConverterParameter=120}"/>
+                                    </Border>
+                                    <StackPanel VerticalAlignment="Top">
+                                        <TextBlock FontWeight="Bold" FontSize="16"
+                                                   Foreground="White"
+                                                   Text="{Binding SelectedNotificationItem.ReleaseName}"/>
+                                        <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
+                                            <TextBlock Text="{Binding NotificationRating}" FontSize="13"
+                                                       FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource AccentBrush}"/>
+                                            <TextBlock Text="{Binding NotificationGenres}" FontSize="12.5"
+                                                       Foreground="{DynamicResource ForegroundDimBrush}"
+                                                       Margin="14,0,0,0"/>
+                                        </StackPanel>
+                                        <TextBlock Text="{Binding NotificationPlot}" TextWrapping="Wrap"
+                                                   MaxHeight="65" FontSize="12.5" Margin="0,8,0,0"
+                                                   LineHeight="18"
+                                                   Foreground="{DynamicResource ForegroundDimBrush}"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                    </StackPanel>
+                                </DockPanel>
+                            </Grid>
                         </DockPanel>
                     </Border>
-                    <DataGrid ItemsSource="{Binding NotificationItems}"
-                              SelectedItem="{Binding SelectedNotificationItem}"
-                              AutoGenerateColumns="False" IsReadOnly="True"
-                              SelectionMode="Single" GridLinesVisibility="Horizontal"
-                              HeadersVisibility="Column" CanUserAddRows="False"
-                              x:Name="NotificationsGrid"
-                              PreviewMouseLeftButtonDown="DragSource_PreviewMouseLeftButtonDown"
-                              MouseMove="DragSource_MouseMove">
-                        <DataGrid.ContextMenu>
-                            <ContextMenu>
-                                <MenuItem Header="Download" Command="{Binding DownloadNotificationCommand}" FontWeight="Bold"/>
-                                <MenuItem Header="Race / Spread" Command="{Binding RaceNotificationCommand}"/>
-                                <Separator/>
-                                <MenuItem Header="Search on Servers" Command="{Binding SearchNotificationOnServersCommand}"/>
-                                <MenuItem Header="Copy Release Name" Command="{Binding CopyNotificationReleaseCommand}"/>
-                            </ContextMenu>
-                        </DataGrid.ContextMenu>
-                        <DataGrid.InputBindings>
-                            <KeyBinding Key="Return" Command="{Binding DownloadNotificationCommand}"/>
-                        </DataGrid.InputBindings>
-                        <DataGrid.Columns>
-                            <DataGridTextColumn Header="Time" Binding="{Binding TimeDisplay}" Width="130"/>
-                            <DataGridTextColumn Header="Server" Binding="{Binding ServerName}" Width="90"/>
-                            <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="100"/>
-                            <DataGridTextColumn Header="Release" Binding="{Binding ReleaseName}" Width="*"/>
-                        </DataGrid.Columns>
-                    </DataGrid>
+                    <!-- NEW RELEASE FEED HUD panel wrapping the DataGrid -->
+                    <Border Style="{DynamicResource HudPanelStyle}">
+                        <DockPanel>
+                            <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                                <TextBlock Text="&gt;&gt; NEW RELEASE FEED" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                            </Border>
+                            <Grid>
+                                <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                <DataGrid ItemsSource="{Binding NotificationItems}"
+                                          SelectedItem="{Binding SelectedNotificationItem}"
+                                          AutoGenerateColumns="False" IsReadOnly="True"
+                                          SelectionMode="Single" GridLinesVisibility="Horizontal"
+                                          HeadersVisibility="Column" CanUserAddRows="False"
+                                          Background="Transparent" BorderThickness="0"
+                                          x:Name="NotificationsGrid"
+                                          PreviewMouseLeftButtonDown="DragSource_PreviewMouseLeftButtonDown"
+                                          MouseMove="DragSource_MouseMove">
+                                    <DataGrid.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="Download" Command="{Binding DownloadNotificationCommand}" FontWeight="Bold"/>
+                                            <MenuItem Header="Race / Spread" Command="{Binding RaceNotificationCommand}"/>
+                                            <Separator/>
+                                            <MenuItem Header="Search on Servers" Command="{Binding SearchNotificationOnServersCommand}"/>
+                                            <MenuItem Header="Copy Release Name" Command="{Binding CopyNotificationReleaseCommand}"/>
+                                        </ContextMenu>
+                                    </DataGrid.ContextMenu>
+                                    <DataGrid.InputBindings>
+                                        <KeyBinding Key="Return" Command="{Binding DownloadNotificationCommand}"/>
+                                    </DataGrid.InputBindings>
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Time" Binding="{Binding TimeDisplay}" Width="130"/>
+                                        <DataGridTextColumn Header="Server" Binding="{Binding ServerName}" Width="90"/>
+                                        <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="100"/>
+                                        <DataGridTextColumn Header="Release" Binding="{Binding ReleaseName}" Width="*"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </Grid>
+                        </DockPanel>
+                    </Border>
                 </DockPanel>
             </TabItem>
 
@@ -369,6 +394,59 @@
                     </Grid>
                 </TabItem.Header>
                 <DockPanel Margin="12">
+                    <!-- Stats cards row -->
+                    <Border DockPanel.Dock="Top" Margin="0,0,0,10">
+                        <StackPanel Orientation="Horizontal">
+                            <Border Style="{DynamicResource StatCardStyle}">
+                                <Grid>
+                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                    <StackPanel Margin="4">
+                                        <TextBlock Text="ACTIVE" Style="{DynamicResource StatCardLabelStyle}"/>
+                                        <TextBlock Text="{Binding ActiveDownloadCount, FallbackValue=—}" Style="{DynamicResource StatCardValueStyle}"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                            <Border Style="{DynamicResource StatCardStyle}">
+                                <Grid>
+                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                    <StackPanel Margin="4">
+                                        <TextBlock Text="QUEUED" Style="{DynamicResource StatCardLabelStyle}"/>
+                                        <TextBlock Text="{Binding QueuedDownloadCount, FallbackValue=—}" Style="{DynamicResource StatCardValueStyle}"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                            <Border Style="{DynamicResource StatCardStyle}">
+                                <Grid>
+                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                    <StackPanel Margin="4">
+                                        <TextBlock Text="ERRORS" Style="{DynamicResource StatCardLabelStyle}"/>
+                                        <TextBlock Text="{Binding FailedDownloadCount, FallbackValue=—}" Style="{DynamicResource StatCardValueStyle}"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                            <Border Style="{DynamicResource StatCardStyle}">
+                                <Grid>
+                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                    <StackPanel Margin="4">
+                                        <TextBlock Text="TODAY" Style="{DynamicResource StatCardLabelStyle}"/>
+                                        <TextBlock Text="{Binding CompletedTodayCount, FallbackValue=—}" Style="{DynamicResource StatCardValueStyle}"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </StackPanel>
+                    </Border>
                     <Border DockPanel.Dock="Top" Margin="0,0,0,8" Padding="10,6"
                             Background="{DynamicResource SurfaceBrush}" CornerRadius="4"
                             Visibility="{Binding HasActiveDownload, Converter={StaticResource BoolToVisibility}}">
@@ -410,32 +488,44 @@
                             </Polyline>
                         </Grid>
                     </Border>
-                    <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
-                            CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
-                        <WrapPanel>
-                            <Button Content="Cancel" Command="{Binding CancelDownloadCommand}"
-                                    Padding="12,6" Margin="0,0,6,4" Style="{StaticResource SecondaryButton}"/>
-                            <Button Content="Retry" Command="{Binding RetryDownloadCommand}"
-                                    Padding="12,6" Margin="0,0,6,4" Style="{StaticResource SecondaryButton}"/>
-                            <Button Content="Open Folder" Command="{Binding OpenFolderCommand}"
-                                    Padding="12,6" Margin="0,0,12,4" Style="{StaticResource SecondaryButton}"
-                                    ToolTip="Open download folder in Explorer"/>
-                            <Button Content="Clear Completed" Command="{Binding ClearCompletedCommand}"
-                                    Padding="12,6" Margin="0,0,6,4" Style="{StaticResource SecondaryButton}"/>
-                            <Button Content="Clear Failed" Command="{Binding ClearFailedCommand}"
-                                    Padding="12,6" Margin="0,0,6,4" Style="{StaticResource SecondaryButton}"/>
-                            <Button Content="Clear Cancelled" Command="{Binding ClearCancelledCommand}"
-                                    Padding="12,6" Margin="0,0,6,4" Style="{StaticResource SecondaryButton}"/>
-                            <Button Content="Clear All Finished" Command="{Binding ClearAllFinishedCommand}"
-                                    Padding="12,6" Margin="0,0,12,4" Style="{StaticResource SecondaryButton}"
-                                    ToolTip="Clear completed, failed, and cancelled"/>
-                            <Button Content="Move Up" Command="{Binding MoveUpCommand}"
-                                    Padding="12,6" Margin="0,0,6,4" Style="{StaticResource SecondaryButton}"/>
-                            <Button Content="Move Down" Command="{Binding MoveDownCommand}"
-                                    Padding="12,6" Margin="0,0,0,4" Style="{StaticResource SecondaryButton}"/>
-                        </WrapPanel>
-                    </Border>
-                    <DataGrid ItemsSource="{Binding DownloadItems}"
+                    <!-- Transfer Queue HUD panel wrapping the toolbar + DataGrid -->
+                    <Border Style="{DynamicResource HudPanelStyle}">
+                        <DockPanel>
+                            <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                                <TextBlock Text="&gt;&gt; TRANSFER QUEUE" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                            </Border>
+                            <Grid>
+                                <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                <DockPanel>
+                                    <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
+                                            CornerRadius="6" Padding="8,6" Margin="0,0,0,0">
+                                        <WrapPanel>
+                                            <Button Content="Cancel" Command="{Binding CancelDownloadCommand}"
+                                                    Padding="12,6" Margin="0,0,6,4" Style="{StaticResource SecondaryButton}"/>
+                                            <Button Content="Retry" Command="{Binding RetryDownloadCommand}"
+                                                    Padding="12,6" Margin="0,0,6,4" Style="{StaticResource SecondaryButton}"/>
+                                            <Button Content="Open Folder" Command="{Binding OpenFolderCommand}"
+                                                    Padding="12,6" Margin="0,0,12,4" Style="{StaticResource SecondaryButton}"
+                                                    ToolTip="Open download folder in Explorer"/>
+                                            <Button Content="Clear Completed" Command="{Binding ClearCompletedCommand}"
+                                                    Padding="12,6" Margin="0,0,6,4" Style="{StaticResource SecondaryButton}"/>
+                                            <Button Content="Clear Failed" Command="{Binding ClearFailedCommand}"
+                                                    Padding="12,6" Margin="0,0,6,4" Style="{StaticResource SecondaryButton}"/>
+                                            <Button Content="Clear Cancelled" Command="{Binding ClearCancelledCommand}"
+                                                    Padding="12,6" Margin="0,0,6,4" Style="{StaticResource SecondaryButton}"/>
+                                            <Button Content="Clear All Finished" Command="{Binding ClearAllFinishedCommand}"
+                                                    Padding="12,6" Margin="0,0,12,4" Style="{StaticResource SecondaryButton}"
+                                                    ToolTip="Clear completed, failed, and cancelled"/>
+                                            <Button Content="Move Up" Command="{Binding MoveUpCommand}"
+                                                    Padding="12,6" Margin="0,0,6,4" Style="{StaticResource SecondaryButton}"/>
+                                            <Button Content="Move Down" Command="{Binding MoveDownCommand}"
+                                                    Padding="12,6" Margin="0,0,0,4" Style="{StaticResource SecondaryButton}"/>
+                                        </WrapPanel>
+                                    </Border>
+                                    <DataGrid ItemsSource="{Binding DownloadItems}"
                               SelectedItem="{Binding SelectedDownloadItem}"
                               AutoGenerateColumns="False" IsReadOnly="True"
                               SelectionMode="Extended" GridLinesVisibility="Horizontal"
@@ -511,6 +601,10 @@
                             </DataGridTemplateColumn>
                         </DataGrid.Columns>
                     </DataGrid>
+                                </DockPanel>
+                            </Grid>
+                        </DockPanel>
+                    </Border>
                 </DockPanel>
             </TabItem>
 
@@ -1223,111 +1317,166 @@
                         <TextBlock Grid.Column="1" Text="IRC" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
-                <DockPanel Margin="0">
-                    <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
-                            BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
-                            Padding="8,4">
+                <DockPanel Margin="12">
+                    <!-- Outer IRC HUD panel -->
+                    <Border Style="{DynamicResource HudPanelStyle}">
                         <DockPanel>
-                            <Button DockPanel.Dock="Right" Content="Reconnect" Command="{Binding Irc.ReconnectCommand}"
-                                    Padding="10,2" Margin="4,0,0,0" Style="{StaticResource SecondaryButton}" FontSize="11"/>
-                            <Button DockPanel.Dock="Right" Content="Disconnect" Command="{Binding Irc.DisconnectCommand}"
-                                    Padding="10,2" Margin="8,0,0,0" Style="{StaticResource SecondaryButton}" FontSize="11"/>
-                            <TextBlock Text="{Binding Irc.TopicText}" TextTrimming="CharacterEllipsis"
-                                       Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"
-                                       VerticalAlignment="Center"/>
+                            <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                                <TextBlock Text="&gt;&gt; IRC" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                            </Border>
+                            <Grid>
+                                <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                <DockPanel Margin="6">
+                                    <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
+                                            BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
+                                            Padding="8,4" Margin="0,0,0,6">
+                                        <DockPanel>
+                                            <Button DockPanel.Dock="Right" Content="Reconnect" Command="{Binding Irc.ReconnectCommand}"
+                                                    Padding="10,2" Margin="4,0,0,0" Style="{StaticResource SecondaryButton}" FontSize="11"/>
+                                            <Button DockPanel.Dock="Right" Content="Disconnect" Command="{Binding Irc.DisconnectCommand}"
+                                                    Padding="10,2" Margin="8,0,0,0" Style="{StaticResource SecondaryButton}" FontSize="11"/>
+                                            <TextBlock Text="{Binding Irc.TopicText}" TextTrimming="CharacterEllipsis"
+                                                       Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"
+                                                       VerticalAlignment="Center"/>
+                                        </DockPanel>
+                                    </Border>
+                                    <DockPanel DockPanel.Dock="Bottom" Margin="0,6,0,0">
+                                        <Border Background="{DynamicResource SurfaceBrush}"
+                                                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0"
+                                                Padding="8,6">
+                                            <DockPanel>
+                                                <Button DockPanel.Dock="Right" Content="Send" Command="{Binding Irc.SendCommand}"
+                                                        Padding="16,6" Margin="6,0,0,0" Style="{StaticResource PrimaryButton}"/>
+                                                <TextBox Text="{Binding Irc.InputText, UpdateSourceTrigger=PropertyChanged}"
+                                                         VerticalContentAlignment="Center" x:Name="IrcInputBox">
+                                                    <TextBox.InputBindings>
+                                                        <KeyBinding Key="Return" Command="{Binding Irc.SendCommand}"/>
+                                                    </TextBox.InputBindings>
+                                                </TextBox>
+                                            </DockPanel>
+                                        </Border>
+                                    </DockPanel>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="180"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="160"/>
+                                        </Grid.ColumnDefinitions>
+                                        <!-- Channels inner panel -->
+                                        <Border Grid.Column="0" Margin="0,0,6,0" Style="{DynamicResource HudPanelStyle}">
+                                            <DockPanel>
+                                                <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                                                    <TextBlock Text="CHANNELS" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                                </Border>
+                                                <Grid>
+                                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                                    <ListBox ItemsSource="{Binding Irc.Channels}"
+                                                             SelectedItem="{Binding Irc.SelectedChannel}"
+                                                             Background="Transparent" BorderThickness="0">
+                                                        <ListBox.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <StackPanel Orientation="Horizontal">
+                                                                    <TextBlock Text="&#x1F512;" FontSize="10" Margin="0,0,4,0"
+                                                                               Visibility="{Binding HasFishKey, Converter={StaticResource BoolToVisibility}}"/>
+                                                                    <TextBlock Text="{Binding SidebarDisplay}" Foreground="{DynamicResource ForegroundBrush}"/>
+                                                                    <TextBlock Text="{Binding UnreadDisplay}" Foreground="{DynamicResource AccentBrush}"
+                                                                               FontWeight="Bold"/>
+                                                                </StackPanel>
+                                                            </DataTemplate>
+                                                        </ListBox.ItemTemplate>
+                                                    </ListBox>
+                                                </Grid>
+                                            </DockPanel>
+                                        </Border>
+                                        <!-- Messages inner panel -->
+                                        <Border Grid.Column="1" Margin="0,0,6,0" Style="{DynamicResource HudPanelStyle}">
+                                            <DockPanel>
+                                                <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                                                    <TextBlock Text="{Binding Irc.SelectedChannel.SidebarDisplay, FallbackValue=#channel}"
+                                                               Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                                </Border>
+                                                <Grid>
+                                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                                    <ListBox ItemsSource="{Binding Irc.Messages}"
+                                                             x:Name="IrcMessageList"
+                                                             Background="Transparent" BorderThickness="0"
+                                                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                                             VirtualizingPanel.ScrollUnit="Pixel">
+                                                        <ListBox.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <StackPanel Orientation="Horizontal" Margin="4,1">
+                                                                    <TextBlock Text="{Binding Timestamp}" Foreground="{DynamicResource ForegroundDimBrush}"
+                                                                               FontSize="11" Margin="0,0,6,0" FontFamily="Consolas"/>
+                                                                    <TextBlock Text="&#x1F512;" FontSize="9" Margin="0,0,3,0"
+                                                                               Visibility="{Binding WasEncrypted, Converter={StaticResource BoolToVisibility}}"/>
+                                                                    <TextBlock ui:ReleaseTextHelper.Message="{Binding}"
+                                                                               ui:ReleaseTextHelper.ClickCommand="{Binding DataContext.Irc.ReleaseLinkClickedCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                               TextWrapping="Wrap"
+                                                                               Foreground="{Binding NickColor}" FontFamily="Consolas" FontSize="12.5">
+                                                                        <TextBlock.Style>
+                                                                            <Style TargetType="TextBlock">
+                                                                                <Style.Triggers>
+                                                                                    <DataTrigger Binding="{Binding IsSystemMessage}" Value="True">
+                                                                                        <Setter Property="Foreground" Value="{DynamicResource ForegroundDimBrush}"/>
+                                                                                        <Setter Property="FontStyle" Value="Italic"/>
+                                                                                    </DataTrigger>
+                                                                                </Style.Triggers>
+                                                                            </Style>
+                                                                        </TextBlock.Style>
+                                                                    </TextBlock>
+                                                                </StackPanel>
+                                                            </DataTemplate>
+                                                        </ListBox.ItemTemplate>
+                                                    </ListBox>
+                                                </Grid>
+                                            </DockPanel>
+                                        </Border>
+                                        <!-- Users inner panel -->
+                                        <Border Grid.Column="2" Style="{DynamicResource HudPanelStyle}">
+                                            <DockPanel>
+                                                <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                                                    <TextBlock Text="USERS" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                                </Border>
+                                                <Grid>
+                                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                                    <ListBox ItemsSource="{Binding Irc.NickList}" x:Name="IrcNickList"
+                                                             Background="Transparent" BorderThickness="0" FontSize="12">
+                                                        <ListBox.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <TextBlock Text="{Binding}" Foreground="{DynamicResource ForegroundBrush}"/>
+                                                            </DataTemplate>
+                                                        </ListBox.ItemTemplate>
+                                                        <ListBox.ContextMenu>
+                                                            <ContextMenu>
+                                                                <MenuItem Header="Private Message"
+                                                                          Command="{Binding PlacementTarget.DataContext.Irc.PrivateMessageNickCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                                          CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                                                <MenuItem Header="FiSH Key Exchange"
+                                                                          Command="{Binding PlacementTarget.DataContext.Irc.KeyExchangeNickCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                                          CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                                            </ContextMenu>
+                                                        </ListBox.ContextMenu>
+                                                    </ListBox>
+                                                </Grid>
+                                            </DockPanel>
+                                        </Border>
+                                    </Grid>
+                                </DockPanel>
+                            </Grid>
                         </DockPanel>
                     </Border>
-                    <DockPanel DockPanel.Dock="Bottom" Margin="0">
-                        <Border Background="{DynamicResource SurfaceBrush}"
-                                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0"
-                                Padding="8,6">
-                            <DockPanel>
-                                <Button DockPanel.Dock="Right" Content="Send" Command="{Binding Irc.SendCommand}"
-                                        Padding="16,6" Margin="6,0,0,0" Style="{StaticResource PrimaryButton}"/>
-                                <TextBox Text="{Binding Irc.InputText, UpdateSourceTrigger=PropertyChanged}"
-                                         VerticalContentAlignment="Center" x:Name="IrcInputBox">
-                                    <TextBox.InputBindings>
-                                        <KeyBinding Key="Return" Command="{Binding Irc.SendCommand}"/>
-                                    </TextBox.InputBindings>
-                                </TextBox>
-                            </DockPanel>
-                        </Border>
-                    </DockPanel>
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="160"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="140"/>
-                        </Grid.ColumnDefinitions>
-                        <Border Grid.Column="0" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,1,0">
-                            <ListBox ItemsSource="{Binding Irc.Channels}"
-                                     SelectedItem="{Binding Irc.SelectedChannel}"
-                                     Background="Transparent" BorderThickness="0">
-                                <ListBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="&#x1F512;" FontSize="10" Margin="0,0,4,0"
-                                                       Visibility="{Binding HasFishKey, Converter={StaticResource BoolToVisibility}}"/>
-                                            <TextBlock Text="{Binding SidebarDisplay}" Foreground="{DynamicResource ForegroundBrush}"/>
-                                            <TextBlock Text="{Binding UnreadDisplay}" Foreground="{DynamicResource AccentBrush}"
-                                                       FontWeight="Bold"/>
-                                        </StackPanel>
-                                    </DataTemplate>
-                                </ListBox.ItemTemplate>
-                            </ListBox>
-                        </Border>
-                        <ListBox Grid.Column="1" ItemsSource="{Binding Irc.Messages}"
-                                 x:Name="IrcMessageList"
-                                 Background="Transparent" BorderThickness="0"
-                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                                 VirtualizingPanel.ScrollUnit="Pixel">
-                            <ListBox.ItemTemplate>
-                                <DataTemplate>
-                                    <StackPanel Orientation="Horizontal" Margin="4,1">
-                                        <TextBlock Text="{Binding Timestamp}" Foreground="{DynamicResource ForegroundDimBrush}"
-                                                   FontSize="11" Margin="0,0,6,0" FontFamily="Consolas"/>
-                                        <TextBlock Text="&#x1F512;" FontSize="9" Margin="0,0,3,0"
-                                                   Visibility="{Binding WasEncrypted, Converter={StaticResource BoolToVisibility}}"/>
-                                        <TextBlock ui:ReleaseTextHelper.Message="{Binding}"
-                                                   ui:ReleaseTextHelper.ClickCommand="{Binding DataContext.Irc.ReleaseLinkClickedCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                   TextWrapping="Wrap"
-                                                   Foreground="{Binding NickColor}" FontFamily="Consolas" FontSize="12.5">
-                                            <TextBlock.Style>
-                                                <Style TargetType="TextBlock">
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding IsSystemMessage}" Value="True">
-                                                            <Setter Property="Foreground" Value="{DynamicResource ForegroundDimBrush}"/>
-                                                            <Setter Property="FontStyle" Value="Italic"/>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </TextBlock.Style>
-                                        </TextBlock>
-                                    </StackPanel>
-                                </DataTemplate>
-                            </ListBox.ItemTemplate>
-                        </ListBox>
-                        <Border Grid.Column="2" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1,0,0,0">
-                            <ListBox ItemsSource="{Binding Irc.NickList}" x:Name="IrcNickList"
-                                     Background="Transparent" BorderThickness="0" FontSize="12">
-                                <ListBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding}" Foreground="{DynamicResource ForegroundBrush}"/>
-                                    </DataTemplate>
-                                </ListBox.ItemTemplate>
-                                <ListBox.ContextMenu>
-                                    <ContextMenu>
-                                        <MenuItem Header="Private Message"
-                                                  Command="{Binding PlacementTarget.DataContext.Irc.PrivateMessageNickCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
-                                                  CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
-                                        <MenuItem Header="FiSH Key Exchange"
-                                                  Command="{Binding PlacementTarget.DataContext.Irc.KeyExchangeNickCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
-                                                  CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
-                                    </ContextMenu>
-                                </ListBox.ContextMenu>
-                            </ListBox>
-                        </Border>
-                    </Grid>
                 </DockPanel>
             </TabItem>
 
