@@ -2914,17 +2914,23 @@
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
                             Margin="0,0,14,0">
+                    <!-- Live RTT / RX / TX. RxRateDisplay and TxRateDisplay are
+                         driven by the same 2-second TickOverview that powers the
+                         Overview tab's throughput panel; RxRateDisplay sums all
+                         active download BytesPerSecond, TxRateDisplay sums all
+                         spread-job non-source SpeedBps. StatusBarRtt comes from
+                         the ConnectionMonitor average across mounted servers. -->
                     <TextBlock Text="RTT " FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
                                Foreground="{DynamicResource TextDimBrush}"/>
-                    <TextBlock Text="38ms" FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                    <TextBlock Text="{Binding StatusBarRtt, FallbackValue=--ms}" FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
                                Foreground="{DynamicResource AccentBrush}" Margin="0,0,14,0"/>
                     <TextBlock Text="&#x2193; " FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
                                Foreground="{DynamicResource TextDimBrush}"/>
-                    <TextBlock Text="12.4 MB/s" FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                    <TextBlock Text="{Binding RxRateDisplay, FallbackValue=0.0 MB/s}" FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
                                Foreground="{DynamicResource GoodBrush}" Margin="0,0,8,0"/>
                     <TextBlock Text="&#x2191; " FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
                                Foreground="{DynamicResource TextDimBrush}"/>
-                    <TextBlock Text="1.2 MB/s" FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                    <TextBlock Text="{Binding TxRateDisplay, FallbackValue=0.0 MB/s}" FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
                                Foreground="{DynamicResource AccentBrush}"/>
                 </StackPanel>
             </Grid>
