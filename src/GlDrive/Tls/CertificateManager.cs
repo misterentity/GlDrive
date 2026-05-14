@@ -63,7 +63,7 @@ public class CertificateManager
                     "Accept the new certificate?");
                 if (accepted)
                 {
-                    TrustCertificate(key, fingerprint);
+                    TrustCertificate(key, fingerprint, certificate);
                     return true;
                 }
             }
@@ -74,16 +74,43 @@ public class CertificateManager
 
         // TOFU: first time seeing this cert — auto-trust
         Log.Information("Auto-trusting new certificate for {Key}: {Fingerprint}", key, fingerprint[..16] + "...");
-        TrustCertificate(key, fingerprint);
+        TrustCertificate(key, fingerprint, certificate);
         return true;
     }
 
     public void TrustCertificate(string hostPort, string fingerprint)
     {
+        TrustCertificate(hostPort, fingerprint, certificate: null);
+    }
+
+    public void TrustCertificate(string hostPort, string fingerprint, X509Certificate? certificate)
+    {
+        string? subject = null;
+        string? issuer = null;
+        DateTime? notAfter = null;
+
+        if (certificate != null)
+        {
+            try
+            {
+                using var cert2 = certificate as X509Certificate2 ?? new X509Certificate2(certificate);
+                subject = cert2.Subject;
+                issuer = cert2.Issuer;
+                notAfter = cert2.NotAfter;
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to extract X.509 metadata for {HostPort}", hostPort);
+            }
+        }
+
         _trustedCerts[hostPort] = new TrustedCert
         {
             Fingerprint = fingerprint,
-            TrustedAt = DateTime.UtcNow
+            TrustedAt = DateTime.UtcNow,
+            Subject = subject,
+            Issuer = issuer,
+            NotAfter = notAfter
         };
         Save();
     }
@@ -130,4 +157,7 @@ public class TrustedCert
 {
     public string Fingerprint { get; set; } = "";
     public DateTime TrustedAt { get; set; }
+    public string? Subject { get; set; }
+    public string? Issuer { get; set; }
+    public DateTime? NotAfter { get; set; }
 }

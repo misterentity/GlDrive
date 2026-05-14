@@ -1,19 +1,29 @@
 <Window x:Class="GlDrive.UI.CleanupWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Folder Cleaner" Width="700" Height="500"
-        MinWidth="500" MinHeight="350"
-        WindowStartupLocation="CenterOwner"
+        Title="Folder Cleaner" Width="800" Height="600"
+        MinWidth="700" MinHeight="500"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResize"
         Background="{DynamicResource BackgroundBrush}"
         Foreground="{DynamicResource ForegroundBrush}">
 
-    <Grid Margin="12">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
+    <Border Margin="14" Style="{DynamicResource HudPanelStyle}">
+        <DockPanel>
+            <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                <TextBlock Text="&gt;&gt; CLEANUP TOOL" Style="{DynamicResource SectionHeaderTextStyle}"/>
+            </Border>
+            <Grid>
+                <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                <Grid Margin="12">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
 
         <!-- Header -->
         <DockPanel Grid.Row="0" Margin="0,0,0,8">
@@ -88,5 +98,8 @@
                     Padding="16,5" Style="{StaticResource PrimaryButton}"
                     FontSize="11" FontWeight="SemiBold" IsEnabled="False"/>
         </StackPanel>
-    </Grid>
+                </Grid>
+            </Grid>
+        </DockPanel>
+    </Border>
 </Window>
