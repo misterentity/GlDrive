@@ -29,6 +29,17 @@ public sealed class SectionBlacklistStore
         [JsonPropertyName("failureCount")] public int FailureCount { get; set; }
     }
 
+    /// <summary>
+    /// How long a blacklist entry stays in effect since its last failure.
+    /// Permissions on glftpd sites change (group reassignment, path-filter
+    /// edits, the user fixing the section path) and a permanent blacklist
+    /// silently freezes those sites out of every future race. After this
+    /// window IsBlacklisted returns false so the next race retries; if MKD
+    /// still 550s, the entry gets refreshed by RecordPermanentFailure and
+    /// the clock resets.
+    /// </summary>
+    public static readonly TimeSpan EntryTtl = TimeSpan.FromDays(14);
+
     private readonly string _path;
     private readonly object _lock = new();
     private readonly Dictionary<(string serverId, string section), Entry> _entries = new(KeyComparer.Instance);
@@ -55,7 +66,20 @@ public sealed class SectionBlacklistStore
                         continue;
                     _entries[(e.ServerId, Normalize(e.Section))] = e;
                 }
-                Log.Information("Section blacklist loaded: {Count} entries", _entries.Count);
+                var now = DateTime.UtcNow;
+                var expired = _entries.Values.Where(e => now - e.LastFailedAt > EntryTtl).ToList();
+                if (expired.Count > 0)
+                {
+                    Log.Information("Section blacklist loaded: {Count} entries ({Expired} aged past {Ttl}-day TTL, will be retried next race)",
+                        _entries.Count, expired.Count, (int)EntryTtl.TotalDays);
+                    foreach (var e in expired)
+                        Log.Information("Section blacklist: {Server}/[{Section}] entry from {When:u} eligible for retry",
+                            e.ServerName, e.Section, e.LastFailedAt);
+                }
+                else
+                {
+                    Log.Information("Section blacklist loaded: {Count} entries", _entries.Count);
+                }
             }
             catch (Exception ex)
             {
@@ -82,12 +106,35 @@ public sealed class SectionBlacklistStore
     public bool IsBlacklisted(string serverId, string section)
     {
         if (string.IsNullOrWhiteSpace(serverId) || string.IsNullOrWhiteSpace(section)) return false;
-        lock (_lock) return _entries.ContainsKey((serverId, Normalize(section)));
+        lock (_lock)
+        {
+            if (!_entries.TryGetValue((serverId, Normalize(section)), out var entry))
+                return false;
+            // Auto-expire: if the last failure was longer ago than the TTL,
+            // we let the race retry. Saves the user from manually editing
+            // section-blacklist.json after fixing site permissions.
+            if (DateTime.UtcNow - entry.LastFailedAt > EntryTtl)
+                return false;
+            return true;
+        }
     }
 
     public Entry? Get(string serverId, string section)
     {
         lock (_lock) return _entries.TryGetValue((serverId, Normalize(section)), out var e) ? e : null;
+    }
+
+    /// <summary>
+    /// True when an entry exists but has aged past its TTL — useful for
+    /// UI / error messages to distinguish "still blocked" from "retrying".
+    /// </summary>
+    public bool IsExpired(string serverId, string section)
+    {
+        lock (_lock)
+        {
+            if (!_entries.TryGetValue((serverId, Normalize(section)), out var entry)) return false;
+            return DateTime.UtcNow - entry.LastFailedAt > EntryTtl;
+        }
     }
 
     /// <summary>

@@ -321,10 +321,17 @@ public class SpreadJob : IDisposable
 
             // Phase 2: For servers that DON'T have the release, create the destination path
             // using the section mapping (spread TO them)
+            var blacklistedDests = new List<(string Name, string Reason)>();
+            var unmappedDests = new List<string>();
+            var downloadOnlyDests = new List<string>();
             foreach (var (serverId, config) in _serverConfigs)
             {
                 if (sitePaths.ContainsKey(serverId)) continue; // Already has it
-                if (config.SpreadSite.DownloadOnly) continue; // Can't upload to download-only
+                if (config.SpreadSite.DownloadOnly)
+                {
+                    downloadOnlyDests.Add(config.Name);
+                    continue;
+                }
 
                 // Skip sites that have permanently failed MKD for this section.
                 // Without this check, every race re-discovers the 550 the hard
@@ -332,11 +339,15 @@ public class SpreadJob : IDisposable
                 if (_blacklist != null && _blacklist.IsBlacklisted(serverId, Section))
                 {
                     var entry = _blacklist.Get(serverId, Section);
+                    var reason = entry?.Reason ?? "unknown";
                     Log.Information("Spread: {Server} blacklisted for [{Section}] — {Reason} " +
                         "(first failed {When:u}, {Count} total). Skipping. " +
-                        "Delete entry from section-blacklist.json to retry.",
-                        config.Name, Section, entry?.Reason ?? "unknown",
-                        entry?.FirstFailedAt ?? DateTime.UtcNow, entry?.FailureCount ?? 0);
+                        "Delete entry from section-blacklist.json or wait {Ttl} days from {Last:u} to auto-retry.",
+                        config.Name, Section, reason,
+                        entry?.FirstFailedAt ?? DateTime.UtcNow, entry?.FailureCount ?? 0,
+                        (int)SectionBlacklistStore.EntryTtl.TotalDays,
+                        entry?.LastFailedAt ?? DateTime.UtcNow);
+                    blacklistedDests.Add((config.Name, reason));
                     continue;
                 }
 
@@ -389,13 +400,25 @@ public class SpreadJob : IDisposable
                     Log.Information("Spread: {Server} has no matching section for [{Section}] — " +
                         "not participating in this race (add a '{Section}' entry to its section map)",
                         config.Name, Section);
+                    unmappedDests.Add(config.Name);
                 }
             }
 
             if (sitePaths.Count < 2)
             {
-                SetFailed($"Need 2+ servers — found release on {sourceServers.Count}, " +
-                    $"no destination servers have a matching section for [{Section}]");
+                // Build a specific diagnosis instead of pretending no section
+                // exists — when most candidate dests are blacklisted from
+                // earlier MKD failures (e.g. wrong section path → 550) the
+                // user has no way to see that without this hint.
+                var parts = new List<string>();
+                if (blacklistedDests.Count > 0)
+                    parts.Add($"{blacklistedDests.Count} blacklisted ({string.Join(", ", blacklistedDests.Select(b => $"{b.Name}: {b.Reason}"))})");
+                if (unmappedDests.Count > 0)
+                    parts.Add($"{unmappedDests.Count} unmapped ({string.Join(", ", unmappedDests)})");
+                if (downloadOnlyDests.Count > 0)
+                    parts.Add($"{downloadOnlyDests.Count} download-only ({string.Join(", ", downloadOnlyDests)})");
+                var diagnosis = parts.Count > 0 ? " — " + string.Join("; ", parts) : "";
+                SetFailed($"Need 2+ servers — found release on {sourceServers.Count}, no eligible destination for [{Section}]{diagnosis}");
                 return;
             }
 
@@ -1898,6 +1921,12 @@ public class SpreadJob : IDisposable
             throw new IOException($"MKD failed for {basePath}");
         }
 
+        // Self-heal: this dest just successfully MKD'd for this section, so any
+        // stale blacklist entry from a prior permission issue is no longer true.
+        // Clear it so the user doesn't have to hand-edit section-blacklist.json
+        // after fixing site perms / section paths.
+        ClearBlacklistOnSuccess(dstId);
+
         // If file is in a subdirectory (e.g. "CD1/file.rar"), create nested dirs.
         var dirPart = Path.GetDirectoryName(relativePath)?.Replace('\\', '/');
         if (string.IsNullOrEmpty(dirPart)) return;
@@ -1946,6 +1975,23 @@ public class SpreadJob : IDisposable
         if (!MkdFailureClassifier.IsPermanent(code, msg)) return;
         var name = _serverConfigs.TryGetValue(dstId, out var cfg) ? cfg.Name : dstId;
         _blacklist.RecordPermanentFailure(dstId, name, Section, path, $"{code} {msg}".Trim());
+    }
+
+    /// <summary>
+    /// Drop any blacklist entry for (dst, this Section) — called after a
+    /// successful MKD so a previously-blocked dest gets fully re-enabled
+    /// once the user fixes the site perms or section path.
+    /// </summary>
+    private void ClearBlacklistOnSuccess(string dstId)
+    {
+        if (_blacklist == null) return;
+        if (!_blacklist.IsBlacklisted(dstId, Section) && !_blacklist.IsExpired(dstId, Section)) return;
+        if (_blacklist.Remove(dstId, Section))
+        {
+            var name = _serverConfigs.TryGetValue(dstId, out var cfg) ? cfg.Name : dstId;
+            Log.Information("Section blacklist: cleared {Server}/[{Section}] after successful MKD",
+                name, Section);
+        }
     }
 
     public void Stop()
