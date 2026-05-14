@@ -1259,12 +1259,29 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         if (_mediaPlayer == null) return;
         SaveCurrentPosition();
         var mp = _mediaPlayer;
+        var ts = _torrentStream;
         IsPlaying = false;
         Task.Run(async () =>
         {
-            mp.Stop();
-            if (_torrentStream != null)
-                await _torrentStream.StopAsync();
+            // v1.96 crash fix: VLC's libvlc native side can still be reading
+            // from the torrent HTTP stream while StopAsync tears the stream
+            // down. Yanking _activeHttpStream / _activeManager out from under
+            // an in-flight native read produced an AccessViolation that
+            // bypassed managed exception handlers and crash-killed the
+            // process (gldrive-20260513.log 17:29:33 FTL WATCHDOG entry).
+            //
+            // Fix: stop VLC FIRST, wait up to ~1s for IsPlaying to actually
+            // flip false (libvlc Stop is async internally), then tear down
+            // the torrent stream. All wrapped in try/catch so a torn-down
+            // partial-state doesn't surface a new exception.
+            try { mp.Stop(); } catch (Exception ex) { Log.Debug(ex, "VLC Stop threw"); }
+            for (int i = 0; i < 50 && mp.IsPlaying; i++)
+                await Task.Delay(20);
+            if (ts != null)
+            {
+                try { await ts.StopAsync(); }
+                catch (Exception ex) { Log.Debug(ex, "TorrentStreamService.StopAsync threw"); }
+            }
         });
     }
 
