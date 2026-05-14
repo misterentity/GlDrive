@@ -265,6 +265,69 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
                 vm.HasFishKey = ch.HasFishKey;
             }
         }
+
+        // Rehydrate message buffers from the on-disk IRC log so the user sees their
+        // chat history when the Dashboard is closed and reopened. Without this, the
+        // in-memory _messageBuffers is empty on every fresh DashboardWindow and the
+        // user assumes the app must have restarted.
+        RehydrateFromDisk(irc.ServerId, irc.ServerName);
+    }
+
+    /// <summary>
+    /// Loads recent channel messages from IrcLogStore into the per-channel buffers.
+    /// IrcLogStore line format: HH:mm:ss\t#channel\tnick\ttext (today + yesterday).
+    /// </summary>
+    private void RehydrateFromDisk(string serverId, string serverName)
+    {
+        try
+        {
+            // Pull a few times MaxMessages so each individual channel ends up with
+            // a reasonable buffer after the per-channel distribution.
+            var lines = IrcLogStore.ReadRecent(serverId, MaxMessages * 4);
+            if (lines.Count == 0) return;
+
+            int added = 0;
+            foreach (var line in lines)
+            {
+                var parts = line.Split('\t', 4);
+                if (parts.Length < 4) continue;
+                var timestamp = parts[0];
+                var channel = parts[1];
+                var nick = parts[2];
+                var text = parts[3];
+                if (string.IsNullOrEmpty(channel) || !channel.StartsWith('#'))
+                    continue;
+
+                var bufferKey = $"{serverId}:{channel}";
+                if (!_messageBuffers.TryGetValue(bufferKey, out var buffer))
+                {
+                    buffer = new List<IrcMessageVm>();
+                    _messageBuffers[bufferKey] = buffer;
+                }
+
+                buffer.Add(new IrcMessageVm
+                {
+                    Timestamp = timestamp,
+                    Nick = nick,
+                    Text = text,
+                    Type = IrcMessageType.Normal,
+                    WasEncrypted = false,
+                    NickColor = GetNickColor(nick)
+                });
+                if (buffer.Count > MaxMessages)
+                    buffer.RemoveAt(0);
+
+                // Make sure the channel shows up in the sidebar even if the user
+                // hasn't joined it in this session yet.
+                EnsureChannelVm(serverId, serverName, channel);
+                added++;
+            }
+            Log.Debug("IRC: rehydrated {Count} messages from disk for {Server}", added, serverId);
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "IRC: rehydrate from disk failed for {Server}", serverId);
+        }
     }
 
     private void OnIrcMessage(string serverId, string serverName, string target, IrcMessageItem item)
