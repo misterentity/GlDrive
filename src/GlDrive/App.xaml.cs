@@ -89,12 +89,17 @@ public partial class App
             return;
         }
 
-        // Global exception handlers to prevent silent crashes
+        // Global exception handlers to prevent silent crashes.
+        //
+        // IMPORTANT: do NOT call Log.CloseAndFlush() here when args.Handled=true. The
+        // process keeps running, but a disposed Serilog pipeline silently drops every
+        // subsequent log entry — observed 2026-05-14 where an H.NotifyIcon glitch at
+        // 09:05 killed logging while the app continued running until ~12:58 with zero
+        // diagnostics. Use Log.Logger.ForContext(...) flushes if needed instead.
         DispatcherUnhandledException += (_, args) =>
         {
             Log.Fatal(args.Exception, "Unhandled UI exception");
             WriteCrashDump(args.Exception, "dispatcher");
-            Log.CloseAndFlush();
             args.Handled = true; // Prevent crash for non-fatal UI exceptions
         };
 
@@ -104,7 +109,9 @@ public partial class App
             if (ex != null)
                 Log.Fatal(ex, "Unhandled domain exception (terminating={Terminating})", args.IsTerminating);
             WriteCrashDump(ex, "appdomain");
-            Log.CloseAndFlush();
+            // CloseAndFlush is safe here — IsTerminating means the runtime is about to
+            // tear the process down regardless.
+            if (args.IsTerminating) Log.CloseAndFlush();
         };
 
         TaskScheduler.UnobservedTaskException += (_, args) =>

@@ -219,19 +219,33 @@ public class FtpConnectionPool : IAsyncDisposable
                 else
                     Log.Warning(ex, "Pool: new connection failed (created={Created}, max={Max})", _created, _maxSize);
 
-                // BNC explicitly said we're out of logins — bypass throttle and kill ghosts NOW.
+                // BNC explicitly said we're out of logins — kill ghosts, but throttle to
+                // once per 5s. Without the throttle, multiple concurrent Borrow() callers
+                // each fired KillGhosts() in the same second; two stacked TLS handshakes
+                // against a hostile BNC crashed GnuTLS natively (no managed handler),
+                // observed as silent process termination on 2026-05-13 and 2026-05-14.
+                // CompareExchange ensures only one thread wins the throttle window.
                 if (HasLoginLimitError(ex))
                 {
-                    try
+                    var nowTicks = DateTime.UtcNow.Ticks;
+                    var lastTicks = Interlocked.Read(ref _lastGhostKillTicks);
+                    if (new TimeSpan(nowTicks - lastTicks).TotalSeconds > 5 &&
+                        Interlocked.CompareExchange(ref _lastGhostKillTicks, nowTicks, lastTicks) == lastTicks)
                     {
-                        await _factory.KillGhosts(ct);
-                        IncrementGhostKill();
-                        Interlocked.Exchange(ref _lastGhostKillTicks, DateTime.UtcNow.Ticks);
-                        Log.Information("Pool: ghost kill triggered by login-limit error from BNC");
+                        try
+                        {
+                            await _factory.KillGhosts(ct);
+                            IncrementGhostKill();
+                            Log.Information("Pool: ghost kill triggered by login-limit error from BNC");
+                        }
+                        catch (Exception ghostEx)
+                        {
+                            Log.Debug(ghostEx, "Pool: forced ghost kill (login-limit) failed");
+                        }
                     }
-                    catch (Exception ghostEx)
+                    else
                     {
-                        Log.Debug(ghostEx, "Pool: forced ghost kill (login-limit) failed");
+                        Log.Debug("Pool: skipping login-limit ghost kill — recent kill <5s ago");
                     }
                 }
                 else
