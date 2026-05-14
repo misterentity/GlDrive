@@ -85,6 +85,34 @@ public partial class DashboardWindow : Window
             _clockTimer?.Stop();
             _clockTimer = null;
         };
+
+        // Toggle keyboard-shortcuts overlay with `?` (Shift+/) and dismiss with Esc.
+        PreviewKeyDown += (s, e) =>
+        {
+            if (e.Key == System.Windows.Input.Key.Escape && ShortcutsOverlay.Visibility == Visibility.Visible)
+            {
+                ShortcutsOverlay.Visibility = Visibility.Collapsed;
+                e.Handled = true;
+                return;
+            }
+            if (e.Key == System.Windows.Input.Key.OemQuestion
+                && (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift)
+            {
+                // Don't fire while typing in a TextBox / ComboBox / TextBox-like
+                if (Keyboard.FocusedElement is System.Windows.Controls.TextBox) return;
+                if (Keyboard.FocusedElement is System.Windows.Controls.ComboBox) return;
+                ShortcutsOverlay.Visibility = ShortcutsOverlay.Visibility == Visibility.Visible
+                    ? Visibility.Collapsed
+                    : Visibility.Visible;
+                e.Handled = true;
+            }
+        };
+    }
+
+    private void ShortcutsOverlay_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        ShortcutsOverlay.Visibility = Visibility.Collapsed;
+        e.Handled = true;
     }
 
     protected override void OnContentRendered(EventArgs e)

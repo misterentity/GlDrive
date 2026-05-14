@@ -2868,5 +2868,72 @@
                 </StackPanel>
             </Grid>
         </Border>
+
+        <!-- Keyboard shortcuts overlay (toggle with `?`) -->
+        <Border x:Name="ShortcutsOverlay" Grid.RowSpan="4"
+                Background="#CC03070D"
+                Visibility="Collapsed" Panel.ZIndex="9999"
+                MouseLeftButtonDown="ShortcutsOverlay_Click">
+            <Border MaxWidth="640" Padding="32" VerticalAlignment="Center" HorizontalAlignment="Center"
+                    Background="#F00B1828" BorderBrush="{DynamicResource AccentBrush}" BorderThickness="1">
+                <Border.Effect>
+                    <DropShadowEffect Color="#00E5FF" BlurRadius="28" ShadowDepth="0" Opacity="0.55"/>
+                </Border.Effect>
+                <Grid>
+                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                    <StackPanel Margin="12">
+                        <TextBlock Text="&gt;&gt; KEYBOARD SHORTCUTS"
+                                   Style="{DynamicResource SectionHeaderTextStyle}"
+                                   FontSize="16" Margin="0,0,0,16"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="160"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="?  /  Shift+/" Style="{DynamicResource AccentTextStyle}" Margin="0,4"/>
+                            <TextBlock Grid.Row="0" Grid.Column="1" Text="Toggle this overlay" Style="{DynamicResource DimTextStyle}" Margin="14,4"/>
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Esc" Style="{DynamicResource AccentTextStyle}" Margin="0,4"/>
+                            <TextBlock Grid.Row="1" Grid.Column="1" Text="Close overlay" Style="{DynamicResource DimTextStyle}" Margin="14,4"/>
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Ctrl+Tab" Style="{DynamicResource AccentTextStyle}" Margin="0,4"/>
+                            <TextBlock Grid.Row="2" Grid.Column="1" Text="Next tab" Style="{DynamicResource DimTextStyle}" Margin="14,4"/>
+
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Ctrl+Shift+Tab" Style="{DynamicResource AccentTextStyle}" Margin="0,4"/>
+                            <TextBlock Grid.Row="3" Grid.Column="1" Text="Previous tab" Style="{DynamicResource DimTextStyle}" Margin="14,4"/>
+
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="Enter (IRC)" Style="{DynamicResource AccentTextStyle}" Margin="0,4"/>
+                            <TextBlock Grid.Row="4" Grid.Column="1" Text="Send message in the IRC input" Style="{DynamicResource DimTextStyle}" Margin="14,4"/>
+
+                            <TextBlock Grid.Row="5" Grid.Column="0" Text="Tab (IRC)" Style="{DynamicResource AccentTextStyle}" Margin="0,4"/>
+                            <TextBlock Grid.Row="5" Grid.Column="1" Text="Nick completion / cycle through matches" Style="{DynamicResource DimTextStyle}" Margin="14,4"/>
+
+                            <TextBlock Grid.Row="6" Grid.Column="0" Text="Delete (Downloads)" Style="{DynamicResource AccentTextStyle}" Margin="0,4"/>
+                            <TextBlock Grid.Row="6" Grid.Column="1" Text="Cancel selected download(s)" Style="{DynamicResource DimTextStyle}" Margin="14,4"/>
+
+                            <TextBlock Grid.Row="7" Grid.Column="0" Text="R (Downloads)" Style="{DynamicResource AccentTextStyle}" Margin="0,4"/>
+                            <TextBlock Grid.Row="7" Grid.Column="1" Text="Retry selected failed download(s)" Style="{DynamicResource DimTextStyle}" Margin="14,4"/>
+                        </Grid>
+                        <TextBlock Text="Click anywhere to dismiss"
+                                   Style="{DynamicResource MicroTextStyle}"
+                                   HorizontalAlignment="Center"
+                                   Margin="0,18,0,0"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </Border>
     </Grid>
 </Window>

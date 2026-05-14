@@ -23,6 +23,11 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
     private SpreadJobVm? _selectedSpreadJob;
     private bool _isRefreshing;
 
+    // Per-job max-observed speed for adaptive sparkline scaling. Keyed by
+    // SpreadJob.Id. Pruned in RefreshFromManager when the job is removed
+    // from SpreadJobs so the dictionary doesn't leak.
+    private readonly Dictionary<string, double> _jobMaxSpeed = new();
+
     public ObservableCollection<SpreadJobVm> SpreadJobs { get; } = new();
     public ObservableCollection<SpreadFileVm> SpreadFileTransfers { get; } = new();
     public ObservableCollection<SpreadScoreVm> SpreadScoreboard { get; } = new();
@@ -64,6 +69,8 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
 
     public ICommand StartRaceCommand { get; }
     public ICommand StopJobCommand { get; }
+    public ICommand PauseJobCommand { get; }
+    public ICommand ResumeJobCommand { get; }
     public ICommand OpenSettingsCommand { get; }
     public ICommand ShowRaceDetailCommand { get; }
 
@@ -77,6 +84,8 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
 
         StartRaceCommand = new RelayCommand(StartRace);
         StopJobCommand = new RelayCommand(StopJob);
+        PauseJobCommand = new RelayCommand<SpreadJobVm>(PauseJob);
+        ResumeJobCommand = new RelayCommand<SpreadJobVm>(ResumeJob);
         OpenSettingsCommand = new RelayCommand(() => _openSettingsAction?.Invoke());
         ShowRaceDetailCommand = new RelayCommand<RaceHistoryVm>(ShowRaceDetail);
 
@@ -170,6 +179,24 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         _serverManager.Spread?.StopJob(SelectedSpreadJob.Id);
     }
 
+    private void PauseJob(SpreadJobVm? vm)
+    {
+        if (vm == null) return;
+        var spread = _serverManager.Spread;
+        if (spread == null) return;
+        var job = spread.ActiveJobs.FirstOrDefault(j => j.Id == vm.Id);
+        job?.Pause();
+    }
+
+    private void ResumeJob(SpreadJobVm? vm)
+    {
+        if (vm == null) return;
+        var spread = _serverManager.Spread;
+        if (spread == null) return;
+        var job = spread.ActiveJobs.FirstOrDefault(j => j.Id == vm.Id);
+        job?.Resume();
+    }
+
     private void SafeRefresh()
     {
         if (_isRefreshing) return;
@@ -200,7 +227,12 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         for (int i = SpreadJobs.Count - 1; i >= 0; i--)
         {
             if (!currentIds.Contains(SpreadJobs[i].Id))
+            {
+                // Prune per-job sparkline scale state so the dictionary
+                // doesn't leak across the app's lifetime.
+                _jobMaxSpeed.Remove(SpreadJobs[i].Id);
                 SpreadJobs.RemoveAt(i);
+            }
         }
 
         // Update or add jobs — update in-place to avoid collection churn
@@ -252,16 +284,17 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
                 ? $"{totalOwnedAcross} / {aggregateTotal}"
                 : "0 / 0";
 
-            vm.IsPaused = job.State == SpreadJobState.Stopped;
+            vm.IsPaused = job.State == SpreadJobState.Paused;
             // Real wiring (v1.90): SpreadJob now exposes IsAutoRace / IsPred /
             // Score directly. ScoreLabel encodes a one-word state line
-            // (PRED takes precedence; auto-race vs manual otherwise; STOPPED
-            // overrides). The big-score card pulls from vm.Score.
+            // (PRED takes precedence; auto-race vs manual otherwise; PAUSED /
+            // STOPPED override). The big-score card pulls from vm.Score.
             vm.IsAutoRace = job.IsAutoRace;
             vm.IsPred = job.IsPred;
             vm.Score = job.Score;
             vm.ScoreLabel = job.State switch
             {
+                SpreadJobState.Paused    => "PAUSED",
                 SpreadJobState.Stopped   => "STOPPED",
                 SpreadJobState.Failed    => "FAILED",
                 SpreadJobState.Completed => "DONE",
@@ -395,7 +428,8 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
             {
                 var action = job.State == SpreadJobState.Completed ? "DONE"
                     : job.State == SpreadJobState.Failed ? "FAILED"
-                    : job.State == SpreadJobState.Stopped ? "PAUSED"
+                    : job.State == SpreadJobState.Paused ? "PAUSED"
+                    : job.State == SpreadJobState.Stopped ? "STOPPED"
                     : job.State.ToString().ToUpperInvariant();
                 AddFeedItem(job.ReleaseName, job.Section, action, "");
                 SafeRefresh();
@@ -413,7 +447,18 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
             if (vm == null) return;
             var pts = vm.SparklinePoints;
             var totalSpeed = job.Sites.Values.Sum(s => s.SpeedBps);
-            var y = Math.Min(40, totalSpeed / 5_000_000.0 * 40.0);
+
+            // Adaptive Y scaling per job — the chart fills from the bottom
+            // (Y=40) to the top (Y=0) when speed hits the per-job max-observed
+            // value. This avoids the old hardcoded 5 MB/s ceiling clipping
+            // fast races to a flat line at the top. Pruned in
+            // RefreshFromManager when the job is removed.
+            if (!_jobMaxSpeed.TryGetValue(job.Id, out var maxSpeed) || totalSpeed > maxSpeed)
+                _jobMaxSpeed[job.Id] = maxSpeed = totalSpeed;
+            if (maxSpeed <= 0) maxSpeed = 1; // avoid div-by-zero on first tick
+
+            var y = 40.0 - Math.Min(40.0, totalSpeed / maxSpeed * 40.0);
+
             // Shift left: drop oldest, re-index remaining, append new
             if (pts.Count >= 60) pts.RemoveAt(0);
             // Re-index x coords so polyline doesn't drift right forever

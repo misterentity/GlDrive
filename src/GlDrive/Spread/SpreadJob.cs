@@ -7,7 +7,7 @@ using Serilog;
 
 namespace GlDrive.Spread;
 
-public enum SpreadJobState { Running, Completed, Failed, Stopped }
+public enum SpreadJobState { Running, Paused, Completed, Failed, Stopped }
 
 public class SiteProgress
 {
@@ -101,6 +101,14 @@ public class SpreadJob : IDisposable
     private volatile bool _forceScan;
     private volatile bool _isNuked;
     private int _completionRetries;
+
+    // Cooperative pause state. _pausedFlag is checked at the top of every
+    // RunAsync tick — when set, the loop awaits _pauseSignal instead of
+    // dispatching new transfers. In-flight transfers are NOT aborted; they
+    // finish naturally. Resume clears the flag and sets the signal so the
+    // waiting loop wakes up. _pauseSignal is initially set (not paused).
+    private volatile bool _pausedFlag;
+    private readonly System.Threading.ManualResetEventSlim _pauseSignal = new(true);
 
     // Pre-computed affil checks (computed once per job)
     private readonly Dictionary<string, bool> _affilCache = new();
@@ -420,8 +428,18 @@ public class SpreadJob : IDisposable
             var scorer = new SpreadScorer(_speedTracker);
             var consecutiveEmpty = 0;
 
-            while (!token.IsCancellationRequested && State == SpreadJobState.Running)
+            while (!token.IsCancellationRequested
+                && (State == SpreadJobState.Running || State == SpreadJobState.Paused))
             {
+                // Cooperative pause check — block dispatch (but not in-flight
+                // transfers) until Resume() sets the signal or Stop() cancels.
+                if (_pausedFlag)
+                {
+                    await Task.Run(() => _pauseSignal.Wait(token), token);
+                    if (token.IsCancellationRequested) break;
+                    continue;
+                }
+
                 // 1. Background scan with adaptive debounce — faster during active racing
                 if (_backgroundScan == null || _backgroundScan.IsCompleted)
                 {
@@ -1933,8 +1951,41 @@ public class SpreadJob : IDisposable
     public void Stop()
     {
         _cts.Cancel();
-        if (State == SpreadJobState.Running)
+        // Unblock any pause wait so the RunAsync loop can observe the
+        // cancellation and exit cleanly.
+        _pausedFlag = false;
+        _pauseSignal.Set();
+        if (State == SpreadJobState.Running || State == SpreadJobState.Paused)
             State = SpreadJobState.Stopped;
+    }
+
+    /// <summary>
+    /// Cooperative pause — sets the paused flag so the main RunAsync loop
+    /// waits at its next tick instead of dispatching new transfers.
+    /// In-flight transfers are NOT aborted; they finish naturally.
+    /// </summary>
+    public void Pause()
+    {
+        if (State == SpreadJobState.Running)
+        {
+            State = SpreadJobState.Paused;
+            _pauseSignal.Reset();
+            _pausedFlag = true;
+        }
+    }
+
+    /// <summary>
+    /// Resume from a paused state — clears the paused flag and wakes up
+    /// the RunAsync loop waiting on _pauseSignal.
+    /// </summary>
+    public void Resume()
+    {
+        if (State == SpreadJobState.Paused)
+        {
+            State = SpreadJobState.Running;
+            _pausedFlag = false;
+            _pauseSignal.Set();
+        }
     }
 
     private void SetFailed(string message)
@@ -1948,6 +1999,8 @@ public class SpreadJob : IDisposable
     {
         _cts.Cancel();
         _cts.Dispose();
+        _pauseSignal.Set();
+        _pauseSignal.Dispose();
         GC.SuppressFinalize(this);
     }
 }
