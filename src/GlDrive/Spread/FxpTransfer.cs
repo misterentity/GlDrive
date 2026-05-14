@@ -24,10 +24,34 @@ public class FxpTransfer
     public string? ErrorMessage { get; private set; }
 
     /// <summary>
+    /// Set when the destination glftpd rejected STOR because the file was
+    /// already uploaded (553 dupescript). The transfer returns success — the
+    /// file IS on the destination — but the caller should skip speed-tracking
+    /// and log the outcome as a dupe-skip rather than a true transfer.
+    /// </summary>
+    public bool WasDupe { get; private set; }
+
+    /// <summary>
     /// Optional callback invoked just before STOR to create destination directories.
     /// Only called after PASV/PORT negotiation succeeds, preventing empty dir creation on failure.
     /// </summary>
     public Func<CancellationToken, Task>? BeforeStore { get; set; }
+
+    /// <summary>
+    /// True if the STOR reply matches glftpd's dupescript / pre_check rejection
+    /// pattern. The file is already on the destination — treat as success.
+    /// Common message forms:
+    ///   553 file.r01: It was uploaded by &lt;user&gt; ( 1h 2m ago).
+    ///   553 tvmaze.nfo: Upload denied by pre_check script (also called dupescript).
+    /// </summary>
+    private static bool IsDupeRejection(FtpReply reply)
+    {
+        if (reply.Code != "553") return false;
+        var msg = reply.Message ?? "";
+        return msg.Contains("It was uploaded by", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("dupescript", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("Upload denied by pre_check", StringComparison.OrdinalIgnoreCase);
+    }
 
     public async Task<bool> ExecuteAsync(
         PooledConnection source, PooledConnection dest,
@@ -183,6 +207,15 @@ public class FxpTransfer
 
         // Start STOR on dest, then RETR on source
         var storReply = await dst.Execute($"STOR {Ftp.CpsvDataHelper.SanitizeFtpPath(dstPath)}", ct);
+        if (IsDupeRejection(storReply))
+        {
+            WasDupe = true;
+            pasvSw.Stop();
+            SetState(TransferState.Complete);
+            Log.Information("FXP dupe-skip (PasvPasv): {Path} already on dest — {Msg}",
+                dstPath, storReply.Message);
+            return true;
+        }
         if (storReply.Code != "150" && storReply.Code != "125")
             throw new IOException($"STOR failed: {storReply.Code} {storReply.Message}");
 
@@ -226,6 +259,15 @@ public class FxpTransfer
         if (BeforeStore != null) await BeforeStore(ct);
 
         var storReply = await dst.Execute($"STOR {Ftp.CpsvDataHelper.SanitizeFtpPath(dstPath)}", ct);
+        if (IsDupeRejection(storReply))
+        {
+            WasDupe = true;
+            pasvSw.Stop();
+            SetState(TransferState.Complete);
+            Log.Information("FXP dupe-skip (CpsvPasv): {Path} already on dest — {Msg}",
+                dstPath, storReply.Message);
+            return true;
+        }
         if (storReply.Code != "150" && storReply.Code != "125")
             throw new IOException($"STOR failed: {storReply.Code} {storReply.Message}");
 
@@ -267,6 +309,15 @@ public class FxpTransfer
         if (BeforeStore != null) await BeforeStore(ct);
 
         var storReply = await dst.Execute($"STOR {Ftp.CpsvDataHelper.SanitizeFtpPath(dstPath)}", ct);
+        if (IsDupeRejection(storReply))
+        {
+            WasDupe = true;
+            pasvSw.Stop();
+            SetState(TransferState.Complete);
+            Log.Information("FXP dupe-skip (PasvCpsv): {Path} already on dest — {Msg}",
+                dstPath, storReply.Message);
+            return true;
+        }
         if (storReply.Code != "150" && storReply.Code != "125")
             throw new IOException($"STOR failed: {storReply.Code} {storReply.Message}");
 
@@ -311,6 +362,28 @@ public class FxpTransfer
                 throw new IOException($"RETR failed: {retrReply.Code} {retrReply.Message}");
 
             var storReply = await dst.Execute($"STOR {Ftp.CpsvDataHelper.SanitizeFtpPath(dstPath)}", ct);
+            if (IsDupeRejection(storReply))
+            {
+                // File is already on dest. Cancel the pending RETR on src so it
+                // doesn't keep streaming into the closed data channel. ABOR is
+                // best-effort — if it fails the caller will dispose the conn
+                // and we'll get a fresh one from the pool.
+                WasDupe = true;
+                try
+                {
+                    await src.Execute("ABOR", ct);
+                    await src.GetReply(ct);
+                }
+                catch (Exception abortEx)
+                {
+                    Log.Debug(abortEx, "ABOR after dupe-detect failed (non-fatal)");
+                }
+                pasvSw.Stop();
+                SetState(TransferState.Complete);
+                Log.Information("FXP dupe-skip (Relay): {Path} already on dest — {Msg}",
+                    dstPath, storReply.Message);
+                return true;
+            }
             if (storReply.Code != "150" && storReply.Code != "125")
                 throw new IOException($"STOR failed: {storReply.Code} {storReply.Message}");
 

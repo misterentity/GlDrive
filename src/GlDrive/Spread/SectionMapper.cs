@@ -52,4 +52,45 @@ public static class SectionMapper
         try { return regex?.IsMatch(input) ?? false; }
         catch (RegexMatchTimeoutException) { return false; }
     }
+
+    /// <summary>
+    /// True if the site has any way to map a destination path for this IRC announce
+    /// section — either an explicit SectionMapping, an exact Sections key (case-
+    /// insensitive), or a fuzzy / substring match against Sections keys. Matches
+    /// the resolution order used by SpreadJob.RunAsync when picking destinations.
+    ///
+    /// Used by SpreadManager.TryAutoRace to drop auto-race participants up front
+    /// for sites that can't possibly host the announce's category, avoiding the
+    /// "Need 2+ servers — 1 unmapped" failures that dominated 2026-05-13/14 logs.
+    /// </summary>
+    public static bool HasSectionFor(SiteSpreadConfig site, string ircSection)
+    {
+        if (string.IsNullOrWhiteSpace(ircSection)) return false;
+
+        foreach (var m in site.SectionMappings)
+        {
+            if (m.Enabled && m.IrcSection.Equals(ircSection, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        foreach (var key in site.Sections.Keys)
+        {
+            if (key.Equals(ircSection, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        var norm = NormalizeKey(ircSection);
+        foreach (var key in site.Sections.Keys)
+        {
+            var nk = NormalizeKey(key);
+            if (nk == norm) return true;
+            if (nk.Length > 0 && norm.Length > 0 && (nk.Contains(norm) || norm.Contains(nk)))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static string NormalizeKey(string s) =>
+        s.ToLowerInvariant().Replace("-", "").Replace("_", "");
 }

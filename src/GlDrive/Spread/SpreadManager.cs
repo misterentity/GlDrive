@@ -503,12 +503,57 @@ public class SpreadManager : IDisposable
             allowed.Add(serverId);
         }
 
+        // Drop sites that have no section mapping or matching Sections key for
+        // this announce category. Without this, races started with destinations
+        // that could never host the release and burned a job lifecycle just to
+        // fail with "Need 2+ servers — 1 unmapped (zephyr)". The participant
+        // is the one we want to filter; the source may still come from a site
+        // with the section (most common case is announce-on-source-server).
+        //
+        // We DON'T require every participant to have the section — a site that
+        // has the section can still be source even if another participant can't
+        // be dest. So the rule is: keep the site only if EITHER it has the
+        // section OR at least one other allowed site has it.
+        var sectionEligible = new List<string>();
+        var sectionMissing = new List<string>();
+        foreach (var serverId in allowed)
+        {
+            var serverConfig = _config.Servers.First(s => s.Id == serverId);
+            if (SectionMapper.HasSectionFor(serverConfig.SpreadSite, category))
+                sectionEligible.Add(serverId);
+            else
+                sectionMissing.Add(serverConfig.Name);
+        }
+
+        // If no allowed site has the section at all, the race is unwinnable —
+        // skip silently with INFO instead of starting + failing as WARN.
+        if (sectionEligible.Count == 0)
+        {
+            Log.Information("Auto-race skipped: no configured server has section [{Section}] for {Release}",
+                category, releaseName);
+            AutoRaceAttempted?.Invoke(category, releaseName,
+                $"Skipped — no server has section [{category}]");
+            return;
+        }
+
+        // Sites without the section can't be destinations, but might still
+        // be useful as a source if they happen to hold the release. However,
+        // for the common "announce → spread" pattern, source is in sectionEligible.
+        // Replace the participant list with section-eligible-only — this is the
+        // pragmatic fix for the user's setup (zephyr has no mp3/flac/x265 etc.).
+        var skippedForSection = sectionMissing.Count > 0
+            ? $" (no [{category}] on: {string.Join(", ", sectionMissing)})"
+            : "";
+        allowed = sectionEligible;
+
         // Need at least 2 participating servers for a race — source + dest.
         if (allowed.Count < 2)
         {
             var reason = denials.Count > 0
-                ? $"Only {allowed.Count} server(s) allowed (denied: {string.Join(", ", denials)})"
-                : $"Only {allowed.Count} server(s) allowed";
+                ? $"Only {allowed.Count} server(s) allowed (denied: {string.Join(", ", denials)}){skippedForSection}"
+                : $"Only {allowed.Count} server(s) allowed{skippedForSection}";
+            Log.Information("Auto-race skipped: {Reason} for {Release} [{Section}]",
+                reason, releaseName, category);
             AutoRaceAttempted?.Invoke(category, releaseName, reason);
             return;
         }
