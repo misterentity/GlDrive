@@ -995,7 +995,24 @@ public class IrcService : IDisposable
 
     public async Task InitiateKeyExchange(string nick)
     {
-        if (_client == null || !_client.IsConnected) return;
+        // Defensive validation — the right-click menu used to pass
+        // ListBox.SelectedItem which could be null/stale if the user
+        // right-clicked without first left-clicking. Per-item context
+        // menu (v1.98) now resolves the binding to the actual nick, but
+        // log + surface failure paths so future regressions are visible.
+        if (string.IsNullOrWhiteSpace(nick))
+        {
+            Log.Warning("InitiateKeyExchange called with empty nick — likely a stale ContextMenu binding");
+            AddSystemMessage("", "Key exchange aborted: no nick selected. Right-click a name in the user list.");
+            return;
+        }
+        nick = nick.TrimStart('@', '+', '%', '~', '&').Trim();
+        if (_client == null || !_client.IsConnected)
+        {
+            Log.Warning("InitiateKeyExchange for {Nick}: IRC client not connected", nick);
+            AddSystemMessage(nick, "Key exchange aborted: IRC not connected.");
+            return;
+        }
 
         PruneKeyExchanges();
 
@@ -1005,7 +1022,7 @@ public class IrcService : IDisposable
         Log.Information("DH1080 INIT send to {Nick}: ourPubLen={Len} ourPubMask={Mask}",
             nick, pub.Length, MaskMid(pub));
         await _client.NoticeAsync(nick, Dh1080.FormatInit(pub));
-        AddSystemMessage(nick, "DH1080 key exchange initiated");
+        AddSystemMessage(nick, $"DH1080 key exchange initiated with {nick} — waiting for response...");
     }
 
     private static string MaskMid(string s) =>
