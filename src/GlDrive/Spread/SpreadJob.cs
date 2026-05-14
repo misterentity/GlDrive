@@ -1511,7 +1511,12 @@ public class SpreadJob : IDisposable
             if (ok)
             {
                 var duration = DateTime.UtcNow - startTime;
-                _speedTracker.RecordTransfer(srcId, dstId, file.Size, duration);
+                // Don't pollute speed stats with dupe-skips — no bytes flowed.
+                // The file IS on the destination (glftpd's dupescript rejected
+                // our STOR because it already exists), so we still count it as
+                // owned for race-completion bookkeeping.
+                if (!transfer.WasDupe)
+                    _speedTracker.RecordTransfer(srcId, dstId, file.Size, duration);
 
                 lock (_ownershipLock)
                 {
@@ -1528,8 +1533,12 @@ public class SpreadJob : IDisposable
                     _destRetryAt.Remove(dstId);
                 }
                 _forceScan = true; // Rescan — new files likely appeared on source from other racers
-                Log.Information("FXP complete: {File} ({Src} -> {Dst})", file.Name,
-                    _serverConfigs[srcId].Name, _serverConfigs[dstId].Name);
+                if (transfer.WasDupe)
+                    Log.Information("FXP dupe-skip: {File} ({Src} -> {Dst}) — already on dest",
+                        file.Name, _serverConfigs[srcId].Name, _serverConfigs[dstId].Name);
+                else
+                    Log.Information("FXP complete: {File} ({Src} -> {Dst})", file.Name,
+                        _serverConfigs[srcId].Name, _serverConfigs[dstId].Name);
             }
             else
             {
