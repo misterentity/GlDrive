@@ -127,8 +127,48 @@
                             <!-- Row 0: Watch folders -->
                             <DockPanel Grid.Row="0" Grid.ColumnSpan="2" Margin="0,0,0,6">
                                 <TextBlock Text="Watch:" Style="{StaticResource SmallLabel}" Width="55"/>
-                                <ToggleButton x:Name="WatchToggle" DockPanel.Dock="Right" Content="Off" Click="WatchToggle_Click"
-                                              Padding="10,2" Margin="6,0,0,0" FontSize="11" Width="50"/>
+                                <ToggleButton x:Name="WatchToggle" DockPanel.Dock="Right" Content="OFF" Click="WatchToggle_Click"
+                                              Padding="12,3" Margin="6,0,0,0" FontSize="11" Width="60"
+                                              FontWeight="Bold" Cursor="Hand">
+                                    <ToggleButton.Style>
+                                        <Style TargetType="ToggleButton">
+                                            <!-- Default: OFF state shows red border + dim text -->
+                                            <Setter Property="Foreground" Value="{DynamicResource BadBrush}"/>
+                                            <Setter Property="Background" Value="#15FF3F63"/>
+                                            <Setter Property="BorderBrush" Value="{DynamicResource BadBrush}"/>
+                                            <Setter Property="BorderThickness" Value="1"/>
+                                            <Setter Property="Template">
+                                                <Setter.Value>
+                                                    <ControlTemplate TargetType="ToggleButton">
+                                                        <Border x:Name="Bd"
+                                                                Background="{TemplateBinding Background}"
+                                                                BorderBrush="{TemplateBinding BorderBrush}"
+                                                                BorderThickness="{TemplateBinding BorderThickness}"
+                                                                Padding="{TemplateBinding Padding}">
+                                                            <ContentPresenter HorizontalAlignment="Center"
+                                                                              VerticalAlignment="Center"
+                                                                              TextBlock.Foreground="{TemplateBinding Foreground}"
+                                                                              TextBlock.FontWeight="{TemplateBinding FontWeight}"/>
+                                                        </Border>
+                                                    </ControlTemplate>
+                                                </Setter.Value>
+                                            </Setter>
+                                            <Style.Triggers>
+                                                <!-- ON state: green glow -->
+                                                <Trigger Property="IsChecked" Value="True">
+                                                    <Setter Property="Foreground" Value="{DynamicResource GoodBrush}"/>
+                                                    <Setter Property="Background" Value="#157CFF66"/>
+                                                    <Setter Property="BorderBrush" Value="{DynamicResource GoodBrush}"/>
+                                                    <Setter Property="Effect">
+                                                        <Setter.Value>
+                                                            <DropShadowEffect Color="#7CFF66" BlurRadius="10" ShadowDepth="0" Opacity="0.5"/>
+                                                        </Setter.Value>
+                                                    </Setter>
+                                                </Trigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </ToggleButton.Style>
+                                </ToggleButton>
                                 <Button DockPanel.Dock="Right" Content="+" Click="AddWatchFolder_Click" Padding="8,2" Margin="6,0,0,0"
                                         Style="{StaticResource SecondaryButton}" FontSize="11" ToolTip="Add watch folder"/>
                                 <TextBox x:Name="WatchFoldersText" FontSize="11" Padding="4,3" IsReadOnly="True"

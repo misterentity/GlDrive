@@ -1135,7 +1135,7 @@ public partial class ExtractorWindow : Window
             // connect for ~60s on a network-backed watch folder).
             if (_watchEnabled)
             {
-                WatchToggle.Content = "On";
+                WatchToggle.Content = "ON";
                 WatchToggle.IsChecked = true;
                 var recursive = ChkRecursive.IsChecked == true;
                 var foldersToScan = _watchFolders.ToList();
@@ -1234,7 +1234,7 @@ public partial class ExtractorWindow : Window
         {
             StopAllWatchers();
             _watchEnabled = false;
-            WatchToggle.Content = "Off";
+            WatchToggle.Content = "OFF";
             WatchToggle.IsChecked = false;
         }
         else
@@ -1248,7 +1248,7 @@ public partial class ExtractorWindow : Window
             }
 
             _watchEnabled = true;
-            WatchToggle.Content = "On";
+            WatchToggle.Content = "ON";
             WatchToggle.IsChecked = true;
 
             // Scan existing archives in watch folders
