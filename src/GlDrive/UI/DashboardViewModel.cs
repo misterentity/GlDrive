@@ -854,9 +854,10 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         set { _hasActiveDownload = value; OnPropertyChanged(); }
     }
 
-    // Mounts-tab actions (per-card OPEN / FLUSH / UNMOUNT).
+    // Mounts-tab actions (per-card OPEN / FLUSH / MOUNT / UNMOUNT).
     public ICommand OpenMountCommand { get; }
     public ICommand FlushMountCommand { get; }
+    public ICommand MountServerCommand { get; }
     public ICommand UnmountServerCommand { get; }
     // Search filter chips — pass "quality:1080p" / "source:WEB" / "size:1GB" / "clear".
     public ICommand ToggleSearchFilterCommand { get; }
@@ -936,6 +937,19 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             if (string.IsNullOrEmpty(serverId)) return;
             try { _serverManager.UnmountServer(serverId); RefreshOverview(); }
             catch (Exception ex) { Serilog.Log.Warning(ex, "UnmountServer failed for {Id}", serverId); }
+        });
+        MountServerCommand = new RelayCommand<string>(serverId =>
+        {
+            // Connect the server (and assign a drive letter if Mount.MountDrive
+            // is true in this server's config). The button label flips between
+            // MOUNT / UNMOUNT based on OverviewServerVm.IsMounted.
+            if (string.IsNullOrEmpty(serverId)) return;
+            _ = Task.Run(async () =>
+            {
+                try { await _serverManager.MountServer(serverId); }
+                catch (Exception ex) { Serilog.Log.Warning(ex, "MountServer failed for {Id}", serverId); }
+                Application.Current?.Dispatcher.Invoke(RefreshOverview);
+            });
         });
 
         ToggleSearchFilterCommand = new RelayCommand<string>(arg =>

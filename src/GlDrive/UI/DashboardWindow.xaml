@@ -2372,6 +2372,36 @@
                                                             </Border>
                                                             <!-- Actions -->
                                                             <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
+                                                                <!-- PAUSE: visible only while the job is running (IsPaused=false) -->
+                                                                <Button Content="PAUSE" Margin="0,0,6,0" Padding="10,5"
+                                                                        Command="{Binding DataContext.PauseJobCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                        CommandParameter="{Binding}">
+                                                                    <Button.Style>
+                                                                        <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding IsPaused}" Value="True">
+                                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </Button.Style>
+                                                                </Button>
+                                                                <!-- RESUME: visible only while paused -->
+                                                                <Button Content="RESUME" Margin="0,0,6,0" Padding="10,5"
+                                                                        Command="{Binding DataContext.ResumeJobCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                        CommandParameter="{Binding}">
+                                                                    <Button.Style>
+                                                                        <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding IsPaused}" Value="True">
+                                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </Button.Style>
+                                                                </Button>
                                                                 <Button Content="STOP"
                                                                         Command="{Binding DataContext.StopJobCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                                         CommandParameter="{Binding}"
@@ -2638,9 +2668,40 @@
                                                                 <Button Content="FLUSH" Style="{DynamicResource CyberpunkButtonStyle}" Margin="0,0,6,0" Padding="14,5"
                                                                         Command="{Binding DataContext.FlushMountCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                                         CommandParameter="{Binding ServerId}"/>
-                                                                <Button Content="UNMOUNT" Style="{DynamicResource DangerButtonStyle}" Padding="14,5"
+                                                                <!-- MOUNT: visible when not connected (IsMounted=false on
+                                                                     OverviewServerVm — that's "any alive state including just-
+                                                                     connected"; for the literal "drive letter mounted" we'd need
+                                                                     a separate flag, but the button label "MOUNT" / "UNMOUNT"
+                                                                     reads correctly given the user's mental model: MOUNT to bring
+                                                                     online, UNMOUNT to take offline). -->
+                                                                <Button Content="MOUNT" Padding="14,5"
+                                                                        Command="{Binding DataContext.MountServerCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                        CommandParameter="{Binding ServerId}">
+                                                                    <Button.Style>
+                                                                        <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding IsMounted}" Value="False">
+                                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </Button.Style>
+                                                                </Button>
+                                                                <Button Content="UNMOUNT" Padding="14,5"
                                                                         Command="{Binding DataContext.UnmountServerCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                                        CommandParameter="{Binding ServerId}"/>
+                                                                        CommandParameter="{Binding ServerId}">
+                                                                    <Button.Style>
+                                                                        <Style TargetType="Button" BasedOn="{StaticResource DangerButtonStyle}">
+                                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding IsMounted}" Value="False">
+                                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </Button.Style>
+                                                                </Button>
                                                             </StackPanel>
                                                             <!-- Status tag (color-coded by SiteTag: green=alive, cyan=MOUNTED, red=offline) -->
                                                             <Border DockPanel.Dock="Bottom" Style="{DynamicResource ServerStatusTagStyle}" HorizontalAlignment="Center" Margin="0,10,0,0">
