@@ -755,6 +755,17 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         set { _statusBarSites = value; OnPropertyChanged(); }
     }
 
+    // Bottom-right status bar's RTT label. Computed via the TickOverview
+    // 2s tick from the per-server FtpConnectionPool.LastNoopRttMs values
+    // (ConnectionMonitor pings each pool every 30s via NOOP). When no
+    // server has a recent ping result yet, falls back to "--ms".
+    private string _statusBarRtt = "--ms";
+    public string StatusBarRtt
+    {
+        get => _statusBarRtt;
+        set { if (_statusBarRtt == value) return; _statusBarRtt = value; OnPropertyChanged(); }
+    }
+
     // Bandwidth graph
     public PointCollection SpeedGraphPoints
     {
