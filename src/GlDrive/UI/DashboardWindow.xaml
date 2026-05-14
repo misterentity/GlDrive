@@ -2011,19 +2011,32 @@
                                                              Background="Transparent" BorderThickness="0" FontSize="12">
                                                         <ListBox.ItemTemplate>
                                                             <DataTemplate>
-                                                                <TextBlock Text="{Binding}" Foreground="{DynamicResource ForegroundBrush}"/>
+                                                                <!-- Per-item context menu: {Binding} resolves to the
+                                                                     actual right-clicked nick (a string), not the
+                                                                     ListBox.SelectedItem which may be stale or null
+                                                                     because WPF doesn't auto-select on right-click.
+                                                                     Find ancestor Window via DataContext to reach
+                                                                     the DashboardViewModel.Irc.* commands. -->
+                                                                <TextBlock Text="{Binding}" Foreground="{DynamicResource ForegroundBrush}">
+                                                                    <TextBlock.ContextMenu>
+                                                                        <ContextMenu>
+                                                                            <MenuItem Header="Private Message"
+                                                                                      Command="{Binding PlacementTarget.Tag.DataContext.Irc.PrivateMessageNickCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                                                      CommandParameter="{Binding}"/>
+                                                                            <MenuItem Header="FiSH Key Exchange"
+                                                                                      Command="{Binding PlacementTarget.Tag.DataContext.Irc.KeyExchangeNickCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                                                      CommandParameter="{Binding}"/>
+                                                                        </ContextMenu>
+                                                                    </TextBlock.ContextMenu>
+                                                                    <!-- Tag chains the per-item TextBlock to the
+                                                                         hosting Window so the ContextMenu can reach
+                                                                         the DataContext via PlacementTarget.Tag. -->
+                                                                    <TextBlock.Tag>
+                                                                        <Binding RelativeSource="{RelativeSource AncestorType=Window}"/>
+                                                                    </TextBlock.Tag>
+                                                                </TextBlock>
                                                             </DataTemplate>
                                                         </ListBox.ItemTemplate>
-                                                        <ListBox.ContextMenu>
-                                                            <ContextMenu>
-                                                                <MenuItem Header="Private Message"
-                                                                          Command="{Binding PlacementTarget.DataContext.Irc.PrivateMessageNickCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
-                                                                          CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
-                                                                <MenuItem Header="FiSH Key Exchange"
-                                                                          Command="{Binding PlacementTarget.DataContext.Irc.KeyExchangeNickCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
-                                                                          CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
-                                                            </ContextMenu>
-                                                        </ListBox.ContextMenu>
                                                     </ListBox>
                                                 </Grid>
                                             </DockPanel>
