@@ -22,6 +22,17 @@ public class SpreadManager : IDisposable
     private readonly Lock _lock = new();
     private bool _disposed;
 
+    // Global per-server transfer-gate (v2.4: Option A). Each FXP transfer
+    // acquires BOTH src and dst gates before STOR. Without this, concurrent
+    // races each independently took N slots on a shared BNC source -> BNC
+    // 530 storm + GnuTLS native crashes (observed 3x 2026-05-15).
+    private readonly ConcurrentDictionary<string, ServerGate> _serverGates = new();
+    // Default per-server concurrent transfer cap. Picked deliberately below
+    // any plausible BNC login cap so the FIRST race against a new BNC doesn't
+    // overshoot; auto-tune (Option B) further tightens when a 530 surfaces.
+    private const int DefaultPerServerConcurrentTransfers = 3;
+    private static readonly TimeSpan GateAcquireTimeout = TimeSpan.FromSeconds(45);
+
     // TTL constants for the dead-race short-circuit map. Tunable here.
     private static readonly TimeSpan AffilBlockedTtl = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan ReleaseNotFoundTtl = TimeSpan.FromMinutes(60);
@@ -76,6 +87,14 @@ public class SpreadManager : IDisposable
         if (poolSize <= 0) return;
 
         var pool = new FtpConnectionPool(factory, poolSize);
+        // Wire BNC-limit auto-detect (Option B): when the pool sees a 530
+        // "restricted to N simultaneous logins", tighten this server's gate
+        // to N-1 (reserve one slot for ghost-kill + main pool keepalive).
+        pool.LoginLimitObserved += observedLimit =>
+        {
+            try { GetOrCreateGate(serverId).TightenTo(Math.Max(1, observedLimit - 1)); }
+            catch (Exception ex) { Log.Debug(ex, "ServerGate auto-tune failed for {Server}", serverId); }
+        };
         try
         {
             await pool.Initialize(ct);
@@ -84,7 +103,10 @@ public class SpreadManager : IDisposable
                 _spreadPools[serverId] = pool;
                 _factories[serverId] = factory;
             }
-            Log.Information("Spread pool initialized for {ServerId} (size={Size})", serverId, poolSize);
+            // Ensure the gate exists from the moment the pool comes up.
+            GetOrCreateGate(serverId);
+            Log.Information("Spread pool initialized for {ServerId} (size={Size}, gate={Gate})",
+                serverId, poolSize, DefaultPerServerConcurrentTransfers);
         }
         catch (Exception ex)
         {
@@ -195,6 +217,12 @@ public class SpreadManager : IDisposable
         var job = new SpreadJob(section, releaseName, mode, _config.Spread,
             pools, mainPools, configs, _speedTracker, _skiplist, _blacklist,
             knownSourceServerId, knownSourcePath);
+
+        // Hand the job a closure over our gate acquirer so every individual
+        // FXP transfer respects the global per-server concurrency cap
+        // regardless of which job kicked it off.
+        job.AcquireTransferGates = (srcId, dstId, ct) =>
+            AcquireTransferGates(srcId, dstId, ct);
 
         job.ProgressChanged += j => JobProgressChanged?.Invoke(j);
         job.Completed += j =>
@@ -725,6 +753,37 @@ public class SpreadManager : IDisposable
         lock (_lock) return _spreadPools.Keys.ToList();
     }
 
+    private ServerGate GetOrCreateGate(string serverId) =>
+        _serverGates.GetOrAdd(serverId, id => new ServerGate(id, DefaultPerServerConcurrentTransfers));
+
+    /// <summary>
+    /// Acquire src + dst transfer gates for a single FXP file transfer.
+    /// Ordering is sorted-by-serverId to avoid A->B / B->A deadlock when
+    /// two transfers each hold one gate. On timeout, throws
+    /// <see cref="TimeoutException"/>; the caller should treat the file as
+    /// a transient failure and let the scoreboard reschedule.
+    /// </summary>
+    public async Task<IAsyncDisposable> AcquireTransferGates(string srcId, string dstId, CancellationToken ct)
+    {
+        // Deterministic acquire order keeps deadlocks impossible.
+        var firstId = string.CompareOrdinal(srcId, dstId) < 0 ? srcId : dstId;
+        var secondId = firstId == srcId ? dstId : srcId;
+        var firstGate = GetOrCreateGate(firstId);
+        var secondGate = GetOrCreateGate(secondId);
+
+        var firstHandle = await firstGate.AcquireAsync(GateAcquireTimeout, ct);
+        try
+        {
+            var secondHandle = await secondGate.AcquireAsync(GateAcquireTimeout, ct);
+            return new CombinedGateHandle(firstHandle, secondHandle);
+        }
+        catch
+        {
+            await firstHandle.DisposeAsync();
+            throw;
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
@@ -735,6 +794,12 @@ public class SpreadManager : IDisposable
         // having the data available on next launch.
         try { _speedTracker.Save(); }
         catch (Exception ex) { Log.Debug(ex, "SpreadManager.Dispose: speed-tracker save failed"); }
+
+        foreach (var gate in _serverGates.Values)
+        {
+            try { gate.Dispose(); } catch { }
+        }
+        _serverGates.Clear();
 
         _metadataFilter.Dispose();
 
