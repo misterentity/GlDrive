@@ -58,6 +58,8 @@ public class SpreadManager : IDisposable
         _metadataFilter = new MetadataFilterService(config);
         _history.Load();
         _blacklist.Load();
+        _speedTracker.EnablePersistence(
+            Path.Combine(ConfigManager.AppDataPath, "spread-speed-history.json"));
     }
 
     public async Task InitializePool(string serverId, FtpClientFactory factory, CancellationToken ct)
@@ -727,6 +729,12 @@ public class SpreadManager : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+
+        // Flush speed history before tearing down — debounced saves may have
+        // skipped recent transfers, and the whole point of persistence is
+        // having the data available on next launch.
+        try { _speedTracker.Save(); }
+        catch (Exception ex) { Log.Debug(ex, "SpreadManager.Dispose: speed-tracker save failed"); }
 
         _metadataFilter.Dispose();
 
