@@ -105,6 +105,18 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     public IrcViewModel Irc => _ircViewModel;
 
+    /// <summary>Header tagline shown in the dashboard chrome — bound from XAML.
+    /// Computed from the running assembly version so it stops going stale every
+    /// release. Previously hardcoded as "v1.71 // KERNEL.MOUNT" in XAML.</summary>
+    public string VersionTagline
+    {
+        get
+        {
+            var v = Services.UpdateChecker.CurrentVersion;
+            return $"v{v.Major}.{v.Minor}.{v.Build} // KERNEL.MOUNT";
+        }
+    }
+
     public ObservableCollection<NotificationItemVm> NotificationItems { get; } = new();
     public ObservableCollection<WishlistItemVm> WishlistItems { get; } = new();
     public ObservableCollection<DownloadItemVm> DownloadItems { get; } = new();
