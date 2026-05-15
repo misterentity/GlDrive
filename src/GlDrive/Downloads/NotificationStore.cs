@@ -33,6 +33,18 @@ public class NotificationStore
     private readonly object _lock = new();
     private List<NotificationItem> _items = [];
     private int _saveQueued;
+    private readonly bool _persistToDisk;
+
+    /// <summary>
+    /// Construct a notification store. <paramref name="persistToDisk"/> defaults
+    /// to true (normal app behavior — Load/Save against %AppData%). Pass false
+    /// from screenshot / test code that wants to seed in-memory demo entries
+    /// without overwriting the user's real notifications.json.
+    /// </summary>
+    public NotificationStore(bool persistToDisk = true)
+    {
+        _persistToDisk = persistToDisk;
+    }
 
     public IReadOnlyList<NotificationItem> Items
     {
@@ -68,6 +80,8 @@ public class NotificationStore
 
     public void Save()
     {
+        if (!_persistToDisk) return;
+
         string json;
         lock (_lock)
         {
@@ -104,6 +118,7 @@ public class NotificationStore
 
     private void ScheduleSave()
     {
+        if (!_persistToDisk) return;
         if (Interlocked.Exchange(ref _saveQueued, 1) == 1) return;
         _ = Task.Run(async () =>
         {
