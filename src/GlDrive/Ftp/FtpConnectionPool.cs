@@ -11,7 +11,7 @@ public class FtpConnectionPool : IAsyncDisposable
 {
     private readonly FtpClientFactory _factory;
     private readonly Channel<AsyncFtpClient> _pool;
-    private readonly int _maxSize;
+    private int _maxSize;
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private int _created;
     private int _active;
@@ -120,6 +120,24 @@ public class FtpConnectionPool : IAsyncDisposable
     public int ActiveCount => _active;
     public int TotalCreated => _created;
     public int MaxSize => _maxSize;
+
+    /// <summary>
+    /// Lower the pool's maximum connection count. Shrink-only — if
+    /// <paramref name="newMax"/> is greater than or equal to the current
+    /// max, this is a no-op. Existing connections beyond the new max
+    /// stay alive until they're naturally rotated out by failure or
+    /// disposal; future Borrows above the new max will queue rather than
+    /// create+fail. Used by SpreadManager when a BNC's observed login
+    /// cap is lower than the configured pool size.
+    /// </summary>
+    public void ShrinkMaxSize(int newMax)
+    {
+        if (newMax < 1) newMax = 1;
+        var old = Interlocked.CompareExchange(ref _maxSize, 0, 0);
+        if (newMax >= old) return;
+        Interlocked.Exchange(ref _maxSize, newMax);
+        Log.Information("Pool: max size shrunk {Old} -> {New} (BNC login cap discovered)", old, newMax);
+    }
     public bool IsConnected { get; private set; }
     /// <summary>True when all connections have been discarded and the pool can't serve requests.</summary>
     public bool IsExhausted => IsConnected && _created <= 0 && _active <= 0;

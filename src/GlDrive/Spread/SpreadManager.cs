@@ -83,16 +83,34 @@ public class SpreadManager : IDisposable
         // SpreadPoolSize (default 3) instead of the old hard-cap-at-1. Pool
         // creation is best-effort: if the server's login cap rejects some of
         // the N attempts, FtpConnectionPool runs with whatever it got.
-        var poolSize = Math.Max(_config.Spread.SpreadPoolSize, 1);
+        // Pool max is capped at the per-server gate's default (3) regardless of
+        // user's SpreadPoolSize setting. Previously, SpreadPoolSize=12 vs BNC
+        // cap of 4 meant the pool's Borrow() could fire connection-creates that
+        // hit "530 restricted to N logins" even when only 3 FXP transfers were
+        // active (scans + transfers competed for slots). The gate alone wasn't
+        // enough — scan borrows and main-pool fallback share the same BNC pool.
+        // Sizing pool to gate makes Borrow() block on Channel.ReadAsync until a
+        // connection returns, instead of attempting CreateAndConnect and failing.
+        var poolSize = Math.Min(
+            Math.Max(_config.Spread.SpreadPoolSize, 1),
+            DefaultPerServerConcurrentTransfers);
         if (poolSize <= 0) return;
 
         var pool = new FtpConnectionPool(factory, poolSize);
         // Wire BNC-limit auto-detect (Option B): when the pool sees a 530
-        // "restricted to N simultaneous logins", tighten this server's gate
-        // to N-1 (reserve one slot for ghost-kill + main pool keepalive).
+        // "restricted to N simultaneous logins", tighten BOTH the gate AND
+        // the pool's max size to N-1 (reserve one slot for ghost-kill).
+        // Tightening only the gate left the pool free to attempt N+1 borrows
+        // (scan + 3 transfers concurrent) and re-trigger the 530 storm —
+        // observed 2026-05-15 14:48 with v2.4.0 (created=3, max=12, 530).
         pool.LoginLimitObserved += observedLimit =>
         {
-            try { GetOrCreateGate(serverId).TightenTo(Math.Max(1, observedLimit - 1)); }
+            try
+            {
+                var safe = Math.Max(1, observedLimit - 1);
+                GetOrCreateGate(serverId).TightenTo(safe);
+                pool.ShrinkMaxSize(safe);
+            }
             catch (Exception ex) { Log.Debug(ex, "ServerGate auto-tune failed for {Server}", serverId); }
         };
         try
@@ -366,7 +384,12 @@ public class SpreadManager : IDisposable
                 // removed we want all available slots back. Reinit must not
                 // silently shrink the pool to 1 like the old chain-mode build
                 // did or every subsequent race would run serial.
-                var neededSize = Math.Max(_config.Spread.SpreadPoolSize, 1);
+                // Reinit must respect the same BNC-safety cap as InitializePool:
+                // pool size never exceeds the per-server gate's default. The
+                // configured SpreadPoolSize is treated as a ceiling only.
+                var neededSize = Math.Min(
+                    Math.Max(_config.Spread.SpreadPoolSize, 1),
+                    DefaultPerServerConcurrentTransfers);
 
                 if (pool.MaxSize < neededSize)
                 {
