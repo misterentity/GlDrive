@@ -38,19 +38,30 @@ public class FxpTransfer
     public Func<CancellationToken, Task>? BeforeStore { get; set; }
 
     /// <summary>
-    /// True if the STOR reply matches glftpd's dupescript / pre_check rejection
-    /// pattern. The file is already on the destination — treat as success.
+    /// True if the STOR reply matches a dupe rejection — the file is already
+    /// on the destination. cbftp matches the same family of substrings in
+    /// ftpconn.cpp (dupematch1 = "uploaded by", dupematch2 = "ile exists",
+    /// plus the X-DUPE preamble). glftpd's dupescript and ioFTPD's XDUPE
+    /// surface different wordings; cover them all.
     /// Common message forms:
     ///   553 file.r01: It was uploaded by &lt;user&gt; ( 1h 2m ago).
     ///   553 tvmaze.nfo: Upload denied by pre_check script (also called dupescript).
+    ///   553 File exists.
+    ///   553 file.r01: File already exists.
+    ///   553-X-DUPE: file.r01
     /// </summary>
     private static bool IsDupeRejection(FtpReply reply)
     {
         if (reply.Code != "553") return false;
         var msg = reply.Message ?? "";
-        return msg.Contains("It was uploaded by", StringComparison.OrdinalIgnoreCase)
+        return msg.Contains("uploaded by", StringComparison.OrdinalIgnoreCase)
             || msg.Contains("dupescript", StringComparison.OrdinalIgnoreCase)
-            || msg.Contains("Upload denied by pre_check", StringComparison.OrdinalIgnoreCase);
+            || msg.Contains("Upload denied by pre_check", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("X-DUPE", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("File exists", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("file exist", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("already exist", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("ile exists", StringComparison.OrdinalIgnoreCase);
     }
 
     public async Task<bool> ExecuteAsync(

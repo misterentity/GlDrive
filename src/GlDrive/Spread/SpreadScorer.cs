@@ -14,15 +14,16 @@ public class SpreadScorer
     public int Score(SpreadFileInfo file, string srcId, string dstId,
         SitePriority dstPriority, double ownedPercent,
         long maxFileSize, double maxSpeedBps,
-        TimeSpan elapsed, SpreadMode mode)
+        TimeSpan elapsed, SpreadMode mode,
+        int priorFailures = 0)
     {
         // SFV always first
         if (file.Name.EndsWith(".sfv", StringComparison.OrdinalIgnoreCase))
-            return 65535;
+            return Math.Max(65535 - priorFailures * 1000, 50000);
 
         // NFO after 15s
         if (file.Name.EndsWith(".nfo", StringComparison.OrdinalIgnoreCase) && elapsed.TotalSeconds >= 15)
-            return 65535;
+            return Math.Max(65535 - priorFailures * 1000, 50000);
 
         int score = 0;
 
@@ -45,6 +46,15 @@ public class SpreadScorer
             score += (int)((1.0 - ownedPercent) * 2000);
         else
             score += (int)(ownedPercent * 2000);
+
+        // Penalize pairs that have already failed for this file. cbftp's
+        // scoreboard re-evaluation naturally rotates source on retry via
+        // backoff timers (3s/10s); we replicate the bias by deducting score
+        // proportional to fail count so an alternate src wins the slot. Each
+        // failure costs 800 pts — at 3 fails the (file,src,dst) is well below
+        // a fresh competing pair's score.
+        score -= priorFailures * 800;
+        if (score < 0) score = 0;
 
         return Math.Min(score, 65535);
     }
