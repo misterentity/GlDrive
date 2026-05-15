@@ -18,7 +18,22 @@ internal static class ScreenshotCapture
     {
         Directory.CreateDirectory(OutputDir);
 
+        // Apply the user's saved theme before capturing. Without this, screenshots
+        // render with only DarkTheme.xaml (App.xaml's default merged dictionary)
+        // because our --screenshots startup path returns BEFORE App.xaml.cs's
+        // normal flow calls ThemeManager.ApplyTheme. End result: screenshots
+        // showed basic dark styling but missed the 69KB CyberpunkTheme.xaml
+        // brushes / effects / control templates that the actual running app
+        // uses. The 'screenshots show the old UI' complaint was this mismatch.
+        var themeName = config.Downloads.Theme;
+        if (string.IsNullOrEmpty(themeName)) themeName = "Cyberpunk";
+        try { ThemeManager.ApplyTheme(themeName); }
+        catch (Exception ex) { Serilog.Log.Debug(ex, "Screenshot: theme apply failed (non-fatal)"); }
+
         var demoConfig = BuildDemoConfig();
+        // Ensure the demo dashboard also reads the chosen theme, in case any
+        // code path reads from config.Downloads.Theme during render.
+        demoConfig.Downloads.Theme = themeName;
         CaptureWizard();
         CaptureDashboard(demoConfig);
         CaptureSettings(demoConfig);
