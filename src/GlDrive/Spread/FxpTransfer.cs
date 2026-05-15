@@ -184,6 +184,52 @@ public class FxpTransfer
                 label, reply.Code, reply.Message);
     }
 
+    // PRET (PRE-Transfer) support cache. drftpd and some ioFTPD configs require
+    // `PRET RETR &lt;path&gt;` or `PRET STOR &lt;path&gt;` BEFORE the PASV command so
+    // the server can pre-route the passive listener to a slave that has the file
+    // (drftpd) or pre-stage the upload target. glftpd doesn't know PRET and
+    // returns 500 "Command not understood". We send PRET on first contact with a
+    // site; on 500/502 we mark it not-supported and skip the round-trip on
+    // subsequent transfers. cbftp does the same negotiation in
+    // SiteLogic::initTransfer (sitelogic.cpp:1665-1677).
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool>
+        _pretSupport = new();
+
+    /// <summary>
+    /// Best-effort PRET. <paramref name="command"/> is the FTP verb that will
+    /// follow PASV/CPSV ("RETR" or "STOR"). Safe to call against any site — on
+    /// sites that don't speak PRET the reply is 5xx and we cache the negative.
+    /// Never throws on protocol-level rejection; only re-raises on cancellation.
+    /// </summary>
+    private static async Task BestEffortPret(AsyncFtpClient client, string command,
+        string path, CancellationToken ct)
+    {
+        var key = $"{client.Host}:{client.Port}";
+        if (_pretSupport.TryGetValue(key, out var supported) && !supported)
+            return; // proven not-supported earlier this session — skip RTT
+
+        try
+        {
+            var sanitized = Ftp.CpsvDataHelper.SanitizeFtpPath(path);
+            var reply = await client.Execute($"PRET {command} {sanitized}", ct);
+            // 2xx = drftpd-style ack, 5xx = not implemented.
+            var notSupported = reply.Code != null
+                && (reply.Code.StartsWith("500") || reply.Code.StartsWith("502")
+                    || reply.Code.StartsWith("504"));
+            _pretSupport[key] = !notSupported;
+            if (notSupported)
+                Log.Debug("PRET not supported on {Host} (code {Code}) — caching", key, reply.Code);
+            else
+                Log.Debug("PRET {Cmd} on {Host}: {Code} {Msg}", command, key, reply.Code, reply.Message);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            // Network-level error — don't cache the verdict; might be transient.
+            Log.Debug(ex, "PRET best-effort failed on {Host} (non-fatal)", key);
+        }
+    }
+
     private async Task<bool> ExecutePasvPasv(
         AsyncFtpClient src, AsyncFtpClient dst,
         string srcPath, string dstPath,
@@ -198,6 +244,10 @@ public class FxpTransfer
         // Enable secure FXP (SSCN) — passive side accepts TLS, active side initiates
         await EnableSscn(dst, "dest-passive", ct);
         await EnableSscn(src, "source-active", ct);
+
+        // PRET STOR before PASV on the passive side (drftpd / some ioFTPD configs
+        // need this to pre-route the listener; glftpd ignores with 500/cached).
+        await BestEffortPret(dst, "STOR", dstPath, ct);
 
         // Dest enters PASV
         var pasvReply = await dst.Execute("PASV", ct);
@@ -255,6 +305,9 @@ public class FxpTransfer
         await EnableSscn(dst, "dest-passive", ct);
         await EnableSscn(src, "source-active", ct);
 
+        // PRET STOR on dest before PASV (drftpd-style passive-route hint).
+        await BestEffortPret(dst, "STOR", dstPath, ct);
+
         var pasvReply = await dst.Execute("PASV", ct);
         if (!pasvReply.Success)
             throw new IOException($"PASV failed on dest: {pasvReply.Code} {pasvReply.Message}");
@@ -304,6 +357,10 @@ public class FxpTransfer
         await SendTypeI(dst, "dest", ct);
         await EnableSscn(src, "source-passive", ct);
         await EnableSscn(dst, "dest-active", ct);
+
+        // PRET RETR on src before PASV (drftpd routes the listener to a slave
+        // that actually holds the file).
+        await BestEffortPret(src, "RETR", srcPath, ct);
 
         var pasvReply = await src.Execute("PASV", ct);
         if (!pasvReply.Success)
