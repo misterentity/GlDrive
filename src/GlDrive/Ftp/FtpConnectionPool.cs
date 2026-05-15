@@ -34,6 +34,15 @@ public class FtpConnectionPool : IAsyncDisposable
 
     private int _disconnects, _exhaustCount, _ghostKills, _errors5xx, _reinitCount;
 
+    /// <summary>
+    /// Fires when the BNC's 530 reply explicitly states a simultaneous-login
+    /// limit (e.g. "restricted to 4 simultaneous logins"). Subscribers can
+    /// use this to tighten downstream concurrency caps (SpreadManager's
+    /// per-server ServerGate). The reported integer is the BNC's hard cap,
+    /// not a recommendation — callers should reserve their own headroom.
+    /// </summary>
+    public event Action<int>? LoginLimitObserved;
+
     internal void RecordConnect(double ms)
     {
         lock (_connectMsSamples)
@@ -227,6 +236,26 @@ public class FtpConnectionPool : IAsyncDisposable
                 // CompareExchange ensures only one thread wins the throttle window.
                 if (HasLoginLimitError(ex))
                 {
+                    // Option B (v2.4): parse the observed BNC cap and broadcast it
+                    // so SpreadManager can tighten its per-server gate. Pattern
+                    // "Sorry, your account is restricted to N simultaneous logins."
+                    try
+                    {
+                        var m = System.Text.RegularExpressions.Regex.Match(
+                            ex.Message ?? "",
+                            @"restricted to (\d+) simultaneous logins",
+                            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        if (m.Success && int.TryParse(m.Groups[1].Value, out var observedLimit)
+                            && observedLimit >= 1 && observedLimit <= 64)
+                        {
+                            LoginLimitObserved?.Invoke(observedLimit);
+                        }
+                    }
+                    catch (Exception parseEx)
+                    {
+                        Log.Debug(parseEx, "Pool: BNC limit parse failed (non-fatal)");
+                    }
+
                     var nowTicks = DateTime.UtcNow.Ticks;
                     var lastTicks = Interlocked.Read(ref _lastGhostKillTicks);
                     if (new TimeSpan(nowTicks - lastTicks).TotalSeconds > 5 &&

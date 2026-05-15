@@ -121,6 +121,14 @@ public class SpreadJob : IDisposable
     public DateTime StartedAt { get; } = DateTime.UtcNow;
     public IReadOnlyDictionary<string, SiteProgress> Sites => _siteProgress;
 
+    /// <summary>
+    /// Wired by SpreadManager so each transfer respects the global per-server
+    /// concurrency gate. Acquires src+dst slots before STOR/RETR; the returned
+    /// disposable is released in ExecuteTransfer's finally block. Null when
+    /// no global gating is configured (legacy callers / unit tests).
+    /// </summary>
+    public Func<string, string, CancellationToken, Task<IAsyncDisposable>>? AcquireTransferGates { get; set; }
+
     // True when this race was triggered by an auto-race (announce listener
     // or notification poll) rather than a manual New Race click. The
     // constructor flags it via the optional knownSourceServerId param —
@@ -1445,9 +1453,34 @@ public class SpreadJob : IDisposable
 
         PooledConnection? srcConn = null;
         PooledConnection? dstConn = null;
+        IAsyncDisposable? gates = null;
 
         try
         {
+            // Acquire global per-server gates BEFORE borrowing the connection pool.
+            // The gate cap is enforced across ALL concurrent jobs and auto-tightens
+            // when a BNC's 530 reveals its login cap. Doing this before Borrow means
+            // we don't even ask the pool until BNC has slot headroom — eliminates
+            // the burst of 530s that triggered today's GnuTLS native crashes.
+            if (AcquireTransferGates != null)
+            {
+                try
+                {
+                    gates = await AcquireTransferGates(srcId, dstId, ct);
+                }
+                catch (TimeoutException tex)
+                {
+                    Log.Debug("Gate timeout for {File} ({Src}->{Dst}): {Msg} — rescheduling",
+                        file.Name,
+                        _serverConfigs.TryGetValue(srcId, out var sc) ? sc.Name : srcId,
+                        _serverConfigs.TryGetValue(dstId, out var dc) ? dc.Name : dstId,
+                        tex.Message);
+                    // Not a real failure — the file gets re-scored on the next pass
+                    // and another (file,src,dst) wins the gate.
+                    return;
+                }
+            }
+
             // Borrow with timeout — if pool is exhausted (all connections poisoned,
             // server refusing new ones due to ghost connections), Borrow blocks forever
             // on ReadAsync. Without a timeout, ActiveTransfers never decrements and
@@ -1625,6 +1658,14 @@ public class SpreadJob : IDisposable
         {
             if (srcConn != null) await srcConn.DisposeAsync();
             if (dstConn != null) await dstConn.DisposeAsync();
+
+            // Release global gates AFTER pool connections — keeps the BNC slot
+            // accounting accurate (a returned-to-pool connection still occupies
+            // a BNC login until the pool actually closes it on rotation).
+            if (gates != null)
+            {
+                try { await gates.DisposeAsync(); } catch { }
+            }
 
             lock (_ownershipLock)
             {
