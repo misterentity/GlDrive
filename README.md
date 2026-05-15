@@ -2,7 +2,7 @@
 
 **Mount glftpd FTPS servers as native Windows drive letters.** A single tray app for the full site-user workflow — browse in Explorer, auto-download from a wishlist, race releases between sites via FXP, chat on FiSH-encrypted IRC, stream media, watch the PreDB.
 
-Built on .NET 10, WPF, WinFsp, FluentFTP, and GnuTLS. Windows 11, x64. Current version: **1.44.55**.
+Built on .NET 10, WPF, WinFsp, FluentFTP, and GnuTLS. Windows 11, x64. Current version: **2.4.1**.
 
 > **For contributors:** the full architecture reference lives in [docs/](docs/). See [docs/project-overview-pdr.md](docs/project-overview-pdr.md) for the design rationale and [docs/system-architecture.md](docs/system-architecture.md) for Mermaid diagrams and protocol walkthroughs.
 
@@ -52,11 +52,17 @@ glftpd sites have several quirks that off-the-shelf FTP clients handle badly. Ea
 
 ### Spread / FXP (cbftp-style race engine)
 - **Four FXP modes** picked automatically by `FxpModeDetector` — PASV-PASV, CPSV-PASV, PASV-CPSV, and **Relay** (CPSV-CPSV piped through local memory with double-buffered 256 KB copy)
-- **Per-server FXP connection pool** separate from the main pool, auto-sized to `max(SpreadPoolSize, maxSlots)`, auto-reinitialized before each race
-- **Chain mode** — one route per release at a time, holds until all in-flight transfers drain
-- **Scoring 0 – 65535** — SFV = 65535, NFO-after-15 s = 65535, then file size + route speed (rolling 10-sample avg) + site priority + ownership delta
+- **Per-server FXP connection pool** separate from the main pool, auto-reinitialized before each race
+- **Global per-server transfer gates** — every FXP transfer acquires a src + dst `ServerGate` semaphore (sorted-id order, deadlock-free) before opening connections. Caps total concurrent transfers per server across all jobs, preventing BNC login storms that previously crashed GnuTLS natively
+- **BNC auto-tune** — when a pool sees `530 restricted to N simultaneous logins`, the gate and the pool's max size are both shrunk to `N − 1` (reserving one slot for ghost-kill keepalive). Shrink-only by design
+- **Section availability pre-filter** — auto-races dropped at planning time if no eligible destination has the announce section, eliminating thousands of "Need 2+ servers" noise failures
+- **PRET support** — `PRET RETR/STOR` sent before PASV/CPSV; cached per-host so drftpd / ioFTPD configs get it and glftpd-only deployments skip the round-trip after the first 500 reply
+- **Scoring 0 – 65535** — SFV = 65535, NFO-after-15 s = 65535, then file size + route speed (rolling 10-sample avg, persisted to `spread-speed-history.json`) + site priority + ownership delta − failure penalty (rotates source on retry)
+- **Per-pair retry cap 4, per-file global cap 7** — matches cbftp's `MAX_SINGLE_PAIR_FILE_TRANSFER_ATTEMPTS` / `MAX_TRANSFER_ATTEMPTS_BEFORE_SKIP`
+- **60 s inactivity timeout with two-strike retry** — first stall clears all retry state and tries again, second actually aborts
+- **Dupe-as-success** — `553` STOR replies matching cbftp's family of `uploaded by` / `dupescript` / `pre_check` / `X-DUPE` / `File exists` / `ile exists` / `already exist` patterns count toward race completion (the file IS on the destination)
 - **Skiplist cascade** — per-site then global, glob or non-backtracking 100 ms regex, first match wins
-- **Pre-transfer guards** — `TYPE I` canary, `SSCN ON`, deferred `MKD` until just before `STOR`, completion sweep with 3× retry
+- **Pre-transfer guards** — `TYPE I` canary, `SSCN ON`, deferred `MKD` until just before `STOR`, completion sweep with 2× retry
 - Race history persisted (max 500) with full skiplist trace; auto-race on IRC announce or `/recent` detection
 
 ### Archive extractor
@@ -197,6 +203,7 @@ Everything per-user lives under `%AppData%\GlDrive\`. Full schema with defaults:
 | App config | `appsettings.json` (camelCase JSON, non-secrets only) |
 | Downloads (per server) | `downloads-{serverId}.json` |
 | Race history | `race-history.json` (max 500) |
+| Spread route speeds | `spread-speed-history.json` (rolling 10 samples per src→dst pair, survives restart) |
 | Wishlist | `wishlist.json` (global) |
 | Notifications | `notifications.json` (max 1000) |
 | Trusted certs | `trusted_certs.json` (TOFU, user-only ACL) |
@@ -221,8 +228,9 @@ Program.cs (watchdog + update applier)
        │    │    └─ FtpSearchService, WishlistMatcher
        │    ├─ per server: IrcService (IrcClient + FishCipher + Dh1080 + FishKeyStore
        │    │                           + IrcAnnounceListener + IrcPatternDetector)
-       │    └─ SpreadManager (per-server FXP pools, SpreadJob, FxpTransfer,
-       │                     SpreadScorer, SpeedTracker, SkiplistEvaluator, RaceHistoryStore)
+       │    └─ SpreadManager (per-server FXP pools, ServerGate (concurrency + BNC auto-tune),
+       │                     SpreadJob, FxpTransfer, SpreadScorer, SpeedTracker (persistent),
+       │                     SkiplistEvaluator, SectionBlacklistStore, RaceHistoryStore)
        ├─ WishlistStore, NotificationStore (global), UpdateChecker
        └─ TrayIcon + DashboardWindow + ExtractorWindow + ThemeManager
 ```
@@ -266,7 +274,8 @@ Resume for `RETR` sends explicit `REST <offset>` before the retry. Before every 
 |---|---|
 | **Drive letter doesn't appear** | Check WinFsp is installed (`sc query WinFsp`); reinstall via the bundled MSI if missing |
 | **"BNC rate limit detected" toast** | Rapid reconnects triggered a ~2-hour cooldown. Wait it out |
-| **Connection pool exhausted** | Usually transient — the pool auto-reinitializes. If persistent, reduce pool size or check BNC `!username` ghost-kill isn't blocked |
+| **Connection pool exhausted** | Usually transient — the pool auto-reinitializes. Since v2.4 the BNC's login cap auto-shrinks the pool + gate from the first `530`; if you still see exhaustion, check BNC `!username` ghost-kill isn't blocked |
+| **FXP transfers all fail with 530** | The first 530 should auto-tune the pool/gate down (look for `Pool: max size shrunk` in the log). If not, your `SpreadPoolSize` in `appsettings.json` may exceed BNC's hard cap; the auto-tune is shrink-only, so a restart resets to defaults |
 | **Update downloads but never applies** | Missing or mismatched `checksums.sha256`. Rebuild via `installer/release.ps1` |
 | **Watchdog restart loop** | Delete `%AppData%\GlDrive\.running` and `.updating` manually |
 | **WebView2 tabs blank** | Install the WebView2 Evergreen Runtime via the fallback-UI link |
