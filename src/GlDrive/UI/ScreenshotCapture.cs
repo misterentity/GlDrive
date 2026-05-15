@@ -84,15 +84,20 @@ internal static class ScreenshotCapture
         dashboard.Show();
         DoEvents();
 
-        // Inject demo downloads + search results directly into the VM's
-        // ObservableCollections. These tabs read from live MountedServer state
-        // (DownloadManager per server) which we don't have in demo mode, so
-        // the only practical way to show populated rows is post-construction
-        // collection seeding.
+        // Inject demo data into the VM's ObservableCollections.
+        //
+        // SECURITY: the Wishlist collection is populated by DashboardViewModel's
+        // constructor from WishlistStore which Load()s the user's REAL
+        // wishlist.json — that would leak the user's actual viewing interests
+        // into a public README screenshot. We clear and replace with neutral
+        // demo titles. The disk file is NOT touched (we only mutate the
+        // ObservableCollection used for binding).
         if (dashboard.DataContext is DashboardViewModel vm)
         {
             foreach (var dl in BuildDemoDownloads()) vm.DownloadItems.Add(dl);
             foreach (var sr in BuildDemoSearchResults()) vm.SearchResults.Add(sr);
+            vm.WishlistItems.Clear();
+            foreach (var w in BuildDemoWishlist()) vm.WishlistItems.Add(w);
         }
         DoEvents();
 
@@ -192,8 +197,8 @@ internal static class ScreenshotCapture
         {
             store.Add(new NotificationItem
             {
-                ServerId = "demo-superbnc",
-                ServerName = "superbnc",
+                ServerId = "demo-site-a",
+                ServerName = "site-a",
                 Category = cat,
                 ReleaseName = rel,
                 RemotePath = $"/recent/{cat}/{rel}",
@@ -209,7 +214,7 @@ internal static class ScreenshotCapture
             Id = "d1",
             ReleaseName = "Sinners.2026.2160p.UHD.BluRay.x265-LIGHTBRiNGER",
             Category = "x265",
-            ServerName = "superbnc",
+            ServerName = "site-a",
             Status = "Downloading",
             ProgressPercent = 64.2,
             ProgressText = "12.8 GiB / 19.9 GiB",
@@ -221,7 +226,7 @@ internal static class ScreenshotCapture
             Id = "d2",
             ReleaseName = "The.Outer.Worlds.S03E04.1080p.WEB.H264-CAKES",
             Category = "tv-hd",
-            ServerName = "superbnc",
+            ServerName = "site-a",
             Status = "Downloading",
             ProgressPercent = 31.7,
             ProgressText = "456 MiB / 1.44 GiB",
@@ -233,7 +238,7 @@ internal static class ScreenshotCapture
             Id = "d3",
             ReleaseName = "Aphex_Twin-Selected_Algorithm_Works-WEB-2026-FALCON",
             Category = "mp3",
-            ServerName = "superbnc",
+            ServerName = "site-a",
             Status = "Extracting",
             ProgressPercent = 100,
             ProgressText = "172 MiB / 172 MiB",
@@ -245,7 +250,7 @@ internal static class ScreenshotCapture
             Id = "d4",
             ReleaseName = "Severance.S03E07.1080p.WEB.H264-NTb",
             Category = "tv-hd",
-            ServerName = "zephyr",
+            ServerName = "site-b",
             Status = "Completed",
             ProgressPercent = 100,
             ProgressText = "1.31 GiB / 1.31 GiB",
@@ -257,7 +262,7 @@ internal static class ScreenshotCapture
             Id = "d5",
             ReleaseName = "Hades.III.Update.v1.0.4-RAZOR1911",
             Category = "games",
-            ServerName = "SYN",
+            ServerName = "site-c",
             Status = "Queued",
             ProgressPercent = 0,
             ProgressText = "0 B / 2.8 GiB",
@@ -269,7 +274,7 @@ internal static class ScreenshotCapture
             Id = "d6",
             ReleaseName = "Dune.Part.Three.2026.1080p.BluRay.H264-RiSEHD",
             Category = "x264-hd",
-            ServerName = "superbnc",
+            ServerName = "site-a",
             Status = "Failed",
             ProgressPercent = 18.4,
             ProgressText = "1.8 GiB / 9.7 GiB",
@@ -278,16 +283,32 @@ internal static class ScreenshotCapture
         };
     }
 
+    private static IEnumerable<WishlistItemVm> BuildDemoWishlist()
+    {
+        yield return new WishlistItemVm { Id = "w1",  Title = "Sample Sci-Fi Drama",            Type = "TvShow", Year = "2026", Quality = "Q1080p", Status = "Watching",  GrabbedCount = "8" };
+        yield return new WishlistItemVm { Id = "w2",  Title = "Demo Crime Anthology",           Type = "TvShow", Year = "2025", Quality = "Q1080p", Status = "Watching",  GrabbedCount = "3" };
+        yield return new WishlistItemVm { Id = "w3",  Title = "Placeholder Feature Film",       Type = "Movie",  Year = "2026", Quality = "Q2160p", Status = "Watching",  GrabbedCount = "1" };
+        yield return new WishlistItemVm { Id = "w4",  Title = "Fictitious Heist Movie",         Type = "Movie",  Year = "2026", Quality = "Q1080p", Status = "Completed", GrabbedCount = "1" };
+        yield return new WishlistItemVm { Id = "w5",  Title = "Imaginary Period Drama",         Type = "TvShow", Year = "2025", Quality = "Q1080p", Status = "Watching",  GrabbedCount = "5" };
+        yield return new WishlistItemVm { Id = "w6",  Title = "Made-Up Animated Series",        Type = "TvShow", Year = "2026", Quality = "Q720p",  Status = "Watching",  GrabbedCount = "12" };
+        yield return new WishlistItemVm { Id = "w7",  Title = "Notional Documentary",           Type = "Movie",  Year = "2024", Quality = "Q1080p", Status = "Completed", GrabbedCount = "1" };
+        yield return new WishlistItemVm { Id = "w8",  Title = "Hypothetical Thriller",          Type = "Movie",  Year = "2026", Quality = "Q2160p", Status = "Watching",  GrabbedCount = "0" };
+        yield return new WishlistItemVm { Id = "w9",  Title = "Generic Comedy Special",         Type = "Movie",  Year = "2025", Quality = "Q1080p", Status = "Completed", GrabbedCount = "1" };
+        yield return new WishlistItemVm { Id = "w10", Title = "Synthetic Mystery Miniseries",   Type = "TvShow", Year = "2026", Quality = "Q1080p", Status = "Watching",  GrabbedCount = "2" };
+        yield return new WishlistItemVm { Id = "w11", Title = "Placeholder Action Sequel",      Type = "Movie",  Year = "2026", Quality = "Q2160p", Status = "Watching",  GrabbedCount = "0" };
+        yield return new WishlistItemVm { Id = "w12", Title = "Test-Pattern Reality Show",      Type = "TvShow", Year = "2025", Quality = "Q720p",  Status = "Paused",    GrabbedCount = "4" };
+    }
+
     private static IEnumerable<SearchResultVm> BuildDemoSearchResults()
     {
         long Gib(double g) => (long)(g * 1024 * 1024 * 1024);
-        yield return new SearchResultVm { ReleaseName = "Sinners.2026.2160p.UHD.BluRay.x265-LIGHTBRiNGER", Category = "x265", RemotePath = "/x265/Sinners.2026.2160p.UHD.BluRay.x265-LIGHTBRiNGER", Size = Gib(19.9), SizeText = "19.9 GiB", ServerName = "superbnc" };
-        yield return new SearchResultVm { ReleaseName = "Sinners.2026.1080p.BluRay.H264-RiSEHD",            Category = "x264-hd", RemotePath = "/x264-hd/Sinners.2026.1080p.BluRay.H264-RiSEHD", Size = Gib(9.4), SizeText = "9.4 GiB", ServerName = "superbnc" };
-        yield return new SearchResultVm { ReleaseName = "Sinners.2026.1080p.WEB.H264-NAISU",                 Category = "x264-hd", RemotePath = "/x264-hd/Sinners.2026.1080p.WEB.H264-NAISU", Size = Gib(7.1), SizeText = "7.1 GiB", ServerName = "zephyr" };
-        yield return new SearchResultVm { ReleaseName = "Sinners.2026.720p.BluRay.H264-NAISU",               Category = "x264-hd", RemotePath = "/x264-hd/Sinners.2026.720p.BluRay.H264-NAISU", Size = Gib(4.6), SizeText = "4.6 GiB", ServerName = "zephyr" };
-        yield return new SearchResultVm { ReleaseName = "Sinners.2026.MULTi.1080p.BluRay.x265-LIGHTBRiNGER", Category = "x265", RemotePath = "/x265/Sinners.2026.MULTi.1080p.BluRay.x265-LIGHTBRiNGER", Size = Gib(13.2), SizeText = "13.2 GiB", ServerName = "SYN" };
-        yield return new SearchResultVm { ReleaseName = "Sinners.2026.PROPER.2160p.UHD.BluRay.DV.HDR.x265-NCmt", Category = "x265", RemotePath = "/x265/Sinners.2026.PROPER.2160p.UHD.BluRay.DV.HDR.x265-NCmt", Size = Gib(28.7), SizeText = "28.7 GiB", ServerName = "SYN" };
-        yield return new SearchResultVm { ReleaseName = "Sinners.2026.BDRip.x264-PUTRiD",                    Category = "x264-sd", RemotePath = "/x264-sd/Sinners.2026.BDRip.x264-PUTRiD", Size = Gib(1.5), SizeText = "1.5 GiB", ServerName = "zephyr" };
+        yield return new SearchResultVm { ReleaseName = "Sinners.2026.2160p.UHD.BluRay.x265-LIGHTBRiNGER", Category = "x265", RemotePath = "/x265/Sinners.2026.2160p.UHD.BluRay.x265-LIGHTBRiNGER", Size = Gib(19.9), SizeText = "19.9 GiB", ServerName = "site-a" };
+        yield return new SearchResultVm { ReleaseName = "Sinners.2026.1080p.BluRay.H264-RiSEHD",            Category = "x264-hd", RemotePath = "/x264-hd/Sinners.2026.1080p.BluRay.H264-RiSEHD", Size = Gib(9.4), SizeText = "9.4 GiB", ServerName = "site-a" };
+        yield return new SearchResultVm { ReleaseName = "Sinners.2026.1080p.WEB.H264-NAISU",                 Category = "x264-hd", RemotePath = "/x264-hd/Sinners.2026.1080p.WEB.H264-NAISU", Size = Gib(7.1), SizeText = "7.1 GiB", ServerName = "site-b" };
+        yield return new SearchResultVm { ReleaseName = "Sinners.2026.720p.BluRay.H264-NAISU",               Category = "x264-hd", RemotePath = "/x264-hd/Sinners.2026.720p.BluRay.H264-NAISU", Size = Gib(4.6), SizeText = "4.6 GiB", ServerName = "site-b" };
+        yield return new SearchResultVm { ReleaseName = "Sinners.2026.MULTi.1080p.BluRay.x265-LIGHTBRiNGER", Category = "x265", RemotePath = "/x265/Sinners.2026.MULTi.1080p.BluRay.x265-LIGHTBRiNGER", Size = Gib(13.2), SizeText = "13.2 GiB", ServerName = "site-c" };
+        yield return new SearchResultVm { ReleaseName = "Sinners.2026.PROPER.2160p.UHD.BluRay.DV.HDR.x265-NCmt", Category = "x265", RemotePath = "/x265/Sinners.2026.PROPER.2160p.UHD.BluRay.DV.HDR.x265-NCmt", Size = Gib(28.7), SizeText = "28.7 GiB", ServerName = "site-c" };
+        yield return new SearchResultVm { ReleaseName = "Sinners.2026.BDRip.x264-PUTRiD",                    Category = "x264-sd", RemotePath = "/x264-sd/Sinners.2026.BDRip.x264-PUTRiD", Size = Gib(1.5), SizeText = "1.5 GiB", ServerName = "site-b" };
     }
 
     private static void CaptureSettings(AppConfig config)

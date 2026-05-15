@@ -112,7 +112,7 @@
                                Margin="0,0,6,0"/>
                     <Border Grid.Column="1" BorderBrush="{DynamicResource LineDimBrush}" BorderThickness="1"
                             Padding="6,2" VerticalAlignment="Center">
-                        <TextBlock Text="CRADLE.GLFTPD" Foreground="{DynamicResource AccentBrush}"
+                        <TextBlock Text="NODE.GLFTPD" Foreground="{DynamicResource AccentBrush}"
                                    FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"/>
                     </Border>
                     <TextBlock Grid.Column="2" Text="SECT/" Style="{DynamicResource MicroTextStyle}"
@@ -2918,7 +2918,7 @@
                                FontFamily="{DynamicResource MonoFontFamily}"
                                FontSize="10"
                                Foreground="{DynamicResource TextDimBrush}"
-                               Text="[RX] 12.4 MB/s  //  [TX] 4.1 MB/s  //  ZEPHYR RTT 38ms  //  SUPERBNC RTT 14ms  //  SPREAD ACTIVE: 4  //  POOL 18/24  //  NODE CRADLE ENGAGED  //  KERNEL OK  //  [RX] 12.4 MB/s  //  [TX] 4.1 MB/s  //  ZEPHYR RTT 38ms  //  SUPERBNC RTT 14ms  //  SPREAD ACTIVE: 4  //  POOL 18/24  //  NODE CRADLE ENGAGED  //  KERNEL OK  //  ">
+                               Text="[RX] 12.4 MB/s  //  [TX] 4.1 MB/s  //  SITE-A RTT 38ms  //  SITE-B RTT 14ms  //  SPREAD ACTIVE: 4  //  POOL 18/24  //  NODE ENGAGED  //  KERNEL OK  //  [RX] 12.4 MB/s  //  [TX] 4.1 MB/s  //  SITE-A RTT 38ms  //  SITE-B RTT 14ms  //  SPREAD ACTIVE: 4  //  POOL 18/24  //  NODE ENGAGED  //  KERNEL OK  //  ">
                         <TextBlock.RenderTransform>
                             <TranslateTransform X="0" Y="0"/>
                         </TextBlock.RenderTransform>
