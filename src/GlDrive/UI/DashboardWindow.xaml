@@ -88,7 +88,7 @@
                             <TextBlock Text="GLDRIVE" Style="{DynamicResource DisplayTextGlowStyle}"
                                        FontSize="16" Foreground="{DynamicResource AccentBrush}"
                                        LineHeight="14"/>
-                            <TextBlock Text="v1.71 // KERNEL.MOUNT" Style="{DynamicResource MicroTextStyle}"
+                            <TextBlock Text="{Binding VersionTagline}" Style="{DynamicResource MicroTextStyle}"
                                        FontSize="9" Foreground="{DynamicResource TextFaintBrush}"
                                        Margin="0,2,0,0"/>
                         </StackPanel>
