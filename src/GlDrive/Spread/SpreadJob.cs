@@ -578,7 +578,13 @@ public class SpreadJob : IDisposable
                         idleSeconds = 0;
                     }
 
-                    if (activeCount == 0 && idleSeconds > 15)
+                    // cbftp's race-level inactivity timeout is 60s (MAX_CHECKS_BEFORE_TIMEOUT * tick).
+                    // Previous 15s killed races that were just waiting on a slow LIST,
+                    // a BNC pool reinit, or a longer backoff tier to expire. cbftp also
+                    // allows two timeout cycles: first one CLEARS retry state and tries
+                    // again, second actually aborts — we follow that pattern below via
+                    // _completionRetries (now allowed up to 2).
+                    if (activeCount == 0 && idleSeconds > 60)
                     {
                         int missingFiles;
                         lock (_ownershipLock)
@@ -593,7 +599,7 @@ public class SpreadJob : IDisposable
                             }
                         }
 
-                        if (missingFiles > 0 && _completionRetries < 1)
+                        if (missingFiles > 0 && _completionRetries < 2)
                         {
                             _completionRetries++;
                             lock (_failureLock) _failureCounts.Clear();
@@ -649,7 +655,7 @@ public class SpreadJob : IDisposable
                         }
                         else
                         {
-                            SetFailed("No activity for 15 seconds, no viable transfers");
+                            SetFailed("No activity for 60 seconds, no viable transfers");
                         }
                         return;
                     }
@@ -1366,8 +1372,21 @@ public class SpreadJob : IDisposable
                             }
                         }
 
-                        // Check failure backoff from snapshot (no nested lock)
-                        if (failureSnapshot.TryGetValue((fileName, srcId, dstId), out var fails) && fails >= 5)
+                        // Per-pair retry cap (cbftp's MAX_SINGLE_PAIR_FILE_TRANSFER_ATTEMPTS = 4).
+                        failureSnapshot.TryGetValue((fileName, srcId, dstId), out var pairFails);
+                        if (pairFails >= 4)
+                        { skippedFailures++; continue; }
+
+                        // Per-file global retry cap (cbftp's MAX_TRANSFER_ATTEMPTS_BEFORE_SKIP = 7).
+                        // Sum failures across all src->dst pairs for this filename. Without this
+                        // cap, a file that hates every route can churn forever, eating slots
+                        // away from files that could succeed.
+                        var fileTotalFails = 0;
+                        foreach (var kv in failureSnapshot)
+                        {
+                            if (kv.Key.Item1 == fileName) fileTotalFails += kv.Value;
+                        }
+                        if (fileTotalFails >= 7)
                         { skippedFailures++; continue; }
 
                         candidateCount++;
@@ -1378,7 +1397,8 @@ public class SpreadJob : IDisposable
 
                         var score = scorer.Score(fileInfo, srcId, dstId,
                             dstConfig.SpreadSite.Priority, ownedPercent,
-                            maxFileSize, maxSpeed, elapsed, Mode);
+                            maxFileSize, maxSpeed, elapsed, Mode,
+                            priorFailures: pairFails);
 
                         // Track best inline — no list allocation
                         if (score > bestScore || (score == bestScore && Random.Shared.Next(2) == 0))
