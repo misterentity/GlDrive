@@ -217,7 +217,9 @@ public partial class App
             new GlDrive.AiAgent.BlacklistValidator(),
             new GlDrive.AiAgent.AffilsValidator(),
             new GlDrive.AiAgent.ErrorReportValidator(
-                System.IO.Path.Combine(ConfigManager.AppDataPath, "ai-data"))
+                System.IO.Path.Combine(ConfigManager.AppDataPath, "ai-data")),
+            new GlDrive.AiAgent.DownloadOnlyValidator(),
+            new GlDrive.AiAgent.RequestFillerValidator()
         };
         ChangeApplier = new GlDrive.AiAgent.ChangeApplier(validators, FreezeStore!, AuditTrail!);
         LogDigester = new GlDrive.AiAgent.LogDigester(

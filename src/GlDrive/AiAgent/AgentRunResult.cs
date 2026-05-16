@@ -33,10 +33,13 @@ public static class AgentCategories
     public const string Blacklist          = "blacklist";
     public const string Affils             = "affils";
     public const string ErrorReport        = "errorReport";
+    public const string DownloadOnly       = "downloadOnly";
+    public const string RequestFiller      = "requestFiller";
 
     public static readonly string[] All =
     {
         Skiplist, Priority, SectionMapping, AnnounceRule, ExcludedCategories,
-        WishlistPrune, PoolSizing, Blacklist, Affils, ErrorReport
+        WishlistPrune, PoolSizing, Blacklist, Affils, ErrorReport,
+        DownloadOnly, RequestFiller
     };
 }
