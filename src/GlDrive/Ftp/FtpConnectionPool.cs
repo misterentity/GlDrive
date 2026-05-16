@@ -34,6 +34,21 @@ public class FtpConnectionPool : IAsyncDisposable
 
     private int _disconnects, _exhaustCount, _ghostKills, _errors5xx, _reinitCount;
 
+    // Poisoned-connection quarantine. After mid-transfer SSL errors ("forcibly
+    // closed by the remote host"), the affected GnuTLS session is in a
+    // corrupted native state. Calling client.Dispose() ends up invoking
+    // gnutls_deinit() which SEGVs the process — observed 6 times on
+    // 2026-05-16 with AppDomain.UnhandledException firing zero times because
+    // native crashes bypass every managed handler. Solution: never Dispose
+    // poisoned connections; hold a permanent managed reference so the GC
+    // finalizer thread never runs SafeHandle.ReleaseHandle on the corrupt
+    // native session. Native memory (~few KB per quarantined session) leaks
+    // intentionally — bounded by the number of failures per process lifetime
+    // (dozens, not thousands), well worth the alternative of a dead process.
+    private readonly List<AsyncFtpClient> _quarantine = new();
+    private readonly Lock _quarantineLock = new();
+    public int QuarantineSize { get { lock (_quarantineLock) return _quarantine.Count; } }
+
     /// <summary>
     /// Fires when the BNC's 530 reply explicitly states a simultaneous-login
     /// limit (e.g. "restricted to 4 simultaneous logins"). Subscribers can
@@ -221,10 +236,11 @@ public class FtpConnectionPool : IAsyncDisposable
                 return new PooledConnection(client, this);
             }
 
-            // Stale or corrupt connection, properly disconnect and create new
+            // Stale or corrupt connection — quarantine instead of dispose.
+            // A connection that failed IsGnuTlsHealthy is exactly the kind we
+            // most fear running gnutls_deinit() on.
             IncrementDisconnect();
-            DisconnectAndDispose(client);
-            Interlocked.Decrement(ref _created);
+            QuarantineDecCreated(client);
         }
 
         // Pool empty — create new if under limit
@@ -357,10 +373,9 @@ public class FtpConnectionPool : IAsyncDisposable
             return new PooledConnection(client, this);
         }
 
-        // Stale, replace it
+        // Stale — quarantine (decrements _created internally) instead of dispose.
         IncrementDisconnect();
-        DisconnectAndDispose(client);
-        Interlocked.Decrement(ref _created); // Account for disposed connection
+        QuarantineDecCreated(client);
         if (Interlocked.Increment(ref _created) <= _maxSize)
         {
             try
@@ -387,30 +402,62 @@ public class FtpConnectionPool : IAsyncDisposable
         Interlocked.Decrement(ref _active);
         if (_disposed || !client.IsConnected)
         {
+            // !IsConnected on the return path means the connection died during
+            // the borrowed operation — same SEGV risk as a Poisoned discard
+            // (the GnuTLS session may be in a corrupted state we just haven't
+            // proven yet). Quarantine it instead of Disposing. _active already
+            // decremented above, so call QuarantineDecCreated which only
+            // decrements _created.
             IncrementDisconnect();
-            DisconnectAndDispose(client);
-            Interlocked.Decrement(ref _created);
+            QuarantineDecCreated(client);
             return;
         }
 
         if (!_pool.Writer.TryWrite(client))
         {
-            DisconnectAndDispose(client);
-            Interlocked.Decrement(ref _created);
+            // Channel write failed — pool is being torn down or oversubscribed.
+            // Same quarantine treatment.
+            QuarantineDecCreated(client);
         }
     }
 
     /// <summary>
-    /// Discard a poisoned connection — dispose it without returning to the pool.
-    /// Used when a cancellation or error may have left the GnuTLS stream corrupt.
+    /// Discard a poisoned connection — DO NOT dispose. Calling Dispose on a
+    /// connection whose GnuTLS session is corrupted (e.g. after a mid-transfer
+    /// "forcibly closed" SSL error) ends up running gnutls_deinit() on bad
+    /// native state, which SEGVs the process bypassing every managed handler.
+    /// Instead we close the socket so the network resource is freed, then
+    /// keep a permanent reference in <see cref="_quarantine"/> so the GC
+    /// finalizer never runs and the SafeHandle.ReleaseHandle native call
+    /// never fires. The managed AsyncFtpClient is ~a few KB; the native
+    /// session leaks ~similar; bounded by error rate. Better than dying.
     /// </summary>
     internal void Discard(AsyncFtpClient client)
     {
         Interlocked.Decrement(ref _active);
-        Interlocked.Decrement(ref _created);
         IncrementDisconnect();
-        DisconnectAndDispose(client);
-        Log.Debug("Pool: discarded poisoned connection (created={Created})", _created);
+        QuarantineDecCreated(client);
+    }
+
+    /// <summary>
+    /// Quarantine helper: neutralize the GnuTLS session (close socket, mark
+    /// session unusable), add the client to the permanent-retain list, and
+    /// decrement <see cref="_created"/>. Caller is responsible for decrementing
+    /// <see cref="_active"/> first if applicable.
+    /// </summary>
+    private void QuarantineDecCreated(AsyncFtpClient client)
+    {
+        try { NeutralizeGnuTls(client); }
+        catch (Exception ex) { Log.Debug(ex, "Pool: NeutralizeGnuTls during quarantine failed"); }
+
+        int qSize;
+        lock (_quarantineLock)
+        {
+            _quarantine.Add(client);
+            qSize = _quarantine.Count;
+        }
+        Interlocked.Decrement(ref _created);
+        Log.Debug("Pool: quarantined connection (quarantine={Q}, created={Created})", qSize, _created);
     }
 
     /// <summary>
