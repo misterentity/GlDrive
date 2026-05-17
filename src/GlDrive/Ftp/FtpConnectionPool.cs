@@ -439,25 +439,66 @@ public class FtpConnectionPool : IAsyncDisposable
         QuarantineDecCreated(client);
     }
 
+    // Quarantine cap. v2.5.0 introduced unbounded quarantine to dodge the
+    // gnutls_deinit() SEGV — that fixed crashes but observed in production
+    // 6.7h after upgrade: 575 threads, 2.1GB working set because each
+    // quarantined AsyncFtpClient still runs its FluentFTP NoopDaemon +
+    // keepalive timer against the closed socket. v2.5.1 caps the live
+    // quarantine at MaxQuarantineSize and force-disposes the oldest entry
+    // when full — by the time an entry hits 50-deep in the FIFO, several
+    // minutes have passed and the native corruption window is much smaller
+    // (still nonzero, but a calculated trade vs runaway resource leak).
+    private const int MaxQuarantineSize = 50;
+
     /// <summary>
     /// Quarantine helper: neutralize the GnuTLS session (close socket, mark
-    /// session unusable), add the client to the permanent-retain list, and
-    /// decrement <see cref="_created"/>. Caller is responsible for decrementing
-    /// <see cref="_active"/> first if applicable.
+    /// session unusable), add the client to the bounded retain list, and
+    /// decrement <see cref="_created"/>. When quarantine is full, evicts the
+    /// oldest entry via best-effort force-dispose in a fire-and-forget task.
+    /// Caller is responsible for decrementing <see cref="_active"/> first.
     /// </summary>
     private void QuarantineDecCreated(AsyncFtpClient client)
     {
         try { NeutralizeGnuTls(client); }
         catch (Exception ex) { Log.Debug(ex, "Pool: NeutralizeGnuTls during quarantine failed"); }
 
+        AsyncFtpClient? evicted = null;
         int qSize;
         lock (_quarantineLock)
         {
             _quarantine.Add(client);
+            if (_quarantine.Count > MaxQuarantineSize)
+            {
+                evicted = _quarantine[0];
+                _quarantine.RemoveAt(0);
+            }
             qSize = _quarantine.Count;
         }
         Interlocked.Decrement(ref _created);
-        Log.Debug("Pool: quarantined connection (quarantine={Q}, created={Created})", qSize, _created);
+
+        // Evict the oldest entry off-thread so the FluentFTP NoopDaemon +
+        // keepalive timer don't keep the managed object alive forever. By
+        // the time an entry reaches the head of the FIFO, several minutes
+        // have passed since its socket close — most native corruption has
+        // settled or torn down with the OS socket cleanup. We still wrap
+        // Dispose() in try/catch (managed exceptions) but accept that a
+        // native SEGV on the evicted entry is possible. Better than 2GB
+        // of leaked threads.
+        if (evicted != null)
+        {
+            var victim = evicted;
+            _ = Task.Run(() =>
+            {
+                try { victim.Dispose(); }
+                catch (Exception ex) { Log.Debug(ex, "Pool: quarantine eviction dispose threw (managed)"); }
+            });
+        }
+
+        // Bumped from Debug to Information so the user can see quarantine
+        // pressure without enabling Debug logging — useful for the next
+        // round of memory/thread tuning.
+        Log.Information("Pool: quarantined connection (quarantine={Q}/{Max}, created={Created}{Evict})",
+            qSize, MaxQuarantineSize, _created, evicted != null ? ", evicted oldest" : "");
     }
 
     /// <summary>
