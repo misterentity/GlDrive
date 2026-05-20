@@ -1014,22 +1014,40 @@ public class SpreadJob : IDisposable
     }
 
     /// <summary>
-    /// Detects glftpd zipscript "-MISSING-*" placeholder files. Zipscript drops
-    /// a tiny stub with this prefix when the SFV declares a file that the site
-    /// does not actually hold. These are inverse signals — the site LACKS the
-    /// real file — and must never be counted as owned.
+    /// Detects glftpd zipscript artifact files/dirs that must NEVER be treated as
+    /// real release files. Counting these as "owned" makes the engine think a
+    /// destination holds files the source lacks, and it tries to FXP them — often
+    /// in reverse (dest→source) — which fails forever and starves the real files
+    /// of transfer slots so the race never completes (observed 2026-05-20:
+    /// Grand.Sumo race spent 35 failed transfers shipping pseudo-files backward).
+    ///
+    /// Covers:
+    ///   - "-MISSING-foo.rar" / "-missing-foo.rar"          (prefix form)
+    ///   - "foo.rar.missing" / "foo.rar-missing"            (suffix forms — the
+    ///                                                        dash form is what
+    ///                                                        glftpd actually emits)
+    ///   - "[###::::] - 27% Complete - [site]"              (race progress bar)
+    ///   - "[ NUKED ] ...", "[ Incomplete ] ..."            (bracketed status stubs)
+    ///   - any 0-byte file starting with "-" or "["         (belt-and-suspenders)
     /// </summary>
-    private static bool IsMissingPlaceholder(string name, long size)
+    private static bool IsZipscriptArtifact(string name, long size)
     {
         if (string.IsNullOrEmpty(name)) return false;
-        // Common forms: "-missing-foo.rar", "-MISSING-foo.rar". Some configs also
-        // use a ".missing" suffix on the real filename.
+
         if (name.StartsWith("-missing-", StringComparison.OrdinalIgnoreCase)) return true;
         if (name.EndsWith(".missing", StringComparison.OrdinalIgnoreCase)) return true;
-        // Belt-and-suspenders: the stub is always tiny. Real release files are
-        // always multi-KB. A 0-byte file whose name starts with "-" is almost
-        // certainly a zipscript marker.
-        if (size == 0 && name.StartsWith('-')) return true;
+        if (name.EndsWith("-missing", StringComparison.OrdinalIgnoreCase)) return true;
+
+        // Race progress / completion-state indicators. glftpd's zipscript writes
+        // 0-byte marker files (or dirs) named with bracketed status text and a
+        // percentage. Real releases never contain "% Complete" or start with '['.
+        if (name.Contains("% Complete", StringComparison.OrdinalIgnoreCase)) return true;
+        if (name.StartsWith('[') && name.Contains(']')) return true;
+
+        // Tiny stubs whose name starts with a marker char are almost always
+        // zipscript artifacts; real release files are multi-KB.
+        if (size == 0 && (name.StartsWith('-') || name.StartsWith('['))) return true;
+
         return false;
     }
 
@@ -1080,6 +1098,12 @@ public class SpreadJob : IDisposable
                     }
                 }
 
+                // Skip zipscript artifact directories — some configs render the
+                // race progress bar ("[###] - NN% Complete - [site]") as a dir.
+                // Recursing into it is wasted LISTs at best, and its name must
+                // never become a transferable entry.
+                if (IsZipscriptArtifact(item.Name, item.Size)) continue;
+
                 // Recurse into subdirectories (Sample/, Subs/, CD1/, etc.)
                 await ScanDirectoryRecursive(pool, basePath, item.FullName, files, depth + 1, ct);
             }
@@ -1095,12 +1119,11 @@ public class SpreadJob : IDisposable
                     }
                 }
 
-                // Skip glftpd zipscript -MISSING placeholders. When zipscript validates
-                // an SFV and finds a declared file absent, it drops a 0-byte
-                // "-MISSING-<filename>" stub in its place. These are not real files —
-                // counting them as "owned" makes destinations falsely show 100%
-                // complete when they in fact hold no real data.
-                if (IsMissingPlaceholder(item.Name, item.Size)) continue;
+                // Skip glftpd zipscript artifacts — -MISSING placeholders, "-missing"
+                // suffix stubs, and "[###] - NN% Complete - [site]" race progress
+                // markers. Counting them as "owned" makes the engine ship pseudo-files
+                // (often in reverse) and starves the real files of slots.
+                if (IsZipscriptArtifact(item.Name, item.Size)) continue;
 
                 // Store relative path from release root for subdir support
                 var relativePath = item.FullName;
