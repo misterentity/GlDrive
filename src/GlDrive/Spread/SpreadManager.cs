@@ -97,6 +97,11 @@ public class SpreadManager : IDisposable
         if (poolSize <= 0) return;
 
         var pool = new FtpConnectionPool(factory, poolSize);
+        // Spread pools have no ConnectionMonitor keepalive, so idle connections
+        // die and the next FXP borrow fails "No connection to the server exists"
+        // (dominant failure on 2026-05-20 v2.6.0). Enable borrow-time NOOP
+        // validation + a keepalive timer per config.
+        pool.ConfigureHealth(_config.Spread.ValidateConnectionOnBorrow, _config.Spread.SpreadKeepaliveSeconds);
         // Wire BNC-limit auto-detect (Option B): when the pool sees a 530
         // "restricted to N simultaneous logins", tighten BOTH the gate AND
         // the pool's max size to N-1 (reserve one slot for ghost-kill).
@@ -400,6 +405,7 @@ public class SpreadManager : IDisposable
                     {
                         await pool.DisposeAsync();
                         var newPool = new FtpConnectionPool(factory, neededSize);
+                        newPool.ConfigureHealth(_config.Spread.ValidateConnectionOnBorrow, _config.Spread.SpreadKeepaliveSeconds);
                         await newPool.Initialize(CancellationToken.None);
                         lock (_lock) _spreadPools[id] = newPool;
                         Log.Information("Spread pool replaced for {Server} (old size={Old}, new size={New})",
