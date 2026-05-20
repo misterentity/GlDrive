@@ -16,7 +16,15 @@ public class FtpConnectionPool : IAsyncDisposable
     private int _created;
     private int _active;
     private bool _disposed;
-    private long _lastGhostKillTicks;
+    // Ghost-kill is fired AT MOST ONCE per pressure episode. 0 = available,
+    // 1 = already used since the last successful connect. Reset by RecordConnect.
+    // Rationale: the first login-limit error gets one !entity ghost-kill to clear
+    // genuinely-stale BNC sessions. If the limit persists, the sessions aren't
+    // ghosts — they're our own live connections — so repeating the kill just
+    // spams !entity logins, which the BNC reads as a reconnect storm and answers
+    // with a multi-minute cooldown ("actively refused"). Observed 2026-05-20:
+    // 6 kills in 4 minutes tripped the cooldown and stalled an active race.
+    private int _ghostKilledSinceSuccess;
 
     // Health counters — flushed hourly by HealthRollup
     public double AvgConnectMs { get; private set; }
@@ -60,6 +68,9 @@ public class FtpConnectionPool : IAsyncDisposable
 
     internal void RecordConnect(double ms)
     {
+        // A successful connect ends the current pressure episode — re-arm the
+        // single ghost-kill for the next time the BNC starts rejecting us.
+        Interlocked.Exchange(ref _ghostKilledSinceSuccess, 0);
         lock (_connectMsSamples)
         {
             if (_connectMsSamples.Count < MaxHealthSamples) _connectMsSamples.Add(ms);
@@ -368,16 +379,18 @@ public class FtpConnectionPool : IAsyncDisposable
                         Log.Debug(parseEx, "Pool: BNC limit parse failed (non-fatal)");
                     }
 
-                    var nowTicks = DateTime.UtcNow.Ticks;
-                    var lastTicks = Interlocked.Read(ref _lastGhostKillTicks);
-                    if (new TimeSpan(nowTicks - lastTicks).TotalSeconds > 5 &&
-                        Interlocked.CompareExchange(ref _lastGhostKillTicks, nowTicks, lastTicks) == lastTicks)
+                    // Ghost-kill ONCE per pressure episode. CompareExchange(1,0)
+                    // succeeds only for the first caller since the last successful
+                    // connect; everyone after that falls through to plain
+                    // fail-and-backoff (the slot will free when an active transfer
+                    // finishes). RecordConnect re-arms it on the next success.
+                    if (Interlocked.CompareExchange(ref _ghostKilledSinceSuccess, 1, 0) == 0)
                     {
                         try
                         {
                             await _factory.KillGhosts(ct);
                             IncrementGhostKill();
-                            Log.Information("Pool: ghost kill triggered by login-limit error from BNC");
+                            Log.Information("Pool: ghost kill (once per episode) triggered by login-limit from BNC");
                         }
                         catch (Exception ghostEx)
                         {
@@ -386,17 +399,15 @@ public class FtpConnectionPool : IAsyncDisposable
                     }
                     else
                     {
-                        Log.Debug("Pool: skipping login-limit ghost kill — recent kill <5s ago");
+                        Log.Debug("Pool: login-limit persists after ghost kill — NOT re-killing (avoids BNC reconnect-storm cooldown); waiting for a slot to free");
                     }
                 }
                 else
                 {
-                // Kill ghost connections and retry once (throttle to once per 30s).
-                // CompareExchange ensures only one thread wins the throttle window.
-                var nowTicks = DateTime.UtcNow.Ticks;
-                var lastTicks = Interlocked.Read(ref _lastGhostKillTicks);
-                if (new TimeSpan(nowTicks - lastTicks).TotalSeconds > 30 &&
-                    Interlocked.CompareExchange(ref _lastGhostKillTicks, nowTicks, lastTicks) == lastTicks)
+                // Generic (non-login-limit) connection failure. Try a single
+                // ghost-kill per episode, then retry once. Same once-per-episode
+                // rule prevents !entity reconnect storms.
+                if (Interlocked.CompareExchange(ref _ghostKilledSinceSuccess, 1, 0) == 0)
                 {
                     try
                     {
