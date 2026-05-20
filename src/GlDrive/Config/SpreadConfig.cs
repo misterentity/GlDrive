@@ -12,6 +12,23 @@ public class SpreadConfig
     public int TransferTimeoutSeconds { get; set; } = 60;
     public int HardTimeoutSeconds { get; set; } = 1200;
     public int MaxConcurrentRaces { get; set; } = 1;
+
+    /// <summary>
+    /// Send a NOOP liveness probe before handing out a pooled spread connection
+    /// for an FXP transfer. Spread pools have no keepalive, so a connection can
+    /// sit idle long enough for the BNC/network to silently close its socket;
+    /// using it then fails with "No connection to the server exists" mid-transfer.
+    /// Validating on borrow catches the dead socket and swaps in a fresh
+    /// connection. Costs ~1 round-trip per transfer. Default on.
+    /// </summary>
+    public bool ValidateConnectionOnBorrow { get; set; } = true;
+
+    /// <summary>
+    /// Keepalive interval (seconds) for idle spread-pool connections. A periodic
+    /// NOOP keeps sockets warm so they don't get reaped by the BNC during quiet
+    /// spells between races. 0 disables. Default 30s.
+    /// </summary>
+    public int SpreadKeepaliveSeconds { get; set; } = 30;
     public bool AutoRaceOnNotification { get; set; }
     public bool NotifyOnRaceComplete { get; set; } = true;
     public List<string> NukeMarkers { get; set; } = [".nuke", "NUKED-"];

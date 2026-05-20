@@ -132,6 +132,83 @@ public class FtpConnectionPool : IAsyncDisposable
         _pool = Channel.CreateBounded<AsyncFtpClient>(maxSize);
     }
 
+    // Health options (v2.6.1). Spread pools have no ConnectionMonitor keepalive
+    // like the main pool, so idle connections die silently and the next FXP
+    // borrow fails "No connection to the server exists". Two mitigations:
+    //  - _validateOnBorrow: NOOP-probe a pooled connection before handing it out.
+    //  - keepalive timer: periodic NOOP on one idle connection per tick.
+    private volatile bool _validateOnBorrow;
+    private int _keepaliveSeconds;
+    private Timer? _keepaliveTimer;
+
+    /// <summary>
+    /// Enable borrow-time liveness validation and/or a keepalive timer. Called
+    /// by SpreadManager after pool creation; the main filesystem pool leaves
+    /// these off (it has ConnectionMonitor). Idempotent — safe to call on reinit.
+    /// </summary>
+    public void ConfigureHealth(bool validateOnBorrow, int keepaliveSeconds)
+    {
+        _validateOnBorrow = validateOnBorrow;
+        _keepaliveSeconds = keepaliveSeconds;
+
+        _keepaliveTimer?.Dispose();
+        _keepaliveTimer = null;
+        if (keepaliveSeconds > 0 && !_disposed)
+        {
+            var period = TimeSpan.FromSeconds(keepaliveSeconds);
+            _keepaliveTimer = new Timer(_ => KeepaliveTick(), null, period, period);
+        }
+    }
+
+    /// <summary>
+    /// NOOP-probe a connection with a short timeout. Returns false on any error
+    /// — caller should quarantine and replace. Never throws.
+    /// </summary>
+    private static async Task<bool> IsLive(AsyncFtpClient client, CancellationToken ct)
+    {
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(3));
+            var reply = await client.Execute("NOOP", cts.Token);
+            return reply.Success;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Keepalive: probe ONE idle connection per tick. Pulling a single
+    /// connection keeps the window tiny — a borrower that arrives mid-probe
+    /// either finds the remaining connections or waits on ReadAsync (the
+    /// _created count is unchanged, so the cap is respected) until this
+    /// returns the probed connection. Dead connections are quarantined.
+    /// </summary>
+    private async void KeepaliveTick()
+    {
+        if (_disposed || _keepaliveSeconds <= 0) return;
+        if (!_pool.Reader.TryRead(out var client)) return;
+        try
+        {
+            if (await IsLive(client, CancellationToken.None))
+            {
+                if (!_pool.Writer.TryWrite(client))
+                    QuarantineDecCreated(client);
+            }
+            else
+            {
+                QuarantineDecCreated(client);
+                Log.Debug("Pool keepalive: dropped dead idle connection (created={Created})", _created);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Pool keepalive tick failed");
+        }
+    }
+
     public int ActiveCount => _active;
     public int TotalCreated => _created;
     public int MaxSize => _maxSize;
@@ -230,15 +307,16 @@ public class FtpConnectionPool : IAsyncDisposable
         // Try to get from pool first
         if (_pool.Reader.TryRead(out var client))
         {
-            if (client.IsConnected && IsGnuTlsHealthy(client))
+            if (client.IsConnected && IsGnuTlsHealthy(client)
+                && (!_validateOnBorrow || await IsLive(client, ct)))
             {
                 Interlocked.Increment(ref _active);
                 return new PooledConnection(client, this);
             }
 
-            // Stale or corrupt connection — quarantine instead of dispose.
-            // A connection that failed IsGnuTlsHealthy is exactly the kind we
-            // most fear running gnutls_deinit() on.
+            // Stale, corrupt, or NOOP-dead connection — quarantine instead of
+            // dispose. A connection that failed IsGnuTlsHealthy or the NOOP
+            // probe is exactly the kind we most fear running gnutls_deinit() on.
             IncrementDisconnect();
             QuarantineDecCreated(client);
         }
@@ -367,13 +445,14 @@ public class FtpConnectionPool : IAsyncDisposable
 
         // At capacity — wait for one to be returned
         client = await _pool.Reader.ReadAsync(ct);
-        if (client.IsConnected && IsGnuTlsHealthy(client))
+        if (client.IsConnected && IsGnuTlsHealthy(client)
+            && (!_validateOnBorrow || await IsLive(client, ct)))
         {
             Interlocked.Increment(ref _active);
             return new PooledConnection(client, this);
         }
 
-        // Stale — quarantine (decrements _created internally) instead of dispose.
+        // Stale or NOOP-dead — quarantine (decrements _created internally).
         IncrementDisconnect();
         QuarantineDecCreated(client);
         if (Interlocked.Increment(ref _created) <= _maxSize)
@@ -657,6 +736,8 @@ public class FtpConnectionPool : IAsyncDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        _keepaliveTimer?.Dispose();
+        _keepaliveTimer = null;
         _pool.Writer.Complete();
         IsConnected = false;
 

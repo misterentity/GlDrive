@@ -249,6 +249,16 @@
                                   ToolTip="When on, SpreadManager logs every rule evaluation at Info level. Useful for diagnosing filter decisions."/>
 
                         <Separator Margin="0,0,0,12"/>
+                        <TextBlock Text="Connection Health" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                        <CheckBox Content="Validate connection before each transfer (NOOP probe)"
+                                  IsChecked="{Binding SpreadValidateOnBorrow}" Margin="0,0,0,4"
+                                  ToolTip="Sends a NOOP to verify a pooled connection is alive before using it for FXP. Prevents 'No connection to the server exists' failures from sockets the BNC closed while idle. Recommended on."/>
+                        <TextBlock Text="Keepalive interval (seconds, 0 = off):" Margin="0,4,0,4"/>
+                        <TextBox Text="{Binding SpreadKeepaliveSeconds, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,12"
+                                 ToolTip="Periodically NOOPs idle spread-pool connections to keep them warm between races. 30s default."/>
+
+                        <Separator Margin="0,0,0,12"/>
                         <TextBlock Text="Global Skiplist" FontWeight="SemiBold" Margin="0,0,0,8"/>
                         <DataGrid x:Name="GlobalSkiplistGrid"
                                   AutoGenerateColumns="False" CanUserAddRows="False"

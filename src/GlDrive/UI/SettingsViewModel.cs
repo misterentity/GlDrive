@@ -42,6 +42,8 @@ public class SettingsViewModel : INotifyPropertyChanged
     private bool _spreadAutoRace;
     private bool _spreadNotifyComplete;
     private bool _spreadDebugMode;
+    private bool _spreadValidateOnBorrow;
+    private string _spreadKeepaliveSeconds;
 
     public SettingsViewModel(AppConfig config)
     {
@@ -78,6 +80,8 @@ public class SettingsViewModel : INotifyPropertyChanged
         _spreadAutoRace = config.Spread.AutoRaceOnNotification;
         _spreadNotifyComplete = config.Spread.NotifyOnRaceComplete;
         _spreadDebugMode = config.Spread.DebugMode;
+        _spreadValidateOnBorrow = config.Spread.ValidateConnectionOnBorrow;
+        _spreadKeepaliveSeconds = config.Spread.SpreadKeepaliveSeconds.ToString();
 
         GlobalSkiplist = new ObservableCollection<SkiplistRule>(config.Spread.GlobalSkiplist);
     }
@@ -114,6 +118,8 @@ public class SettingsViewModel : INotifyPropertyChanged
     public bool SpreadAutoRace { get => _spreadAutoRace; set { _spreadAutoRace = value; OnPropertyChanged(); } }
     public bool SpreadNotifyComplete { get => _spreadNotifyComplete; set { _spreadNotifyComplete = value; OnPropertyChanged(); } }
     public bool SpreadDebugMode { get => _spreadDebugMode; set { _spreadDebugMode = value; OnPropertyChanged(); } }
+    public bool SpreadValidateOnBorrow { get => _spreadValidateOnBorrow; set { _spreadValidateOnBorrow = value; OnPropertyChanged(); } }
+    public string SpreadKeepaliveSeconds { get => _spreadKeepaliveSeconds; set { _spreadKeepaliveSeconds = value; OnPropertyChanged(); } }
     public ObservableCollection<SkiplistRule> GlobalSkiplist { get; set; } = new();
 
     // Agent properties — bound directly to _config.Agent (no local backing field needed)
@@ -304,6 +310,8 @@ public class SettingsViewModel : INotifyPropertyChanged
         config.Spread.AutoRaceOnNotification = SpreadAutoRace;
         config.Spread.NotifyOnRaceComplete = SpreadNotifyComplete;
         config.Spread.DebugMode = SpreadDebugMode;
+        config.Spread.ValidateConnectionOnBorrow = SpreadValidateOnBorrow;
+        config.Spread.SpreadKeepaliveSeconds = int.TryParse(SpreadKeepaliveSeconds, out var sks) ? Math.Clamp(sks, 0, 300) : 30;
         config.Spread.GlobalSkiplist = GlobalSkiplist.ToList();
 
         // AI Agent — properties bind directly to _config.Agent, but mirror to the passed-in
