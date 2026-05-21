@@ -2010,7 +2010,7 @@ public class SpreadJob : IDisposable
         if (!ok)
         {
             RecordIfPermanent(dstId, basePath, code, msg);
-            RecordDirscriptDenialIfMatch(dstId, basePath, msg);
+            RecordPermanentMkdDenialIfMatch(dstId, basePath, code, msg);
             throw new IOException($"MKD failed for {basePath}");
         }
 
@@ -2033,23 +2033,28 @@ public class SpreadJob : IDisposable
             if (!okSub)
             {
                 RecordIfPermanent(dstId, current, codeSub, msgSub);
-                RecordDirscriptDenialIfMatch(dstId, current, msgSub);
+                RecordPermanentMkdDenialIfMatch(dstId, current, codeSub, msgSub);
                 throw new IOException($"MKD failed for {current}");
             }
         }
     }
 
     /// <summary>
-    /// Issue #6: if the MKD reply mentions "Denied by dirscript" (glftpd's
-    /// section path filter), remember this base path for the rest of the job
-    /// so FindBestTransfer stops picking dest candidates that route through it.
-    /// dirscript is deterministic — once it has said NO for a path on this dest,
-    /// it will keep saying NO. Logging another WRN every time helps no one.
+    /// If the MKD reply is a PERMANENT denial (dirscript, "not allowed to make
+    /// directories", permission denied, path-filter, etc. — see
+    /// MkdFailureClassifier), remember this base path for the rest of the job so
+    /// FindBestTransfer immediately stops picking dest candidates that route
+    /// through it. These denials are deterministic — once the server says NO for
+    /// a path, it keeps saying NO — so retrying every file's MKD just spams 550s
+    /// (observed 2026-05-21: 24 MKD failures in one race for the same path before
+    /// the slow backoff ladder dropped the dest). Previously this only caught
+    /// "Denied by dirscript", missing "Not allowed to make directories here",
+    /// which is why MasterChef hammered superbnc 24 times.
     /// </summary>
-    private void RecordDirscriptDenialIfMatch(string dstId, string basePath, string? msg)
+    private void RecordPermanentMkdDenialIfMatch(string dstId, string basePath, string code, string? msg)
     {
         if (string.IsNullOrEmpty(msg)) return;
-        if (!msg.Contains("Denied by dirscript", StringComparison.OrdinalIgnoreCase)) return;
+        if (!MkdFailureClassifier.IsPermanent(code, msg)) return;
 
         lock (_ownershipLock)
         {

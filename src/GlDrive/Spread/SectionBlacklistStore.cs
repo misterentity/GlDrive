@@ -239,6 +239,10 @@ public static class MkdFailureClassifier
         if (m.Contains("path filter", StringComparison.OrdinalIgnoreCase)) return true;
         if (m.Contains("not a member", StringComparison.OrdinalIgnoreCase)) return true;
         if (m.Contains("You cannot create", StringComparison.OrdinalIgnoreCase)) return true;
+        // dirscript denial — also deterministic; the script will reject the same
+        // path every time. Previously only the in-race guard caught this, so it
+        // never made it to the persistent blacklist.
+        if (m.Contains("Denied by dirscript", StringComparison.OrdinalIgnoreCase)) return true;
         return false;
     }
 }
