@@ -493,10 +493,29 @@ public class FxpTransfer
             srcTcp.Close();
             dstTcp.Close();
 
-            // Get completion replies
-            var srcComplete = await src.GetReply(ct);
-            var dstComplete = await dst.GetReply(ct);
-            Log.Debug("Relay complete: src={SrcCode}, dst={DstCode}", srcComplete.Code, dstComplete.Code);
+            // The relay loop exited on a clean EOF from the source data channel
+            // and every byte was flushed to the destination — the file is
+            // delivered. The 226 completion replies are only confirmation. BNCs
+            // under race load very frequently drop the now-idle CONTROL channel
+            // in the window between the last data byte and the 226, throwing
+            // "No connection to the server exists" at GetReply. That was the #1
+            // failure on 2026-05-21 (80 of 175), and every one of them had
+            // already transferred the file — they were getting needlessly
+            // re-raced. When we actually relayed bytes, treat a completion-reply
+            // failure as success; the next scan + SFV verifies the dest copy and
+            // re-races only if it's genuinely short.
+            try
+            {
+                var srcComplete = await src.GetReply(ct);
+                var dstComplete = await dst.GetReply(ct);
+                Log.Debug("Relay complete: src={SrcCode}, dst={DstCode}", srcComplete.Code, dstComplete.Code);
+            }
+            catch (Exception replyEx) when (totalRelayed > 0)
+            {
+                Log.Information("Relay: {Bytes} bytes delivered but completion reply failed ({Err}) — " +
+                    "counting as delivered; next scan verifies the dest copy",
+                    totalRelayed, replyEx.Message);
+            }
 
             TotalBytes = totalRelayed;
             SetState(TransferState.Complete);
