@@ -21,6 +21,25 @@ public class RaceHistoryItem
     public string SiteNames { get; set; } = "";
     public string SkiplistResult { get; set; } = ""; // "Allowed" or "Denied by: *PATTERN*"
     public List<SkiplistTraceEntry>? SkiplistTrace { get; set; }
+
+    // PRD R1 — race outcome metrics. FilesTotal is the release's file count;
+    // FilesDelivered is how many reached at least one viable destination;
+    // CleanComplete is true when every non-source/non-download-only dest got
+    // the full set (0 undelivered).
+    public int FilesTotal { get; set; }
+    public int FilesDelivered { get; set; }
+    public bool CleanComplete { get; set; }
+
+    // PRD O3 — failure taxonomy. One of: "", "config", "upload-denied",
+    // "bnc-pressure", "transport", "not-found", "nuked", "no-activity".
+    public string FailureCategory { get; set; } = "";
+}
+
+/// <summary>PRD R1/O3 aggregate. CleanRate = Clean / Finished (0 when none).</summary>
+public readonly record struct RaceSummary(
+    int Finished, int Clean, int Failed, IReadOnlyDictionary<string, int> FailureCounts)
+{
+    public double CleanRate => Finished > 0 ? (double)Clean / Finished : 0.0;
 }
 
 public class RaceHistoryStore
@@ -33,6 +52,26 @@ public class RaceHistoryStore
     public IReadOnlyList<RaceHistoryItem> Items
     {
         get { lock (_lock) return _items.ToList(); }
+    }
+
+    /// <summary>
+    /// PRD R1/O3 — aggregate outcome summary across recorded races. CleanRate is
+    /// clean completions as a fraction of finished (non-running) races.
+    /// FailureCounts groups failed races by category for the taxonomy view.
+    /// </summary>
+    public RaceSummary Summarize()
+    {
+        lock (_lock)
+        {
+            var finished = _items.Where(i => i.Result != SpreadJobState.Running).ToList();
+            var clean = finished.Count(i => i.CleanComplete);
+            var failed = finished.Count(i => i.Result == SpreadJobState.Failed);
+            var failureCounts = finished
+                .Where(i => i.Result == SpreadJobState.Failed && !string.IsNullOrEmpty(i.FailureCategory))
+                .GroupBy(i => i.FailureCategory)
+                .ToDictionary(g => g.Key, g => g.Count());
+            return new RaceSummary(finished.Count, clean, failed, failureCounts);
+        }
     }
 
     public void Load()

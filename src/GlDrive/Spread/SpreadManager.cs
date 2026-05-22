@@ -342,6 +342,17 @@ public class SpreadManager : IDisposable
             var totalFiles = job.Sites.Values.Any() ? job.Sites.Values.Max(s => s.FilesOwned) : 0;
             var siteNames = string.Join(", ", job.Sites.Values.Select(s => s.ServerName));
 
+            // PRD R1 — outcome metrics. FilesTotal = release file count (max across
+            // sites). Destinations = non-source sites. FilesDelivered = best dest's
+            // owned count. CleanComplete = every dest got the full set.
+            var filesTotal = job.Sites.Values.Any() ? job.Sites.Values.Max(s => s.FilesTotal) : 0;
+            var dests = job.Sites.Values.Where(s => !s.IsSource).ToList();
+            var filesDelivered = dests.Count > 0 ? dests.Max(s => s.FilesOwned) : 0;
+            var cleanComplete = job.State == SpreadJobState.Completed
+                && filesTotal > 0
+                && dests.Count > 0
+                && dests.All(s => s.FilesOwned >= filesTotal);
+
             _history.Add(new RaceHistoryItem
             {
                 Id = job.Id,
@@ -356,7 +367,13 @@ public class SpreadManager : IDisposable
                 BytesTransferred = totalBytes,
                 SiteNames = siteNames,
                 SkiplistResult = job.SkiplistResult,
-                SkiplistTrace = job.SkiplistTrace
+                SkiplistTrace = job.SkiplistTrace,
+                FilesTotal = filesTotal,
+                FilesDelivered = filesDelivered,
+                CleanComplete = cleanComplete,
+                FailureCategory = job.State == SpreadJobState.Failed
+                    ? SpreadJob.ClassifyFailure(job.LastError)
+                    : ""
             });
         }
         catch (Exception ex)
