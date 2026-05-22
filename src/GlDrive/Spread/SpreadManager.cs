@@ -57,6 +57,34 @@ public class SpreadManager : IDisposable
     }
 
     public RaceHistoryStore History => _history;
+
+    /// <summary>
+    /// PRD O2 — per-server pool health snapshot. Returns one entry per known
+    /// spread pool with live counters (size/active/created/quarantine), BNC
+    /// auto-detected login cap, and cooldown status. Surfaced in the Spread
+    /// tab so a user can see at a glance why throughput is what it is.
+    /// </summary>
+    public IReadOnlyList<PoolHealthSnapshot> PoolHealth()
+    {
+        var list = new List<PoolHealthSnapshot>();
+        lock (_lock)
+        {
+            foreach (var (id, pool) in _spreadPools)
+            {
+                var name = _config.Servers.FirstOrDefault(s => s.Id == id)?.Name ?? id;
+                list.Add(new PoolHealthSnapshot(
+                    ServerId: id,
+                    ServerName: name,
+                    MaxSize: pool.MaxSize,
+                    Active: pool.ActiveCount,
+                    Created: pool.TotalCreated,
+                    Quarantined: pool.QuarantineSize,
+                    ObservedBncCap: pool.ObservedLoginCap,
+                    InCooldown: pool.IsInCooldown));
+            }
+        }
+        return list;
+    }
     public SectionBlacklistStore Blacklist => _blacklist;
 
     public event Action<SpreadJob>? JobStarted;

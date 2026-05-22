@@ -65,6 +65,14 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         set { _sessionSummary = value; OnPropertyChanged(); }
     }
 
+    // PRD O2 — per-server pool health line.
+    private string _poolHealth = "";
+    public string PoolHealth
+    {
+        get => _poolHealth;
+        set { _poolHealth = value; OnPropertyChanged(); }
+    }
+
     public SpreadJobVm? SelectedSpreadJob
     {
         get => _selectedSpreadJob;
@@ -227,6 +235,23 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
     {
         var spread = _serverManager.Spread;
         if (spread == null) return;
+
+        // PRD O2 — refresh pool health on every tick.
+        var snaps = spread.PoolHealth();
+        if (snaps.Count == 0)
+        {
+            PoolHealth = "";
+        }
+        else
+        {
+            PoolHealth = string.Join("   ",
+                snaps.Select(s =>
+                {
+                    var cap = s.ObservedBncCap is int c ? $" bnc:{c}" : "";
+                    var cd = s.InCooldown ? " [COOLDOWN]" : "";
+                    return $"{s.ServerName} {s.Active}/{s.Created}/{s.MaxSize} q:{s.Quarantined}{cap}{cd}";
+                }));
+        }
 
         var jobs = spread.ActiveJobs;
         var currentIds = jobs.Select(j => j.Id).ToHashSet();

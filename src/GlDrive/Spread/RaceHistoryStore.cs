@@ -42,6 +42,17 @@ public readonly record struct RaceSummary(
     public double CleanRate => Finished > 0 ? (double)Clean / Finished : 0.0;
 }
 
+/// <summary>PRD O2 — per-server spread-pool health for the diagnostics readout.</summary>
+public readonly record struct PoolHealthSnapshot(
+    string ServerId,
+    string ServerName,
+    int MaxSize,
+    int Active,
+    int Created,
+    int Quarantined,
+    int? ObservedBncCap,
+    bool InCooldown);
+
 public class RaceHistoryStore
 {
     private static readonly string FilePath = Path.Combine(ConfigManager.AppDataPath, "race-history.json");
