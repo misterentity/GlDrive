@@ -1050,7 +1050,7 @@ public class SpreadJob : IDisposable
     ///   - "[ NUKED ] ...", "[ Incomplete ] ..."            (bracketed status stubs)
     ///   - any 0-byte file starting with "-" or "["         (belt-and-suspenders)
     /// </summary>
-    private static bool IsZipscriptArtifact(string name, long size)
+    internal static bool IsZipscriptArtifact(string name, long size)
     {
         if (string.IsNullOrEmpty(name)) return false;
 
