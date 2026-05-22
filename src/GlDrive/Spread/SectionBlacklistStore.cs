@@ -125,6 +125,26 @@ public sealed class SectionBlacklistStore
     }
 
     /// <summary>
+    /// Count of distinct still-active (non-expired) blacklisted sections for a
+    /// server. SpreadManager uses this for self-healing auto-download-only: a
+    /// server that has permanently failed uploads across several distinct
+    /// sections almost certainly can't receive uploads at all (leech-only BNC),
+    /// so it should be excluded as a destination entirely rather than discovered
+    /// section-by-section. (PRD R2.)
+    /// </summary>
+    public int DistinctActiveSectionCount(string serverId)
+    {
+        if (string.IsNullOrWhiteSpace(serverId)) return 0;
+        var now = DateTime.UtcNow;
+        lock (_lock)
+        {
+            return _entries.Count(kv =>
+                kv.Key.serverId == serverId &&
+                now - kv.Value.LastFailedAt <= EntryTtl);
+        }
+    }
+
+    /// <summary>
     /// True when an entry exists but has aged past its TTL — useful for
     /// UI / error messages to distinguish "still blocked" from "retrying".
     /// </summary>
