@@ -1636,6 +1636,37 @@ public class SpreadJob : IDisposable
                 Log.Warning("FXP failed: {File} ({Src} -> {Dst}): {Error}", file.Name,
                     _serverConfigs[srcId].Name, _serverConfigs[dstId].Name, transfer.ErrorMessage);
 
+                // Permanent UPLOAD denial (STOR 553 "no upload rights" /
+                // path-filter)? The account can't write to this dest tree at all
+                // — retrying is futile. Drop the dest for this race immediately
+                // (in-race guard) AND blacklist (dst, section) so future races
+                // skip it. Observed 2026-05-22: 119 SYN->superbnc STOR failures
+                // because superbnc is leech-only; each was retried to the cap.
+                if (MkdFailureClassifier.IsPermanentUploadDenial(transfer.ErrorMessage))
+                {
+                    // In-race guard: add this dest's base path to the denied set so
+                    // FindBestTransfer stops picking it for every remaining file.
+                    lock (_ownershipLock)
+                    {
+                        if (!_destDirscriptDenied.TryGetValue(dstId, out var set))
+                        {
+                            set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                            _destDirscriptDenied[dstId] = set;
+                        }
+                        set.Add(dstBasePath);
+                    }
+                    // Persistent blacklist so future races skip (dst, section).
+                    if (_blacklist != null)
+                    {
+                        var dn = _serverConfigs.TryGetValue(dstId, out var c2) ? c2.Name : dstId;
+                        _blacklist.RecordPermanentFailure(dstId, dn, Section, dstBasePath,
+                            transfer.ErrorMessage ?? "upload denied");
+                    }
+                    Log.Information("Spread: {Dst} permanently can't receive [{Section}] (upload denied) — " +
+                        "dropped for this race + blacklisted",
+                        _serverConfigs.TryGetValue(dstId, out var c3) ? c3.Name : dstId, Section);
+                }
+
                 // Push the dest onto the backoff ladder. Both MKD and FXP
                 // failures flow through here — a destination whose data
                 // channel keeps dying (GnuTLS corruption, BNC dropouts)
