@@ -541,9 +541,18 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
                 break;
 
             case "/keyx":
-                // /keyx <nick> — initiate DH1080
-                if (!string.IsNullOrEmpty(args))
-                    await irc.InitiateKeyExchange(args.Trim());
+                // /keyx [nick] — initiate DH1080. With no argument, default to the
+                // current PM target / channel (same as /unkey). PM windows have no
+                // nick list, so /keyx-with-no-arg is the only way to start an
+                // exchange there — previously it silently did nothing, which is
+                // why PM key exchange "didn't work".
+                var keyxTarget = string.IsNullOrWhiteSpace(args)
+                    ? _selectedChannel?.Name
+                    : args.Trim().TrimStart('@', '+', '%', '~', '&');
+                if (!string.IsNullOrEmpty(keyxTarget))
+                    await irc.InitiateKeyExchange(keyxTarget);
+                else
+                    AddLocalSystem("/keyx: open a PM with the nick first, or use /keyx <nick>");
                 break;
 
             case "/unkey":
