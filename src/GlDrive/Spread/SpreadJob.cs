@@ -87,6 +87,10 @@ public class SpreadJob : IDisposable
     private readonly Dictionary<string, HashSet<string>> _destDirscriptDenied =
         new(StringComparer.Ordinal);
 
+    // PRD R2: server IDs we've already logged the auto-download-only flag for,
+    // so the "auto-flagged download-only" line prints once per server per race.
+    private readonly HashSet<string> _autoDownloadOnlyLogged = new(StringComparer.Ordinal);
+
     // Set to true when the race terminates due to a skiplist/blacklist denial.
     // Used by EmitRaceOutcome to emit "blacklisted" instead of "aborted".
     private bool _blacklisted = false;
@@ -337,6 +341,22 @@ public class SpreadJob : IDisposable
                 if (sitePaths.ContainsKey(serverId)) continue; // Already has it
                 if (config.SpreadSite.DownloadOnly)
                 {
+                    downloadOnlyDests.Add(config.Name);
+                    continue;
+                }
+
+                // PRD R2 — self-healing auto-download-only. A server that has
+                // permanently failed uploads across >=3 distinct sections almost
+                // certainly can't receive uploads at all (leech-only BNC). Stop
+                // discovering this section-by-section: treat it as download-only.
+                // Cleared automatically when any upload succeeds (ClearBlacklistOnSuccess
+                // removes the entry, dropping the distinct count back below 3).
+                if (_blacklist != null && _blacklist.DistinctActiveSectionCount(serverId) >= 3)
+                {
+                    if (_autoDownloadOnlyLogged.Add(serverId))
+                        Log.Information("Spread: {Server} auto-flagged download-only — permanent upload " +
+                            "denials across {Count} sections; excluding as a destination until an upload succeeds",
+                            config.Name, _blacklist.DistinctActiveSectionCount(serverId));
                     downloadOnlyDests.Add(config.Name);
                     continue;
                 }
@@ -1829,6 +1849,14 @@ public class SpreadJob : IDisposable
                 "— last error: {Err}. Remaining destinations continue.",
                 dstName, newCount, dstBasePath, errorMessage ?? "(no message)");
             _forceScan = true;
+        }
+        else if (retryAt == DateTime.MaxValue)
+        {
+            // Already dropped for this race (a prior failure blew the backoff
+            // ladder). Don't compute (MaxValue - now) — that printed the absurd
+            // "backing off 251622991756s" line. Just note the repeat failure.
+            Log.Debug("Spread: destination {Dst} already dropped this race — repeat failure ({Kind}) — {Err}",
+                dstName, isMkd ? "MKD" : "FXP", errorMessage ?? "(no message)");
         }
         else
         {

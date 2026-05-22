@@ -26,6 +26,15 @@ public class FtpConnectionPool : IAsyncDisposable
     // 6 kills in 4 minutes tripped the cooldown and stalled an active race.
     private int _ghostKilledSinceSuccess;
 
+    // PRD H2 — BNC cooldown. When the server starts refusing connections at the
+    // TCP level ("actively refused") or keeps returning 530 AFTER we already
+    // spent our one ghost-kill this episode, the BNC has tripped its own
+    // reconnect cooldown. Hammering it with more connection attempts only
+    // prolongs the refusal (observed 2026-05-20). Park new-connection creation
+    // for CooldownWindow; existing pooled connections are still served.
+    private long _refusedUntilTicks;
+    private static readonly TimeSpan CooldownWindow = TimeSpan.FromSeconds(90);
+
     // Health counters — flushed hourly by HealthRollup
     public double AvgConnectMs { get; private set; }
     public double P99ConnectMs { get; private set; }
@@ -69,8 +78,9 @@ public class FtpConnectionPool : IAsyncDisposable
     internal void RecordConnect(double ms)
     {
         // A successful connect ends the current pressure episode — re-arm the
-        // single ghost-kill for the next time the BNC starts rejecting us.
+        // single ghost-kill and clear any BNC cooldown.
         Interlocked.Exchange(ref _ghostKilledSinceSuccess, 0);
+        Interlocked.Exchange(ref _refusedUntilTicks, 0);
         lock (_connectMsSamples)
         {
             if (_connectMsSamples.Count < MaxHealthSamples) _connectMsSamples.Add(ms);
@@ -332,6 +342,32 @@ public class FtpConnectionPool : IAsyncDisposable
             QuarantineDecCreated(client);
         }
 
+        // PRD H2: if the server is in a BNC cooldown, don't attempt a new
+        // connection — it'll just be refused and deepen the cooldown. Fall
+        // through to wait on the channel (an in-flight transfer may return a
+        // usable connection) or fail fast if the pool is truly empty.
+        var refusedUntil = Interlocked.Read(ref _refusedUntilTicks);
+        if (refusedUntil > 0 && DateTime.UtcNow.Ticks < refusedUntil)
+        {
+            if (_created <= 0)
+            {
+                IncrementExhaust();
+                throw new InvalidOperationException(
+                    "Server in BNC cooldown — not attempting new connection");
+            }
+            client = await _pool.Reader.ReadAsync(ct);
+            if (client.IsConnected && IsGnuTlsHealthy(client)
+                && (!_validateOnBorrow || await IsLive(client, ct)))
+            {
+                Interlocked.Increment(ref _active);
+                return new PooledConnection(client, this);
+            }
+            IncrementDisconnect();
+            QuarantineDecCreated(client);
+            throw new InvalidOperationException(
+                "Server in BNC cooldown — pooled connection was dead");
+        }
+
         // Pool empty — create new if under limit
         if (Interlocked.Increment(ref _created) <= _maxSize)
         {
@@ -345,6 +381,17 @@ public class FtpConnectionPool : IAsyncDisposable
             }
             catch (Exception ex)
             {
+                // BNC cooldown detection: TCP-level refusal, or a 530 that
+                // persists after we already used our one ghost-kill this episode.
+                var refused = ex.Message?.Contains("actively refused", StringComparison.OrdinalIgnoreCase) == true
+                    || ex.Message?.Contains("target machine actively refused", StringComparison.OrdinalIgnoreCase) == true
+                    || (HasLoginLimitError(ex) && Interlocked.CompareExchange(ref _ghostKilledSinceSuccess, 1, 1) == 1);
+                if (refused)
+                {
+                    Interlocked.Exchange(ref _refusedUntilTicks, DateTime.UtcNow.Add(CooldownWindow).Ticks);
+                    Log.Information("Pool: server entering {Sec}s BNC cooldown (refusal detected) — pausing new connections",
+                        (int)CooldownWindow.TotalSeconds);
+                }
                 Interlocked.Decrement(ref _created);
                 if (_created >= _maxSize)
                     Log.Debug(ex, "Pool: new connection failed (at capacity, created={Created}, max={Max})", _created, _maxSize);
