@@ -11,11 +11,16 @@
     <StartupObject>GlDrive.Program</StartupObject>
     <AssemblyName>GlDrive</AssemblyName>
     <RootNamespace>GlDrive</RootNamespace>
-    <Version>2.7.0</Version>
+    <Version>2.8.0</Version>
     <Description>Mount a glftpd FTPS server as a Windows drive letter</Description>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Expose internals to the test project (PRD Q1) — IsZipscriptArtifact etc. -->
+    <InternalsVisibleTo Include="GlDrive.Tests" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.3" />

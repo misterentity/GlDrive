@@ -585,7 +585,9 @@ public class FtpConnectionPool : IAsyncDisposable
     // when full — by the time an entry hits 50-deep in the FIFO, several
     // minutes have passed and the native corruption window is much smaller
     // (still nonzero, but a calculated trade vs runaway resource leak).
-    private const int MaxQuarantineSize = 50;
+    // Lowered 50 -> 30 (PRD H1): combined with stopping the NOOP daemon on
+    // quarantine, keeps thread count bounded under sustained race churn.
+    private const int MaxQuarantineSize = 30;
 
     /// <summary>
     /// Quarantine helper: neutralize the GnuTLS session (close socket, mark
@@ -708,6 +710,13 @@ public class FtpConnectionPool : IAsyncDisposable
     {
         try
         {
+            // PRD H1: stop the built-in NOOP daemon so a quarantined (never-disposed)
+            // client doesn't keep a background NOOP task alive forever. The daemon
+            // loop checks Config.Noop each tick and exits when false. Without this,
+            // every quarantined connection retained a live daemon and thread count
+            // climbed with quarantine churn.
+            try { client.Config.Noop = false; } catch { }
+
             // Get the FtpSocketStream via the public IInternalFtpClient interface
             var stream = ((IInternalFtpClient)client).GetBaseStream();
             if (stream == null) return;
