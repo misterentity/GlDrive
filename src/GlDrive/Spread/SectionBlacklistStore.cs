@@ -245,4 +245,32 @@ public static class MkdFailureClassifier
         if (m.Contains("Denied by dirscript", StringComparison.OrdinalIgnoreCase)) return true;
         return false;
     }
+
+    /// <summary>
+    /// Permanent UPLOAD denials seen at STOR time (not MKD). These mean the
+    /// account simply can't write to this destination tree — retrying never
+    /// helps. Matched on the IOException message text (which embeds the FTP
+    /// reply), not a separate code, because the transfer layer surfaces it as
+    /// "STOR failed: 553 ...". Examples:
+    ///   553 Error: you have no upload rights for this directory!
+    ///   553 file: path-filter denied permission. (Filename deny)
+    ///   553 Permission denied
+    /// </summary>
+    public static bool IsPermanentUploadDenial(string? errorMessage)
+    {
+        if (string.IsNullOrEmpty(errorMessage)) return false;
+        var m = errorMessage;
+        // Must be a STOR/upload rejection, not a transient transport error.
+        if (!m.Contains("STOR failed", StringComparison.OrdinalIgnoreCase)
+            && !m.Contains("upload rights", StringComparison.OrdinalIgnoreCase)
+            && !m.Contains("path-filter", StringComparison.OrdinalIgnoreCase)
+            && !m.Contains("path filter", StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (m.Contains("no upload rights", StringComparison.OrdinalIgnoreCase)) return true;
+        if (m.Contains("path-filter denied", StringComparison.OrdinalIgnoreCase)) return true;
+        if (m.Contains("path filter denied", StringComparison.OrdinalIgnoreCase)) return true;
+        if (m.Contains("Permission denied", StringComparison.OrdinalIgnoreCase)) return true;
+        if (m.Contains("Not allowed", StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
 }
