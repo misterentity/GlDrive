@@ -2295,6 +2295,11 @@
                     <TextBlock DockPanel.Dock="Top" Text="{Binding SpreadStatus}" FontSize="12"
                                Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,8"
                                TextWrapping="Wrap"/>
+                    <!-- PRD R1/O3 — session success rate + failure taxonomy -->
+                    <TextBlock DockPanel.Dock="Top" Text="{Binding SessionSummary}" FontSize="11"
+                               Foreground="{DynamicResource AccentBrush}"
+                               FontFamily="{DynamicResource MonoFontFamily}" Margin="0,0,0,8"
+                               TextWrapping="Wrap"/>
                     <!-- Main 2-row layout: AUTO RACES (top, 2*) + SITE SCOREBOARD + AUTO-RACE FEED (bottom, 1*) -->
                     <Grid>
                         <Grid.RowDefinitions>

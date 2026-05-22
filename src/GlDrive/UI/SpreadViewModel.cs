@@ -57,6 +57,14 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         set { _spreadStatus = value; OnPropertyChanged(); }
     }
 
+    // PRD R1/O3 — session success rate + failure taxonomy, surfaced in the Spread tab.
+    private string _sessionSummary = "No races yet";
+    public string SessionSummary
+    {
+        get => _sessionSummary;
+        set { _sessionSummary = value; OnPropertyChanged(); }
+    }
+
     public SpreadJobVm? SelectedSpreadJob
     {
         get => _selectedSpreadJob;
@@ -520,6 +528,23 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
                 Duration = FormatDuration(item.CompletedAt - item.StartedAt),
                 SkiplistTrace = item.SkiplistTrace
             });
+        }
+
+        // PRD R1/O3 — compute + surface the session summary.
+        var sum = spread.History.Summarize();
+        if (sum.Finished == 0)
+        {
+            SessionSummary = "No races yet";
+        }
+        else
+        {
+            var failBreakdown = sum.FailureCounts.Count > 0
+                ? "  ·  " + string.Join("  ", sum.FailureCounts
+                    .OrderByDescending(kv => kv.Value)
+                    .Select(kv => $"{kv.Key}:{kv.Value}"))
+                : "";
+            SessionSummary =
+                $"{sum.Clean}/{sum.Finished} clean ({sum.CleanRate:P0})  ·  {sum.Failed} failed{failBreakdown}";
         }
     }
 

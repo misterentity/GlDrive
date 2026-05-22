@@ -2191,11 +2191,48 @@ public class SpreadJob : IDisposable
         }
     }
 
+    /// <summary>Last failure message (PRD R1/O3). Null if the job didn't fail.</summary>
+    public string? LastError { get; private set; }
+
     private void SetFailed(string message)
     {
         State = SpreadJobState.Failed;
+        LastError = message;
         Error?.Invoke(this, message);
         Log.Warning("Spread job failed: {Release} — {Error}", ReleaseName, message);
+    }
+
+    /// <summary>
+    /// PRD O3 — map a race failure message to a coarse category for metrics/UI.
+    /// Pure + static so it's unit-testable without a live job.
+    /// </summary>
+    public static string ClassifyFailure(string? message)
+    {
+        if (string.IsNullOrEmpty(message)) return "";
+        var m = message;
+        if (m.Contains("NUKED", StringComparison.OrdinalIgnoreCase)) return "nuked";
+        if (m.Contains("not found on any server", StringComparison.OrdinalIgnoreCase)) return "not-found";
+        if (m.Contains("no upload rights", StringComparison.OrdinalIgnoreCase)
+            || m.Contains("Denied by dirscript", StringComparison.OrdinalIgnoreCase)
+            || m.Contains("Not allowed to make directories", StringComparison.OrdinalIgnoreCase)
+            || m.Contains("path-filter", StringComparison.OrdinalIgnoreCase)
+            || m.Contains("Permission denied", StringComparison.OrdinalIgnoreCase))
+            return "upload-denied";
+        if (m.Contains("simultaneous logins", StringComparison.OrdinalIgnoreCase)
+            || m.Contains("actively refused", StringComparison.OrdinalIgnoreCase)
+            || m.Contains("BNC cooldown", StringComparison.OrdinalIgnoreCase))
+            return "bnc-pressure";
+        if (m.Contains("forcibly closed", StringComparison.OrdinalIgnoreCase)
+            || m.Contains("No connection to the server", StringComparison.OrdinalIgnoreCase)
+            || m.Contains("timed out", StringComparison.OrdinalIgnoreCase)
+            || m.Contains("transport connection", StringComparison.OrdinalIgnoreCase))
+            return "transport";
+        if (m.Contains("No activity", StringComparison.OrdinalIgnoreCase)) return "no-activity";
+        if (m.Contains("Need 2+ servers", StringComparison.OrdinalIgnoreCase)
+            || m.Contains("no eligible destination", StringComparison.OrdinalIgnoreCase)
+            || m.Contains("affil-blocked", StringComparison.OrdinalIgnoreCase))
+            return "config";
+        return "other";
     }
 
     public void Dispose()
