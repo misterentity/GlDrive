@@ -66,6 +66,12 @@ public class FtpConnectionPool : IAsyncDisposable
     private readonly Lock _quarantineLock = new();
     public int QuarantineSize { get { lock (_quarantineLock) return _quarantine.Count; } }
 
+    /// <summary>PRD O2 — true while a BNC cooldown is active (no new connections).</summary>
+    public bool IsInCooldown => Interlocked.Read(ref _refusedUntilTicks) > DateTime.UtcNow.Ticks;
+
+    /// <summary>PRD O2 — last observed BNC login cap (parsed from "restricted to N simultaneous logins"), or null.</summary>
+    public int? ObservedLoginCap { get; private set; }
+
     /// <summary>
     /// Fires when the BNC's 530 reply explicitly states a simultaneous-login
     /// limit (e.g. "restricted to 4 simultaneous logins"). Subscribers can
@@ -393,10 +399,14 @@ public class FtpConnectionPool : IAsyncDisposable
                         (int)CooldownWindow.TotalSeconds);
                 }
                 Interlocked.Decrement(ref _created);
+                // PRD O4 — demote to Information. The underlying cause (login limit,
+                // BNC cooldown, ghost-kill triggered) is already logged once per
+                // episode by dedicated paths; repeating it as WRN for every retry
+                // floods the log. The failure-taxonomy metrics surface the pattern.
                 if (_created >= _maxSize)
                     Log.Debug(ex, "Pool: new connection failed (at capacity, created={Created}, max={Max})", _created, _maxSize);
                 else
-                    Log.Warning(ex, "Pool: new connection failed (created={Created}, max={Max})", _created, _maxSize);
+                    Log.Information(ex, "Pool: new connection failed (created={Created}, max={Max})", _created, _maxSize);
 
                 // BNC explicitly said we're out of logins — kill ghosts, but throttle to
                 // once per 5s. Without the throttle, multiple concurrent Borrow() callers
@@ -418,6 +428,7 @@ public class FtpConnectionPool : IAsyncDisposable
                         if (m.Success && int.TryParse(m.Groups[1].Value, out var observedLimit)
                             && observedLimit >= 1 && observedLimit <= 64)
                         {
+                            ObservedLoginCap = observedLimit; // PRD O2 surfacing
                             LoginLimitObserved?.Invoke(observedLimit);
                         }
                     }
