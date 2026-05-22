@@ -1,7 +1,27 @@
 # GlDrive v3.5 — Product Requirements Document
 
-**Status:** Active goal · **Baseline:** v2.6.6 · **Target:** v3.5.0
+**Status:** ✅ **MET** at v3.5.0 (13/13 acceptance criteria) · **Baseline:** v2.6.6
 **Theme:** Polish-focused hardening across Racing, Reliability, Observability, and Quality.
+
+## Acceptance evidence
+
+| ID | Where met | Validation |
+|---|---|---|
+| R1 | v2.9.0 — `RaceHistoryItem.{FilesTotal,FilesDelivered,CleanComplete}` + `Summarize()` + Spread tab "X/Y clean (Z%)" | `RaceSummarizeTests` |
+| R2 | v2.7.0 — `DistinctActiveSectionCount ≥ 3` → auto-DL-only | `BlacklistStoreTests` (threshold + double-count guard) |
+| R3 | v2.7.0 — dropped-dest branch in `RegisterDestFailure` | code inspection |
+| R4 | scorer fail-penalty | `SpreadScorerTests.Failure_penalty_demotes_a_failed_pair_below_a_fresh_one` |
+| H1 | v2.8.0 — `Config.Noop=false` on quarantine + cap 30 | observed bounded threads/memory |
+| H2 | v2.7.0 — `_refusedUntilTicks` 90s gate | code inspection |
+| H3 | 0 crashes 2026-05-20 / 0 crashes 2026-05-21 / 0 crashes 2026-05-22 | log grep |
+| H4 | v2.0.0 — `Log.CloseAndFlush()` removed from dispatcher handler | code inspection |
+| O1 | existing 2s `SafeRefresh` updating scoreboard/transfers live | runtime |
+| O2 | v3.0.0 — `PoolHealth()` + Spread tab line | runtime |
+| O3 | v2.9.0 — `ClassifyFailure` + category breakdown | `ClassifyFailureTests` |
+| O4 | v3.0.0 — pool-create-failed WARN→INFO | log grep |
+| Q1 | v2.8.0 — `GlDrive.Tests` (79 tests, ≥40 target) | `dotnet test` |
+| Q2 | `.github/workflows/ci.yml` | local mirror run |
+| Q3 | regression guards across IsZipscriptArtifact / dupe / permanent-denial / scorer | `GlDrive.Tests` suite |
 
 ## 1. Purpose
 
