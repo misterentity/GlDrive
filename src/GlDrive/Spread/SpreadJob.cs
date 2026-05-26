@@ -2212,6 +2212,12 @@ public class SpreadJob : IDisposable
         var m = message;
         if (m.Contains("NUKED", StringComparison.OrdinalIgnoreCase)) return "nuked";
         if (m.Contains("not found on any server", StringComparison.OrdinalIgnoreCase)) return "not-found";
+        // Site-full is a distinct, useful category — it tells the user the dest
+        // needs siteop intervention, not a config / perms fix.
+        if (m.Contains("out of disk space", StringComparison.OrdinalIgnoreCase)
+            || m.Contains("disk full", StringComparison.OrdinalIgnoreCase)
+            || m.Contains("no space", StringComparison.OrdinalIgnoreCase))
+            return "site-full";
         if (m.Contains("no upload rights", StringComparison.OrdinalIgnoreCase)
             || m.Contains("Denied by dirscript", StringComparison.OrdinalIgnoreCase)
             || m.Contains("Not allowed to make directories", StringComparison.OrdinalIgnoreCase)

@@ -250,8 +250,17 @@ public static class MkdFailureClassifier
     public static bool IsPermanent(string code, string message)
     {
         if (string.IsNullOrEmpty(message)) return false;
-        if (code != "550") return false;
+        // Most permanent denials are 550 (path/permission). But disk-full and a
+        // few other deterministic failures come back as 553 (file action not
+        // taken). Accept either code; the message text gates the verdict.
+        if (code != "550" && code != "553") return false;
         var m = message;
+        // glftpd 553 — site has no free space. Will not change until the siteop
+        // frees space; retrying is purely wasted I/O. Observed 2026-05-25:
+        // 24x MKD + 62x STOR on the same release for the same reason.
+        if (m.Contains("out of disk space", StringComparison.OrdinalIgnoreCase)) return true;
+        if (m.Contains("disk full", StringComparison.OrdinalIgnoreCase)) return true;
+        if (m.Contains("no space", StringComparison.OrdinalIgnoreCase)) return true;
         // glftpd path-filter, user has no write access in this tree
         if (m.Contains("Not allowed to make directories", StringComparison.OrdinalIgnoreCase)) return true;
         if (m.Contains("Permission denied", StringComparison.OrdinalIgnoreCase)) return true;
@@ -291,6 +300,10 @@ public static class MkdFailureClassifier
         if (m.Contains("path filter denied", StringComparison.OrdinalIgnoreCase)) return true;
         if (m.Contains("Permission denied", StringComparison.OrdinalIgnoreCase)) return true;
         if (m.Contains("Not allowed", StringComparison.OrdinalIgnoreCase)) return true;
+        // Disk-full also surfaces as STOR 553 on the way in.
+        if (m.Contains("out of disk space", StringComparison.OrdinalIgnoreCase)) return true;
+        if (m.Contains("disk full", StringComparison.OrdinalIgnoreCase)) return true;
+        if (m.Contains("no space", StringComparison.OrdinalIgnoreCase)) return true;
         return false;
     }
 }

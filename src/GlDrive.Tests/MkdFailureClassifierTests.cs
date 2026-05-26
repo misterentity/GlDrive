@@ -12,14 +12,17 @@ public class MkdFailureClassifierTests
     [InlineData("550", "you are not a member of this group", true)]
     [InlineData("550", "You cannot create that here", true)]
     [InlineData("550", "MKD Denied by dirscript.", true)]   // added v2.6.4
+    [InlineData("553", "Error: out of disk space, contact the siteop!", true)] // v3.5.1
+    [InlineData("553", "disk full", true)]                                     // v3.5.1
+    [InlineData("550", "out of disk space, contact the siteop!", true)]        // either code
     public void IsPermanent_catches_permanent_mkd_denials(string code, string msg, bool expected)
         => Assert.Equal(expected, MkdFailureClassifier.IsPermanent(code, msg));
 
     [Theory]
-    [InlineData("550", "Directory created")]                 // not a denial
-    [InlineData("553", "Not allowed to make directories")]   // wrong code → not MKD-permanent
-    [InlineData("450", "Transient error")]
-    [InlineData("550", "")]
+    [InlineData("550", "Directory created")]                 // success-shaped message
+    [InlineData("553", "Some other 553")]                    // 553 alone isn't permanent
+    [InlineData("450", "Transient error")]                   // 4xx are transient
+    [InlineData("550", "")]                                  // empty
     public void IsPermanent_ignores_transient_or_wrong_code(string code, string msg)
         => Assert.False(MkdFailureClassifier.IsPermanent(code, msg));
 
@@ -28,6 +31,7 @@ public class MkdFailureClassifierTests
     [InlineData("STOR failed: 553 .imdb: path-filter denied permission. (Filename deny)", true)]
     [InlineData("STOR failed: 553 Permission denied", true)]
     [InlineData("553 Error: you have no upload rights for this directory!", true)]
+    [InlineData("STOR failed: 553 Error: out of disk space, contact the siteop!", true)] // v3.5.1
     public void IsPermanentUploadDenial_catches_stor_denials(string msg, bool expected)
         => Assert.Equal(expected, MkdFailureClassifier.IsPermanentUploadDenial(msg));
 
