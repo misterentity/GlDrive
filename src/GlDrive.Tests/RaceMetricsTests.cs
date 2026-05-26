@@ -10,6 +10,8 @@ public class ClassifyFailureTests
     [InlineData("Release not found on any server — check release name and section paths", "not-found")]
     [InlineData("STOR failed: 553 Error: you have no upload rights for this directory!", "upload-denied")]
     [InlineData("MKD failed: 550 MKD Denied by dirscript.", "upload-denied")]
+    [InlineData("MKD failed: 553 Error: out of disk space, contact the siteop!", "site-full")]
+    [InlineData("STOR failed: 553 Error: out of disk space, contact the siteop!", "site-full")]
     [InlineData("Code: 530 Message: Sorry, your account is restricted to 4 simultaneous logins.", "bnc-pressure")]
     [InlineData("Server in BNC cooldown — not attempting new connection", "bnc-pressure")]
     [InlineData("No connection to the server exists.", "transport")]

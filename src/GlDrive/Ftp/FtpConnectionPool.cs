@@ -757,6 +757,15 @@ public class FtpConnectionPool : IAsyncDisposable
                         backingField?.SetValue(gnuTlsInternal, false);
                     }
                 }
+
+                // Belt-and-braces (PRD v3.5.1): NULL the m_customStream pointer on
+                // the FtpSocketStream so that if a later Dispose() chain runs
+                // (e.g. quarantine FIFO eviction), it has no GnuTLS wrapper to
+                // tear down. gnutls_deinit() on a corrupted session is what
+                // SEGVs the process — observed 2026-05-25 10:17 after an
+                // evicted-oldest force-dispose. Native session memory leaks
+                // (small + bounded by eviction rate) instead of crashing.
+                try { customStreamField?.SetValue(stream, null); } catch { }
             }
 
             // Also close the raw socket to prevent any stray native I/O
