@@ -40,6 +40,27 @@ public sealed class SectionBlacklistStore
     /// </summary>
     public static readonly TimeSpan EntryTtl = TimeSpan.FromDays(14);
 
+    // PRD v3.5.2 — entries whose reason is *transient* (disk-full, etc.) get a
+    // much shorter TTL than perms/path-filter denials. Siteops free disk in
+    // hours, not days, and a 14-day freeze on tv-hd because the dest was full
+    // for one afternoon is wrong. Also excluded from DistinctActiveSectionCount
+    // so they don't trip the >=3-section auto-download-only blanket.
+    public static readonly TimeSpan TransientEntryTtl = TimeSpan.FromHours(2);
+
+    /// <summary>True if the recorded reason indicates a transient site condition that
+    /// will clear without a config change — disk-full and friends.</summary>
+    public static bool IsTransientReason(string? reason)
+    {
+        if (string.IsNullOrEmpty(reason)) return false;
+        var r = reason;
+        return r.Contains("out of disk space", StringComparison.OrdinalIgnoreCase)
+            || r.Contains("disk full", StringComparison.OrdinalIgnoreCase)
+            || r.Contains("no space", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static TimeSpan TtlFor(Entry e) =>
+        IsTransientReason(e.Reason) ? TransientEntryTtl : EntryTtl;
+
     private readonly string _path;
     private readonly object _lock = new();
     private readonly Dictionary<(string serverId, string section), Entry> _entries = new(KeyComparer.Instance);
@@ -111,9 +132,9 @@ public sealed class SectionBlacklistStore
             if (!_entries.TryGetValue((serverId, Normalize(section)), out var entry))
                 return false;
             // Auto-expire: if the last failure was longer ago than the TTL,
-            // we let the race retry. Saves the user from manually editing
-            // section-blacklist.json after fixing site permissions.
-            if (DateTime.UtcNow - entry.LastFailedAt > EntryTtl)
+            // we let the race retry. Transient reasons (disk-full) use a much
+            // shorter TTL than permission denials.
+            if (DateTime.UtcNow - entry.LastFailedAt > TtlFor(entry))
                 return false;
             return true;
         }
@@ -138,9 +159,17 @@ public sealed class SectionBlacklistStore
         var now = DateTime.UtcNow;
         lock (_lock)
         {
+            // Only PERSISTENT-reason entries count toward auto-download-only.
+            // Transient (disk-full) entries make the engine skip THAT section
+            // while the condition persists, but a few transient strikes should
+            // never blanket-flag the whole server as leech-only — observed
+            // 2026-05-27: disk-full failures on May 25 blacklisted zephyr for
+            // 3 sections, triggering auto-DL-only, so no race reached zephyr
+            // for two days even though the disk had long since been cleared.
             return _entries.Count(kv =>
                 kv.Key.serverId == serverId &&
-                now - kv.Value.LastFailedAt <= EntryTtl);
+                now - kv.Value.LastFailedAt <= TtlFor(kv.Value) &&
+                !IsTransientReason(kv.Value.Reason));
         }
     }
 
@@ -153,7 +182,7 @@ public sealed class SectionBlacklistStore
         lock (_lock)
         {
             if (!_entries.TryGetValue((serverId, Normalize(section)), out var entry)) return false;
-            return DateTime.UtcNow - entry.LastFailedAt > EntryTtl;
+            return DateTime.UtcNow - entry.LastFailedAt > TtlFor(entry);
         }
     }
 
