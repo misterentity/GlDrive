@@ -67,6 +67,42 @@ public class BlacklistStoreTests
         s.RecordPermanentFailure("srv1", "Server One", "x265", "/x265", "x");
         Assert.True(s.DistinctActiveSectionCount("srv1") >= 3); // now triggers auto-DL
     }
+
+    [Fact]
+    public void Disk_full_entries_are_transient_and_excluded_from_distinct_count()
+    {
+        // v3.5.2 regression guard. Three disk-full denials should NOT trip the
+        // auto-download-only blanket — the dest will accept uploads again once
+        // the siteop frees space.
+        var s = new SectionBlacklistStore();
+        s.RecordPermanentFailure("srv1", "Server One", "tv-hd",     "/tv-hd",     "out of disk space, contact the siteop!");
+        s.RecordPermanentFailure("srv1", "Server One", "tv-sports", "/tv-sports", "out of disk space, contact the siteop!");
+        s.RecordPermanentFailure("srv1", "Server One", "games",     "/games",     "disk full");
+        Assert.Equal(0, s.DistinctActiveSectionCount("srv1"));    // transient — doesn't count
+        // The per-section blacklist still applies short-term so we don't pile on
+        // a full disk in the same moment.
+        Assert.True(s.IsBlacklisted("srv1", "tv-hd"));
+    }
+
+    [Fact]
+    public void Persistent_and_transient_reasons_count_separately()
+    {
+        var s = new SectionBlacklistStore();
+        s.RecordPermanentFailure("srv1", "Server One", "mp3",   "/mp3",   "Not allowed to make directories here.");
+        s.RecordPermanentFailure("srv1", "Server One", "flac",  "/flac",  "Permission denied");
+        s.RecordPermanentFailure("srv1", "Server One", "tv-hd", "/tv-hd", "out of disk space, contact the siteop!");
+        Assert.Equal(2, s.DistinctActiveSectionCount("srv1"));   // tv-hd excluded
+    }
+
+    [Theory]
+    [InlineData("out of disk space, contact the siteop!", true)]
+    [InlineData("disk full", true)]
+    [InlineData("no space on device", true)]
+    [InlineData("Not allowed to make directories here.", false)]
+    [InlineData("Denied by dirscript", false)]
+    [InlineData("", false)]
+    public void IsTransientReason_classifies_correctly(string reason, bool expected)
+        => Assert.Equal(expected, SectionBlacklistStore.IsTransientReason(reason));
 }
 
 public class RaceSummarizeTests
