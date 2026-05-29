@@ -91,6 +91,14 @@ public class SpreadJob : IDisposable
     // so the "auto-flagged download-only" line prints once per server per race.
     private readonly HashSet<string> _autoDownloadOnlyLogged = new(StringComparer.Ordinal);
 
+    // Sources that returned "Insufficient credits" on RETR. A leeched-out source
+    // can't be downloaded FROM, and credits don't replenish mid-race, so once a
+    // source 550s for credits we stop selecting it as a transfer source for the
+    // rest of this race instead of laddering the blameless destination toward a
+    // drop. Per-job scope; NOT persisted (credits return across days, unlike a
+    // permission denial). Guarded by _ownershipLock.
+    private readonly HashSet<string> _sourceCreditDenied = new(StringComparer.Ordinal);
+
     // Set to true when the race terminates due to a skiplist/blacklist denial.
     // Used by EmitRaceOutcome to emit "blacklisted" instead of "aborted".
     private bool _blacklisted = false;
@@ -1358,6 +1366,10 @@ public class SpreadJob : IDisposable
 
                 foreach (var srcId in owners)
                 {
+                    // Source parked for this race — out of credits, can't pull
+                    // from it. Skip every (file, this-src, *) candidate.
+                    if (_sourceCreditDenied.Contains(srcId)) { skippedFailures++; continue; }
+
                     foreach (var (dstId, dstBasePath) in sitePaths)
                     {
                         if (srcId == dstId) continue;
@@ -1687,14 +1699,34 @@ public class SpreadJob : IDisposable
                         _serverConfigs.TryGetValue(dstId, out var c3) ? c3.Name : dstId, Section);
                 }
 
-                // Push the dest onto the backoff ladder. Both MKD and FXP
-                // failures flow through here — a destination whose data
-                // channel keeps dying (GnuTLS corruption, BNC dropouts)
-                // deserves the same adaptive pause as one that rejects MKD.
-                // _failureCounts (per file/src/dst) is the per-pair retry
-                // limit; _destFailureCount is the per-dest backoff schedule.
-                RegisterDestFailure(dstId, dstBasePath, transfer.ErrorMessage,
-                    IsMkdError(transfer.ErrorMessage));
+                // Source out of credits (RETR 550 Insufficient credits)? This is
+                // a SOURCE-side condition — every file pulled from this source
+                // will fail identically and credits won't return mid-race. Park
+                // the source for the rest of the race so FindBestTransfer stops
+                // routing through it, rather than laddering the (blameless) dest
+                // toward a 5-failure drop. Not persisted: credits come back.
+                if (MkdFailureClassifier.IsCreditExhaustion(transfer.ErrorMessage))
+                {
+                    bool firstTime;
+                    lock (_ownershipLock) firstTime = _sourceCreditDenied.Add(srcId);
+                    if (firstTime)
+                        Log.Warning("Spread: source {Src} out of credits ([{Section}]) — parking as a " +
+                            "transfer source for this race — {Error}",
+                            _serverConfigs.TryGetValue(srcId, out var sc) ? sc.Name : srcId, Section,
+                            transfer.ErrorMessage);
+                    _forceScan = true;
+                }
+                else
+                {
+                    // Push the dest onto the backoff ladder. Both MKD and FXP
+                    // failures flow through here — a destination whose data
+                    // channel keeps dying (GnuTLS corruption, BNC dropouts)
+                    // deserves the same adaptive pause as one that rejects MKD.
+                    // _failureCounts (per file/src/dst) is the per-pair retry
+                    // limit; _destFailureCount is the per-dest backoff schedule.
+                    RegisterDestFailure(dstId, dstBasePath, transfer.ErrorMessage,
+                        IsMkdError(transfer.ErrorMessage));
+                }
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
