@@ -335,4 +335,25 @@ public static class MkdFailureClassifier
         if (m.Contains("no space", StringComparison.OrdinalIgnoreCase)) return true;
         return false;
     }
+
+    /// <summary>
+    /// True when a transfer failed because the account is out of credits on the
+    /// site (glftpd "550 Insufficient credits" / ratio enforcement). This is a
+    /// SOURCE-side condition seen at RETR time — the account can't download
+    /// because its credit balance is empty. Credits only replenish by uploading
+    /// elsewhere, which won't happen mid-race, so the condition is effectively
+    /// permanent for the race duration. Unlike a permission/path denial it is
+    /// NOT persisted (credits come back across days), only parked per-race.
+    /// Observed 2026-05-29: 65 SYN-&gt;zephyr RETR retries, all 550 Insufficient
+    /// credits, each riding the per-dest backoff ladder to a 5-failure drop.
+    /// </summary>
+    public static bool IsCreditExhaustion(string? errorMessage)
+    {
+        if (string.IsNullOrEmpty(errorMessage)) return false;
+        var m = errorMessage;
+        return m.Contains("insufficient credits", StringComparison.OrdinalIgnoreCase)
+            || m.Contains("not enough credits", StringComparison.OrdinalIgnoreCase)
+            || m.Contains("out of credits", StringComparison.OrdinalIgnoreCase)
+            || m.Contains("no credits", StringComparison.OrdinalIgnoreCase);
+    }
 }

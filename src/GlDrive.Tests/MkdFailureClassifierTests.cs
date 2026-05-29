@@ -43,4 +43,17 @@ public class MkdFailureClassifierTests
     [InlineData(null)]
     public void IsPermanentUploadDenial_ignores_transient(string? msg)
         => Assert.False(MkdFailureClassifier.IsPermanentUploadDenial(msg));
+
+    [Theory]
+    [InlineData("RETR failed: 550 Insufficient credits.", true)]   // observed 2026-05-29
+    [InlineData("550 Insufficient credits.", true)]
+    [InlineData("RETR failed: 550 Not enough credits", true)]
+    [InlineData("550 You are out of credits", true)]
+    [InlineData("RETR failed: 550 No credits left", true)]
+    [InlineData("RETR failed: 550 No such file or directory", false)] // unrelated 550
+    [InlineData("STOR failed: 553 disk full", false)]                 // disk-full, not credits
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IsCreditExhaustion_catches_credit_denials(string? msg, bool expected)
+        => Assert.Equal(expected, MkdFailureClassifier.IsCreditExhaustion(msg));
 }
