@@ -608,7 +608,14 @@ public class SpreadJob : IDisposable
                     // only AFTER the 15s idle timer has killed the race.
                     var idleSeconds = (DateTime.UtcNow - lastActivity).TotalSeconds;
                     var nextBackoff = NextBackoffExpiry();
-                    if (nextBackoff is { } bAt && bAt > DateTime.UtcNow && idleSeconds < 180)
+                    // A server in a BNC cooldown is pending work too — its 90s
+                    // window will expire and candidates resume. Treat it like an
+                    // active backoff so the 60s idle timer doesn't fail the race
+                    // out from under a known, self-healing cooldown. Same 180s
+                    // hard cap prevents a permanently-refusing BNC pinning forever.
+                    var anyCooldown = AnyPoolInCooldown();
+                    if (((nextBackoff is { } bAt && bAt > DateTime.UtcNow) || anyCooldown)
+                        && idleSeconds < 180)
                     {
                         lastActivity = DateTime.UtcNow;
                         idleSeconds = 0;
@@ -1266,6 +1273,16 @@ public class SpreadJob : IDisposable
     {
         var elapsed = DateTime.UtcNow - StartedAt;
 
+        // Read the pool registry once (volatile, replaced by UpdatePools). Used to
+        // skip any server currently in a BNC cooldown: its pool has parked new
+        // connections, so every Borrow routed through it throws "Server in BNC
+        // cooldown" and ExecuteTransfer logs an FXP error. Pre-fix this hammered
+        // 1,371 times in one day on superbnc — every file of every queued race
+        // re-attempted the dead route each pass. IsInCooldown auto-clears on the
+        // next successful connect or when the 90s window expires, so candidates
+        // resume on their own.
+        var poolsSnap = _pools;
+
         // Pre-compute speed map OUTSIDE lock
         var maxSpeed = 1.0;
         foreach (var src in _pools.Keys)
@@ -1300,6 +1317,7 @@ public class SpreadJob : IDisposable
         var skippedSlots = 0;
         var skippedFailures = 0;
         var skippedBackoff = 0;
+        var skippedCooldown = 0;
         Dictionary<string, DateTime> retrySnapshot;
         lock (_ownershipLock) retrySnapshot = new Dictionary<string, DateTime>(_destRetryAt);
         var now = DateTime.UtcNow;
@@ -1370,11 +1388,22 @@ public class SpreadJob : IDisposable
                     // from it. Skip every (file, this-src, *) candidate.
                     if (_sourceCreditDenied.Contains(srcId)) { skippedFailures++; continue; }
 
+                    // Source's pool is in a BNC cooldown — new connections are
+                    // parked, so a Borrow would just throw. Skip every candidate
+                    // pulling from it until the cooldown clears.
+                    if (poolsSnap.TryGetValue(srcId, out var srcPoolCd) && srcPoolCd.IsInCooldown)
+                    { skippedCooldown++; continue; }
+
                     foreach (var (dstId, dstBasePath) in sitePaths)
                     {
                         if (srcId == dstId) continue;
                         if (owners.Contains(dstId)) { skippedOwned++; continue; }
                         if (_inFlightFiles.Contains((fileName, dstId))) { skippedOwned++; continue; }
+
+                        // Dest's pool is in a BNC cooldown — can't open a data/
+                        // control connection to receive. Skip until it clears.
+                        if (poolsSnap.TryGetValue(dstId, out var dstPoolCd) && dstPoolCd.IsInCooldown)
+                        { skippedCooldown++; continue; }
 
                         // Per-destination backoff. The dest recently failed and
                         // is parked until retryAt; MaxValue means dropped from
@@ -1480,9 +1509,9 @@ public class SpreadJob : IDisposable
         {
             if (_fileInfos.Count > 0 && candidateCount == 0)
             {
-                Log.Debug("FindBestTransfer: {Files} files, 0 candidates. Skipped: owned={Owned} downloadOnly={DL} affil={Affil} slots={Slots} failures={Fail} backoff={BO}",
+                Log.Debug("FindBestTransfer: {Files} files, 0 candidates. Skipped: owned={Owned} downloadOnly={DL} affil={Affil} slots={Slots} failures={Fail} backoff={BO} cooldown={CD}",
                     _fileInfos.Count, skippedOwned, skippedDownloadOnly, skippedAffil,
-                    skippedSlots, skippedFailures, skippedBackoff);
+                    skippedSlots, skippedFailures, skippedBackoff, skippedCooldown);
                 if (skippedSlots > 0 && skippedOwned == 0)
                     Log.Debug("FindBestTransfer slot details: {SlotInfo}",
                         string.Join(", ", activeTransferSnapshot.Select(kv =>
@@ -1753,7 +1782,22 @@ public class SpreadJob : IDisposable
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "FXP transfer error: {File} ({Src} -> {Dst})", file.Name, srcId, dstId);
+            // BNC cooldown thrown at Borrow time (a server entered cooldown between
+            // the FindBestTransfer scan that picked this route and this execute).
+            // FindBestTransfer skips cooled-down servers, so this is a rare scan/
+            // execute race, not a real transfer failure — no connection was even
+            // borrowed (srcConn/dstConn are null, nothing to poison). Log quietly
+            // so it doesn't masquerade as an FXP error. The route resumes once the
+            // cooldown clears.
+            if (ex is InvalidOperationException &&
+                ex.Message.Contains("BNC cooldown", StringComparison.OrdinalIgnoreCase))
+            {
+                Log.Debug("FXP deferred (BNC cooldown): {File} ({Src} -> {Dst})", file.Name, srcId, dstId);
+            }
+            else
+            {
+                Log.Warning(ex, "FXP transfer error: {File} ({Src} -> {Dst})", file.Name, srcId, dstId);
+            }
 
             // Mark connections as poisoned so pool discards them instead of reusing
             // (GnuTLS stream may be corrupt after failed/cancelled transfer)
@@ -1916,6 +1960,19 @@ public class SpreadJob : IDisposable
             }
             return earliest;
         }
+    }
+
+    /// <summary>
+    /// True if any participating server's pool is currently in a BNC cooldown.
+    /// Used by the race loop to treat a cooldown as pending work (keeps the idle
+    /// timer fresh) rather than letting a self-healing 90s window fail the race.
+    /// </summary>
+    private bool AnyPoolInCooldown()
+    {
+        var pools = _pools;
+        foreach (var pool in pools.Values)
+            if (pool.IsInCooldown) return true;
+        return false;
     }
 
     private bool IsDestDropped(string dstId)
