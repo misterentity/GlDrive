@@ -129,7 +129,14 @@ public partial class App
             foreach (var ex in inner)
             {
                 if (ex is NullReferenceException &&
-                    (ex.StackTrace?.Contains("BaseFtpClient.NoopDaemon", StringComparison.Ordinal) ?? false))
+                    ((ex.StackTrace?.Contains("BaseFtpClient.NoopDaemon", StringComparison.Ordinal) ?? false)
+                     // Background GnuTLS read raced a connection teardown (socket
+                     // close / m_customStream null in NeutralizeGnuTls) and
+                     // dereferenced freed state. The NoopDaemon that produced
+                     // these is now disabled (FtpClientFactory), but keep the
+                     // suppression for any other path that reads a torn-down
+                     // stream — it's a harmless use-after-free we've neutralized.
+                     || (ex.StackTrace?.Contains("GnuTlsInternalStream.Read", StringComparison.Ordinal) ?? false)))
                 {
                     suppress = true;
                     break;

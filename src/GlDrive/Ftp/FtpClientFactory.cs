@@ -94,14 +94,23 @@ public class FtpClientFactory
         // when connections are in a poisoned state (e.g., after failed FXP transfers)
         client.Config.StaleDataCheck = false;
 
-        // Built-in NOOP daemon keeps EVERY pool connection alive, not just whichever
-        // one ConnectionMonitor borrows each cycle. Without this, BNC idle timeouts
-        // killed unused pool conns silently, and the next borrow detected the death
-        // as a "Connection lost" — producing the constant 30s reconnect cycle.
-        // Empirically (superbnc.xxxxx.tw, May 2026), the BNC drops idle conns under
-        // 30s, so we NOOP every 15s of inactivity to stay well under that.
-        client.Config.Noop = true;
-        client.Config.NoopInterval = 15000;
+        // FluentFTP's built-in NOOP daemon is DISABLED. It ran reads on its own
+        // background thread, every NoopInterval, independent of who owned the
+        // connection. When the pool neutralized/disposed a poisoned connection
+        // (socket Close + m_customStream null in NeutralizeGnuTls) while a daemon
+        // read was in flight, the read dereferenced freed state and threw an NRE
+        // from GnuTlsInternalStream.Read that escaped to terminate the process —
+        // 6 such crashes on 2026-06-02 (Event 1026), all stack
+        // `GnuTlsInternalStream.Read` <- threadpool dispatch, NOT the NoopDaemon
+        // frame our UnobservedTaskException handler suppresses.
+        //
+        // Keeping idle pool connections warm is now the pool's job via the
+        // owner-exclusive FtpConnectionPool keepalive (ConfigureHealth): it reads
+        // a connection OUT of the channel before NOOPing it, so a keepalive read
+        // can never run concurrently with a borrow, quarantine, or dispose of the
+        // same connection. No background thread ever reads a connection another
+        // thread might be tearing down — the race is gone.
+        client.Config.Noop = false;
 
         // Skip QUIT+read cycle during Disconnect — prevents GnuTLS from attempting
         // to read from poisoned streams during disposal, which crashes the process

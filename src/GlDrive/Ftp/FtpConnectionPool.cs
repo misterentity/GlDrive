@@ -207,32 +207,50 @@ public class FtpConnectionPool : IAsyncDisposable
     }
 
     /// <summary>
-    /// Keepalive: probe ONE idle connection per tick. Pulling a single
-    /// connection keeps the window tiny — a borrower that arrives mid-probe
-    /// either finds the remaining connections or waits on ReadAsync (the
-    /// _created count is unchanged, so the cap is respected) until this
-    /// returns the probed connection. Dead connections are quarantined.
+    /// Keepalive: warm EVERY currently-idle connection this tick. Replaces
+    /// FluentFTP's background NoopDaemon (disabled in FtpClientFactory) which
+    /// kept all pool connections alive but raced its reads against disposal.
+    /// This is owner-exclusive: each connection is read OUT of the channel
+    /// before its NOOP, so the probe can never run concurrently with a borrow,
+    /// quarantine, or dispose of the same connection — the GnuTLS use-after-free
+    /// race that crashed the process is structurally impossible here.
+    ///
+    /// We snapshot the current idle count and read at most that many, NOOP each,
+    /// and write survivors back to the tail. Bounding by the snapshot prevents
+    /// re-probing a connection we just returned (FIFO channel). The window where
+    /// a connection is out of the channel is one NOOP round-trip (sub-second);
+    /// a borrower arriving mid-probe finds the remaining idle connections or
+    /// waits on ReadAsync (the _created count is unchanged, cap respected).
+    /// Dead connections are quarantined.
     /// </summary>
     private async void KeepaliveTick()
     {
         if (_disposed || _keepaliveSeconds <= 0) return;
-        if (!_pool.Reader.TryRead(out var client)) return;
-        try
+
+        // Snapshot the live connection count so we make at most one pass over the
+        // currently-idle set, even though we write survivors straight back.
+        var budget = Interlocked.CompareExchange(ref _created, 0, 0);
+        for (var i = 0; i < budget; i++)
         {
-            if (await IsLive(client, CancellationToken.None))
+            if (_disposed) return;
+            if (!_pool.Reader.TryRead(out var client)) return; // no idle connections left this tick
+            try
             {
-                if (!_pool.Writer.TryWrite(client))
+                if (await IsLive(client, CancellationToken.None))
+                {
+                    if (!_pool.Writer.TryWrite(client))
+                        QuarantineDecCreated(client);
+                }
+                else
+                {
                     QuarantineDecCreated(client);
+                    Log.Debug("Pool keepalive: dropped dead idle connection (created={Created})", _created);
+                }
             }
-            else
+            catch (Exception ex)
             {
-                QuarantineDecCreated(client);
-                Log.Debug("Pool keepalive: dropped dead idle connection (created={Created})", _created);
+                Log.Debug(ex, "Pool keepalive tick failed");
             }
-        }
-        catch (Exception ex)
-        {
-            Log.Debug(ex, "Pool keepalive tick failed");
         }
     }
 

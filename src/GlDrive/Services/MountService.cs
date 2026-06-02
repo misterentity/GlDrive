@@ -76,6 +76,19 @@ public class MountService : IDisposable
             _pool = new FtpConnectionPool(_factory, mainPoolSize);
             await _pool.Initialize(ct);
 
+            // Warm idle main-pool connections ourselves now that FluentFTP's
+            // background NoopDaemon is disabled (it raced reads against disposal
+            // and crashed the process — see FtpClientFactory). This keepalive is
+            // owner-exclusive: it reads each connection out of the channel before
+            // NOOPing, so no read ever races a quarantine/dispose. NOOP cadence
+            // tracks the configured keepalive interval (default 15s), staying well
+            // under the BNC's <30s idle-drop. validateOnBorrow stays off — the
+            // filesystem path already gates borrows via IsGnuTlsHealthy and a
+            // per-borrow NOOP would add latency to every file operation.
+            _pool.ConfigureHealth(
+                validateOnBorrow: false,
+                keepaliveSeconds: Math.Clamp(_serverConfig.Pool.KeepaliveIntervalSeconds, 10, 120));
+
             _ftp = new FtpOperations(_pool);
             _cache = new DirectoryCache(
                 _serverConfig.Cache.DirectoryListingTtlSeconds,
