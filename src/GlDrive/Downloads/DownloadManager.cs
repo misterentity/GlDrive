@@ -35,13 +35,16 @@ public class DownloadManager : IDisposable
 
     public DownloadStore Store => _store;
 
+    private readonly DiskReservation? _disk;
+
     public DownloadManager(DownloadStore store, FtpOperations ftp, StreamingDownloader downloader,
-        DownloadConfig config)
+        DownloadConfig config, DiskReservation? disk = null)
     {
         _store = store;
         _ftp = ftp;
         _downloader = downloader;
         _config = config;
+        _disk = disk;
         _concurrency = new SemaphoreSlim(config.MaxConcurrentDownloads);
     }
 
@@ -271,6 +274,16 @@ public class DownloadManager : IDisposable
                 var fresh = _store.GetById(item.Id);
                 if (fresh == null || fresh.Status != DownloadStatus.Queued) continue;
 
+                // Cooldown-defer: if the download pool is in a BNC cooldown, a Borrow
+                // would just throw and burn a retry. Re-queue and wait for the window
+                // to clear — no RetryCount cost (like the race engine's cooldown skip).
+                if (_downloader.IsPoolInCooldown)
+                {
+                    EnqueueForProcessing(fresh);
+                    await Task.Delay(TimeSpan.FromSeconds(15), ct);
+                    continue;
+                }
+
                 await _concurrency.WaitAsync(ct);
                 tasks.Add(ProcessItem(fresh, ct));
                 ObserveAndPrune(tasks);
@@ -331,6 +344,20 @@ public class DownloadManager : IDisposable
         var itemCts = CancellationTokenSource.CreateLinkedTokenSource(globalCt);
         lock (_activeCts) _activeCts[item.Id] = itemCts;
 
+        // The network concurrency slot (acquired by ProcessLoop) is released as soon
+        // as the network phase finishes, BEFORE the CPU-bound SFV/extract — so a big
+        // extraction doesn't block other downloads from starting. Guarded so finally
+        // never double-releases. Disk reservation tracked for symmetric release.
+        var slotReleased = false;
+        void ReleaseSlot()
+        {
+            if (slotReleased) return;
+            slotReleased = true;
+            _concurrency.Release();
+        }
+        string? reservedRoot = null;
+        long reservedBytes = 0;
+
         try
         {
             item.Status = DownloadStatus.Downloading;
@@ -385,27 +412,25 @@ public class DownloadManager : IDisposable
                 // Directory download — calculate total
                 item.TotalBytes = dataFiles.Sum(f => f.Size);
 
-                // Disk space check
-                var targetRoot = Path.GetPathRoot(item.LocalPath);
-                if (!string.IsNullOrEmpty(targetRoot))
+                // Disk-space reservation (v3.6 Phase 2b) — accounts for what OTHER
+                // concurrent downloads already reserved, so N downloads can't each
+                // see "enough room" and collectively overrun the disk. Reserve the
+                // not-yet-on-disk remainder (TotalBytes minus already-downloaded).
+                if (_disk != null)
                 {
-                    try
+                    var remaining = Math.Max(0, item.TotalBytes - item.DownloadedBytes);
+                    if (!_disk.TryReserve(item.LocalPath, remaining, out var root))
                     {
-                        var driveInfo = new DriveInfo(targetRoot);
-                        if (driveInfo.IsReady && driveInfo.AvailableFreeSpace < item.TotalBytes)
-                        {
-                            item.Status = DownloadStatus.Failed;
-                            item.ErrorMessage = $"Insufficient disk space: need {FormatSize(item.TotalBytes)}, have {FormatSize(driveInfo.AvailableFreeSpace)}";
-                            _store.Update(item);
-                            DownloadStatusChanged?.Invoke(item);
-                            EmitDownloadOutcome(item, "failed");
-                            return;
-                        }
+                        var free = new DriveInfo(root).IsReady ? new DriveInfo(root).AvailableFreeSpace : 0;
+                        item.Status = DownloadStatus.Failed;
+                        item.ErrorMessage = $"Insufficient disk space: need {FormatSize(remaining)} (with reservations), have ~{FormatSize(free)}";
+                        _store.Update(item);
+                        DownloadStatusChanged?.Invoke(item);
+                        EmitDownloadOutcome(item, "failed");
+                        return;
                     }
-                    catch (Exception ex)
-                    {
-                        Log.Debug(ex, "Could not check disk space for {Path}", targetRoot);
-                    }
+                    reservedRoot = root;
+                    reservedBytes = remaining;
                 }
 
                 long completedBytes = 0;
@@ -460,6 +485,10 @@ public class DownloadManager : IDisposable
                     completedBytes += file.Size;
                 }
             }
+
+            // Network phase done — hand the concurrency slot back so other downloads
+            // can start while THIS item runs CPU-bound SFV verify + extraction.
+            ReleaseSlot();
 
             // SFV verification if enabled
             if (_config.VerifySfv && Directory.Exists(item.LocalPath))
@@ -560,7 +589,12 @@ public class DownloadManager : IDisposable
         {
             lock (_activeCts) _activeCts.Remove(item.Id);
             itemCts.Dispose();
-            _concurrency.Release();
+            // Release the network slot if the post-process path didn't reach the
+            // explicit ReleaseSlot() (early return, failure, or cancellation).
+            ReleaseSlot();
+            // Release the disk reservation symmetrically (it covered the in-flight
+            // bytes; the files are now actually on disk and counted by the OS).
+            if (reservedRoot != null) _disk?.Release(reservedRoot, reservedBytes);
         }
     }
 

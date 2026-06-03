@@ -21,6 +21,10 @@ public class StreamingDownloader
         _speedLimitBytesPerSecond = speedLimitKbps > 0 ? speedLimitKbps * 1024L : 0;
     }
 
+    /// <summary>True when the download pool is in a BNC cooldown — callers should
+    /// defer rather than borrow (which would just throw).</summary>
+    public bool IsPoolInCooldown => _pool.IsInCooldown;
+
     public async Task DownloadToFile(
         string remotePath, string localPath, long resumeOffset,
         IProgress<DownloadProgress>? progress, CancellationToken ct)

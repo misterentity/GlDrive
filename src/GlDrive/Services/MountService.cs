@@ -25,6 +25,9 @@ public class MountService : IDisposable
     private NewReleaseMonitor? _releaseMonitor;
     private StreamingDownloader? _streamingDownloader;
     private DownloadManager? _downloadManager;
+    // Process-wide disk reservation shared across all servers' downloads so
+    // concurrent releases can't collectively overrun a drive.
+    private static readonly DiskReservation _diskReservation = new();
     private FtpSearchService? _searchService;
     private WishlistMatcher? _wishlistMatcher;
     private bool _mounted;
@@ -176,10 +179,17 @@ public class MountService : IDisposable
             var effectiveSpeedLimit = _serverConfig.SpeedLimitKbps > 0
                 ? _serverConfig.SpeedLimitKbps
                 : _downloadConfig.SpeedLimitKbps;
+            // Downloads run on the main pool, capped by the shared account login
+            // gate. (A separate download pool was evaluated but rejected: at the
+            // conservative login cap its idle connection permanently holds a permit
+            // and starves the spread pool's initialization.) The disk reservation +
+            // slot-before-extract + cooldown-defer wins below don't need a separate
+            // pool.
             _streamingDownloader = new StreamingDownloader(
                 _pool, _downloadConfig.StreamingBufferSizeKb, _downloadConfig.WriteBufferLimitMb,
                 effectiveSpeedLimit);
-            _downloadManager = new DownloadManager(downloadStore, _ftp, _streamingDownloader, _downloadConfig);
+            _downloadManager = new DownloadManager(downloadStore, _ftp, _streamingDownloader,
+                _downloadConfig, _diskReservation);
             _searchService = new FtpSearchService(_pool, _serverConfig.Search);
             _searchService.StartIndexer();
             _wishlistMatcher = new WishlistMatcher(wishlistStore, _downloadManager, _ftp, _downloadConfig,
