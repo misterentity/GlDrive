@@ -141,7 +141,12 @@ public class SpreadManager : IDisposable
             DefaultPerServerConcurrentTransfers);
         if (poolSize <= 0) return;
 
-        var pool = new FtpConnectionPool(factory, poolSize);
+        // Share the account-wide login gate with the main + download pools for this
+        // server (same host:port:username key) so the spread pool's logins count
+        // against the SAME account cap — this is the linchpin that makes the cap
+        // truly account-wide instead of per-pool.
+        var loginGate = ResolveAccountLoginGate(serverId);
+        var pool = new FtpConnectionPool(factory, poolSize, loginGate);
         // Spread pools have no ConnectionMonitor keepalive, so idle connections
         // die and the next FXP borrow fails "No connection to the server exists"
         // (dominant failure on 2026-05-20 v2.6.0). Enable borrow-time NOOP
@@ -468,7 +473,7 @@ public class SpreadManager : IDisposable
                     if (factory != null)
                     {
                         await pool.DisposeAsync();
-                        var newPool = new FtpConnectionPool(factory, neededSize);
+                        var newPool = new FtpConnectionPool(factory, neededSize, ResolveAccountLoginGate(id));
                         newPool.ConfigureHealth(_config.Spread.ValidateConnectionOnBorrow, _config.Spread.SpreadKeepaliveSeconds);
                         await newPool.Initialize(CancellationToken.None);
                         lock (_lock) _spreadPools[id] = newPool;
@@ -912,6 +917,22 @@ public class SpreadManager : IDisposable
 
     private ServerGate GetOrCreateGate(string serverId) =>
         _serverGates.GetOrAdd(serverId, id => new ServerGate(id, DefaultPerServerConcurrentTransfers));
+
+    /// <summary>
+    /// Resolve the account-wide login gate for a server (shared with its main +
+    /// download pools via the host:port:username key). Returns null only if the
+    /// server config is missing — the pool then runs ungated (prior behavior).
+    /// Note: distinct from <see cref="ServerGate"/>, which caps concurrent transfer
+    /// PAIRS; this gate caps total live LOGINS to the account.
+    /// </summary>
+    private IAccountLoginGate? ResolveAccountLoginGate(string serverId)
+    {
+        var sc = _config.Servers.FirstOrDefault(s => s.Id == serverId);
+        if (sc == null) return null;
+        return ServerLoginGateRegistry.GetOrCreate(
+            sc.Connection.Host, sc.Connection.Port, sc.Connection.Username,
+            sc.Pool.LoginCap, sc.Pool.LoginHeadroom);
+    }
 
     /// <summary>
     /// Acquire src + dst transfer gates for a single FXP file transfer.

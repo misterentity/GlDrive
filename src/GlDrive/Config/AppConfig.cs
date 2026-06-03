@@ -82,6 +82,15 @@ public class PoolConfig
     public int KeepaliveIntervalSeconds { get; set; } = 15;
     public int ReconnectInitialDelaySeconds { get; set; } = 5;
     public int ReconnectMaxDelaySeconds { get; set; } = 120;
+
+    // Account-wide login cap (v3.6 Phase 1). The hard simultaneous-login limit the
+    // glftpd account allows. ALL pools to the same account (main + spread + download)
+    // share one gate sized to (LoginCap − LoginHeadroom), so their combined live
+    // logins never exceed the cap and stop self-inflicting 530s. Conservative
+    // defaults (3/1 ⇒ 2 usable); the gate auto-tightens if a real 530 reveals a
+    // lower cap. Raise LoginCap for accounts that genuinely allow more.
+    public int LoginCap { get; set; } = 3;
+    public int LoginHeadroom { get; set; } = 1;
 }
 
 public class LoggingConfig
