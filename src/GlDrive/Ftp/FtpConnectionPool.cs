@@ -152,11 +152,68 @@ public class FtpConnectionPool : IAsyncDisposable
         return false;
     }
 
+    // Account-wide login gate (v3.6 Phase 1). When non-null, every connection this
+    // pool opens first acquires a permit, and releases it when the connection is
+    // closed (quarantine/dispose) — NOT on idle return. Shared across all pools to
+    // the same account so total live logins never exceed the account cap. Null in
+    // the 2-arg ctor (tests + any legacy path) = no gating, exact prior behavior.
+    private readonly IAccountLoginGate? _loginGate;
+    private int _permitsHeld;
+    private static readonly TimeSpan PermitAcquireTimeout = TimeSpan.FromSeconds(30);
+
     public FtpConnectionPool(FtpClientFactory factory, int maxSize = 3)
+        : this(factory, maxSize, null) { }
+
+    public FtpConnectionPool(FtpClientFactory factory, int maxSize, IAccountLoginGate? loginGate)
     {
         _factory = factory;
         _maxSize = maxSize;
+        _loginGate = loginGate;
         _pool = Channel.CreateBounded<AsyncFtpClient>(maxSize);
+    }
+
+    /// <summary>
+    /// Create a connection under the account login gate. Acquires a permit before
+    /// opening the TCP login (bounded wait); on any failure releases the permit and
+    /// rethrows so the caller's _created bookkeeping backs out symmetrically. On
+    /// success the permit is held until the connection is quarantined/disposed.
+    /// </summary>
+    private async Task<AsyncFtpClient> AcquireAndConnect(CancellationToken ct)
+    {
+        if (_loginGate != null)
+        {
+            var got = await _loginGate.TryAcquireAsync(ct, PermitAcquireTimeout);
+            if (!got)
+                throw new InvalidOperationException(
+                    "Account login cap reached — no login permit available");
+        }
+        try
+        {
+            var client = await _factory.CreateAndConnect(ct);
+            Interlocked.Increment(ref _permitsHeld);
+            return client;
+        }
+        catch
+        {
+            _loginGate?.Release();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Release one login permit when a connection permanently leaves the live set
+    /// (quarantine or dispose). Clamped — never releases more than held.
+    /// </summary>
+    private void ReleasePermit()
+    {
+        if (_loginGate == null) return;
+        if (Interlocked.Decrement(ref _permitsHeld) < 0)
+        {
+            Interlocked.Increment(ref _permitsHeld); // undo
+            Log.Warning("Pool: login permit under-release detected (clamped)");
+            return;
+        }
+        _loginGate.Release();
     }
 
     // Health options (v2.6.1). Spread pools have no ConnectionMonitor keepalive
@@ -290,7 +347,7 @@ public class FtpConnectionPool : IAsyncDisposable
 
             // Create initial connection to verify connectivity
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            var client = await _factory.CreateAndConnect(ct);
+            var client = await AcquireAndConnect(ct);
             RecordConnect(sw.ElapsedMilliseconds);
 
             // Detect CPSV support (glftpd BNC)
@@ -327,7 +384,7 @@ public class FtpConnectionPool : IAsyncDisposable
             if (_created > 0 || _active > 0) return; // Double-check under lock
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            var client = await _factory.CreateAndConnect(ct);
+            var client = await AcquireAndConnect(ct);
             RecordConnect(sw.ElapsedMilliseconds);
             ControlHost = _factory.Host;
             if (client.Capabilities.Contains(FtpCapability.CPSV))
@@ -398,7 +455,7 @@ public class FtpConnectionPool : IAsyncDisposable
             try
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                client = await _factory.CreateAndConnect(ct);
+                client = await AcquireAndConnect(ct);
                 RecordConnect(sw.ElapsedMilliseconds);
                 Interlocked.Increment(ref _active);
                 return new PooledConnection(client, this);
@@ -448,6 +505,11 @@ public class FtpConnectionPool : IAsyncDisposable
                         {
                             ObservedLoginCap = observedLimit; // PRD O2 surfacing
                             LoginLimitObserved?.Invoke(observedLimit);
+                            // The BNC just told us its real cap. Tighten the shared
+                            // account gate (shrink-only) so EVERY pool to this account
+                            // immediately stops over-subscribing. Reserve 1 login of
+                            // headroom for transient ungated work (ghost-kill).
+                            _loginGate?.TightenTo(Math.Max(1, observedLimit - 1));
                         }
                     }
                     catch (Exception parseEx)
@@ -495,7 +557,7 @@ public class FtpConnectionPool : IAsyncDisposable
                             try
                             {
                                 var sw2 = System.Diagnostics.Stopwatch.StartNew();
-                                client = await _factory.CreateAndConnect(ct);
+                                client = await AcquireAndConnect(ct);
                                 RecordConnect(sw2.ElapsedMilliseconds);
                                 Interlocked.Increment(ref _active);
                                 return new PooledConnection(client, this);
@@ -547,7 +609,7 @@ public class FtpConnectionPool : IAsyncDisposable
             try
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                client = await _factory.CreateAndConnect(ct);
+                client = await AcquireAndConnect(ct);
                 RecordConnect(sw.ElapsedMilliseconds);
                 Interlocked.Increment(ref _active);
                 return new PooledConnection(client, this);
@@ -643,6 +705,13 @@ public class FtpConnectionPool : IAsyncDisposable
             qSize = _quarantine.Count;
         }
         Interlocked.Decrement(ref _created);
+        // The connection's socket was just closed by NeutralizeGnuTls, freeing its
+        // BNC login — so release its account login permit. This is the single
+        // teardown funnel (Discard, stale-borrow, unhealthy-return, dead-keepalive
+        // all route here), making permit release symmetric with AcquireAndConnect.
+        // Failed-create backouts decrement _created elsewhere but never reach here —
+        // AcquireAndConnect already released their permit on the connect failure.
+        ReleasePermit();
 
         // Evict the oldest entry off-thread so the FluentFTP NoopDaemon +
         // keepalive timer don't keep the managed object alive forever. By
@@ -860,7 +929,14 @@ public class FtpConnectionPool : IAsyncDisposable
         IsConnected = false;
 
         while (_pool.Reader.TryRead(out var client))
+        {
             await SafeDisconnectAndDispose(client);
+            // Each idle pooled connection held a login permit — release it as we
+            // close it. Connections currently BORROWED release their own permit
+            // when they Return (routes to QuarantineDecCreated since _disposed=true),
+            // so we only account for the idle ones drained here.
+            ReleasePermit();
+        }
 
         _initLock.Dispose();
         GC.SuppressFinalize(this);

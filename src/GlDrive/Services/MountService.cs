@@ -73,7 +73,15 @@ public class MountService : IDisposable
             var mainPoolSize = _serverConfig.Pool.PoolSize;
             if (_serverConfig.SpreadSite?.Sections.Count > 0)
                 mainPoolSize = Math.Min(mainPoolSize, 2);
-            _pool = new FtpConnectionPool(_factory, mainPoolSize);
+            // Resolve the account-wide login gate (shared with the spread + download
+            // pools for the same host:port:username) so total live logins across all
+            // subsystems never exceed the account cap — the root-cause fix for the
+            // self-inflicted 530 / BNC-cooldown storms.
+            var conn = _serverConfig.Connection;
+            var loginGate = ServerLoginGateRegistry.GetOrCreate(
+                conn.Host, conn.Port, conn.Username,
+                _serverConfig.Pool.LoginCap, _serverConfig.Pool.LoginHeadroom);
+            _pool = new FtpConnectionPool(_factory, mainPoolSize, loginGate);
             await _pool.Initialize(ct);
 
             // Warm idle main-pool connections ourselves now that FluentFTP's
