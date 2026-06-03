@@ -12,6 +12,16 @@ namespace GlDrive.Spread;
 
 public enum TransferState { Idle, NegotiatingPassive, NegotiatingActive, Transferring, Complete, Error }
 
+/// <summary>
+/// Which connection a failed FXP transfer should poison. Set ONLY for clean
+/// negotiation-phase protocol-reply failures where the responsible side is
+/// unambiguous and no data flowed (so the peer's GnuTLS session is intact). The
+/// data/TLS phase, timeouts, the relay loop, and the top-level catch all leave
+/// this <see cref="None"/>, which the caller conservatively maps to Both — never
+/// under-poisoning a possibly-corrupt session (a native-crash risk).
+/// </summary>
+public enum FxpFaultSide { None, Source, Dest, Both }
+
 public class FxpTransfer
 {
     private static readonly Regex PasvRegex = new(@"\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)\)", RegexOptions.Compiled);
@@ -22,6 +32,20 @@ public class FxpTransfer
     public TransferState State { get; private set; } = TransferState.Idle;
     public long TotalBytes { get; private set; }
     public string? ErrorMessage { get; private set; }
+
+    /// <summary>
+    /// Which side a failed transfer implicates (None = unknown/ambiguous ⇒ caller
+    /// poisons both). Set only at unambiguous negotiation-phase protocol failures.
+    /// </summary>
+    public FxpFaultSide FaultSide { get; private set; } = FxpFaultSide.None;
+
+    /// <summary>Record the faulting side, then build the exception to throw. Keeps
+    /// attribution co-located with each throw site so it can't drift.</summary>
+    private IOException Fault(FxpFaultSide side, string message)
+    {
+        FaultSide = side;
+        return new IOException(message);
+    }
 
     /// <summary>
     /// Set when the destination glftpd rejected STOR because the file was
@@ -101,6 +125,9 @@ public class FxpTransfer
                     Log.Debug("CpsvPasv failed ({Error}), trying Relay mode — connections will be poisoned", ex.Message);
                     source.Poisoned = true;
                     dest.Poisoned = true;
+                    // Both are already poisoned (floor); clear the CpsvPasv attribution
+                    // so any subsequent Relay failure attributes to the Relay outcome.
+                    FaultSide = FxpFaultSide.None;
                     pasvSw.Restart();
                     ok = await ExecuteRelay(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct, pasvSw);
                 }
@@ -252,7 +279,7 @@ public class FxpTransfer
         // Dest enters PASV
         var pasvReply = await dst.Execute("PASV", ct);
         if (!pasvReply.Success)
-            throw new IOException($"PASV failed on dest: {pasvReply.Code} {pasvReply.Message}");
+            throw Fault(FxpFaultSide.Dest, $"PASV failed on dest: {pasvReply.Code} {pasvReply.Message}");
 
         var pasvAddr = ExtractPasvAddress(pasvReply.Message);
 
@@ -261,7 +288,7 @@ public class FxpTransfer
         // Source connects to dest's PASV address via PORT
         var portReply = await src.Execute($"PORT {pasvAddr}", ct);
         if (!portReply.Success)
-            throw new IOException($"PORT failed on source: {portReply.Code} {portReply.Message}");
+            throw Fault(FxpFaultSide.Source, $"PORT failed on source: {portReply.Code} {portReply.Message}");
 
         // Create dest directory now that connection is established (prevents empty dirs on failure)
         if (BeforeStore != null) await BeforeStore(ct);
@@ -278,11 +305,11 @@ public class FxpTransfer
             return true;
         }
         if (storReply.Code != "150" && storReply.Code != "125")
-            throw new IOException($"STOR failed: {storReply.Code} {storReply.Message}");
+            throw Fault(FxpFaultSide.Dest, $"STOR failed: {storReply.Code} {storReply.Message}");
 
         var retrReply = await src.Execute($"RETR {Ftp.CpsvDataHelper.SanitizeFtpPath(srcPath)}", ct);
         if (retrReply.Code != "150" && retrReply.Code != "125")
-            throw new IOException($"RETR failed: {retrReply.Code} {retrReply.Message}");
+            throw Fault(FxpFaultSide.Source, $"RETR failed: {retrReply.Code} {retrReply.Message}");
 
         pasvSw.Stop(); // negotiation complete — data is now flowing
         SetState(TransferState.Transferring);
@@ -310,7 +337,7 @@ public class FxpTransfer
 
         var pasvReply = await dst.Execute("PASV", ct);
         if (!pasvReply.Success)
-            throw new IOException($"PASV failed on dest: {pasvReply.Code} {pasvReply.Message}");
+            throw Fault(FxpFaultSide.Dest, $"PASV failed on dest: {pasvReply.Code} {pasvReply.Message}");
 
         var pasvAddr = ExtractPasvAddress(pasvReply.Message);
 
@@ -318,7 +345,7 @@ public class FxpTransfer
 
         var portReply = await src.Execute($"PORT {pasvAddr}", ct);
         if (!portReply.Success)
-            throw new IOException($"PORT failed on source: {portReply.Code} {portReply.Message}");
+            throw Fault(FxpFaultSide.Source, $"PORT failed on source: {portReply.Code} {portReply.Message}");
 
         if (BeforeStore != null) await BeforeStore(ct);
 
@@ -333,11 +360,11 @@ public class FxpTransfer
             return true;
         }
         if (storReply.Code != "150" && storReply.Code != "125")
-            throw new IOException($"STOR failed: {storReply.Code} {storReply.Message}");
+            throw Fault(FxpFaultSide.Dest, $"STOR failed: {storReply.Code} {storReply.Message}");
 
         var retrReply = await src.Execute($"RETR {Ftp.CpsvDataHelper.SanitizeFtpPath(srcPath)}", ct);
         if (retrReply.Code != "150" && retrReply.Code != "125")
-            throw new IOException($"RETR failed: {retrReply.Code} {retrReply.Message}");
+            throw Fault(FxpFaultSide.Source, $"RETR failed: {retrReply.Code} {retrReply.Message}");
 
         pasvSw.Stop(); // negotiation complete — data is now flowing
         SetState(TransferState.Transferring);
@@ -364,7 +391,7 @@ public class FxpTransfer
 
         var pasvReply = await src.Execute("PASV", ct);
         if (!pasvReply.Success)
-            throw new IOException($"PASV failed on source: {pasvReply.Code} {pasvReply.Message}");
+            throw Fault(FxpFaultSide.Source, $"PASV failed on source: {pasvReply.Code} {pasvReply.Message}");
 
         var pasvAddr = ExtractPasvAddress(pasvReply.Message);
 
@@ -372,7 +399,7 @@ public class FxpTransfer
 
         var portReply = await dst.Execute($"PORT {pasvAddr}", ct);
         if (!portReply.Success)
-            throw new IOException($"PORT failed on dest: {portReply.Code} {portReply.Message}");
+            throw Fault(FxpFaultSide.Dest, $"PORT failed on dest: {portReply.Code} {portReply.Message}");
 
         if (BeforeStore != null) await BeforeStore(ct);
 
@@ -387,11 +414,11 @@ public class FxpTransfer
             return true;
         }
         if (storReply.Code != "150" && storReply.Code != "125")
-            throw new IOException($"STOR failed: {storReply.Code} {storReply.Message}");
+            throw Fault(FxpFaultSide.Dest, $"STOR failed: {storReply.Code} {storReply.Message}");
 
         var retrReply = await src.Execute($"RETR {Ftp.CpsvDataHelper.SanitizeFtpPath(srcPath)}", ct);
         if (retrReply.Code != "150" && retrReply.Code != "125")
-            throw new IOException($"RETR failed: {retrReply.Code} {retrReply.Message}");
+            throw Fault(FxpFaultSide.Source, $"RETR failed: {retrReply.Code} {retrReply.Message}");
 
         pasvSw.Stop(); // negotiation complete — data is now flowing
         SetState(TransferState.Transferring);
@@ -424,10 +451,12 @@ public class FxpTransfer
 
             if (BeforeStore != null) await BeforeStore(ct);
 
-            // Send data commands
+            // Send data commands. In Relay both CPSV data sockets are already open
+            // and TLS is negotiated right after STOR — a failure here leaves the peer
+            // entangled, so attribute Both (conservative) rather than one side.
             var retrReply = await src.Execute($"RETR {Ftp.CpsvDataHelper.SanitizeFtpPath(srcPath)}", ct);
             if (retrReply.Code != "150" && retrReply.Code != "125")
-                throw new IOException($"RETR failed: {retrReply.Code} {retrReply.Message}");
+                throw Fault(FxpFaultSide.Both, $"RETR failed: {retrReply.Code} {retrReply.Message}");
 
             var storReply = await dst.Execute($"STOR {Ftp.CpsvDataHelper.SanitizeFtpPath(dstPath)}", ct);
             if (IsDupeRejection(storReply))
@@ -453,7 +482,7 @@ public class FxpTransfer
                 return true;
             }
             if (storReply.Code != "150" && storReply.Code != "125")
-                throw new IOException($"STOR failed: {storReply.Code} {storReply.Message}");
+                throw Fault(FxpFaultSide.Both, $"STOR failed: {storReply.Code} {storReply.Message}");
 
             // Negotiate TLS as server on both (glftpd does SSL_connect)
             srcSsl = await CpsvDataHelper.NegotiateDataTls(srcTcp.GetStream(), ct);
