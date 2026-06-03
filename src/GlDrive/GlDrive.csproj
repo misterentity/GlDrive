@@ -11,7 +11,7 @@
     <StartupObject>GlDrive.Program</StartupObject>
     <AssemblyName>GlDrive</AssemblyName>
     <RootNamespace>GlDrive</RootNamespace>
-    <Version>3.5.5</Version>
+    <Version>3.5.6</Version>
     <Description>Mount a glftpd FTPS server as a Windows drive letter</Description>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
@@ -25,8 +25,19 @@
   <ItemGroup>
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.3" />
     <PackageReference Include="winfsp.net" Version="2.1.25156" />
-    <PackageReference Include="FluentFTP" Version="53.0.2" />
-    <PackageReference Include="FluentFTP.GnuTLS" Version="1.0.38" />
+    <!-- EXACT-VERSION PINNED. GlDrive reaches into FluentFTP/GnuTLS PRIVATE internals
+         by reflection (FtpConnectionPool.IsGnuTlsHealthy/NeutralizeGnuTls, mirrored by
+         GnuTlsReflectionGuard) to prevent native gnutls_deinit SEGVs. A version bump can
+         silently rename those internals and reintroduce the crashes.
+         UPGRADE CHECKLIST before changing these versions:
+           1. Bump the version, restore, build.
+           2. Run the app — the startup GnuTlsReflectionGuard.VerifyOrFail check must log
+              "GnuTLS crash-guard: all N reflected members resolved" with NO Fatal/MessageBox.
+           3. If it reports missing members, update GnuTlsReflectionGuard.Resolve() AND the
+              two pool reflection helpers to the new names, then re-verify.
+           4. Run a sustained race against a real BNC and confirm no native crash. -->
+    <PackageReference Include="FluentFTP" Version="[53.0.2]" />
+    <PackageReference Include="FluentFTP.GnuTLS" Version="[1.0.38]" />
     <PackageReference Include="H.NotifyIcon.Wpf" Version="2.4.1" />
     <PackageReference Include="Serilog" Version="4.3.1" />
     <PackageReference Include="Serilog.Sinks.File" Version="6.0.0" />

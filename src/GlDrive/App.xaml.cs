@@ -173,6 +173,18 @@ public partial class App
             .GetName().Version?.ToString() ?? "unknown";
         Log.Information("GlDrive starting... version={Version}", asmVersion);
 
+        // Verify the private-member reflection that prevents native GnuTLS crashes
+        // still resolves against the loaded FluentFTP/GnuTLS assemblies. If a package
+        // bump renamed internals, IsGnuTlsHealthy/NeutralizeGnuTls silently become
+        // no-ops and the native crashes return — so fail LOUD here. Per decision the
+        // app keeps running (degraded) rather than refusing to start.
+        GlDrive.Ftp.GnuTlsReflectionGuard.VerifyOrFail(msg =>
+        {
+            try { MessageBox.Show(msg, "GlDrive — TLS crash protection degraded",
+                MessageBoxButton.OK, MessageBoxImage.Warning); }
+            catch { /* headless/early — log already has it */ }
+        });
+
         // Heartbeat diagnostic: inspect the previous instance's last heartbeat BEFORE
         // starting a new one (the new monitor overwrites the file on first tick).
         // A recent heartbeat (<90s) at startup means the previous process was alive

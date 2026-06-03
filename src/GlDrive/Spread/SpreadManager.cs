@@ -47,6 +47,23 @@ public class SpreadManager : IDisposable
     // not needed because the restart itself clears the polling cadence.
     private readonly ConcurrentDictionary<(string section, string release), (DateTime expiry, string reason)> _recentlyDeadRaces = new();
 
+    // Auto-race structural feasibility cache (v3.6 Phase 0). An announce fires
+    // TryAutoRace, which spins a background Task to run rules/metadata gating —
+    // but a section that NO 2 connected servers can host is infeasible for EVERY
+    // release in that section, and the old code rediscovered that per-release on
+    // every announce (339 wasted "Only 1 server allowed" spin-ups in one day).
+    // This caches the cheap, FTP-free structural verdict PER SECTION so repeat
+    // announces short-circuit before the Task.Run. Keyed by category (case-insens).
+    // Entries carry the topology version they were computed under; a mount/unmount
+    // bumps _topologyVersion and silently invalidates them (no stale suppression
+    // when a new section-capable server connects). TTL is a backstop.
+    private readonly ConcurrentDictionary<string, (DateTime expiry, int topoVersion, string detail)> _sectionFeasibility =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static readonly TimeSpan SectionInfeasibleTtl = TimeSpan.FromMinutes(10);
+    // Bumped whenever the connected spread-pool SET changes (add/remove), so the
+    // feasibility cache can't suppress a race after topology changed under it.
+    private int _topologyVersion;
+
     public Func<string, FtpConnectionPool?>? _getMainPool;
 
     public event Action<string, string, string>? AutoRaceAttempted; // section, release, result
@@ -153,6 +170,7 @@ public class SpreadManager : IDisposable
             {
                 _spreadPools[serverId] = pool;
                 _factories[serverId] = factory;
+                _topologyVersion++; // invalidate the section-feasibility cache
             }
             // Ensure the gate exists from the moment the pool comes up.
             GetOrCreateGate(serverId);
@@ -173,6 +191,7 @@ public class SpreadManager : IDisposable
         {
             _spreadPools.Remove(serverId, out pool);
             _factories.Remove(serverId);
+            _topologyVersion++; // invalidate the section-feasibility cache
         }
 
         if (pool != null)
@@ -516,6 +535,17 @@ public class SpreadManager : IDisposable
             return;
         }
 
+        // Structural feasibility short-circuit (FTP-free). If fewer than 2 connected
+        // servers can structurally host this section (not blacklisted AND section-
+        // mappable), the async gate below would ALWAYS skip with "Only 1 server
+        // allowed" — and it'd recompute that for every release in the section on
+        // every announce. Suppress here, cached per-section, before spawning the Task.
+        if (!IsSectionStructurallyFeasible(category, serverIds, out var infeasDetail))
+        {
+            AutoRaceAttempted?.Invoke(category, releaseName, infeasDetail);
+            return;
+        }
+
         // Pre-check: rules evaluation + metadata filter happen async (metadata
         // filter may do an HTTP call). Fire and forget — TryAutoRace stays sync
         // for its callers, but the gating runs in the background.
@@ -532,6 +562,59 @@ public class SpreadManager : IDisposable
                 AutoRaceAttempted?.Invoke(category, releaseName, $"Pre-check error: {ex.Message}");
             }
         });
+    }
+
+    /// <summary>
+    /// Cheap, FTP-free necessary-condition gate for an auto-race: are there >=2
+    /// connected servers that could structurally host this section (not blacklisted
+    /// for the category AND <see cref="SectionMapper.HasSectionFor"/>)? This is a
+    /// strict SUPERSET of the async gate in <see cref="TryAutoRaceInternalAsync"/>
+    /// (rules/metadata can only REMOVE servers), so "infeasible" here guarantees the
+    /// async path would also skip — safe to suppress. Result is cached per section
+    /// and invalidated by topology changes (mount/unmount bump _topologyVersion).
+    /// On infeasible, <paramref name="detail"/> carries a one-line reason and the
+    /// caller logs/raises it once.
+    /// </summary>
+    private bool IsSectionStructurallyFeasible(string category, List<string> serverIds, out string detail)
+    {
+        int topo;
+        lock (_lock) topo = _topologyVersion;
+
+        if (_sectionFeasibility.TryGetValue(category, out var cached))
+        {
+            if (cached.topoVersion == topo && cached.expiry > DateTime.UtcNow)
+            {
+                detail = cached.detail; // cached infeasible verdict
+                return false;
+            }
+            _sectionFeasibility.TryRemove(category, out _); // stale (topology or TTL)
+        }
+
+        var eligible = new List<string>();
+        var missing = new List<string>();
+        foreach (var serverId in serverIds)
+        {
+            var serverConfig = _config.Servers.FirstOrDefault(s => s.Id == serverId);
+            if (serverConfig == null) continue;
+            if (_blacklist.IsBlacklisted(serverId, category)) { missing.Add(serverConfig.Name); continue; }
+            if (SectionMapper.HasSectionFor(serverConfig.SpreadSite, category))
+                eligible.Add(serverId);
+            else
+                missing.Add(serverConfig.Name);
+        }
+
+        if (eligible.Count >= 2)
+        {
+            detail = "";
+            return true; // feasible — DON'T cache (let the real gate decide; avoids stale allow)
+        }
+
+        var miss = missing.Count > 0 ? $" (no [{category}] or blacklisted on: {string.Join(", ", missing)})" : "";
+        detail = $"Skipped — only {eligible.Count} server(s) can host [{category}]{miss}";
+        _sectionFeasibility[category] = (DateTime.UtcNow + SectionInfeasibleTtl, topo, detail);
+        Log.Information("Auto-race structurally infeasible for [{Section}]: {Detail} — suppressing for {Ttl}min",
+            category, detail, (int)SectionInfeasibleTtl.TotalMinutes);
+        return false;
     }
 
     private async Task TryAutoRaceInternalAsync(string category, string releaseName,

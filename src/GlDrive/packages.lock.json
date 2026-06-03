@@ -10,13 +10,13 @@
       },
       "FluentFTP": {
         "type": "Direct",
-        "requested": "[53.0.2, )",
+        "requested": "[53.0.2, 53.0.2]",
         "resolved": "53.0.2",
         "contentHash": "EaBY+FECGqlfDL1HnxaSrPCuakebW6xlfNt/VsH5daPS76kfKA3hZiJjH6OTceNzNDWl9HTpwRXOP96mHWhbIg=="
       },
       "FluentFTP.GnuTLS": {
         "type": "Direct",
-        "requested": "[1.0.38, )",
+        "requested": "[1.0.38, 1.0.38]",
         "resolved": "1.0.38",
         "contentHash": "XNnb6XHOtXPjuH39WtrdOF7xihZaCVWofyAgpSAK2Oog/IXtSTyd7HZnhHQPQz2i/vfUKRVbw0JIHMKa0vP6BA==",
         "dependencies": {

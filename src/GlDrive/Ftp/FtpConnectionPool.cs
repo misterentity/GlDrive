@@ -687,8 +687,15 @@ public class FtpConnectionPool : IAsyncDisposable
             var customStream = customStreamField?.GetValue(stream);
             if (customStream == null) return true; // Not using GnuTLS
 
-            var baseStreamProp = customStream.GetType().GetProperty("BaseStream");
-            var gnuTlsInternal = baseStreamProp?.GetValue(customStream);
+            // BaseStream is a FIELD on GnuTlsStream (not a property — the pre-v3.6
+            // GetProperty lookup silently returned null, making this whole health
+            // check a no-op). GnuTlsReflectionGuard verifies this member kind at
+            // startup so a package rename fails loud.
+            var baseStreamField = customStream.GetType().GetField("BaseStream",
+                BindingFlags.NonPublic | BindingFlags.Instance)
+                ?? customStream.GetType().GetField("BaseStream",
+                    BindingFlags.Public | BindingFlags.Instance);
+            var gnuTlsInternal = baseStreamField?.GetValue(customStream);
             if (gnuTlsInternal == null) return true;
 
             // Check IsSessionUsable flag
@@ -703,17 +710,18 @@ public class FtpConnectionPool : IAsyncDisposable
                 }
             }
 
-            // Check that the native session handle is non-zero (not freed/corrupted)
-            var sessionField = gnuTlsInternal.GetType().GetField("_session",
-                BindingFlags.NonPublic | BindingFlags.Instance)
-                ?? gnuTlsInternal.GetType().GetField("session",
-                    BindingFlags.NonPublic | BindingFlags.Instance);
+            // Check the managed session object 'sess' (ClientSession) is present —
+            // a null sess means the GnuTLS session is gone/torn down and the next
+            // Read would fault. (Pre-v3.6 looked for a non-existent IntPtr
+            // '_session'; corrected to the real 'sess' field.)
+            var sessionField = gnuTlsInternal.GetType().GetField("sess",
+                BindingFlags.NonPublic | BindingFlags.Instance);
             if (sessionField != null)
             {
                 var sessionValue = sessionField.GetValue(gnuTlsInternal);
-                if (sessionValue is IntPtr ptr && ptr == IntPtr.Zero)
+                if (sessionValue == null)
                 {
-                    Log.Warning("Pool: GnuTLS native session handle is null — discarding connection");
+                    Log.Warning("Pool: GnuTLS session object is null — discarding connection");
                     return false;
                 }
             }
@@ -756,10 +764,15 @@ public class FtpConnectionPool : IAsyncDisposable
             var customStream = customStreamField?.GetValue(stream);
             if (customStream != null)
             {
-                // The custom stream wraps GnuTlsInternalStream as its BaseStream.
-                // Set IsSessionUsable = false to prevent gnutls_bye() in Dispose.
-                var baseStreamProp = customStream.GetType().GetProperty("BaseStream");
-                var gnuTlsInternal = baseStreamProp?.GetValue(customStream);
+                // The custom stream wraps GnuTlsInternalStream as its BaseStream
+                // FIELD (not a property — the pre-v3.6 GetProperty lookup returned
+                // null, so IsSessionUsable was NEVER set and gnutls_bye was not
+                // actually being skipped here; corrected to GetField).
+                var baseStreamField = customStream.GetType().GetField("BaseStream",
+                    BindingFlags.NonPublic | BindingFlags.Instance)
+                    ?? customStream.GetType().GetField("BaseStream",
+                        BindingFlags.Public | BindingFlags.Instance);
+                var gnuTlsInternal = baseStreamField?.GetValue(customStream);
                 if (gnuTlsInternal != null)
                 {
                     var usableProp = gnuTlsInternal.GetType().GetProperty("IsSessionUsable");
