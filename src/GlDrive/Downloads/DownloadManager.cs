@@ -21,6 +21,15 @@ public class DownloadManager : IDisposable
     private readonly Dictionary<string, CancellationTokenSource> _activeCts = new();
     private Task? _progressPersistTask;
 
+    // Retry robustness (v3.6 Phase 2a). Auto-retry re-enqueues after a delay via a
+    // background task. Across a Stop()/Start() cycle that task could resurrect a
+    // download into a torn-down or freshly-restarted manager (double-enqueue or
+    // loss). A monotonic generation stamps each Start(); a retry scheduled under an
+    // old generation no-ops. Tracked in _retryTasks so StopAsync can drain them.
+    private int _generation;
+    private readonly List<Task> _retryTasks = new();
+    private readonly object _retryLock = new();
+
     public event Action<DownloadItem, DownloadProgress>? DownloadProgressChanged;
     public event Action<DownloadItem>? DownloadStatusChanged;
 
@@ -39,17 +48,34 @@ public class DownloadManager : IDisposable
     public void Start()
     {
         _cts = new CancellationTokenSource();
+        // New generation — any retry task still pending from a previous run will
+        // see the bumped generation and no-op instead of enqueuing into this run.
+        Interlocked.Increment(ref _generation);
 
         // Re-enqueue any queued items from store
         foreach (var item in _store.Items.Where(i => i.Status == DownloadStatus.Queued))
-        {
-            lock (_queueLock) _pendingQueue.Add(item);
-            _queueSignal.Release();
-        }
+            EnqueueForProcessing(item);
 
         _processorTask = ProcessLoop(_cts.Token);
         _progressPersistTask = PersistProgressLoop(_cts.Token);
         Log.Information("DownloadManager started (max concurrent: {Max})", _config.MaxConcurrentDownloads);
+    }
+
+    /// <summary>
+    /// Put an item on the pending queue and signal the processor — the single
+    /// low-level enqueue funnel (used by Start re-enqueue, Retry, and the auto-retry
+    /// task). Dedups by Id under the lock so a doubled signal can't queue the same
+    /// item twice. Never throws if the manager is mid-teardown (signal disposed).
+    /// </summary>
+    private void EnqueueForProcessing(DownloadItem item)
+    {
+        lock (_queueLock)
+        {
+            if (_pendingQueue.Any(i => i.Id == item.Id)) return; // already queued
+            _pendingQueue.Add(item);
+        }
+        try { _queueSignal.Release(); }
+        catch (ObjectDisposedException) { /* manager stopped between add and signal */ }
     }
 
     public async Task StopAsync(TimeSpan? timeout = null)
@@ -73,6 +99,17 @@ public class DownloadManager : IDisposable
             }
             catch { }
         }
+
+        // Drain pending retry tasks (their Task.Delay is cancelled by _cts above, so
+        // they finish promptly) before disposing _cts, so none fire post-stop.
+        Task[] retries;
+        lock (_retryLock) retries = _retryTasks.ToArray();
+        if (retries.Length > 0)
+        {
+            try { await Task.WhenAll(retries).WaitAsync(TimeSpan.FromSeconds(1)); }
+            catch { }
+        }
+
         _cts?.Dispose();
         _cts = null;
     }
@@ -147,8 +184,7 @@ public class DownloadManager : IDisposable
         // Don't reset DownloadedBytes — resume will pick up from partial
         item.ErrorMessage = null;
         _store.Update(item);
-        lock (_queueLock) _pendingQueue.Add(item);
-        _queueSignal.Release();
+        EnqueueForProcessing(item);
         DownloadStatusChanged?.Invoke(item);
     }
 
@@ -237,12 +273,57 @@ public class DownloadManager : IDisposable
 
                 await _concurrency.WaitAsync(ct);
                 tasks.Add(ProcessItem(fresh, ct));
-                tasks.RemoveAll(t => t.IsCompleted);
+                ObserveAndPrune(tasks);
             }
         }
         catch (OperationCanceledException) { }
 
-        await Task.WhenAll(tasks);
+        try { await Task.WhenAll(tasks); }
+        catch (Exception ex) { Log.Debug(ex, "DownloadManager: a ProcessItem task faulted during shutdown drain"); }
+    }
+
+    /// <summary>
+    /// Schedule a delayed re-enqueue for an auto-retry. Tracked in _retryTasks so
+    /// StopAsync can drain it, and generation-guarded so a retry scheduled before a
+    /// Stop()/Start() cycle no-ops instead of resurrecting into the new run.
+    /// </summary>
+    private void ScheduleRetry(DownloadItem item, int delaySeconds)
+    {
+        var gen = Volatile.Read(ref _generation);
+        var token = _cts?.Token ?? CancellationToken.None;
+        Task task = null!;
+        task = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(delaySeconds), token);
+                if (Volatile.Read(ref _generation) == gen)
+                    EnqueueForProcessing(item);
+            }
+            catch (OperationCanceledException) { }
+            catch (ObjectDisposedException) { /* _cts disposed mid-delay during stop */ }
+            finally
+            {
+                lock (_retryLock) _retryTasks.Remove(task);
+            }
+        });
+        lock (_retryLock) _retryTasks.Add(task);
+    }
+
+    /// <summary>
+    /// Remove completed ProcessItem tasks, OBSERVING any fault so it isn't lost to
+    /// an unobserved-task exception. ProcessItem catches its own download errors, so
+    /// a fault here means an unexpected bug (e.g. store update threw) — log it.
+    /// </summary>
+    private static void ObserveAndPrune(List<Task> tasks)
+    {
+        tasks.RemoveAll(t =>
+        {
+            if (!t.IsCompleted) return false;
+            if (t.IsFaulted)
+                Log.Error(t.Exception, "DownloadManager: ProcessItem task faulted unexpectedly");
+            return true;
+        });
     }
 
     private async Task ProcessItem(DownloadItem item, CancellationToken globalCt)
@@ -463,19 +544,7 @@ public class DownloadManager : IDisposable
                 DownloadStatusChanged?.Invoke(item);
                 // NOTE: item.RetryCount is post-increment here — means "scheduling retry attempt N".
                 EmitDownloadOutcome(item, "retried");
-                var retryToken = _cts?.Token ?? CancellationToken.None;
-                var capturedSignal = _queueSignal;
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await Task.Delay(TimeSpan.FromSeconds(delay), retryToken);
-                        lock (_queueLock) _pendingQueue.Add(item);
-                        try { capturedSignal.Release(); }
-                        catch (ObjectDisposedException) { /* manager stopped between failure and retry */ }
-                    }
-                    catch (OperationCanceledException) { }
-                });
+                ScheduleRetry(item, delay);
             }
             else
             {
