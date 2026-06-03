@@ -1685,8 +1685,16 @@ public class SpreadJob : IDisposable
                 // native GnuTLS session is left in an invalid state. If these connections
                 // are returned to the pool, the next borrower will crash in Read() with an
                 // unrecoverable native exception that kills the process.
-                if (srcConn != null) srcConn.Poisoned = true;
-                if (dstConn != null) dstConn.Poisoned = true;
+                //
+                // v3.6 Phase 3a: attribute the poison to the side that actually failed
+                // (FxpTransfer.FaultSide) instead of always poisoning both. A clean
+                // one-sided protocol failure (STOR 5xx ⇒ dest, RETR 5xx ⇒ source)
+                // leaves the blameless peer's session intact, so poisoning it forced a
+                // needless reconnect (burning a login, feeding the BNC cooldown).
+                // Ambiguous/data/TLS failures stay None ⇒ Both (never under-poison a
+                // possibly-corrupt session). Spread pools validate-on-borrow as a
+                // safety net for any mis-narrowed connection.
+                ApplyPoisonAttribution(transfer, srcConn, dstConn);
 
                 lock (_failureLock)
                 {
@@ -1959,6 +1967,32 @@ public class SpreadJob : IDisposable
                 if (earliest == null || at < earliest) earliest = at;
             }
             return earliest;
+        }
+    }
+
+    /// <summary>
+    /// Poison the connection(s) implicated by a failed transfer. Narrows to one
+    /// side only for unambiguous clean protocol failures (FxpTransfer.FaultSide);
+    /// None/Both poison both — the conservative default that never leaves a
+    /// possibly-corrupt GnuTLS session in the pool. Only ever SETS Poisoned (never
+    /// clears), so an earlier explicit poison (e.g. the Relay fallback) is a floor.
+    /// </summary>
+    private static void ApplyPoisonAttribution(FxpTransfer transfer, PooledConnection? srcConn, PooledConnection? dstConn)
+    {
+        switch (transfer.FaultSide)
+        {
+            case FxpFaultSide.Source:
+                if (srcConn != null) srcConn.Poisoned = true;
+                Log.Debug("Poison attribution: source only (FaultSide=Source)");
+                break;
+            case FxpFaultSide.Dest:
+                if (dstConn != null) dstConn.Poisoned = true;
+                Log.Debug("Poison attribution: dest only (FaultSide=Dest)");
+                break;
+            default: // None or Both — ambiguous, poison both
+                if (srcConn != null) srcConn.Poisoned = true;
+                if (dstConn != null) dstConn.Poisoned = true;
+                break;
         }
     }
 
