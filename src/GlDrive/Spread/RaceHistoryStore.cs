@@ -30,6 +30,10 @@ public class RaceHistoryItem
     public int FilesDelivered { get; set; }
     public bool CleanComplete { get; set; }
 
+    // Final 0-65535 race score (points) captured at completion — same value shown on the
+    // retained race card. Persisted so a finished race's points survive a restart.
+    public int Score { get; set; }
+
     // PRD O3 — failure taxonomy. One of: "", "config", "upload-denied",
     // "bnc-pressure", "transport", "not-found", "nuked", "no-activity".
     public string FailureCategory { get; set; } = "";

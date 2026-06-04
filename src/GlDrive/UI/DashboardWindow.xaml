@@ -2315,7 +2315,14 @@
                         <Border Grid.Row="0" Style="{DynamicResource HudPanelStyle}" Margin="0,0,0,10">
                             <DockPanel>
                                 <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                    <TextBlock Text="&gt;&gt; AUTO RACES" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                    <DockPanel LastChildFill="True">
+                                        <!-- Removes all retained finished (DONE/FAILED/STOPPED) race cards -->
+                                        <Button DockPanel.Dock="Right" Content="CLEAR DONE" Padding="8,2" Margin="8,0,0,0"
+                                                FontSize="10" VerticalAlignment="Center"
+                                                Command="{Binding ClearFinishedCommand}"
+                                                ToolTip="Remove all finished race cards from the list"/>
+                                        <TextBlock Text="&gt;&gt; AUTO RACES" Style="{DynamicResource SectionHeaderTextStyle}" VerticalAlignment="Center"/>
+                                    </DockPanel>
                                 </Border>
                                 <Grid>
                                     <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -2329,6 +2336,17 @@
                                                     <Border Margin="0,0,0,10" Background="#80050F1A"
                                                             BorderBrush="{DynamicResource LineBrush}" BorderThickness="1"
                                                             Padding="14,12">
+                                                        <!-- Finished cards stay in the list, dimmed, showing their final score -->
+                                                        <Border.Style>
+                                                            <Style TargetType="Border">
+                                                                <Setter Property="Opacity" Value="1"/>
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsFinished}" Value="True">
+                                                                        <Setter Property="Opacity" Value="0.72"/>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Border.Style>
                                                         <Grid>
                                                             <Grid.ColumnDefinitions>
                                                                 <ColumnDefinition Width="160"/>
@@ -2393,42 +2411,30 @@
                                                                     </Polyline.Effect>
                                                                 </Polyline>
                                                             </Border>
-                                                            <!-- Actions -->
+                                                            <!-- Actions — gated by card state: live races get PAUSE/RESUME/STOP,
+                                                                 finished (retained) cards get DISMISS -->
                                                             <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
-                                                                <!-- PAUSE: visible only while the job is running (IsPaused=false) -->
+                                                                <!-- PAUSE: live + running only -->
                                                                 <Button Content="PAUSE" Margin="0,0,6,0" Padding="10,5"
+                                                                        Visibility="{Binding CanPause, Converter={StaticResource BoolToVisibility}}"
                                                                         Command="{Binding DataContext.PauseJobCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                                        CommandParameter="{Binding}">
-                                                                    <Button.Style>
-                                                                        <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-                                                                            <Setter Property="Visibility" Value="Visible"/>
-                                                                            <Style.Triggers>
-                                                                                <DataTrigger Binding="{Binding IsPaused}" Value="True">
-                                                                                    <Setter Property="Visibility" Value="Collapsed"/>
-                                                                                </DataTrigger>
-                                                                            </Style.Triggers>
-                                                                        </Style>
-                                                                    </Button.Style>
-                                                                </Button>
-                                                                <!-- RESUME: visible only while paused -->
+                                                                        CommandParameter="{Binding}"/>
+                                                                <!-- RESUME: live + paused only -->
                                                                 <Button Content="RESUME" Margin="0,0,6,0" Padding="10,5"
+                                                                        Visibility="{Binding CanResume, Converter={StaticResource BoolToVisibility}}"
                                                                         Command="{Binding DataContext.ResumeJobCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                                        CommandParameter="{Binding}">
-                                                                    <Button.Style>
-                                                                        <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-                                                                            <Setter Property="Visibility" Value="Collapsed"/>
-                                                                            <Style.Triggers>
-                                                                                <DataTrigger Binding="{Binding IsPaused}" Value="True">
-                                                                                    <Setter Property="Visibility" Value="Visible"/>
-                                                                                </DataTrigger>
-                                                                            </Style.Triggers>
-                                                                        </Style>
-                                                                    </Button.Style>
-                                                                </Button>
+                                                                        CommandParameter="{Binding}"/>
+                                                                <!-- STOP: live races only -->
                                                                 <Button Content="STOP"
+                                                                        Visibility="{Binding CanStop, Converter={StaticResource BoolToVisibility}}"
                                                                         Command="{Binding DataContext.StopJobCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                                         CommandParameter="{Binding}"
                                                                         Style="{DynamicResource DangerButtonStyle}" Padding="12,5"/>
+                                                                <!-- DISMISS: finished cards only — removes just this card -->
+                                                                <Button Content="DISMISS" Padding="10,5"
+                                                                        Visibility="{Binding CanDismiss, Converter={StaticResource BoolToVisibility}}"
+                                                                        Command="{Binding DataContext.DismissJobCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                        CommandParameter="{Binding}"/>
                                                             </StackPanel>
                                                         </Grid>
                                                     </Border>

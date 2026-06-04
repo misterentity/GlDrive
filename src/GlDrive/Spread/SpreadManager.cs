@@ -423,6 +423,7 @@ public class SpreadManager : IDisposable
                 FilesTotal = filesTotal,
                 FilesDelivered = filesDelivered,
                 CleanComplete = cleanComplete,
+                Score = job.Score,
                 FailureCategory = job.State == SpreadJobState.Failed
                     ? SpreadJob.ClassifyFailure(job.LastError)
                     : ""
