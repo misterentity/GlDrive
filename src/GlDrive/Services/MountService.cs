@@ -248,7 +248,8 @@ public class MountService : IDisposable
         {
             Log.Warning("Background tasks did not stop in time for {ServerName} — proceeding with cleanup", _serverConfig.Name);
         }
-        catch { }
+        // Best-effort: a stopping task may fault; never let it block unmount.
+        catch (Exception ex) { Log.Debug(ex, "Background task stop faulted during unmount for {ServerName}", _serverConfig.Name); }
 
         // 3. Unmount WinFsp host
         try
@@ -277,7 +278,8 @@ public class MountService : IDisposable
         _downloadManager?.Stop();
         _searchService?.StopIndexer();
 
-        try { _host?.Unmount(); } catch { }
+        // Best-effort WinFsp unmount on the sync teardown path; a dead host shouldn't block Dispose.
+        try { _host?.Unmount(); } catch (Exception ex) { Log.Debug(ex, "Sync unmount error for {ServerName}", _serverConfig.Name); }
 
         Cleanup();
         _mounted = false;
@@ -315,7 +317,8 @@ public class MountService : IDisposable
             {
                 Log.Warning("Pool dispose timed out — abandoning connections");
             }
-            catch { }
+            // Best-effort: a non-timeout dispose fault (dead socket, GnuTLS) must not block unmount.
+            catch (Exception ex) { Log.Debug(ex, "Pool dispose error during unmount for {ServerName}", _serverConfig.Name); }
             _pool = null;
         }
 
@@ -338,7 +341,10 @@ public class MountService : IDisposable
         _cache = null;
         _ftp = null;
 
-        // Fire-and-forget pool dispose with timeout — don't block on dead TCP connections
+        // Fire-and-forget pool dispose with timeout — don't block on dead TCP connections.
+        // The inner try/catch logs expected faults; the OnlyOnFaulted continuation is a
+        // backstop so no dispose fault escapes as an unobserved TaskException (which can
+        // crash the process on finalization) — matches the pool-lifecycle logging style.
         var pool = _pool;
         _pool = null;
         if (pool != null)
@@ -353,7 +359,9 @@ public class MountService : IDisposable
                     Log.Warning("Pool dispose timed out (sync cleanup) — abandoning connections");
                 }
                 catch (Exception ex) { Log.Debug(ex, "Pool dispose error"); }
-            });
+            }).ContinueWith(
+                t => Log.Debug(t.Exception, "Pool dispose task faulted (sync cleanup)"),
+                TaskContinuationOptions.OnlyOnFaulted);
 
         _factory = null;
     }
@@ -386,7 +394,9 @@ public class MountService : IDisposable
                         proc?.WaitForExit(3000);
                     }
                 }
-                catch { }
+                // Best-effort: launchctl stop is one of three fallback cleanup attempts; failure
+                // is expected (no WinFsp launchctl, not our mount) and we fall through to net use.
+                catch (Exception ex) { Log.Debug(ex, "WinFsp launchctl stop failed for {MountPoint}", mountPoint); }
 
                 // Try net use delete
                 if (Directory.Exists(mountPoint))
@@ -534,7 +544,9 @@ public class MountService : IDisposable
                 Log.Information("RefreshStatsAsync falling back to LIST trailer for {Server}", _serverConfig.Name);
                 try
                 {
-                    await conn.Client.GetListing(_serverConfig.Connection.RootPath, CancellationToken.None);
+                    // Honor the 10s statsCts deadline so a slow/hung LIST can't pin this
+                    // borrowed connection (and the unmount/stats path) indefinitely.
+                    await conn.Client.GetListing(_serverConfig.Connection.RootPath, statsCts.Token);
                     var reply = conn.Client.LastReply;
                     var body = (reply.InfoMessages ?? string.Empty) + "\n" + (reply.Message ?? string.Empty);
                     Log.Information("LIST trailer for {Server} bodyLen={Len} body={Body}",

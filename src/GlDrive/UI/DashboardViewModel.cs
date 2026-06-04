@@ -2583,11 +2583,18 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     public void Dispose()
     {
+        // DispatcherTimer is not IDisposable — Stop() removes it from the dispatcher's
+        // active-timer list, which is the GC root that keeps this VM alive via the Tick
+        // lambdas (they capture `this`). All four timers use anonymous Tick handlers with
+        // no stored delegate, so Tick -= is impossible; Stop() + null is the correct cleanup.
         _statusTimer?.Stop();
+        _statusTimer = null;
         _overviewTimer?.Stop();
         _overviewTimer = null;
         _preDbRefreshTimer?.Stop();
+        _preDbRefreshTimer = null;
         _preDbCountdownTimer?.Stop();
+        _preDbCountdownTimer = null;
         _searchCts?.Cancel();
         _searchCts?.Dispose();
         _searchCts = null;

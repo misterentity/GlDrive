@@ -30,16 +30,20 @@ public static class AgentCategories
     public const string ExcludedCategories = "excludedCategories";
     public const string WishlistPrune      = "wishlistPrune";
     public const string PoolSizing         = "poolSizing";
+    // Blacklist constant retained for BlacklistValidator.Category (validator still registered to
+    // defensively reject stray emissions) but DELIBERATELY excluded from All below.
     public const string Blacklist          = "blacklist";
     public const string Affils             = "affils";
     public const string ErrorReport        = "errorReport";
     public const string DownloadOnly       = "downloadOnly";
     public const string RequestFiller      = "requestFiller";
 
+    // Advertised/applyable categories. Blacklist is OMITTED: its Phase 8 mutation pipeline is
+    // unimplemented, so BlacklistValidator always rejects — advertising it just wastes model output.
     public static readonly string[] All =
     {
         Skiplist, Priority, SectionMapping, AnnounceRule, ExcludedCategories,
-        WishlistPrune, PoolSizing, Blacklist, Affils, ErrorReport,
+        WishlistPrune, PoolSizing, Affils, ErrorReport,
         DownloadOnly, RequestFiller
     };
 }

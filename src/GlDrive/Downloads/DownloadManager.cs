@@ -134,7 +134,11 @@ public class DownloadManager : IDisposable
     {
         lock (_queueLock)
         {
-            // Duplicate detection under lock to prevent race with ProcessItem
+            // Duplicate dedup AND the _store.Add/_pendingQueue.Add below run under the
+            // SAME _queueLock — so the check-then-add is atomic. Two concurrent
+            // Enqueue() calls for one RemotePath serialize here: the first commits the
+            // item (immediately visible via the _store.Items snapshot), the second
+            // observes it and returns false. No TOCTOU between concurrent enqueues.
             var existing = _store.Items.FirstOrDefault(i =>
                 i.RemotePath == item.RemotePath &&
                 i.Status is DownloadStatus.Queued or DownloadStatus.Downloading or DownloadStatus.Extracting);
@@ -355,8 +359,21 @@ public class DownloadManager : IDisposable
             slotReleased = true;
             _concurrency.Release();
         }
+        // Disk reservation is RELEASED EXACTLY ONCE per ProcessItem via this guard,
+        // mirroring ReleaseSlot. A retry re-enqueues the item and runs a *fresh*
+        // ProcessItem with its own local reservation, so reserve/release stay
+        // symmetric — the budget can't slowly leak across retry attempts (v3.6 Phase
+        // 2b). The guard also prevents a double-release if the method gains more exit
+        // paths later. Only ever non-null after a SUCCESSFUL TryReserve.
         string? reservedRoot = null;
         long reservedBytes = 0;
+        var reservationReleased = false;
+        void ReleaseReservation()
+        {
+            if (reservationReleased) return;
+            reservationReleased = true;
+            if (reservedRoot != null) _disk?.Release(reservedRoot, reservedBytes);
+        }
 
         try
         {
@@ -592,9 +609,11 @@ public class DownloadManager : IDisposable
             // Release the network slot if the post-process path didn't reach the
             // explicit ReleaseSlot() (early return, failure, or cancellation).
             ReleaseSlot();
-            // Release the disk reservation symmetrically (it covered the in-flight
-            // bytes; the files are now actually on disk and counted by the OS).
-            if (reservedRoot != null) _disk?.Release(reservedRoot, reservedBytes);
+            // Release the disk reservation symmetrically and exactly once (it covered
+            // the in-flight bytes; the files are now actually on disk and counted by
+            // the OS). On the retry path this releases before the re-enqueued item's
+            // next ProcessItem re-reserves, so the budget never double-counts.
+            ReleaseReservation();
         }
     }
 

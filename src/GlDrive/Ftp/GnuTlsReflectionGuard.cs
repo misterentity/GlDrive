@@ -143,8 +143,13 @@ internal static class GnuTlsReflectionGuard
             + "natively under connection churn. See the log; downgrading FluentFTP restores protection.");
     }
 
-    /// <summary>Number of distinct members the guard verifies — for the success log line.</summary>
-    private const int ResolvedMemberCount = 6;
+    /// <summary>
+    /// Number of distinct members the guard verifies — for the success log line.
+    /// MUST equal the count of member/type <c>missing.Add</c> sites in <see cref="Resolve"/>
+    /// (the reflection-threw catch-all does NOT count): 2 types + m_customStream + m_socket +
+    /// BaseStream + IsSessionUsable + sess = 7. Keep in sync when adding/removing a check.
+    /// </summary>
+    private const int ResolvedMemberCount = 7;
 
     private static Type? FindType(Assembly asm, string simpleName)
     {

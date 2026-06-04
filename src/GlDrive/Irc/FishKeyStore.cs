@@ -39,6 +39,12 @@ public class FishKeyStore
 {
     private readonly string _filePath;
     private Dictionary<string, FishKeyEntry> _keys = new(StringComparer.OrdinalIgnoreCase);
+    // Serializes ALL map reads/writes. Concurrent incoming messages (read loop + DH1080
+    // Task.Run + UI /key) can race the GetKey→decrypt→SetKeyWithAlt variant-promotion
+    // window; without this lock the wrong base64-alphabet variant can be promoted and a
+    // half-written map could be enumerated/saved. Dual-alphabet semantics (Key/AltKey/Key3)
+    // are preserved — the lock only makes each lookup/mutation atomic, never collapses variants.
+    private readonly object _keyLock = new();
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -54,14 +60,21 @@ public class FishKeyStore
 
     public FishKeyEntry? GetKey(string target)
     {
-        _keys.TryGetValue(target, out var entry);
-        return entry;
+        // Lock guards lookups against concurrent variant-promotion writes (Save is sync, no await held).
+        lock (_keyLock)
+        {
+            _keys.TryGetValue(target, out var entry);
+            return entry;
+        }
     }
 
     public void SetKey(string target, string key, FishMode mode = FishMode.ECB, bool manual = true)
     {
-        _keys[target] = new FishKeyEntry { Key = key, AltKey = "", Mode = mode, Manual = manual, SetAt = DateTime.UtcNow };
-        Save();
+        lock (_keyLock)
+        {
+            _keys[target] = new FishKeyEntry { Key = key, AltKey = "", Mode = mode, Manual = manual, SetAt = DateTime.UtcNow };
+            Save();
+        }
     }
 
     /// <summary>
@@ -70,9 +83,14 @@ public class FishKeyStore
     /// </summary>
     public void SetKeyWithAlt(string target, string key, string altKey, string key3, FishMode mode)
     {
-        var manual = _keys.TryGetValue(target, out var existing) && existing.Manual;
-        _keys[target] = new FishKeyEntry { Key = key, AltKey = altKey, Key3 = key3, Mode = mode, Manual = manual, SetAt = DateTime.UtcNow };
-        Save();
+        // Read-manual-flag + replace must be atomic so a concurrent SetDh1080Keys/SetKey can't
+        // interleave and flip the Manual decision or lose the promoted dual-alphabet variant.
+        lock (_keyLock)
+        {
+            var manual = _keys.TryGetValue(target, out var existing) && existing.Manual;
+            _keys[target] = new FishKeyEntry { Key = key, AltKey = altKey, Key3 = key3, Mode = mode, Manual = manual, SetAt = DateTime.UtcNow };
+            Save();
+        }
     }
 
     /// <summary>
@@ -82,20 +100,34 @@ public class FishKeyStore
     /// </summary>
     public bool SetDh1080Keys(string target, string key, string altKey, string key3, FishMode mode)
     {
-        if (_keys.TryGetValue(target, out var existing) && existing.Manual)
-            return false;
-        _keys[target] = new FishKeyEntry { Key = key, AltKey = altKey, Key3 = key3, Mode = mode, Manual = false, SetAt = DateTime.UtcNow };
-        Save();
-        return true;
+        // Check-manual + write atomic: protects the manual-key invariant from a racing /key
+        // that could otherwise let DH1080 overwrite a just-set manual key (or vice-versa).
+        lock (_keyLock)
+        {
+            if (_keys.TryGetValue(target, out var existing) && existing.Manual)
+                return false;
+            _keys[target] = new FishKeyEntry { Key = key, AltKey = altKey, Key3 = key3, Mode = mode, Manual = false, SetAt = DateTime.UtcNow };
+            Save();
+            return true;
+        }
     }
 
     public void RemoveKey(string target)
     {
-        if (_keys.Remove(target))
-            Save();
+        lock (_keyLock)
+        {
+            if (_keys.Remove(target))
+                Save();
+        }
     }
 
-    public IReadOnlyDictionary<string, FishKeyEntry> GetAllKeys() => _keys;
+    // Return a snapshot — the live map must never escape the lock or callers could enumerate
+    // it mid-mutation (variant promotion replaces entries) and crash on concurrent modification.
+    public IReadOnlyDictionary<string, FishKeyEntry> GetAllKeys()
+    {
+        lock (_keyLock)
+            return new Dictionary<string, FishKeyEntry>(_keys, StringComparer.OrdinalIgnoreCase);
+    }
 
     private void Load()
     {
@@ -119,21 +151,29 @@ public class FishKeyStore
             }
 
             var loaded = JsonSerializer.Deserialize<Dictionary<string, FishKeyEntry>>(json, JsonOptions);
-            // Re-wrap to preserve case-insensitive lookup (deserializer uses default comparer)
-            _keys = loaded != null
-                ? new Dictionary<string, FishKeyEntry>(loaded, StringComparer.OrdinalIgnoreCase)
-                : new(StringComparer.OrdinalIgnoreCase);
+            // Mutate the map + re-save under the same lock all other writers use, so a key set
+            // during startup load can't be clobbered by the deserialized snapshot.
+            lock (_keyLock)
+            {
+                // Re-wrap to preserve case-insensitive lookup (deserializer uses default comparer)
+                _keys = loaded != null
+                    ? new Dictionary<string, FishKeyEntry>(loaded, StringComparer.OrdinalIgnoreCase)
+                    : new(StringComparer.OrdinalIgnoreCase);
 
-            // Re-save to ensure encrypted format
-            Save();
+                // Re-save to ensure encrypted format
+                Save();
+            }
         }
         catch (Exception ex)
         {
             Log.Warning(ex, "Failed to load FiSH keys, starting empty");
-            _keys = new(StringComparer.OrdinalIgnoreCase);
+            lock (_keyLock)
+                _keys = new(StringComparer.OrdinalIgnoreCase);
         }
     }
 
+    // MUST be called while holding _keyLock — it reads _keys directly and is non-reentrant
+    // by design (the lock is a plain Monitor; never lock inside here or it self-deadlocks).
     private void Save()
     {
         try

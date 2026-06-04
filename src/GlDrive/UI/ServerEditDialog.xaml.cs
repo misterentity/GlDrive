@@ -205,6 +205,33 @@ public partial class ServerEditDialog : Window
         TestResultText.Text = $"Certificate cleared for {key}. Will be re-accepted on next connect.";
     }
 
+    // Utility ops (discover/AI/SITE RULES) must honour TOFU just like the real
+    // connection path (FtpClientFactory). A blind `e.Accept = true` here would let
+    // a first-connect MitM pin an attacker cert into the SAME trusted_certs.json the
+    // mounted drive trusts. Route every utility validation through the shared
+    // CertificateManager: it pins on first sight, rejects a changed fingerprint,
+    // and persists to the global store. Clear the SynchronizationContext so the
+    // blocking .GetResult() can't deadlock when the callback fires on the WPF
+    // dispatcher (mirrors FtpClientFactory.Create).
+    private static void AttachTofuValidation(AsyncFtpClient client, string host, int port)
+    {
+        var certMgr = new Tls.CertificateManager();
+        client.ValidateCertificate += (control, e) =>
+        {
+            var prevCtx = SynchronizationContext.Current;
+            SynchronizationContext.SetSynchronizationContext(null);
+            try
+            {
+                e.Accept = certMgr.ValidateCertificate(host, port, e.Certificate)
+                    .ConfigureAwait(false).GetAwaiter().GetResult();
+            }
+            finally
+            {
+                SynchronizationContext.SetSynchronizationContext(prevCtx);
+            }
+        };
+    }
+
     private async void TestConnection_Click(object sender, RoutedEventArgs e)
     {
         TestResultText.Text = "Testing connection...";
@@ -266,9 +293,14 @@ public partial class ServerEditDialog : Window
             var listing = await client.GetListing("/");
             await client.Disconnect();
 
-            // Auto-trust the certificate so subsequent connects succeed
+            // Auto-trust the certificate so subsequent connects succeed.
+            // This is the deliberate Test-Connection TOFU UX (accept-then-pin), but
+            // surface the SHA-256 fingerprint first so a first-connect MitM cert is
+            // visible in the log before it's written to the trusted store.
             if (certFingerprint != null)
             {
+                Log.Information("Test connection: pinning certificate for {Host}:{Port} fingerprint {Fingerprint}",
+                    host, port, certFingerprint);
                 var certMgr = new Tls.CertificateManager();
                 certMgr.TrustCertificate($"{host}:{port}", certFingerprint);
             }
@@ -544,7 +576,8 @@ public partial class ServerEditDialog : Window
             if (PreferTls12Box.IsChecked == true)
                 gnuConfig.AdvancedOptions = [GnuAdvanced.NoTickets];
             client.Config.CustomStreamConfig = gnuConfig;
-            client.ValidateCertificate += (_, ev) => ev.Accept = true;
+            // TOFU instead of blind accept — see AttachTofuValidation.
+            AttachTofuValidation(client, host, port);
 
             await client.Connect();
 
@@ -643,7 +676,8 @@ public partial class ServerEditDialog : Window
             if (PreferTls12Box.IsChecked == true)
                 gnuConfig.AdvancedOptions = [GnuAdvanced.NoTickets];
             client.Config.CustomStreamConfig = gnuConfig;
-            client.ValidateCertificate += (_, ev) => ev.Accept = true;
+            // TOFU instead of blind accept — see AttachTofuValidation.
+            AttachTofuValidation(client, host, port);
 
             await client.Connect();
             var reply = await client.Execute("SITE RULES");
@@ -679,7 +713,8 @@ public partial class ServerEditDialog : Window
                 if (PreferTls12Box.IsChecked == true)
                     gnuConfig2.AdvancedOptions = [GnuAdvanced.NoTickets];
                 sampleClient.Config.CustomStreamConfig = gnuConfig2;
-                sampleClient.ValidateCertificate += (_, ev) => ev.Accept = true;
+                // TOFU instead of blind accept — see AttachTofuValidation.
+                AttachTofuValidation(sampleClient, host, port);
                 await sampleClient.Connect();
 
                 // Also scan the notification watch path for sections
@@ -1140,7 +1175,8 @@ public partial class ServerEditDialog : Window
             if (PreferTls12Box.IsChecked == true)
                 gnuConfig.AdvancedOptions = [GnuAdvanced.NoTickets];
             client.Config.CustomStreamConfig = gnuConfig;
-            client.ValidateCertificate += (_, ev) => ev.Accept = true;
+            // TOFU instead of blind accept — see AttachTofuValidation.
+            AttachTofuValidation(client, host, port);
 
             TestResultText.Text = "Connecting...";
             await client.Connect();
@@ -1526,7 +1562,8 @@ public partial class ServerEditDialog : Window
             if (PreferTls12Box.IsChecked == true)
                 gnuConfig.AdvancedOptions = [GnuAdvanced.NoTickets];
             client.Config.CustomStreamConfig = gnuConfig;
-            client.ValidateCertificate += (_, ev) => ev.Accept = true;
+            // TOFU instead of blind accept — see AttachTofuValidation.
+            AttachTofuValidation(client, host, port);
 
             TestResultText.Text = "Connecting for SITE RULES...";
             await client.Connect();

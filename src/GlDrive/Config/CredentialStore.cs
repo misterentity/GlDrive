@@ -35,8 +35,8 @@ public static class CredentialStore
         }
         catch (Exception ex)
         {
+            // Write failure is logged and swallowed (consistent with reads + SaveApiKey) so a locked Credential Manager doesn't crash first-run setup; a later GetProxyPassword==null surfaces as a normal auth failure.
             Log.Error(ex, "Failed to save proxy credential");
-            throw;
         }
     }
 
@@ -68,8 +68,8 @@ public static class CredentialStore
         }
         catch (Exception ex)
         {
+            // Write failure is logged and swallowed (consistent with reads + SaveApiKey) so a locked Credential Manager doesn't crash first-run setup; a later GetPassword==null surfaces as a normal auth failure.
             Log.Error(ex, "Failed to save credential");
-            throw;
         }
     }
 
@@ -113,8 +113,8 @@ public static class CredentialStore
         }
         catch (Exception ex)
         {
+            // Write failure is logged and swallowed (consistent with reads + SaveApiKey) so a locked Credential Manager doesn't crash first-run setup; a later GetIrcPassword==null surfaces as a normal auth failure.
             Log.Error(ex, "Failed to save IRC credential");
-            throw;
         }
     }
 
@@ -160,8 +160,8 @@ public static class CredentialStore
         }
         catch (Exception ex)
         {
+            // Write failure is logged and swallowed (consistent with reads + SaveApiKey) so a locked Credential Manager doesn't crash first-run setup; a later GetSshPassword==null surfaces as a normal auth failure.
             Log.Error(ex, "Failed to save SSH credential");
-            throw;
         }
     }
 

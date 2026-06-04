@@ -26,7 +26,10 @@ public class GlDriveFileSystem : FileSystemBase
     private readonly byte[] _defaultSecurityDescriptor;
     private long _cachedTotalSize = 1L * 1024 * 1024 * 1024 * 1024; // 1 TB default
     private long _cachedFreeSize = 500L * 1024 * 1024 * 1024; // 500 GB default
-    private DateTime _lastDiskQuery = DateTime.UtcNow; // delay first query until 5min after mount
+    // Stored as ticks (long) so it can be read/written with Interlocked like its
+    // sibling cached fields — GetVolumeInfo runs on concurrent WinFsp threads, a raw
+    // DateTime read/write would tear. Initialized to "now" to delay first query 5min.
+    private long _lastDiskQueryTicks = DateTime.UtcNow.Ticks;
     private int _diskQueryRunning; // 0 = idle, 1 = running
     private bool _diskQueryUnsupported;
 
@@ -94,9 +97,11 @@ public class GlDriveFileSystem : FileSystemBase
         volumeInfo.FreeSize = (ulong)Interlocked.Read(ref _cachedFreeSize);
         volumeInfo.SetVolumeLabel(_volumeLabel);
 
-        // Refresh disk info in background every 5 minutes (skip if unsupported or already running)
+        // Refresh disk info in background every 5 minutes (skip if unsupported or already running).
+        // Interlocked.Read the timestamp — same synchronization discipline as the sibling cached fields.
+        var lastDiskQuery = new DateTime(Interlocked.Read(ref _lastDiskQueryTicks), DateTimeKind.Utc);
         if (!_diskQueryUnsupported &&
-            (DateTime.UtcNow - _lastDiskQuery).TotalMinutes >= 5 &&
+            (DateTime.UtcNow - lastDiskQuery).TotalMinutes >= 5 &&
             Interlocked.CompareExchange(ref _diskQueryRunning, 1, 0) == 0)
         {
             _ = Task.Run(async () =>
@@ -122,7 +127,8 @@ public class GlDriveFileSystem : FileSystemBase
                 }
                 finally
                 {
-                    _lastDiskQuery = DateTime.UtcNow;
+                    // Interlocked.Exchange the timestamp ticks — consistent with the read site above.
+                    Interlocked.Exchange(ref _lastDiskQueryTicks, DateTime.UtcNow.Ticks);
                     Interlocked.Exchange(ref _diskQueryRunning, 0);
                 }
             });
@@ -667,6 +673,10 @@ public class GlDriveFileSystem : FileSystemBase
             _cache.InvalidateParent(fromPath);
             _cache.InvalidateParent(toPath);
             _cache.Invalidate(fromPath);
+            // Evict the DESTINATION's own cached listing too — a rename can replace an
+            // existing dir at toPath (replaceIfExists), so a stale child listing under
+            // toPath must not survive. Mirrors the source eviction above.
+            _cache.Invalidate(toPath);
             return STATUS_SUCCESS;
         }
         catch (Exception ex)
@@ -701,8 +711,15 @@ public override int CanDelete(
 
         Log.Debug("Listing {Path} (cache miss, fetching from server)...", remotePath);
 
-        // Bound concurrent FTP calls to avoid ThreadPool starvation
-        _ftpGate.Wait();
+        // Bound concurrent FTP calls to avoid ThreadPool starvation.
+        // Bounded wait: this runs on a WinFsp callback thread — an unbounded Wait()
+        // would wedge the whole mount if a prior FTP op hangs holding the gate. Fail
+        // fast on timeout instead, and only Release if we actually acquired the gate.
+        if (!_ftpGate.Wait(TimeSpan.FromSeconds(10)))
+        {
+            Log.Warning("ListDirectory gate timed out (FTP ops saturated): {Path}", remotePath);
+            throw new TimeoutException($"ListDirectory gate timed out: {remotePath}");
+        }
         try
         {
             // Re-check cache after acquiring gate (another thread may have populated it)
@@ -726,6 +743,7 @@ public override int CanDelete(
         }
         finally
         {
+            // Only reached when Wait() returned true (acquired) — balanced release.
             _ftpGate.Release();
         }
     }
