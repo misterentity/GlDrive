@@ -56,8 +56,45 @@ public class SpreadJobVm : INotifyPropertyChanged
     public bool IsPaused
     {
         get => _isPaused;
-        set { if (_isPaused == value) return; _isPaused = value; OnPropertyChanged(); }
+        set
+        {
+            if (_isPaused == value) return;
+            _isPaused = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CanPause));
+            OnPropertyChanged(nameof(CanResume));
+        }
     }
+
+    // Finished cards (DONE/FAILED/STOPPED) stay in the SpreadJobs list so the user can see
+    // each race's final frozen score/points — a clean race freezes at 65,535, a partial one
+    // lower. RefreshFromManager skips pruning them; only DISMISS / CLEAR DONE removes them.
+    private bool _isFinished;
+    public bool IsFinished
+    {
+        get => _isFinished;
+        set
+        {
+            if (_isFinished == value) return;
+            _isFinished = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsActive));
+            OnPropertyChanged(nameof(CanPause));
+            OnPropertyChanged(nameof(CanResume));
+            OnPropertyChanged(nameof(CanStop));
+            OnPropertyChanged(nameof(CanDismiss));
+        }
+    }
+
+    /// <summary>Wall-clock completion time, used to cap retained finished cards (oldest evicted first).</summary>
+    public DateTime FinishedAt { get; set; }
+
+    // Action-button gating. A finished card is read-only except for DISMISS.
+    public bool IsActive => !_isFinished;
+    public bool CanPause => !_isFinished && !_isPaused;
+    public bool CanResume => !_isFinished && _isPaused;
+    public bool CanStop => !_isFinished;
+    public bool CanDismiss => _isFinished;
 
     public bool IsPred
     {

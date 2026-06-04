@@ -36,8 +36,13 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
     public ObservableCollection<RaceHistoryVm> RaceHistory { get; } = new();
     public ObservableCollection<AutoRaceFeedItem> AutoRaceFeed { get; } = new();
 
-    public int LeaderScore => SpreadJobs.Count > 0 ? SpreadJobs.Max(j => j.Score) : 0;
-    public int QueueDepth => SpreadJobs.Count;
+    // Leader/queue stats reflect LIVE races only — retained finished cards (always 65,535 on a
+    // clean race) would otherwise pin LeaderScore and inflate the queue depth.
+    public int LeaderScore => SpreadJobs.Where(j => !j.IsFinished).Select(j => j.Score).DefaultIfEmpty(0).Max();
+    public int QueueDepth => SpreadJobs.Count(j => !j.IsFinished);
+
+    // Cap on retained finished cards; oldest (by FinishedAt) evicted past this.
+    private const int MaxFinishedCards = 25;
 
     public string SelectedSection
     {
@@ -89,6 +94,8 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
     public ICommand ResumeJobCommand { get; }
     public ICommand OpenSettingsCommand { get; }
     public ICommand ShowRaceDetailCommand { get; }
+    public ICommand DismissJobCommand { get; }
+    public ICommand ClearFinishedCommand { get; }
 
     public bool HasSections => SpreadSections.Count > 0;
     public bool NeedSetup => SpreadSections.Count == 0;
@@ -104,6 +111,8 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         ResumeJobCommand = new RelayCommand<SpreadJobVm>(ResumeJob);
         OpenSettingsCommand = new RelayCommand(() => _openSettingsAction?.Invoke());
         ShowRaceDetailCommand = new RelayCommand<RaceHistoryVm>(ShowRaceDetail);
+        DismissJobCommand = new RelayCommand<SpreadJobVm>(DismissJob);
+        ClearFinishedCommand = new RelayCommand(ClearFinished);
 
         RefreshSections();
         LoadHistory();
@@ -256,10 +265,12 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         var jobs = spread.ActiveJobs;
         var currentIds = jobs.Select(j => j.Id).ToHashSet();
 
-        // Remove gone jobs
+        // Remove gone jobs — but KEEP finished cards: they intentionally outlive their job in
+        // ActiveJobs so the user can see each race's final frozen score. Only DISMISS / CLEAR DONE
+        // removes them.
         for (int i = SpreadJobs.Count - 1; i >= 0; i--)
         {
-            if (!currentIds.Contains(SpreadJobs[i].Id))
+            if (!currentIds.Contains(SpreadJobs[i].Id) && !SpreadJobs[i].IsFinished)
             {
                 // Prune per-job sparkline scale state so the dictionary
                 // doesn't leak across the app's lifetime.
@@ -278,61 +289,7 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
                 SpreadJobs.Add(vm);
             }
 
-            vm.Release = job.ReleaseName;
-            vm.Section = job.Section;
-            vm.State = job.State;
-
-            var sites = job.Sites.Values.ToList();
-            var totalFiles = sites.Count > 0 ? sites.Max(s => s.FilesTotal) : 0;
-
-            double avgOwned = 0;
-            if (totalFiles > 0)
-            {
-                var nonDownloadOnly = sites.Where(s =>
-                {
-                    var cfg = _config.Servers.FirstOrDefault(sc => sc.Id == s.ServerId);
-                    return cfg != null && !cfg.SpreadSite.DownloadOnly;
-                }).ToList();
-
-                if (nonDownloadOnly.Count > 0)
-                    avgOwned = nonDownloadOnly.Average(s => s.FilesOwned * 100.0 / totalFiles);
-            }
-
-            vm.ProgressPercent = avgOwned;
-            vm.Status = job.State.ToString();
-
-            // Card display fields (best-effort population from available data)
-            var srcSite = sites.FirstOrDefault(s => s.FilesOwned > 0 && s.FilesOwned == sites.Max(x => x.FilesOwned));
-            vm.SourceDisplay = srcSite != null && !string.IsNullOrEmpty(srcSite.ServerName) ? srcSite.ServerName : "—";
-
-            var destNames = sites
-                .Where(s => s.ServerId != srcSite?.ServerId && !string.IsNullOrEmpty(s.ServerName))
-                .Select(s => s.ServerName)
-                .ToList();
-            vm.DestDisplay = destNames.Count > 0 ? string.Join(" · ", destNames) : "—";
-
-            var totalOwnedAcross = sites.Sum(s => s.FilesOwned);
-            var aggregateTotal = totalFiles > 0 ? totalFiles * Math.Max(sites.Count, 1) : 0;
-            vm.FilesDoneTotalDisplay = totalFiles > 0
-                ? $"{totalOwnedAcross} / {aggregateTotal}"
-                : "0 / 0";
-
-            vm.IsPaused = job.State == SpreadJobState.Paused;
-            // Real wiring (v1.90): SpreadJob now exposes IsAutoRace / IsPred /
-            // Score directly. ScoreLabel encodes a one-word state line
-            // (PRED takes precedence; auto-race vs manual otherwise; PAUSED /
-            // STOPPED override). The big-score card pulls from vm.Score.
-            vm.IsAutoRace = job.IsAutoRace;
-            vm.IsPred = job.IsPred;
-            vm.Score = job.Score;
-            vm.ScoreLabel = job.State switch
-            {
-                SpreadJobState.Paused    => "PAUSED",
-                SpreadJobState.Stopped   => "STOPPED",
-                SpreadJobState.Failed    => "FAILED",
-                SpreadJobState.Completed => "DONE",
-                _ => job.IsPred ? "PRE" : (job.IsAutoRace ? "AUTO RACE" : "MANUAL")
-            };
+            ApplyJobToVm(vm, job);
         }
 
         OnPropertyChanged(nameof(LeaderScore));
@@ -436,6 +393,118 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
+    // Populate a card VM from its live job. Shared by the refresh loop and the finished-freeze
+    // path so a retained card shows the same final numbers the race ended with.
+    private void ApplyJobToVm(SpreadJobVm vm, SpreadJob job)
+    {
+        vm.Release = job.ReleaseName;
+        vm.Section = job.Section;
+        vm.State = job.State;
+
+        var sites = job.Sites.Values.ToList();
+        var totalFiles = sites.Count > 0 ? sites.Max(s => s.FilesTotal) : 0;
+
+        double avgOwned = 0;
+        if (totalFiles > 0)
+        {
+            var nonDownloadOnly = sites.Where(s =>
+            {
+                var cfg = _config.Servers.FirstOrDefault(sc => sc.Id == s.ServerId);
+                return cfg != null && !cfg.SpreadSite.DownloadOnly;
+            }).ToList();
+
+            if (nonDownloadOnly.Count > 0)
+                avgOwned = nonDownloadOnly.Average(s => s.FilesOwned * 100.0 / totalFiles);
+        }
+
+        vm.ProgressPercent = avgOwned;
+        vm.Status = job.State.ToString();
+
+        // Card display fields (best-effort population from available data)
+        var srcSite = sites.FirstOrDefault(s => s.FilesOwned > 0 && s.FilesOwned == sites.Max(x => x.FilesOwned));
+        vm.SourceDisplay = srcSite != null && !string.IsNullOrEmpty(srcSite.ServerName) ? srcSite.ServerName : "—";
+
+        var destNames = sites
+            .Where(s => s.ServerId != srcSite?.ServerId && !string.IsNullOrEmpty(s.ServerName))
+            .Select(s => s.ServerName)
+            .ToList();
+        vm.DestDisplay = destNames.Count > 0 ? string.Join(" · ", destNames) : "—";
+
+        var totalOwnedAcross = sites.Sum(s => s.FilesOwned);
+        var aggregateTotal = totalFiles > 0 ? totalFiles * Math.Max(sites.Count, 1) : 0;
+        vm.FilesDoneTotalDisplay = totalFiles > 0
+            ? $"{totalOwnedAcross} / {aggregateTotal}"
+            : "0 / 0";
+
+        vm.IsPaused = job.State == SpreadJobState.Paused;
+        // Real wiring (v1.90): SpreadJob now exposes IsAutoRace / IsPred /
+        // Score directly. ScoreLabel encodes a one-word state line
+        // (PRED takes precedence; auto-race vs manual otherwise; PAUSED /
+        // STOPPED override). The big-score card pulls from vm.Score.
+        vm.IsAutoRace = job.IsAutoRace;
+        vm.IsPred = job.IsPred;
+        vm.Score = job.Score;
+        vm.ScoreLabel = job.State switch
+        {
+            SpreadJobState.Paused    => "PAUSED",
+            SpreadJobState.Stopped   => "STOPPED",
+            SpreadJobState.Failed    => "FAILED",
+            SpreadJobState.Completed => "DONE",
+            _ => job.IsPred ? "PRE" : (job.IsAutoRace ? "AUTO RACE" : "MANUAL")
+        };
+    }
+
+    // Freeze the card for a just-completed job with its FINAL score/state and flag it Finished so
+    // the prune loop keeps it. Called from JobCompleted BEFORE SafeRefresh so the subsequent
+    // refresh tick (which no longer sees the job in ActiveJobs) won't drop the card.
+    private void FreezeFinishedJob(SpreadJob job)
+    {
+        var vm = SpreadJobs.FirstOrDefault(j => j.Id == job.Id);
+        if (vm == null)
+        {
+            vm = new SpreadJobVm { Id = job.Id };
+            SpreadJobs.Add(vm);
+        }
+        ApplyJobToVm(vm, job);   // captures job.Score + DONE/FAILED/STOPPED label
+        vm.FinishedAt = DateTime.Now;
+        vm.IsFinished = true;    // set last: flips button gating + protects from prune
+        EnforceFinishedCap();
+    }
+
+    // Keep at most MaxFinishedCards retained finished cards; evict the oldest by FinishedAt.
+    private void EnforceFinishedCap()
+    {
+        var finished = SpreadJobs.Where(j => j.IsFinished).OrderBy(j => j.FinishedAt).ToList();
+        for (int i = 0; i < finished.Count - MaxFinishedCards; i++)
+        {
+            _jobMaxSpeed.Remove(finished[i].Id);
+            SpreadJobs.Remove(finished[i]);
+        }
+    }
+
+    private void DismissJob(SpreadJobVm? vm)
+    {
+        if (vm == null || !vm.IsFinished) return; // only finished cards are dismissable
+        _jobMaxSpeed.Remove(vm.Id);
+        SpreadJobs.Remove(vm);
+        OnPropertyChanged(nameof(QueueDepth));
+        OnPropertyChanged(nameof(LeaderScore));
+    }
+
+    private void ClearFinished()
+    {
+        for (int i = SpreadJobs.Count - 1; i >= 0; i--)
+        {
+            if (SpreadJobs[i].IsFinished)
+            {
+                _jobMaxSpeed.Remove(SpreadJobs[i].Id);
+                SpreadJobs.RemoveAt(i);
+            }
+        }
+        OnPropertyChanged(nameof(QueueDepth));
+        OnPropertyChanged(nameof(LeaderScore));
+    }
+
     public void SetOpenSettingsAction(Action action) => _openSettingsAction = action;
     public void Activate() => _refreshTimer.Start();
     public void Deactivate() => _refreshTimer.Stop();
@@ -465,6 +534,7 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
                     : job.State == SpreadJobState.Stopped ? "STOPPED"
                     : job.State.ToString().ToUpperInvariant();
                 AddFeedItem(job.ReleaseName, job.Section, action, "");
+                FreezeFinishedJob(job);   // retain the card with its final score before the next refresh prunes it
                 SafeRefresh();
                 RefreshHistory();
             });
