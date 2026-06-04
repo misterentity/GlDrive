@@ -385,7 +385,16 @@ public class UpdateChecker : IDisposable
             X509Certificate2? currentCert = null;
             try
             {
+                // CreateFromSignedFile is SYSLIB0057-obsolete but has NO non-obsolete equivalent
+                // for extracting the Authenticode SIGNER cert from a signed PE: X509CertificateLoader
+                // only loads cert/PKCS12 content, and the SignedCms/PE-parse alternative drops
+                // catalog-signing support and risks subtle hand-rolled offset bugs in this
+                // signature-VERIFICATION path. Keep the exact Windows Authenticode machinery (identical
+                // semantics) and suppress the warning at this single call site instead. The X509Certificate2
+                // copy ctor below is NOT obsolete (only byte[]/string/span content ctors are).
+#pragma warning disable SYSLIB0057
                 var raw = X509Certificate.CreateFromSignedFile(currentExe);
+#pragma warning restore SYSLIB0057
                 currentCert = new X509Certificate2(raw);
             }
             catch (CryptographicException) { }
@@ -404,7 +413,12 @@ public class UpdateChecker : IDisposable
             X509Certificate2? updateCert = null;
             try
             {
+                // SYSLIB0057-obsolete but intentionally retained — see currentCert site above:
+                // no non-obsolete API extracts the Authenticode signer cert from a signed PE with
+                // identical (catalog-aware) semantics, and weakening this verification path is unacceptable.
+#pragma warning disable SYSLIB0057
                 var raw = X509Certificate.CreateFromSignedFile(filePath);
+#pragma warning restore SYSLIB0057
                 updateCert = new X509Certificate2(raw);
             }
             catch (CryptographicException) { }

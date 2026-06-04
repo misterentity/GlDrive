@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-GlDrive — a Windows 11 tray app that mounts glftpd FTPS servers as local drive letters using WinFsp + FluentFTP + GnuTLS. Single project, .NET 10 WPF targeting win-x64. **No test project, no test runner** — verification is manual via `dotnet build` + runtime exercise.
+GlDrive — a Windows 11 tray app that mounts glftpd FTPS servers as local drive letters using WinFsp + FluentFTP + GnuTLS. Single project (`src/GlDrive/GlDrive.csproj`), .NET 10 WPF targeting win-x64, plus a unit-test project (`src/GlDrive.Tests/GlDrive.Tests.csproj`, 135 tests via `dotnet test`) covering the pure logic (crypto round-trips, login-gate accounting, spread scoring, zipscript artifact filtering, etc.). The WinFsp/WPF/live-FTP layers still require manual runtime verification — `dotnet build` + exercise the app.
 
 ## MANDATORY pre-commit check
 

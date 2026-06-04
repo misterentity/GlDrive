@@ -51,7 +51,23 @@ public class ConfigManager
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "Failed to load config, using defaults");
+            // OneDrive corruption hazard: an interrupted sync can leave appsettings.json
+            // unparseable. Silently returning defaults here would WIPE every server
+            // definition on the next Save(). Back up the corrupt file (so the user can
+            // recover their servers) and log at ERROR (not Warning) before defaulting.
+            string backupPath = Path.Combine(
+                AppDataFolder, $"appsettings.corrupt-{DateTime.Now:yyyyMMdd-HHmmss}.json");
+            try
+            {
+                File.Copy(ConfigFilePath, backupPath, overwrite: false);
+            }
+            catch (Exception copyEx)
+            {
+                // Never let a backup failure mask the original load error.
+                Log.Error(copyEx, "Failed to back up corrupt config to {BackupPath}", backupPath);
+            }
+            Log.Error(ex, "Config file at {ConfigPath} was unreadable (likely an interrupted OneDrive sync). " +
+                "Backed up to {BackupPath}; loading default config", ConfigFilePath, backupPath);
             return new AppConfig();
         }
     }

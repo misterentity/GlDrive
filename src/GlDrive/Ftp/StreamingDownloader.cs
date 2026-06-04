@@ -31,20 +31,35 @@ public class StreamingDownloader
     {
         Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
 
-        await using var conn = await _pool.Borrow(ct);
+        var conn = await _pool.Borrow(ct);
         var client = conn.Client;
+        try
+        {
+            if (resumeOffset > 0)
+                Log.Information("Resuming download at {Offset}: {Remote} -> {Local}", resumeOffset, remotePath, localPath);
+            else
+                Log.Information("Streaming download: {Remote} -> {Local}", remotePath, localPath);
 
-        if (resumeOffset > 0)
-            Log.Information("Resuming download at {Offset}: {Remote} -> {Local}", resumeOffset, remotePath, localPath);
-        else
-            Log.Information("Streaming download: {Remote} -> {Local}", remotePath, localPath);
+            if (_pool.UseCpsv)
+                await DownloadCpsv(client, remotePath, localPath, resumeOffset, progress, ct);
+            else
+                await DownloadStandard(client, remotePath, localPath, resumeOffset, progress, ct);
 
-        if (_pool.UseCpsv)
-            await DownloadCpsv(client, remotePath, localPath, resumeOffset, progress, ct);
-        else
-            await DownloadStandard(client, remotePath, localPath, resumeOffset, progress, ct);
-
-        Log.Information("Download complete: {Local}", localPath);
+            Log.Information("Download complete: {Local}", localPath);
+        }
+        catch
+        {
+            // RETR data-channel/TLS failure (or cancellation) corrupts the GnuTLS stream and
+            // can leave an unread completion reply on the control channel. Returning this
+            // connection to the pool risks reply desync and SEGV on reuse — poison so the
+            // pool discards instead of recycling it. Mirrors FtpOperations.ListDirectory.
+            conn.Poisoned = true;
+            throw;
+        }
+        finally
+        {
+            await conn.DisposeAsync();
+        }
     }
 
     private async Task DownloadStandard(

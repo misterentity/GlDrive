@@ -54,6 +54,11 @@ public class IrcService : IDisposable
     private readonly Dictionary<string, int> _pendingInviteJoins = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _invitedChannels = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _decryptFailHintSent = new(StringComparer.OrdinalIgnoreCase);
+    // Serializes the GetKey→(sync)decrypt→SetKeyWithAlt variant-promotion compound so two
+    // incoming messages can't both read the same pre-promotion snapshot and race the write,
+    // promoting the wrong base64-alphabet variant. Decrypt is fully synchronous — this lock
+    // is NEVER held across an await (the codebase forbids lock-across-await).
+    private readonly object _decryptPromoteLock = new();
 
     // Liveness: periodic PING to detect dead connections
     private Timer? _pingTimer;
@@ -429,7 +434,6 @@ public class IrcService : IDisposable
         var effectiveTarget = IsChannel(target) ? target : nick;
         if (_serverConfig.Irc.FishEnabled && FishCipher.IsEncrypted(text))
         {
-            var keyEntry = _fishKeyStore.GetKey(effectiveTarget);
             var prefix = text.StartsWith("+OK *") ? "CBC" : "ECB";
             // The +OK / +OK * prefix is plaintext FiSH protocol signaling — reliable
             // regardless of whether decryption succeeds. Sync stored mode to match the
@@ -437,55 +441,62 @@ public class IrcService : IDisposable
             // Previously this only ran on successful decrypts, leaving us stuck in CBC
             // when a peer's ECB-only client (mIRC fish_inj.dll etc.) sent us ECB messages
             // we couldn't decrypt.
-            if (keyEntry != null)
+            // The whole GetKey→decrypt→promote compound runs under _decryptPromoteLock so a
+            // concurrent message for the same target can't promote the wrong alphabet variant.
+            // Decrypt is synchronous; no await is taken inside this lock.
+            lock (_decryptPromoteLock)
             {
-                var peerMode = prefix == "CBC" ? FishMode.CBC : FishMode.ECB;
-                if (keyEntry.Mode != peerMode)
+                var keyEntry = _fishKeyStore.GetKey(effectiveTarget);
+                if (keyEntry != null)
                 {
-                    _fishKeyStore.SetKeyWithAlt(effectiveTarget, keyEntry.Key, keyEntry.AltKey, keyEntry.Key3, peerMode);
-                    Log.Information("FiSH mode updated for {Target}: {OldMode} → {NewMode} (from incoming prefix)",
-                        effectiveTarget, keyEntry.Mode, peerMode);
-                    keyEntry = _fishKeyStore.GetKey(effectiveTarget)!;
-                }
-
-                var keys = new[] { keyEntry.Key, keyEntry.AltKey, keyEntry.Key3 };
-                var (decrypted, winIdx, qualities) = FishCipher.DecryptWithFallback(text, keys);
-                var bestQ = winIdx >= 0 ? qualities[winIdx] : 0;
-                if (decrypted != null && bestQ >= FishCipher.FailedDecryptQualityThreshold)
-                {
-                    Log.Information("FiSH PM {Target}: prefix={Prefix} cipherLen={CL} keyMask={KM} winKey={Idx} decrypted={Stats}",
-                        effectiveTarget, prefix, text.Length, MaskKey(keyEntry.Key), winIdx, TextStats(decrypted));
-
-                    // If a non-primary key won, swap so future encrypts/decrypts use it primary.
-                    if (winIdx > 0)
+                    var peerMode = prefix == "CBC" ? FishMode.CBC : FishMode.ECB;
+                    if (keyEntry.Mode != peerMode)
                     {
-                        var promoted = PromoteKeyToPrimary(keys, winIdx);
-                        _fishKeyStore.SetKeyWithAlt(effectiveTarget, promoted[0], promoted[1], promoted[2], keyEntry.Mode);
-                        Log.Information("FiSH key swap for {Target}: index {Idx} promoted to primary", effectiveTarget, winIdx);
+                        _fishKeyStore.SetKeyWithAlt(effectiveTarget, keyEntry.Key, keyEntry.AltKey, keyEntry.Key3, peerMode);
+                        Log.Information("FiSH mode updated for {Target}: {OldMode} → {NewMode} (from incoming prefix)",
+                            effectiveTarget, keyEntry.Mode, peerMode);
+                        keyEntry = _fishKeyStore.GetKey(effectiveTarget)!;
                     }
 
-                    text = decrypted;
-                    wasEncrypted = true;
+                    var keys = new[] { keyEntry.Key, keyEntry.AltKey, keyEntry.Key3 };
+                    var (decrypted, winIdx, qualities) = FishCipher.DecryptWithFallback(text, keys);
+                    var bestQ = winIdx >= 0 ? qualities[winIdx] : 0;
+                    if (decrypted != null && bestQ >= FishCipher.FailedDecryptQualityThreshold)
+                    {
+                        Log.Information("FiSH PM {Target}: prefix={Prefix} cipherLen={CL} keyMask={KM} winKey={Idx} decrypted={Stats}",
+                            effectiveTarget, prefix, text.Length, MaskKey(keyEntry.Key), winIdx, TextStats(decrypted));
+
+                        // If a non-primary key won, swap so future encrypts/decrypts use it primary.
+                        if (winIdx > 0)
+                        {
+                            var promoted = PromoteKeyToPrimary(keys, winIdx);
+                            _fishKeyStore.SetKeyWithAlt(effectiveTarget, promoted[0], promoted[1], promoted[2], keyEntry.Mode);
+                            Log.Information("FiSH key swap for {Target}: index {Idx} promoted to primary", effectiveTarget, winIdx);
+                        }
+
+                        text = decrypted;
+                        wasEncrypted = true;
+                    }
+                    else
+                    {
+                        // All keys produced garbage (wrong key entirely — peer using a different KDF or static key).
+                        var ch = CipherHash(text);
+                        Log.Warning("FiSH PM {Target}: decrypt failed. prefix={Prefix} cipherLen={CL} cipherHash={Hash} keyMask={KM} qualities=[{Q0:F2},{Q1:F2},{Q2:F2}] manual={Manual}",
+                            effectiveTarget, prefix, text.Length, ch, MaskKey(keyEntry.Key),
+                            qualities.Length > 0 ? qualities[0] : 0,
+                            qualities.Length > 1 ? qualities[1] : 0,
+                            qualities.Length > 2 ? qualities[2] : 0,
+                            keyEntry.Manual);
+                        text = $"🔒 [FiSH decrypt failed — {prefix}, cipher {ch}]";
+                        wasEncrypted = false;
+                        PostDecryptFailureHint(effectiveTarget, keyEntry, prefix);
+                    }
                 }
                 else
                 {
-                    // All keys produced garbage (wrong key entirely — peer using a different KDF or static key).
-                    var ch = CipherHash(text);
-                    Log.Warning("FiSH PM {Target}: decrypt failed. prefix={Prefix} cipherLen={CL} cipherHash={Hash} keyMask={KM} qualities=[{Q0:F2},{Q1:F2},{Q2:F2}] manual={Manual}",
-                        effectiveTarget, prefix, text.Length, ch, MaskKey(keyEntry.Key),
-                        qualities.Length > 0 ? qualities[0] : 0,
-                        qualities.Length > 1 ? qualities[1] : 0,
-                        qualities.Length > 2 ? qualities[2] : 0,
-                        keyEntry.Manual);
-                    text = $"🔒 [FiSH decrypt failed — {prefix}, cipher {ch}]";
-                    wasEncrypted = false;
-                    PostDecryptFailureHint(effectiveTarget, keyEntry, prefix);
+                    Log.Information("FiSH PM {Target}: no key stored. prefix={Prefix} cipherLen={CL}",
+                        effectiveTarget, prefix, text.Length);
                 }
-            }
-            else
-            {
-                Log.Information("FiSH PM {Target}: no key stored. prefix={Prefix} cipherLen={CL}",
-                    effectiveTarget, prefix, text.Length);
             }
         }
 
@@ -515,46 +526,52 @@ public class IrcService : IDisposable
 
         if (_serverConfig.Irc.FishEnabled && FishCipher.IsEncrypted(text))
         {
-            var keyEntry = _fishKeyStore.GetKey(effectiveTarget);
             var prefix = text.StartsWith("+OK *") ? "CBC" : "ECB";
-            if (keyEntry != null)
+            // Same atomic GetKey→decrypt→promote compound as HandlePrivmsg — guarded so a
+            // concurrent message can't race the variant promotion. Decrypt is synchronous;
+            // no await is taken inside this lock.
+            lock (_decryptPromoteLock)
             {
-                // Sync stored mode from incoming prefix even on decrypt failure — see HandlePrivmsg.
-                var peerMode = prefix == "CBC" ? FishMode.CBC : FishMode.ECB;
-                if (keyEntry.Mode != peerMode)
+                var keyEntry = _fishKeyStore.GetKey(effectiveTarget);
+                if (keyEntry != null)
                 {
-                    _fishKeyStore.SetKeyWithAlt(effectiveTarget, keyEntry.Key, keyEntry.AltKey, keyEntry.Key3, peerMode);
-                    Log.Information("FiSH mode updated for {Target}: {OldMode} → {NewMode} (from incoming notice prefix)",
-                        effectiveTarget, keyEntry.Mode, peerMode);
-                    keyEntry = _fishKeyStore.GetKey(effectiveTarget)!;
-                }
-
-                var keys = new[] { keyEntry.Key, keyEntry.AltKey, keyEntry.Key3 };
-                var (decrypted, winIdx, qualities) = FishCipher.DecryptWithFallback(text, keys);
-                var bestQ = winIdx >= 0 ? qualities[winIdx] : 0;
-                if (decrypted != null && bestQ >= FishCipher.FailedDecryptQualityThreshold)
-                {
-                    if (winIdx > 0)
+                    // Sync stored mode from incoming prefix even on decrypt failure — see HandlePrivmsg.
+                    var peerMode = prefix == "CBC" ? FishMode.CBC : FishMode.ECB;
+                    if (keyEntry.Mode != peerMode)
                     {
-                        var promoted = PromoteKeyToPrimary(keys, winIdx);
-                        _fishKeyStore.SetKeyWithAlt(effectiveTarget, promoted[0], promoted[1], promoted[2], keyEntry.Mode);
+                        _fishKeyStore.SetKeyWithAlt(effectiveTarget, keyEntry.Key, keyEntry.AltKey, keyEntry.Key3, peerMode);
+                        Log.Information("FiSH mode updated for {Target}: {OldMode} → {NewMode} (from incoming notice prefix)",
+                            effectiveTarget, keyEntry.Mode, peerMode);
+                        keyEntry = _fishKeyStore.GetKey(effectiveTarget)!;
                     }
 
-                    text = decrypted;
-                    wasEncrypted = true;
-                }
-                else
-                {
-                    var ch = CipherHash(text);
-                    Log.Warning("FiSH NOTICE {Target}: decrypt failed. prefix={Prefix} cipherLen={CL} cipherHash={Hash} keyMask={KM} qualities=[{Q0:F2},{Q1:F2},{Q2:F2}] manual={Manual}",
-                        effectiveTarget, prefix, text.Length, ch, MaskKey(keyEntry.Key),
-                        qualities.Length > 0 ? qualities[0] : 0,
-                        qualities.Length > 1 ? qualities[1] : 0,
-                        qualities.Length > 2 ? qualities[2] : 0,
-                        keyEntry.Manual);
-                    text = $"🔒 [FiSH decrypt failed — {prefix}, cipher {ch}]";
-                    wasEncrypted = false;
-                    PostDecryptFailureHint(effectiveTarget, keyEntry, prefix);
+                    var keys = new[] { keyEntry.Key, keyEntry.AltKey, keyEntry.Key3 };
+                    var (decrypted, winIdx, qualities) = FishCipher.DecryptWithFallback(text, keys);
+                    var bestQ = winIdx >= 0 ? qualities[winIdx] : 0;
+                    if (decrypted != null && bestQ >= FishCipher.FailedDecryptQualityThreshold)
+                    {
+                        if (winIdx > 0)
+                        {
+                            var promoted = PromoteKeyToPrimary(keys, winIdx);
+                            _fishKeyStore.SetKeyWithAlt(effectiveTarget, promoted[0], promoted[1], promoted[2], keyEntry.Mode);
+                        }
+
+                        text = decrypted;
+                        wasEncrypted = true;
+                    }
+                    else
+                    {
+                        var ch = CipherHash(text);
+                        Log.Warning("FiSH NOTICE {Target}: decrypt failed. prefix={Prefix} cipherLen={CL} cipherHash={Hash} keyMask={KM} qualities=[{Q0:F2},{Q1:F2},{Q2:F2}] manual={Manual}",
+                            effectiveTarget, prefix, text.Length, ch, MaskKey(keyEntry.Key),
+                            qualities.Length > 0 ? qualities[0] : 0,
+                            qualities.Length > 1 ? qualities[1] : 0,
+                            qualities.Length > 2 ? qualities[2] : 0,
+                            keyEntry.Manual);
+                        text = $"🔒 [FiSH decrypt failed — {prefix}, cipher {ch}]";
+                        wasEncrypted = false;
+                        PostDecryptFailureHint(effectiveTarget, keyEntry, prefix);
+                    }
                 }
             }
         }

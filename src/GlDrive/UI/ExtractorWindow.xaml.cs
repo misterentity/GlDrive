@@ -380,7 +380,12 @@ public partial class ExtractorWindow : Window
     {
         if (_extracting)
         {
-            _cts?.Cancel();
+            // Cancel/dispose race guard: the in-flight run's finally block may be
+            // disposing _cts at this exact moment. Snapshot the field to a local so
+            // we don't read a freshly-nulled field, and swallow ObjectDisposedException
+            // in case it was already disposed — Cancel() on a disposed CTS throws, and
+            // this is an async void handler so an escape would crash the whole app.
+            try { _cts?.Cancel(); } catch (ObjectDisposedException) { }
             return;
         }
 
@@ -389,8 +394,14 @@ public partial class ExtractorWindow : Window
 
         _extracting = true;
         ExtractButton.Content = "Cancel";
-        _cts = new CancellationTokenSource();
-        var ct = _cts.Token;
+        // Hold a LOCAL reference to the CTS used by this run. The finally block nulls
+        // the _cts field before disposing this local, so a concurrent cancel-click
+        // reads null (no-op) rather than touching a half-disposed source. The token is
+        // captured once up front and used throughout — IsCancellationRequested is safe
+        // to read even after the source is disposed, so the loop never needs the field.
+        var cts = new CancellationTokenSource();
+        _cts = cts;
+        var ct = cts.Token;
         var password = ArchivePassword.Password;
         var deleteAfter = ChkDeleteAfter.IsChecked == true;
         var overwriteIdx = OverwriteMode.SelectedIndex;
@@ -454,8 +465,12 @@ public partial class ExtractorWindow : Window
         {
             _extracting = false;
             ExtractButton.Content = "Extract All";
-            _cts?.Dispose();
-            _cts = null;
+            // Null the field BEFORE disposing the local, so a cancel-click racing this
+            // teardown sees null (no-op) instead of calling Cancel() on a disposed CTS.
+            // Only clear the field if it still points at our CTS — never clobber a CTS
+            // a newer run may have installed.
+            if (ReferenceEquals(_cts, cts)) _cts = null;
+            cts.Dispose();
             UpdateStatus();
         }
     }

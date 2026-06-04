@@ -8,6 +8,9 @@ public class DirectoryCache
 {
     private readonly ConcurrentDictionary<string, CachedDirectory> _cache = new();
     private readonly ConcurrentDictionary<string, byte> _refreshing = new();
+    // Serializes the capacity check + evict + insert in Set() so concurrent writers
+    // can't each pass the `Count < max` gate and overgrow the cache past _maxEntries.
+    private readonly object _setLock = new();
     private readonly int _ttlSeconds;
     private readonly int _maxEntries;
 
@@ -79,11 +82,18 @@ public class DirectoryCache
     {
         var key = NormalizePath(remotePath);
 
-        // Evict if over capacity
-        if (_cache.Count >= _maxEntries)
-            EvictOldest();
+        // Under _setLock so the count-check, eviction, and insert are one atomic step —
+        // ConcurrentDictionary.Count is consistent inside the lock and only one writer
+        // evicts/inserts at a time, so the cache never overgrows past _maxEntries.
+        // (Reads via TryGet/FindItem stay lock-free; this only orders writes.)
+        lock (_setLock)
+        {
+            // Evict if over capacity (leave room for the entry we're about to add)
+            if (!_cache.ContainsKey(key) && _cache.Count >= _maxEntries)
+                EvictOldest();
 
-        _cache[key] = new CachedDirectory(items);
+            _cache[key] = new CachedDirectory(items);
+        }
     }
 
     public void Invalidate(string remotePath)
@@ -163,12 +173,20 @@ public class DirectoryCache
     {
         public FtpListItem[] Items { get; }
         public DateTime CachedAt { get; }
-        private Dictionary<string, FtpListItem>? _nameLookup;
+
+        // Thread-safe lazy init: `??=` was a non-atomic race — two concurrent FindByName
+        // calls could each build (and discard) a dictionary. ExecutionAndPublication
+        // guarantees the factory runs once. Keep StringComparer.Ordinal: filesystem
+        // lookups are case-sensitive (FTP paths) and must not collapse case variants.
+        private readonly Lazy<Dictionary<string, FtpListItem>> _nameLookup;
 
         public CachedDirectory(FtpListItem[] items)
         {
             Items = items;
             CachedAt = DateTime.UtcNow;
+            _nameLookup = new Lazy<Dictionary<string, FtpListItem>>(
+                () => Items.ToDictionary(i => i.Name, StringComparer.Ordinal),
+                LazyThreadSafetyMode.ExecutionAndPublication);
         }
 
         public bool IsExpired(int ttlSeconds) =>
@@ -176,9 +194,7 @@ public class DirectoryCache
 
         public FtpListItem? FindByName(string name)
         {
-            // Lazy-init dictionary on first lookup
-            _nameLookup ??= Items.ToDictionary(i => i.Name, StringComparer.Ordinal);
-            return _nameLookup.GetValueOrDefault(name);
+            return _nameLookup.Value.GetValueOrDefault(name);
         }
     }
 }

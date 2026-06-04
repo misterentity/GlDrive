@@ -483,23 +483,57 @@ public class MediaStreamServer : IDisposable
         var fi = new FileInfo(filePath);
         var fileSize = fi.Length;
 
+        // Mirror HandleDirectStream's Range validation: support `bytes=N-`, `bytes=N-M`, and suffix
+        // `bytes=-N`. An unvalidated start offset >= fileSize previously produced a negative/wrapped
+        // ContentLength64 and a bogus Content-Range — RFC 7233 requires 416 in that case.
         long offset = 0;
+        long end = fileSize - 1;
         var rangeHeader = ctx.Request.Headers["Range"];
         if (rangeHeader != null && rangeHeader.StartsWith("bytes="))
         {
-            var parts = rangeHeader[6..].Split('-');
-            if (long.TryParse(parts[0], out var start))
+            var spec = rangeHeader[6..];
+            // Multi-range (e.g. `bytes=0-499,600-999`) is unsupported (no multipart/byteranges) → 416.
+            if (spec.Contains(','))
+            {
+                ctx.Response.StatusCode = 416;
+                if (fileSize > 0) ctx.Response.Headers.Add("Content-Range", $"bytes */{fileSize}");
+                ctx.Response.Close();
+                return;
+            }
+            var parts = spec.Split('-', 2);
+            if (parts.Length == 2 && parts[0].Length == 0)
+            {
+                // Suffix range: last N bytes
+                if (long.TryParse(parts[1], out var suffixLen) && suffixLen > 0 && fileSize > 0)
+                    offset = Math.Max(0, fileSize - suffixLen);
+            }
+            else if (long.TryParse(parts[0], out var start))
+            {
                 offset = start;
+                // Honor an explicit end bound, clamping to the last byte of the file.
+                if (parts.Length == 2 && long.TryParse(parts[1], out var rangeEnd) && rangeEnd >= start)
+                    end = Math.Min(rangeEnd, fileSize - 1);
+            }
+
+            // Reject ranges that start at or past EOF — would otherwise yield a negative Content-Length.
+            if (offset >= fileSize || offset < 0)
+            {
+                ctx.Response.StatusCode = 416;
+                if (fileSize > 0) ctx.Response.Headers.Add("Content-Range", $"bytes */{fileSize}");
+                ctx.Response.Close();
+                return;
+            }
         }
 
         ctx.Response.ContentType = GetVideoContentType(filePath);
         ctx.Response.Headers.Add("Accept-Ranges", "bytes");
 
-        if (offset > 0)
+        var length = end - offset + 1;
+        if (offset > 0 || end < fileSize - 1)
         {
             ctx.Response.StatusCode = 206;
-            ctx.Response.Headers.Add("Content-Range", $"bytes {offset}-{fileSize - 1}/{fileSize}");
-            ctx.Response.ContentLength64 = fileSize - offset;
+            ctx.Response.Headers.Add("Content-Range", $"bytes {offset}-{end}/{fileSize}");
+            ctx.Response.ContentLength64 = length;
         }
         else
         {
@@ -510,12 +544,16 @@ public class MediaStreamServer : IDisposable
         await using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
         if (offset > 0) fs.Seek(offset, SeekOrigin.Begin);
 
+        // Cap reads to the validated [offset, end] window so a `bytes=N-M` request doesn't over-send.
+        var remaining = length;
         var buffer = new byte[256 * 1024];
         int read;
-        while ((read = await fs.ReadAsync(buffer)) > 0)
+        while (remaining > 0 &&
+               (read = await fs.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)))) > 0)
         {
             await ctx.Response.OutputStream.WriteAsync(buffer.AsMemory(0, read));
             await ctx.Response.OutputStream.FlushAsync();
+            remaining -= read;
         }
 
         ctx.Response.Close();
@@ -773,7 +811,13 @@ public class MediaStreamServer : IDisposable
     public void Dispose()
     {
         _cts.Cancel();
+        // Stop then Dispose the listener to release the HTTP.sys URL reservation; null-guarded so a
+        // double Dispose is a no-op (Stop/Close already torn down → _listener is null on the 2nd call).
         try { _listener?.Stop(); } catch { }
+        // HttpListener.Close() releases the HTTP.sys URL reservation and underlying handle;
+        // Dispose() is an explicit interface impl (not callable on the concrete type) and is
+        // equivalent to Close(), so Close alone is the correct teardown. Null-guarded for double-Dispose.
+        try { _listener?.Close(); } catch { }
         _listener = null;
         _cts.Dispose();
         GC.SuppressFinalize(this);
