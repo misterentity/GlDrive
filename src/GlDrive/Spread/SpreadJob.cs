@@ -1408,7 +1408,8 @@ public class SpreadJob : IDisposable
                         // Per-destination backoff. The dest recently failed and
                         // is parked until retryAt; MaxValue means dropped from
                         // this race entirely (blew the backoff ladder).
-                        if (retrySnapshot.TryGetValue(dstId, out var until) && now < until)
+                        if (retrySnapshot.TryGetValue(dstId, out var until)
+                            && CandidatePredicates.DestInBackoff(until, now))
                         { skippedBackoff++; continue; }
 
                         // Issue #6: if dirscript already denied any prefix of
@@ -1416,24 +1417,13 @@ public class SpreadJob : IDisposable
                         // try again — dirscript is deterministic and re-MKDing
                         // just spams 553 "Denied by dirscript" warnings.
                         // Treated identically to a backoff skip.
-                        if (_destDirscriptDenied.TryGetValue(dstId, out var deniedSet))
-                        {
-                            var blocked = false;
-                            foreach (var denied in deniedSet)
-                            {
-                                if (dstBasePath.StartsWith(denied, StringComparison.OrdinalIgnoreCase))
-                                {
-                                    blocked = true;
-                                    break;
-                                }
-                            }
-                            if (blocked) { skippedBackoff++; continue; }
-                        }
+                        if (_destDirscriptDenied.TryGetValue(dstId, out var deniedSet)
+                            && CandidatePredicates.DirscriptBlocked(dstBasePath, deniedSet))
+                        { skippedBackoff++; continue; }
 
                         // SFV-first: block non-SFV files until SFV is delivered to this dest
-                        if (destsNeedingSfv != null && destsNeedingSfv.Contains(dstId) &&
-                            !fileName.EndsWith(".sfv", StringComparison.OrdinalIgnoreCase) &&
-                            !fileName.EndsWith(".nfo", StringComparison.OrdinalIgnoreCase))
+                        if (destsNeedingSfv != null
+                            && CandidatePredicates.SfvFirstBlocked(fileName, destsNeedingSfv.Contains(dstId)))
                             continue;
 
                         var dstConfig = _serverConfigs[dstId];
@@ -1443,8 +1433,8 @@ public class SpreadJob : IDisposable
                         // Check slots from snapshot (no nested lock)
                         var dstActive = activeTransferSnapshot.GetValueOrDefault(dstId);
                         var srcActive = activeTransferSnapshot.GetValueOrDefault(srcId);
-                        if (dstActive >= dstConfig.SpreadSite.MaxUploadSlots ||
-                            srcActive >= _serverConfigs[srcId].SpreadSite.MaxDownloadSlots)
+                        if (CandidatePredicates.SlotsFull(dstActive, dstConfig.SpreadSite.MaxUploadSlots,
+                                srcActive, _serverConfigs[srcId].SpreadSite.MaxDownloadSlots))
                         { skippedSlots++; continue; }
 
                         // Check Unique/Similar skiplist actions (O(1) via pre-built sets)
@@ -1464,9 +1454,9 @@ public class SpreadJob : IDisposable
                             }
                         }
 
-                        // Per-pair retry cap (cbftp's MAX_SINGLE_PAIR_FILE_TRANSFER_ATTEMPTS = 4).
+                        // Per-pair retry cap (cbftp's MAX_SINGLE_PAIR_FILE_TRANSFER_ATTEMPTS).
                         failureSnapshot.TryGetValue((fileName, srcId, dstId), out var pairFails);
-                        if (pairFails >= 4)
+                        if (CandidatePredicates.PairRetryCapped(pairFails))
                         { skippedFailures++; continue; }
 
                         // Per-file global retry cap (cbftp's MAX_TRANSFER_ATTEMPTS_BEFORE_SKIP = 7).
@@ -1478,7 +1468,7 @@ public class SpreadJob : IDisposable
                         {
                             if (kv.Key.Item1 == fileName) fileTotalFails += kv.Value;
                         }
-                        if (fileTotalFails >= 7)
+                        if (CandidatePredicates.FileRetryCapped(fileTotalFails))
                         { skippedFailures++; continue; }
 
                         candidateCount++;
