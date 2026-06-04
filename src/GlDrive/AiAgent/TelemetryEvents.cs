@@ -30,6 +30,30 @@ public record RaceOutcomeEvent : TelemetryEnvelope
     [JsonPropertyName("result")]     public string Result { get; init; } = "";  // complete|aborted|blacklisted
     [JsonPropertyName("filesExpected")] public int FilesExpected { get; init; }
     [JsonPropertyName("filesTotal")]    public int FilesTotal { get; init; }
+    // Section→folder learning: optional null-default fields so the digester can correlate the
+    // routed remote section / dest folder per race. Nulls are omitted on write (WhenWritingNull),
+    // so existing race lines stay byte-compatible and old lines deserialize with these left null.
+    [JsonPropertyName("resolvedRemoteSection")] public string? ResolvedRemoteSection { get; init; }
+    [JsonPropertyName("destFolderPath")]        public string? DestFolderPath { get; init; }
+    [JsonPropertyName("wasAutoRaced")]          public bool? WasAutoRaced { get; init; }
+    [JsonPropertyName("matchedTriggerRegex")]   public string? MatchedTriggerRegex { get; init; }
+}
+
+public record MatchedAnnounceEvent : TelemetryEnvelope
+{
+    // Section→folder learning: an IRC announce that MATCHED a race rule (the positive signal,
+    // complementing AnnounceNoMatchEvent). Captures section label + parsed release facets so the
+    // digester can aggregate (release-type, section) → observed destination folder.
+    [JsonPropertyName("serverId")]   public string ServerId { get; init; } = "";
+    [JsonPropertyName("channel")]    public string Channel { get; init; } = "";
+    [JsonPropertyName("section")]    public string Section { get; init; } = "";   // IRC announce section label
+    [JsonPropertyName("release")]    public string Release { get; init; } = "";
+    [JsonPropertyName("parsedType")] public string ParsedType { get; init; } = ""; // from SceneNameParser
+    [JsonPropertyName("quality")]    public string Quality { get; init; } = "";
+    [JsonPropertyName("source")]     public string Source { get; init; } = "";
+    [JsonPropertyName("group")]      public string Group { get; init; } = "";
+    [JsonPropertyName("ruleSource")] public string RuleSource { get; init; } = ""; // "builtin" | "custom"
+    [JsonPropertyName("autoRace")]   public bool AutoRace { get; init; }
 }
 
 public record NukeDetectedEvent : TelemetryEnvelope
@@ -138,5 +162,7 @@ public record ErrorSignatureEvent : TelemetryEnvelope
 public enum TelemetryStream
 {
     Races, Nukes, SiteHealth, AnnouncesNoMatch, WishlistAttempts,
-    Overrides, Downloads, Transfers, SectionActivity, Errors
+    Overrides, Downloads, Transfers, SectionActivity, Errors,
+    // Section→folder learning: positive-match announce stream (matched-announces-{date}.jsonl). Added LAST.
+    MatchedAnnounces
 }

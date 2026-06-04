@@ -15,6 +15,8 @@ public sealed class DigestBundle
     [JsonPropertyName("downloads")]   public DownloadsDigest Downloads { get; set; } = new();
     [JsonPropertyName("transfers")]   public TransfersDigest Transfers { get; set; } = new();
     [JsonPropertyName("sectionActivity")] public SectionActivityDigest SectionActivity { get; set; } = new();
+    // section→folder learning: aggregated announce/race co-occurrence the AiAgent uses to propose SectionMapping changes
+    [JsonPropertyName("sectionFolder")] public SectionFolderDigest SectionFolder { get; set; } = new();
     [JsonPropertyName("errors")]      public ErrorsDigest Errors { get; set; } = new();
     [JsonPropertyName("evidencePointers")] public Dictionary<string, string> EvidencePointers { get; set; } = new();
 }
@@ -118,6 +120,23 @@ public sealed class SectionActivityDigest
         [JsonPropertyName("filesIn")]  public int FilesIn { get; set; }
         [JsonPropertyName("ourRaces")] public int OurRaces { get; set; }
         [JsonPropertyName("ourWinRate")] public double OurWinRate { get; set; }
+    }
+}
+
+// section→folder learning digest: one row per (server, IRC section, parsed type, quality) correlated with observed race destinations
+public sealed class SectionFolderDigest
+{
+    [JsonPropertyName("rows")] public List<Row> Rows { get; set; } = [];
+    public sealed class Row
+    {
+        [JsonPropertyName("serverId")]              public string ServerId { get; set; } = "";
+        [JsonPropertyName("ircSection")]            public string IrcSection { get; set; } = "";
+        [JsonPropertyName("parsedType")]            public string ParsedType { get; set; } = "";
+        [JsonPropertyName("quality")]               public string Quality { get; set; } = "";
+        [JsonPropertyName("announceCount")]         public int AnnounceCount { get; set; }
+        [JsonPropertyName("observedRemoteSection")] public string ObservedRemoteSection { get; set; } = "";
+        [JsonPropertyName("raceCount")]             public int RaceCount { get; set; }
+        [JsonPropertyName("raceCompletionRate")]    public double RaceCompletionRate { get; set; }
     }
 }
 

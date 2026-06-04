@@ -16,6 +16,11 @@ public sealed class AgentPrompt
         - skiplist: add/update/remove per-site deny rules.
         - priority: bump site priority ±1 tier (never to VeryHigh autonomously).
         - sectionMapping: add row or patch trigger IF existing trigger is default (.* or empty).
+          Drive this from the `sectionFolder` digest (see DIGESTS below): when the data shows a release
+          type/quality in an ircSection consistently lands in one observedRemoteSection, tighten that
+          section's default ".*" trigger to a discriminating regex (e.g. "(?i)\.1080p\." for 1080p rows).
+          Only ADD a mapping when announceCount is meaningful (not 1-off noise). HARD RULE: a proposed
+          RemoteSection MUST already exist in that site's Sections — the validator rejects unknown ones.
         - announceRule: add rule or patch existing; new pattern must compile AND match >=3 nomatch samples.
         - excludedCategories: add section key to a server's excluded notifications.
         - wishlistPrune: soft-mark "dead" or hard-remove wishlist item per invariants.
@@ -40,6 +45,13 @@ public sealed class AgentPrompt
 
         FROZEN PATHS list is provided below. Producing any change whose target is frozen (or a descendant
         of a frozen path) is a bug — such changes will be rejected with reason "frozen".
+
+        DIGESTS (new): the telemetry digest now includes `sectionFolder` — a deterministic co-occurrence
+        table. Each row is (serverId, ircSection, parsedType, quality) -> observedRemoteSection, with
+        announceCount and raceCompletionRate. It is EVIDENCE of which release types actually land in which
+        remote folders. Use it to propose discriminating sectionMapping triggers (per the sectionMapping
+        category rule above): high announceCount + a clear observedRemoteSection for a specific
+        parsedType/quality is the signal to tighten a default ".*" trigger or add a targeted row.
 
         OUTPUT CONTRACT (non-negotiable):
         - Your ENTIRE response must be a single JSON object. Nothing else.
