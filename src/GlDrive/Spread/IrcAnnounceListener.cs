@@ -128,7 +128,8 @@ public class IrcAnnounceListener : IDisposable
 
             if (!string.IsNullOrEmpty(release) && release.Length >= 5)
             {
-                if (TryFireAnnounce(section, release, target, message.Text, autoRace))
+                // ruleSource "builtin" — matched the shipped verbose [ NEW ] pattern.
+                if (TryFireAnnounce(section, release, target, message.Text, autoRace, "builtin"))
                     return;
             }
         }
@@ -162,7 +163,8 @@ public class IrcAnnounceListener : IDisposable
                     continue;
                 }
 
-                if (TryFireAnnounce(section, release, target, message.Text, rule.AutoRace))
+                // ruleSource "custom" — matched a user-configured announce rule.
+                if (TryFireAnnounce(section, release, target, message.Text, rule.AutoRace, "custom"))
                     return;
             }
             catch (RegexMatchTimeoutException) { }
@@ -243,7 +245,7 @@ public class IrcAnnounceListener : IDisposable
         return dp[b.Length];
     }
 
-    private bool TryFireAnnounce(string section, string release, string channel, string msgText, bool autoRace)
+    private bool TryFireAnnounce(string section, string release, string channel, string msgText, bool autoRace, string ruleSource)
     {
         // Final validation gate — covers both the built-in verbose pattern and custom rules.
         // Rejects junk like "brings", "leads", "racing" that loose regexes capture out of
@@ -269,6 +271,35 @@ public class IrcAnnounceListener : IDisposable
 
         Log.Information("IRC announce detected: [{Section}] {Release} (from {Channel}, msg: {Msg})",
             section, release, channel, msgText);
+
+        // section→folder learning: record every MATCHED announce as a learning signal
+        // (mirror of the AnnounceNoMatch emit above). Captures the parsed release shape
+        // so the nightly agent can aggregate (release-type, section) -> observed folder.
+        // Wrapped so telemetry can never break announce handling.
+        try
+        {
+            var parsed = GlDrive.Downloads.SceneNameParser.Parse(release);
+            // ParsedRelease has no explicit category field — derive a coarse type from
+            // its structure: season/episode => tv, year-only => movie, else other.
+            var parsedType = parsed.Season != null || parsed.Episode != null || parsed.IsSeasonPack
+                ? "tv"
+                : parsed.Year != null ? "movie" : "other";
+            App.TelemetryRecorder?.Record(GlDrive.AiAgent.TelemetryStream.MatchedAnnounces,
+                new GlDrive.AiAgent.MatchedAnnounceEvent
+                {
+                    ServerId = _serverId,
+                    Channel = channel,
+                    Section = section,
+                    Release = release,
+                    ParsedType = parsedType,
+                    Quality = parsed.Quality.ToString(),
+                    Source = parsed.Source ?? "",
+                    Group = parsed.Group ?? "",
+                    RuleSource = ruleSource,
+                    AutoRace = autoRace
+                });
+        }
+        catch (Exception ex) { Log.Debug(ex, "MatchedAnnounce emit failed"); }
 
         ReleaseAnnounced?.Invoke(_serverId, section, release, autoRace);
         return true;

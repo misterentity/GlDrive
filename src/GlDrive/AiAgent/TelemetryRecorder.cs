@@ -123,6 +123,8 @@ public sealed class TelemetryRecorder : IDisposable
                 TelemetryStream.Transfers => "transfers",
                 TelemetryStream.SectionActivity => "section-activity",
                 TelemetryStream.Errors => "errors",
+                // Section→folder learning: matched-announces-{date}.jsonl prefix for the new positive-match stream.
+                TelemetryStream.MatchedAnnounces => "matched-announces",
                 _ => "unknown"
             };
             return $"{prefix}-{d:yyyyMMdd}.jsonl";

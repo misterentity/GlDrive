@@ -103,6 +103,15 @@ public class SpreadJob : IDisposable
     // Used by EmitRaceOutcome to emit "blacklisted" instead of "aborted".
     private bool _blacklisted = false;
 
+    // section→folder learning: captures the SectionMapper.Resolution that picked
+    // each destination's path (null when the fuzzy/substring fallback was used).
+    // Lets EmitRaceOutcome attribute the chosen RemoteSection + TriggerRegex so
+    // the nightly agent can tell which learned mapping actually routed the race.
+    // Keyed by destination serverId. Written only on the single RunAsync setup
+    // thread (Phase 2), read in EmitRaceOutcome — no concurrent mutation.
+    private readonly Dictionary<string, (string remoteSection, string path, string? triggerRegex)> _resolvedDestRoutes =
+        new(StringComparer.Ordinal);
+
     // Skiplist evaluation trace (captured in Phase 0 for history popup)
     public List<SkiplistTraceEntry>? SkiplistTrace { get; private set; }
     public string SkiplistResult { get; private set; } = "Allowed";
@@ -385,6 +394,44 @@ public class SpreadJob : IDisposable
                         entry?.LastFailedAt ?? DateTime.UtcNow);
                     blacklistedDests.Add((config.Name, reason));
                     continue;
+                }
+
+                // section→folder learning: consult the learned SectionMappings FIRST so
+                // a trigger-matched mapping routes the destination — today these mappings
+                // are inert because RunAsync never calls SectionMapper.Resolve. Strictly
+                // additive: only short-circuits when Resolve returns a usable path; every
+                // null path (no mapping / no trigger match / empty resolved path) falls
+                // through to the original exact→fuzzy→substring chain unchanged.
+                var resolution = SectionMapper.Resolve(config.SpreadSite, Section, ReleaseName);
+                if (resolution is { } res)
+                {
+                    // Prefer the mapping's explicit Path; else look up the resolved
+                    // RemoteSection key in Sections (case-insensitive) like the rest of
+                    // the resolver does. Empty → fall through to the legacy matching.
+                    var mappedBase = res.Mapping is { Path.Length: > 0 } m
+                        ? m.Path
+                        : config.SpreadSite.Sections
+                            .FirstOrDefault(kvp => kvp.Key.Equals(res.RemoteSection, StringComparison.OrdinalIgnoreCase))
+                            .Value;
+
+                    if (!string.IsNullOrEmpty(mappedBase))
+                    {
+                        var sectionBase = mappedBase.TrimEnd('/');
+                        var destPath = await ProbeDatedDirectory(serverId, sectionBase, ct)
+                            is { } datedBase
+                                ? datedBase + "/" + ReleaseName
+                                : sectionBase + "/" + ReleaseName;
+
+                        sitePaths[serverId] = destPath;
+                        // Capture the route so EmitRaceOutcome can attribute it; null
+                        // triggerRegex when the mapping used the catch-all default.
+                        var trig = res.Mapping?.TriggerRegex;
+                        _resolvedDestRoutes[serverId] = (res.RemoteSection, destPath,
+                            string.IsNullOrEmpty(trig) || trig == ".*" ? null : trig);
+                        Log.Information("Spread: {Server} is DESTINATION via SectionMapping [{Irc} -> {Remote}] {Path}",
+                            config.Name, Section, res.RemoteSection, destPath);
+                        continue;
+                    }
                 }
 
                 // Find the best section path on this server
@@ -799,6 +846,13 @@ public class SpreadJob : IDisposable
                 filesExpected = _expectedFileCount;
             }
 
+            // section→folder learning: attribute the primary destination's resolved
+            // route so the agent can correlate (announce section -> chosen folder) with
+            // race success. Picks the first SectionMapping-resolved destination; null
+            // for every field when only the fuzzy/substring fallback routed this race.
+            (string remoteSection, string path, string? triggerRegex)? primaryRoute =
+                _resolvedDestRoutes.Count > 0 ? _resolvedDestRoutes.Values.First() : null;
+
             recorder.Record(GlDrive.AiAgent.TelemetryStream.Races, new GlDrive.AiAgent.RaceOutcomeEvent
             {
                 RaceId = Id,
@@ -812,7 +866,12 @@ public class SpreadJob : IDisposable
                 ScoreBreakdown = new Dictionary<string, int>(),
                 Result = result,
                 FilesExpected = filesExpected,
-                FilesTotal = filesTotal
+                FilesTotal = filesTotal,
+                // New optional learning fields (nulls omitted on write — back-compat).
+                ResolvedRemoteSection = primaryRoute?.remoteSection,
+                DestFolderPath = primaryRoute?.path,
+                WasAutoRaced = IsAutoRace,
+                MatchedTriggerRegex = primaryRoute?.triggerRegex
             });
         }
         catch (Exception ex)

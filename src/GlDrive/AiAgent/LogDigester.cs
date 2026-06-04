@@ -30,6 +30,8 @@ public sealed class LogDigester
         bundle.Downloads       = new DownloadsDigester().Build(ReadStream<DownloadOutcomeEvent>("downloads", windowStart, now));
         bundle.Transfers       = new TransfersDigester().Build(ReadStream<FileTransferEvent>("transfers", windowStart, now));
         bundle.SectionActivity = new SectionActivityDigester().Build(ReadStream<SectionActivityEvent>("section-activity", windowStart, now));
+        // section→folder learning: correlate matched announces with race destinations (re-reading "races" yields a fresh enumerable)
+        bundle.SectionFolder   = new SectionFolderDigester().Build(ReadStream<MatchedAnnounceEvent>("matched-announces", windowStart, now), ReadStream<RaceOutcomeEvent>("races", windowStart, now));
         bundle.Errors          = new ErrorsDigester().Build(ReadStream<ErrorSignatureEvent>("errors", windowStart, now));
 
         bundle.EvidencePointers = new Dictionary<string, string>
@@ -37,7 +39,9 @@ public sealed class LogDigester
             ["races"]             = $"races-{now:yyyyMMdd}.jsonl",
             ["nukes"]             = $"nukes-{now:yyyyMMdd}.jsonl",
             ["announcesNoMatch"]  = $"announces-nomatch-{now:yyyyMMdd}.jsonl",
-            ["wishlistAttempts"]  = $"wishlist-attempts-{now:yyyyMMdd}.jsonl"
+            ["wishlistAttempts"]  = $"wishlist-attempts-{now:yyyyMMdd}.jsonl",
+            // evidence pointer for the section→folder learning rows so the AiAgent audit trail can cite source events
+            ["matchedAnnounces"]  = $"matched-announces-{now:yyyyMMdd}.jsonl"
         };
 
         return bundle;
