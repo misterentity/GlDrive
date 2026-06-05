@@ -146,7 +146,9 @@ public class SpreadManager : IDisposable
         // against the SAME account cap — this is the linchpin that makes the cap
         // truly account-wide instead of per-pool.
         var loginGate = ResolveAccountLoginGate(serverId);
-        var pool = new FtpConnectionPool(factory, poolSize, loginGate);
+        // priorityLogins: true — draw from the gate's reserved FXP permit so the main
+        // pool can't starve racing out of every login (the v3.7.2 root-cause fix).
+        var pool = new FtpConnectionPool(factory, poolSize, loginGate, priorityLogins: true);
         // Spread pools have no ConnectionMonitor keepalive, so idle connections
         // die and the next FXP borrow fails "No connection to the server exists"
         // (dominant failure on 2026-05-20 v2.6.0). Enable borrow-time NOOP
@@ -184,7 +186,8 @@ public class SpreadManager : IDisposable
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "Failed to initialize spread pool for {ServerId}", serverId);
+            Log.Warning(ex, "Failed to initialize spread pool for {ServerId} — racing DISABLED for this server " +
+                            "until restart (login-cap starvation? FXP permit is reserved as of v3.7.2)", serverId);
             await pool.DisposeAsync();
         }
     }
@@ -474,7 +477,7 @@ public class SpreadManager : IDisposable
                     if (factory != null)
                     {
                         await pool.DisposeAsync();
-                        var newPool = new FtpConnectionPool(factory, neededSize, ResolveAccountLoginGate(id));
+                        var newPool = new FtpConnectionPool(factory, neededSize, ResolveAccountLoginGate(id), priorityLogins: true);
                         newPool.ConfigureHealth(_config.Spread.ValidateConnectionOnBorrow, _config.Spread.SpreadKeepaliveSeconds);
                         await newPool.Initialize(CancellationToken.None);
                         lock (_lock) _spreadPools[id] = newPool;
@@ -537,7 +540,17 @@ public class SpreadManager : IDisposable
 
         if (serverIds.Count < 2)
         {
-            AutoRaceAttempted?.Invoke(category, releaseName, $"Skipped — <2 connected servers with sections");
+            // Visibility: this was the silent killer — when spread pools fail to
+            // initialize (login-cap starvation), _spreadPools is empty, every
+            // auto-race lands here, and NOTHING was logged. Surface it so "review
+            // logs" actually shows why racing is dead.
+            int livePools;
+            lock (_lock) livePools = _spreadPools.Count;
+            Log.Warning("Auto-race skipped for {Release} [{Section}]: only {Count} connected spread pool(s) " +
+                        "(need 2). Live FXP pools={Live} — if 0, spread pool init failed (check login cap).",
+                releaseName, category, serverIds.Count, livePools);
+            AutoRaceAttempted?.Invoke(category, releaseName,
+                $"Skipped — only {serverIds.Count} connected server(s) with FXP pool (live pools={livePools})");
             return;
         }
 

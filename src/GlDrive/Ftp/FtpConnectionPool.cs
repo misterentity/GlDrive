@@ -158,17 +158,21 @@ public class FtpConnectionPool : IAsyncDisposable
     // the same account so total live logins never exceed the account cap. Null in
     // the 2-arg ctor (tests + any legacy path) = no gating, exact prior behavior.
     private readonly IAccountLoginGate? _loginGate;
+    // Priority pools (the FXP/spread pool) draw login permits from the gate's reserved
+    // pool so they're never starved by the main pool. See ServerLoginGate.
+    private readonly bool _priorityLogins;
     private int _permitsHeld;
     private static readonly TimeSpan PermitAcquireTimeout = TimeSpan.FromSeconds(30);
 
     public FtpConnectionPool(FtpClientFactory factory, int maxSize = 3)
         : this(factory, maxSize, null) { }
 
-    public FtpConnectionPool(FtpClientFactory factory, int maxSize, IAccountLoginGate? loginGate)
+    public FtpConnectionPool(FtpClientFactory factory, int maxSize, IAccountLoginGate? loginGate, bool priorityLogins = false)
     {
         _factory = factory;
         _maxSize = maxSize;
         _loginGate = loginGate;
+        _priorityLogins = priorityLogins;
         _pool = Channel.CreateBounded<AsyncFtpClient>(maxSize);
     }
 
@@ -182,7 +186,7 @@ public class FtpConnectionPool : IAsyncDisposable
     {
         if (_loginGate != null)
         {
-            var got = await _loginGate.TryAcquireAsync(ct, PermitAcquireTimeout);
+            var got = await _loginGate.TryAcquireAsync(ct, PermitAcquireTimeout, _priorityLogins);
             if (!got)
                 throw new InvalidOperationException(
                     "Account login cap reached — no login permit available");
@@ -195,7 +199,7 @@ public class FtpConnectionPool : IAsyncDisposable
         }
         catch
         {
-            _loginGate?.Release();
+            _loginGate?.Release(_priorityLogins);
             throw;
         }
     }
@@ -213,7 +217,7 @@ public class FtpConnectionPool : IAsyncDisposable
             Log.Warning("Pool: login permit under-release detected (clamped)");
             return;
         }
-        _loginGate.Release();
+        _loginGate.Release(_priorityLogins);
     }
 
     // Health options (v2.6.1). Spread pools have no ConnectionMonitor keepalive

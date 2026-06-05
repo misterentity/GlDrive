@@ -607,7 +607,9 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
     {
         var spread = _serverManager.Spread;
         if (spread == null) return;
-        foreach (var item in spread.History.Items.Take(100))
+        foreach (var item in spread.History.Items
+                     .Where(i => !string.IsNullOrWhiteSpace(i.ReleaseName))
+                     .Take(100))
         {
             RaceHistory.Add(new RaceHistoryVm
             {
