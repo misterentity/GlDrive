@@ -45,6 +45,10 @@ public class SpreadJob : IDisposable
     private readonly Dictionary<string, SiteProgress> _siteProgress = new();
     private int _expectedFileCount;
     private (string serverId, string path)? _pendingSfv;
+    // SFV paths already counted into _expectedFileCount. Without this, the SFV is
+    // re-found on every scan (ProcessFiles re-arms _pendingSfv) and the count grows
+    // unbounded, so completion is never reached. Guarded by _ownershipLock.
+    private readonly HashSet<string> _parsedSfvs = new(StringComparer.OrdinalIgnoreCase);
 
     // Transfer tracking (file name component uses OrdinalIgnoreCase)
     private readonly Dictionary<(string file, string src, string dst), int> _failureCounts =
@@ -1318,7 +1322,10 @@ public class SpreadJob : IDisposable
 
             lock (_ownershipLock)
             {
-                _expectedFileCount += lineCount + 1; // +1 for the SFV itself; accumulates across multiple SFVs
+                // Count each distinct SFV exactly once — re-parsing on every scan
+                // would inflate the expected total without bound and block completion.
+                if (_parsedSfvs.Add(sfvPath))
+                    _expectedFileCount += lineCount + 1; // +1 for the SFV itself; accumulates across DISTINCT SFVs
             }
         }
         catch (Exception ex)
