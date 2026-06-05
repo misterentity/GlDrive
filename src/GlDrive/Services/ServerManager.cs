@@ -35,6 +35,8 @@ public class ServerManager : IDisposable
         _spreadManager = new SpreadManager(config);
         _spreadManager._getMainPool = serverId =>
             _servers.TryGetValue(serverId, out var svc) ? svc.Pool : null;
+        _spreadManager._getSearchService = serverId =>
+            _servers.TryGetValue(serverId, out var svc) ? svc.Search : null;
     }
 
     public async Task MountServer(string serverId, CancellationToken ct = default)

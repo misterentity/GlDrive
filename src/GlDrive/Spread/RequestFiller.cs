@@ -114,39 +114,24 @@ public class RequestFiller : IDisposable
         {
             Log.Information("RequestFiller: searching for {Release}", release);
 
-            // Search all OTHER connected servers for the release
-            foreach (var sourceId in _serverManager.ConnectedServerIds)
+            var exact = await _spreadManager.SearchReleaseOnServers(
+                release, new[] { _requesterServerId }, CancellationToken.None);
+            if (exact == null)
             {
-                if (sourceId == _requesterServerId) continue;
-                var sourceMount = _serverManager.GetServer(sourceId);
-                if (sourceMount?.Search is not { } searcher) continue;
-
-                List<SearchResult> results;
-                try { results = await searcher.Search(release); }
-                catch (Exception ex)
-                {
-                    Log.Debug(ex, "RequestFiller: search failed on {Source}", sourceId);
-                    continue;
-                }
-
-                var exact = results.FirstOrDefault(r =>
-                    r.ReleaseName.Equals(release, StringComparison.OrdinalIgnoreCase));
-                if (exact == null) continue;
-
-                Log.Information("RequestFiller: found {Release} on {Source} at {Path} — racing to {Target}",
-                    release, sourceId, exact.RemotePath, _requesterServerId);
-
-                _spreadManager.StartRace(
-                    exact.Category,
-                    release,
-                    new[] { sourceId, _requesterServerId },
-                    SpreadMode.Race,
-                    knownSourceServerId: sourceId,
-                    knownSourcePath: exact.RemotePath);
+                Log.Information("RequestFiller: no source found for {Release}", release);
                 return;
             }
 
-            Log.Information("RequestFiller: no source found for {Release}", release);
+            Log.Information("RequestFiller: found {Release} on {Source} at {Path} — racing to {Target}",
+                release, exact.ServerId, exact.RemotePath, _requesterServerId);
+
+            _spreadManager.StartRace(
+                exact.Category,
+                release,
+                new[] { exact.ServerId, _requesterServerId },
+                SpreadMode.Race,
+                knownSourceServerId: exact.ServerId,
+                knownSourcePath: exact.RemotePath);
         }
         catch (Exception ex)
         {

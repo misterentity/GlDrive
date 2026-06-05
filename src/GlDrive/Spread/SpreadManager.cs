@@ -66,6 +66,11 @@ public class SpreadManager : IDisposable
 
     public Func<string, FtpConnectionPool?>? _getMainPool;
 
+    // Per-server search accessor (MountService.Search). Wired by ServerManager so the
+    // spread engine can locate an alternate source mid-race without a hard dependency
+    // on ServerManager. Null => alternate-source search unavailable (skipped).
+    public Func<string, GlDrive.Downloads.FtpSearchService?>? _getSearchService;
+
     public event Action<string, string, string>? AutoRaceAttempted; // section, release, result
 
     public IReadOnlyList<SpreadJob> ActiveJobs
@@ -927,6 +932,65 @@ public class SpreadManager : IDisposable
     public IReadOnlyList<string> GetConnectedServerIds()
     {
         lock (_lock) return _spreadPools.Keys.ToList();
+    }
+
+    /// <summary>
+    /// Search every connected server (except <paramref name="excludeIds"/>) in
+    /// parallel for an exact match of <paramref name="release"/> and return the best
+    /// alternate source. Candidates failing skiplist rules or section blacklist are
+    /// dropped. Returns null when nothing usable is found. Reused by RequestFiller and
+    /// by SpreadJob's mid-race source-migration failover.
+    /// </summary>
+    public async Task<SearchResult?> SearchReleaseOnServers(
+        string release, IReadOnlyCollection<string> excludeIds, CancellationToken ct)
+    {
+        if (_getSearchService == null) return null;
+        var candidates = GetConnectedServerIds()
+            .Where(id => !excludeIds.Contains(id))
+            .ToList();
+        if (candidates.Count == 0) return null;
+
+        var timeout = TimeSpan.FromSeconds(Math.Max(5, _config.Spread.AlternateSourceSearchTimeoutSeconds));
+
+        var searches = candidates.Select(async id =>
+        {
+            var svc = _getSearchService(id);
+            if (svc == null) return (SearchResult?)null;
+            try
+            {
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                cts.CancelAfter(timeout);
+                var results = await svc.Search(release, null, cts.Token);
+                var exact = results.FirstOrDefault(r =>
+                    r.ReleaseName.Equals(release, StringComparison.OrdinalIgnoreCase));
+                if (exact == null) return null;
+                exact.ServerId = id; // ensure attribution
+                return exact;
+            }
+            catch (Exception ex)
+            {
+                Log.Debug(ex, "Alternate-source search failed on {Server}", id);
+                return null;
+            }
+        });
+
+        var found = (await Task.WhenAll(searches)).Where(r => r != null).Select(r => r!).ToList();
+        if (found.Count == 0) return null;
+
+        // Filter by rules + blacklist; prefer the candidate with the most files.
+        var serverConfigs = _config.Servers.ToDictionary(s => s.Id, s => s);
+        SearchResult? best = null;
+        foreach (var r in found.OrderByDescending(r => r.Files?.Count ?? 0))
+        {
+            if (!serverConfigs.TryGetValue(r.ServerId, out var sc)) continue;
+            if (_blacklist.IsBlacklisted(r.ServerId, r.Category)) continue;
+            var action = _skiplist.Evaluate(release, true, false, r.ServerId, r.Category,
+                sc.SpreadSite.Skiplist, _config.Spread.GlobalSkiplist);
+            if (action == SkiplistAction.Deny) continue;
+            best = r;
+            break;
+        }
+        return best;
     }
 
     private ServerGate GetOrCreateGate(string serverId) =>
