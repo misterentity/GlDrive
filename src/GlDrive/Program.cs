@@ -18,8 +18,14 @@ public static class Program
             return RunWatchdog(targetPid);
         }
 
-        // Normal mode — spawn watchdog then start WPF app
-        SpawnWatchdog();
+        // Normal mode — spawn watchdog then start WPF app.
+        // EXCEPT during --apply-update: that process runs from a temp extract directory that
+        // does NOT contain the self-contained runtime DLLs (e.g. System.Security.Cryptography,
+        // System.Text.Json). A watchdog spawned there crashes with FileNotFoundException the
+        // moment it touches HMAC marker validation. The real app, relaunched from the install
+        // dir after the update, spawns its own watchdog normally — so nothing is lost.
+        if (Array.IndexOf(args, "--apply-update") < 0)
+            SpawnWatchdog();
 
         var app = new App();
         app.InitializeComponent();
@@ -92,7 +98,17 @@ public static class Program
 
         // If a valid HMAC-authenticated update marker exists, the updater handles restarting.
         // Plain markers (no HMAC, expired, or tampered) are treated as missing — not honored.
-        if (UpdateMarkerHmac.IsValid(updateMarker))
+        //
+        // GUARD: UpdateMarkerHmac.IsValid lazily loads System.Security.Cryptography (HMACSHA256 /
+        // CryptographicOperations). If THIS watchdog ever runs from a partial directory missing
+        // that DLL, the load fails with FileNotFoundException at JIT/resolution time — at the call
+        // site here, NOT inside IsValid (so IsValid's own try/catch can't help), and an unguarded
+        // call crashes the watchdog (the WER crash-loops seen during 3.x update installs). A failure
+        // to even validate means we're in a partial/update context → bow out, let the updater drive.
+        bool updateInProgress;
+        try { updateInProgress = UpdateMarkerHmac.IsValid(updateMarker); }
+        catch { updateInProgress = true; }
+        if (updateInProgress)
         {
             try { File.Delete(updateMarker); } catch { }
             return 0;
