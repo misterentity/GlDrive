@@ -32,6 +32,36 @@ public class SpreadConfig
     public bool AutoRaceOnNotification { get; set; }
     public bool NotifyOnRaceComplete { get; set; } = true;
     public List<string> NukeMarkers { get; set; } = [".nuke", "NUKED-"];
+
+    /// <summary>
+    /// When on, a race runs until each destination is confirmed complete via
+    /// zipscript (a CompletionMarkers match OR all SFV files present + no -MISSING-
+    /// stubs), not merely until the source files were copied. Off = legacy
+    /// file-count completion. Default on.
+    /// </summary>
+    public bool WaitForDestinationComplete { get; set; } = true;
+
+    /// <summary>Max minutes to wait for a destination's zipscript to mark complete
+    /// AFTER all files are delivered, before that dest is recorded as a timeout.
+    /// Independent of HardTimeoutSeconds (which budgets the transfer phase).</summary>
+    public int DestinationCompletionWaitMinutes { get; set; } = 10;
+
+    /// <summary>Directory re-list cadence (seconds) while waiting for completion
+    /// (no active transfers). Keeps polling for the marker without hammering.</summary>
+    public int CompletionRefreshIntervalSeconds { get; set; } = 30;
+
+    /// <summary>Substrings (case-insensitive) that mark a release dir as complete in
+    /// a destination listing. Site-tunable, like NukeMarkers. Empty = heuristic only.</summary>
+    public List<string> CompletionMarkers { get; set; } =
+        ["[ COMPLETE ]", "[ COMPLETED ]", "(COMPLETE)", "COMPLETE", "-=COMPLETE=-"];
+
+    /// <summary>When a release moves off its source mid-race, search other connected
+    /// sites for an alternate source and continue feeding the target from it.</summary>
+    public bool AlternateSourceSearch { get; set; } = true;
+
+    /// <summary>Per-server timeout (seconds) for the mid-race alternate-source search.</summary>
+    public int AlternateSourceSearchTimeoutSeconds { get; set; } = 20;
+
     public List<SkiplistRule> GlobalSkiplist { get; set; } = [];
 
     /// <summary>
