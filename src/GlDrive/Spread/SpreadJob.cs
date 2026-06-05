@@ -50,6 +50,12 @@ public class SpreadJob : IDisposable
     // unbounded, so completion is never reached. Guarded by _ownershipLock.
     private readonly HashSet<string> _parsedSfvs = new(StringComparer.OrdinalIgnoreCase);
 
+    // Per-destination zipscript signals captured on each scan (see CompletionDetector).
+    // _destSawMarker[id] = a completion marker was visible in id's release dir this scan.
+    // _destHasMissingStub[id] = a -MISSING- stub was visible this scan.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _destSawMarker = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _destHasMissingStub = new();
+
     // Transfer tracking (file name component uses OrdinalIgnoreCase)
     private readonly Dictionary<(string file, string src, string dst), int> _failureCounts =
         new(new FileRouteTupleComparer());
@@ -989,7 +995,7 @@ public class SpreadJob : IDisposable
                 return $"{name}:{kv.Value}";
             })));
 
-        var results = new List<(string serverId, List<SpreadFileInfo> files)>();
+        var results = new List<(string serverId, List<SpreadFileInfo> files, ScanSignals signals)>();
         var scanLock = new Lock();
 
         var tasks = sitePaths.Select(async kvp =>
@@ -1015,6 +1021,7 @@ public class SpreadJob : IDisposable
             // race dies at the 60s inactivity timer with "no viable transfers"
             // — even though zephyr was ready to receive.
             var files = new List<SpreadFileInfo>();
+            var signals = new ScanSignals();
             var scanDone = false;
             Exception? lastError = null;
 
@@ -1024,7 +1031,7 @@ public class SpreadJob : IDisposable
                 {
                     Log.Information("Spread scan: listing {Server} at {Path} (using main pool)...",
                         serverName, basePath);
-                    await ScanDirectoryRecursive(mainPool, basePath, basePath, files, 0, ct);
+                    await ScanDirectoryRecursive(mainPool, basePath, basePath, files, signals, 0, ct);
                     scanDone = true;
                 }
                 catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
@@ -1051,7 +1058,7 @@ public class SpreadJob : IDisposable
                 {
                     Log.Information("Spread scan: listing {Server} at {Path} (using spread pool fallback)...",
                         serverName, basePath);
-                    await ScanDirectoryRecursive(spreadPool, basePath, basePath, files, 0, ct);
+                    await ScanDirectoryRecursive(spreadPool, basePath, basePath, files, signals, 0, ct);
                     scanDone = true;
                 }
                 catch (Exception ex)
@@ -1063,7 +1070,7 @@ public class SpreadJob : IDisposable
             if (scanDone)
             {
                 Log.Information("Spread scan: {Server} returned {Count} files", serverName, files.Count);
-                lock (scanLock) results.Add((serverId, files));
+                lock (scanLock) results.Add((serverId, files, signals));
             }
             else
             {
@@ -1077,12 +1084,14 @@ public class SpreadJob : IDisposable
         // Process all results under lock once
         lock (_ownershipLock)
         {
-            foreach (var (serverId, files) in results)
+            foreach (var (serverId, files, signals) in results)
             {
                 var serverName = _serverConfigs.TryGetValue(serverId, out var cfg) ? cfg.Name : serverId;
                 Log.Information("Spread scan: {Server} found {Count} files at {Path}",
                     serverName, files.Count, sitePaths.GetValueOrDefault(serverId, "?"));
                 ProcessFiles(serverId, files);
+                _destSawMarker[serverId] = signals.SawCompletionMarker;
+                _destHasMissingStub[serverId] = signals.HasMissingStub;
             }
 
             if (results.Count == 0)
@@ -1150,7 +1159,7 @@ public class SpreadJob : IDisposable
     }
 
     private async Task ScanDirectoryRecursive(FtpConnectionPool pool, string basePath,
-        string currentPath, List<SpreadFileInfo> files, int depth, CancellationToken ct)
+        string currentPath, List<SpreadFileInfo> files, ScanSignals signals, int depth, CancellationToken ct)
     {
         if (depth > 3) return; // Max recursion depth
 
@@ -1196,6 +1205,11 @@ public class SpreadJob : IDisposable
                     }
                 }
 
+                if (CompletionDetector.IsCompletionMarker(item.Name, _spreadConfig.CompletionMarkers))
+                    signals.SawCompletionMarker = true;
+                if (CompletionDetector.IsMissingStub(item.Name, item.Size))
+                    signals.HasMissingStub = true;
+
                 // Skip zipscript artifact directories — some configs render the
                 // race progress bar ("[###] - NN% Complete - [site]") as a dir.
                 // Recursing into it is wasted LISTs at best, and its name must
@@ -1203,7 +1217,7 @@ public class SpreadJob : IDisposable
                 if (IsZipscriptArtifact(item.Name, item.Size)) continue;
 
                 // Recurse into subdirectories (Sample/, Subs/, CD1/, etc.)
-                await ScanDirectoryRecursive(pool, basePath, item.FullName, files, depth + 1, ct);
+                await ScanDirectoryRecursive(pool, basePath, item.FullName, files, signals, depth + 1, ct);
             }
             else if (item.Type == FtpObjectType.File)
             {
@@ -1216,6 +1230,11 @@ public class SpreadJob : IDisposable
                         return;
                     }
                 }
+
+                if (CompletionDetector.IsCompletionMarker(item.Name, _spreadConfig.CompletionMarkers))
+                    signals.SawCompletionMarker = true;
+                if (CompletionDetector.IsMissingStub(item.Name, item.Size))
+                    signals.HasMissingStub = true;
 
                 // Skip glftpd zipscript artifacts — -MISSING placeholders, "-missing"
                 // suffix stubs, and "[###] - NN% Complete - [site]" race progress
@@ -2427,6 +2446,13 @@ public class SpreadJob : IDisposable
         _pauseSignal.Set();
         _pauseSignal.Dispose();
         GC.SuppressFinalize(this);
+    }
+
+    /// <summary>Mutable per-site scan signals threaded through ScanDirectoryRecursive.</summary>
+    private sealed class ScanSignals
+    {
+        public bool SawCompletionMarker;
+        public bool HasMissingStub;
     }
 }
 
