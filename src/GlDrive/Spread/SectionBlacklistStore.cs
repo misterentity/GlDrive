@@ -356,4 +356,31 @@ public static class MkdFailureClassifier
             || m.Contains("out of credits", StringComparison.OrdinalIgnoreCase)
             || m.Contains("no credits", StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>
+    /// True when a transfer failed because the SOURCE no longer has the file —
+    /// glftpd "RETR ... 550 No such file" after the release was moved/deleted/
+    /// archived off the source mid-race. Distinct from IsCreditExhaustion (also a
+    /// RETR 550, but a credit balance issue) and from MKD missing-parent (a DEST
+    /// 550 surfaced as "MKD failed"). Drives the alternate-source failover.
+    /// </summary>
+    public static bool IsSourceFileMissing(string? errorMessage)
+    {
+        if (string.IsNullOrEmpty(errorMessage)) return false;
+        var m = errorMessage;
+        // Must be a download/RETR rejection, not an MKD or STOR failure.
+        if (m.Contains("MKD failed", StringComparison.OrdinalIgnoreCase)) return false;
+        if (m.Contains("STOR failed", StringComparison.OrdinalIgnoreCase)) return false;
+        // Credit exhaustion is its own (already-handled) source condition.
+        if (IsCreditExhaustion(m)) return false;
+        var notFound =
+            m.Contains("No such file", StringComparison.OrdinalIgnoreCase) ||
+            m.Contains("File not found", StringComparison.OrdinalIgnoreCase) ||
+            m.Contains("Cannot find the file", StringComparison.OrdinalIgnoreCase) ||
+            m.Contains("does not exist", StringComparison.OrdinalIgnoreCase);
+        if (!notFound) return false;
+        // Bias toward RETR/download context to avoid matching unrelated 550s.
+        return m.Contains("RETR", StringComparison.OrdinalIgnoreCase)
+            || m.Contains("550", StringComparison.Ordinal);
+    }
 }

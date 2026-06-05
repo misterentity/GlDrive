@@ -57,3 +57,24 @@ public class MkdFailureClassifierTests
     public void IsCreditExhaustion_catches_credit_denials(string? msg, bool expected)
         => Assert.Equal(expected, MkdFailureClassifier.IsCreditExhaustion(msg));
 }
+
+public class MkdFailureClassifier_SourceMissingTests
+{
+    [Theory]
+    [InlineData("RETR failed: 550 No such file or directory", true)]
+    [InlineData("RETR failed: 550 File not found", true)]
+    [InlineData("550 file.rar: No such file or directory", true)]
+    [InlineData("RETR failed: 550 Cannot find the file", true)]
+    public void IsSourceFileMissing_catches_retr_not_found(string msg, bool expected)
+        => Assert.Equal(expected, MkdFailureClassifier.IsSourceFileMissing(msg));
+
+    [Theory]
+    [InlineData("RETR failed: 550 Insufficient credits")]
+    [InlineData("STOR failed: 553 no upload rights")]
+    [InlineData("MKD failed: 550 No such file or directory")]
+    [InlineData("data transfer timeout")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void IsSourceFileMissing_ignores_non_source_missing(string? msg)
+        => Assert.False(MkdFailureClassifier.IsSourceFileMissing(msg));
+}
