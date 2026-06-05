@@ -133,6 +133,13 @@ public class SpreadJob : IDisposable
     private volatile bool _isNuked;
     private int _completionRetries;
 
+    // Per-destination completion lifecycle (see CompletionDetector). Keyed by dest
+    // serverId. _destAllFilesAt stamps when a dest first held the full file set, so
+    // the await timer can expire it. Both written under _ownershipLock during the
+    // post-scan reconcile and read in the RunAsync completion gate.
+    private readonly Dictionary<string, DestState> _destStates = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, DateTime> _destAllFilesAt = new(StringComparer.Ordinal);
+
     // Cooperative pause state. _pausedFlag is checked at the top of every
     // RunAsync tick — when set, the loop awaits _pauseSignal instead of
     // dispatching new transfers. In-flight transfers are NOT aborted; they
@@ -537,7 +544,14 @@ public class SpreadJob : IDisposable
                 ReleaseName, Section, sourceServers.Count, sitePaths.Count);
 
             using var hardTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            hardTimeout.CancelAfter(TimeSpan.FromSeconds(_spreadConfig.HardTimeoutSeconds));
+            // HardTimeoutSeconds budgets the transfer phase; add the completion-wait
+            // window so the global timer can't kill a legitimate await phase, while a
+            // wedged race still terminates at this absolute ceiling.
+            var ceilingSeconds = _spreadConfig.HardTimeoutSeconds
+                + (_spreadConfig.WaitForDestinationComplete
+                    ? _spreadConfig.DestinationCompletionWaitMinutes * 60
+                    : 0);
+            hardTimeout.CancelAfter(TimeSpan.FromSeconds(ceilingSeconds));
             var token = hardTimeout.Token;
 
             var lastActivity = DateTime.UtcNow;
@@ -559,11 +573,14 @@ public class SpreadJob : IDisposable
                 // 1. Background scan with adaptive debounce — faster during active racing
                 if (_backgroundScan == null || _backgroundScan.IsCompleted)
                 {
-                    // Adaptive interval: 2s during active transfers, 5s when idle
+                    // Adaptive interval: 2s during active transfers, 5s idle, and the
+                    // (slower) completion-refresh cadence while only awaiting zipscript.
                     int activeCount;
                     lock (_progressLock)
                         activeCount = _siteProgress.Values.Sum(s => s.ActiveTransfers);
                     var scanInterval = activeCount > 0 ? 2.0 : 5.0;
+                    if (activeCount == 0 && _spreadConfig.WaitForDestinationComplete && AnyDestAwaiting())
+                        scanInterval = Math.Max(scanInterval, _spreadConfig.CompletionRefreshIntervalSeconds);
 
                     if (_forceScan || (DateTime.UtcNow - _lastScanTime).TotalSeconds >= scanInterval)
                     {
@@ -629,7 +646,10 @@ public class SpreadJob : IDisposable
 
                 if (transfer == null)
                 {
-                    if (IsJobComplete())
+                    var done = _spreadConfig.WaitForDestinationComplete
+                        ? AllDestinationsTerminal(sitePaths, sourceServers)
+                        : IsJobComplete();
+                    if (done)
                     {
                         State = SpreadJobState.Completed;
                         Completed?.Invoke(this);
@@ -671,8 +691,14 @@ public class SpreadJob : IDisposable
                     // out from under a known, self-healing cooldown. Same 180s
                     // hard cap prevents a permanently-refusing BNC pinning forever.
                     var anyCooldown = AnyPoolInCooldown();
-                    if (((nextBackoff is { } bAt && bAt > DateTime.UtcNow) || anyCooldown)
-                        && idleSeconds < 180)
+                    // A dest still inside its completion-wait window is pending work,
+                    // not idle — don't let the 60s idle timer fail the race while we
+                    // legitimately wait for zipscript. Bounded by the await budget.
+                    var awaitingCompletion = _spreadConfig.WaitForDestinationComplete && AnyDestAwaiting();
+                    var awaitCapSeconds = _spreadConfig.DestinationCompletionWaitMinutes * 60 + 60;
+                    if (((nextBackoff is { } bAt && bAt > DateTime.UtcNow) || anyCooldown
+                         || (awaitingCompletion && idleSeconds < awaitCapSeconds))
+                        && idleSeconds < Math.Max(180, awaitCapSeconds))
                     {
                         lastActivity = DateTime.UtcNow;
                         idleSeconds = 0;
@@ -1117,6 +1143,8 @@ public class SpreadJob : IDisposable
                 progress.IsComplete = progress.FilesOwned >= finalTotal && finalTotal > 0;
             }
         }
+        if (_spreadConfig.WaitForDestinationComplete)
+            EvaluateDestCompletion(finalTotal);
         ProgressChanged?.Invoke(this);
     }
 
@@ -2089,6 +2117,118 @@ public class SpreadJob : IDisposable
         lock (_ownershipLock)
         {
             return _destRetryAt.TryGetValue(dstId, out var until) && until == DateTime.MaxValue;
+        }
+    }
+
+    // Caller must already hold _ownershipLock.
+    private bool IsDestDroppedNoLock(string dstId)
+        => _destRetryAt.TryGetValue(dstId, out var until) && until == DateTime.MaxValue;
+
+    /// <summary>
+    /// Recompute every non-download-only destination's completion state from the
+    /// latest scan. Marker/heuristic -> Complete; full file set but unconfirmed ->
+    /// AwaitingCompletion (stamping _destAllFilesAt); otherwise Transferring. The
+    /// await->TimedOut transition is time-based and applied in the RunAsync gate.
+    /// Called from ScanSites after the FilesTotal reconcile.
+    /// </summary>
+    private void EvaluateDestCompletion(int finalTotal)
+    {
+        lock (_ownershipLock)
+        {
+            foreach (var (serverId, _) in _siteProgress)
+            {
+                if (!_serverConfigs.TryGetValue(serverId, out var cfg)) continue;
+                if (cfg.SpreadSite.DownloadOnly) continue;
+                var owned = _serverFileCount.GetValueOrDefault(serverId);
+                var sawMarker = _destSawMarker.GetValueOrDefault(serverId);
+                var hasMissing = _destHasMissingStub.GetValueOrDefault(serverId);
+                var state = CompletionDetector.Evaluate(owned, finalTotal, sawMarker, hasMissing);
+
+                // Preserve a prior terminal verdict (don't flap Complete back to
+                // Transferring if a later scan momentarily under-counts).
+                if (_destStates.TryGetValue(serverId, out var prev) &&
+                    (prev == DestState.Complete || prev == DestState.TimedOut))
+                    continue;
+
+                _destStates[serverId] = state;
+                if (state == DestState.AwaitingCompletion)
+                    _destAllFilesAt.TryAdd(serverId, DateTime.UtcNow);
+                else if (state == DestState.Transferring)
+                    _destAllFilesAt.Remove(serverId);
+            }
+        }
+    }
+
+    /// <summary>
+    /// True when every participating (non-download-only, not-dropped) destination is
+    /// in a terminal state. Applies the await->TimedOut transition using the
+    /// completion-wait budget. Used by the RunAsync gate when WaitForDestinationComplete.
+    /// </summary>
+    private bool AllDestinationsTerminal(Dictionary<string, string> sitePaths, HashSet<string> sourceServers)
+    {
+        lock (_ownershipLock)
+        {
+            var states = new List<DestState>();
+            var now = DateTime.UtcNow;
+            foreach (var id in sitePaths.Keys)
+            {
+                if (sourceServers.Contains(id)) continue;
+                if (_serverConfigs[id].SpreadSite.DownloadOnly) continue;
+                if (IsDestDroppedNoLock(id)) { states.Add(DestState.TimedOut); continue; }
+
+                var state = _destStates.GetValueOrDefault(id, DestState.Transferring);
+                if (state == DestState.AwaitingCompletion &&
+                    _destAllFilesAt.TryGetValue(id, out var at) &&
+                    CompletionDetector.IsAwaitExpired(at, now, _spreadConfig.DestinationCompletionWaitMinutes))
+                {
+                    state = DestState.TimedOut;
+                    _destStates[id] = state;
+                    Log.Information("Spread: dest {Dst} timed out awaiting completion ({Min}min) — {Release}",
+                        _serverConfigs.TryGetValue(id, out var c) ? c.Name : id,
+                        _spreadConfig.DestinationCompletionWaitMinutes, ReleaseName);
+                }
+                states.Add(state);
+            }
+            return CompletionDetector.AllTerminal(states);
+        }
+    }
+
+    /// <summary>True if any dest is still within its completion-wait window (so the
+    /// idle timer must not fail the race — the await is legitimate pending work).</summary>
+    private bool AnyDestAwaiting()
+    {
+        lock (_ownershipLock)
+        {
+            var now = DateTime.UtcNow;
+            foreach (var (id, state) in _destStates)
+            {
+                if (state != DestState.AwaitingCompletion) continue;
+                if (_destAllFilesAt.TryGetValue(id, out var at) &&
+                    !CompletionDetector.IsAwaitExpired(at, now, _spreadConfig.DestinationCompletionWaitMinutes))
+                    return true;
+            }
+            return false;
+        }
+    }
+
+    /// <summary>Compact per-dest completion summary for race history, e.g. "2 complete · 1 timeout".</summary>
+    internal string DestinationStateSummary()
+    {
+        lock (_ownershipLock)
+        {
+            if (_destStates.Count == 0) return "";
+            int complete = 0, timeout = 0, pending = 0;
+            foreach (var s in _destStates.Values)
+            {
+                if (s == DestState.Complete) complete++;
+                else if (s == DestState.TimedOut) timeout++;
+                else pending++;
+            }
+            var parts = new List<string>();
+            if (complete > 0) parts.Add($"{complete} complete");
+            if (timeout > 0) parts.Add($"{timeout} timeout");
+            if (pending > 0) parts.Add($"{pending} pending");
+            return string.Join(" · ", parts);
         }
     }
 
