@@ -20,58 +20,98 @@ namespace GlDrive.Ftp;
 /// </summary>
 public interface IAccountLoginGate
 {
-    /// <summary>Acquire one login permit, waiting up to <paramref name="timeout"/>. Returns false on timeout.</summary>
-    Task<bool> TryAcquireAsync(CancellationToken ct, TimeSpan? timeout = null);
-    /// <summary>Release one previously-acquired permit. Over-release is ignored (logged).</summary>
-    void Release();
+    /// <summary>
+    /// Acquire one login permit, waiting up to <paramref name="timeout"/>. Returns false on timeout.
+    /// <paramref name="priority"/> callers (the FXP/spread pool) may draw from the reserved
+    /// pool; non-priority callers (the WinFsp main pool) are capped at limit−reserved so a
+    /// permit is always available for racing.
+    /// </summary>
+    Task<bool> TryAcquireAsync(CancellationToken ct, TimeSpan? timeout = null, bool priority = false);
+    /// <summary>Release one previously-acquired permit. Over-release is ignored (logged). The
+    /// <paramref name="priority"/> flag MUST match the value passed to the matching acquire.</summary>
+    void Release(bool priority = false);
     /// <summary>Permits currently held by callers.</summary>
     int Held { get; }
     /// <summary>Current effective limit (shrinks via <see cref="TightenTo"/>).</summary>
     int Limit { get; }
+    /// <summary>Permits reserved for priority (FXP) callers — non-priority callers can't take these.</summary>
+    int Reserved { get; }
     /// <summary>Shrink-only: lower the effective limit by permanently parking permits.</summary>
     void TightenTo(int newLimit);
 }
 
 public sealed class ServerLoginGate : IAccountLoginGate
 {
+    // _sem governs the TOTAL live-login ceiling (the account cap). Every caller —
+    // priority or not — holds one _sem permit per login, and Release always returns
+    // one to _sem, so Held/Limit/TightenTo accounting is unchanged from the original.
     private readonly SemaphoreSlim _sem;
+    // _general is a SUB-cap that only NON-priority callers (the main pool) must also
+    // hold. Its ceiling is limit−reserved, so non-priority callers can never occupy
+    // more than that many of _sem's permits — guaranteeing `reserved` permits in _sem
+    // always remain obtainable by a priority (FXP/spread) caller. With reserved=0,
+    // _general mirrors _sem exactly and behavior is identical to the pre-reservation gate.
+    private readonly SemaphoreSlim _general;
     private readonly int _maxLimit;
-    private int _limit;     // current effective limit (shrink-only)
-    private int _held;      // permits acquired by callers (not counting parked ballast)
-    private int _parked;    // permits permanently parked by TightenTo
+    private readonly int _reserved;
+    private int _limit;        // current effective TOTAL limit (shrink-only)
+    private int _generalLimit; // current non-priority sub-cap (= _limit − _reserved)
+    private int _held;         // permits acquired by callers (not counting parked ballast)
+    private int _parked;       // _sem permits permanently parked by TightenTo
+    private int _generalParked;// _general permits permanently parked by TightenTo
     private readonly object _lock = new();
     public string Key { get; }
 
-    public ServerLoginGate(string key, int limit, int maxLimit)
+    public ServerLoginGate(string key, int limit, int maxLimit, int reserved = 0)
     {
         Key = key;
         _maxLimit = Math.Max(1, maxLimit);
         _limit = Math.Clamp(limit, 1, _maxLimit);
+        // Never reserve so much that the main pool can't get a single login.
+        _reserved = Math.Clamp(reserved, 0, _limit - 1);
         // SemaphoreSlim capacity == maxLimit; start with _limit available, the rest
         // pre-parked so the effective ceiling is _limit until TightenTo lowers it.
         _sem = new SemaphoreSlim(_limit, _maxLimit);
         _parked = _maxLimit - _limit;
+        _generalLimit = _limit - _reserved;
+        _general = new SemaphoreSlim(_generalLimit, _maxLimit);
+        _generalParked = _maxLimit - _generalLimit;
     }
 
     public int Held => Volatile.Read(ref _held);
     public int Limit { get { lock (_lock) return _limit; } }
+    public int Reserved => _reserved;
 
-    public async Task<bool> TryAcquireAsync(CancellationToken ct, TimeSpan? timeout = null)
+    public async Task<bool> TryAcquireAsync(CancellationToken ct, TimeSpan? timeout = null, bool priority = false)
     {
-        bool ok;
+        var wait = timeout ?? Timeout.InfiniteTimeSpan;
         try
         {
-            ok = await _sem.WaitAsync(timeout ?? Timeout.InfiniteTimeSpan, ct);
+            if (priority)
+            {
+                // Priority callers draw straight from the total pool — the _general
+                // sub-cap on non-priority callers guarantees a slot is here for them.
+                if (!await _sem.WaitAsync(wait, ct)) return false;
+                Interlocked.Increment(ref _held);
+                return true;
+            }
+
+            // Non-priority: must hold BOTH the sub-cap permit and a total permit.
+            if (!await _general.WaitAsync(wait, ct)) return false;
+            bool gotSem;
+            try { gotSem = await _sem.WaitAsync(wait, ct); }
+            catch (OperationCanceledException) { SafeRelease(_general); throw; }
+            if (!gotSem) { SafeRelease(_general); return false; }
+            Interlocked.Increment(ref _held);
+            return true;
         }
         catch (OperationCanceledException)
         {
             return false;
         }
-        if (ok) Interlocked.Increment(ref _held);
-        return ok;
     }
 
-    public void Release()
+    public void Release(bool priority = false)
     {
         // Guard against over-release (a permit-accounting bug must never push the
         // semaphore above its real ceiling or free a login we don't hold).
@@ -81,7 +121,13 @@ public sealed class ServerLoginGate : IAccountLoginGate
             Log.Warning("ServerLoginGate[{Key}]: over-release ignored (held would go negative)", Key);
             return;
         }
-        try { _sem.Release(); }
+        SafeRelease(_sem);
+        if (!priority) SafeRelease(_general);
+    }
+
+    private static void SafeRelease(SemaphoreSlim sem)
+    {
+        try { sem.Release(); }
         catch (SemaphoreFullException) { /* already at ceiling — nothing to free */ }
     }
 
@@ -89,11 +135,12 @@ public sealed class ServerLoginGate : IAccountLoginGate
     /// Shrink-only. Lower the effective limit by permanently acquiring (parking)
     /// the difference — those permits never return, so live logins can't exceed
     /// the new limit. No-op if <paramref name="newLimit"/> ≥ current. Called when a
-    /// BNC's 530 reveals its real cap is lower than configured.
+    /// BNC's 530 reveals its real cap is lower than configured. The reserved FXP
+    /// permits are preserved: the non-priority sub-cap shrinks alongside the total.
     /// </summary>
     public void TightenTo(int newLimit)
     {
-        int toPark;
+        int toPark, generalToPark;
         lock (_lock)
         {
             newLimit = Math.Clamp(newLimit, 1, _maxLimit);
@@ -101,14 +148,21 @@ public sealed class ServerLoginGate : IAccountLoginGate
             toPark = _limit - newLimit;
             _limit = newLimit;
             _parked += toPark;
+
+            var newGeneralLimit = Math.Max(0, _limit - _reserved);
+            generalToPark = _generalLimit - newGeneralLimit;
+            _generalLimit = newGeneralLimit;
+            _generalParked += generalToPark;
         }
         // Park permits off-thread: WaitAsync may block if all are currently held,
         // but as connections close and release, the parking absorbs the permits and
-        // the effective ceiling settles at the new limit. Parked permits are never
-        // released.
+        // the effective ceiling settles at the new limit. Parked permits are never released.
         for (var i = 0; i < toPark; i++)
             _ = _sem.WaitAsync();
-        Log.Information("ServerLoginGate[{Key}]: tightened to {Limit} (parked {Parked} total)", Key, newLimit, _parked);
+        for (var i = 0; i < generalToPark; i++)
+            _ = _general.WaitAsync();
+        Log.Information("ServerLoginGate[{Key}]: tightened to {Limit} (parked {Parked} total, reserved {Reserved} for FXP)",
+            Key, newLimit, _parked, _reserved);
     }
 }
 
@@ -137,9 +191,15 @@ public static class ServerLoginGateRegistry
         return Gates.GetOrAdd(key, k =>
         {
             var usable = Math.Max(1, cap - Math.Max(0, headroom));
-            Log.Information("ServerLoginGate[{Key}]: created (cap={Cap}, headroom={Head}, usable={Usable})",
-                k, cap, headroom, usable);
-            return new ServerLoginGate(k, usable, usable);
+            // Reserve one login for the FXP/spread pool whenever there's more than a
+            // single usable permit. Without this the WinFsp main pool squats every
+            // permit (held for a connection's whole life, not freed on idle return)
+            // and the spread pool can NEVER initialize — racing dies silently. With
+            // only 1 usable login there's nothing to reserve (main pool needs it).
+            var reserved = usable >= 2 ? 1 : 0;
+            Log.Information("ServerLoginGate[{Key}]: created (cap={Cap}, headroom={Head}, usable={Usable}, fxpReserved={Reserved})",
+                k, cap, headroom, usable, reserved);
+            return new ServerLoginGate(k, usable, usable, reserved);
         });
     }
 

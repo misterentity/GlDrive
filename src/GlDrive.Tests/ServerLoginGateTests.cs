@@ -112,4 +112,73 @@ public class ServerLoginGateTests
         var floored = ServerLoginGateRegistry.GetOrCreate("usable.test2", 2121, "u", cap: 1, headroom: 5);
         Assert.Equal(1, floored.Limit); // never below 1
     }
+
+    [Fact]
+    public async Task Reserved_permit_is_protected_from_non_priority_callers()
+    {
+        // limit 2, reserve 1 for FXP. The main pool (non-priority) can take only 1;
+        // the 2nd is held in reserve and remains obtainable by a priority (spread) caller.
+        var gate = new ServerLoginGate("acct", limit: 2, maxLimit: 2, reserved: 1);
+        Assert.Equal(1, gate.Reserved);
+
+        Assert.True(await gate.TryAcquireAsync(default, Now));          // main #1 — ok
+        Assert.False(await gate.TryAcquireAsync(default, Now));         // main #2 — blocked by sub-cap
+        Assert.True(await gate.TryAcquireAsync(default, Now, priority: true)); // FXP — gets the reserved slot
+        Assert.False(await gate.TryAcquireAsync(default, Now, priority: true)); // total cap now hit
+        Assert.Equal(2, gate.Held);
+    }
+
+    [Fact]
+    public async Task Releasing_priority_and_general_permits_restores_both_pools()
+    {
+        var gate = new ServerLoginGate("acct", 2, 2, reserved: 1);
+        Assert.True(await gate.TryAcquireAsync(default, Now));                  // general
+        Assert.True(await gate.TryAcquireAsync(default, Now, priority: true));  // reserved
+        Assert.Equal(2, gate.Held);
+
+        gate.Release(priority: true);   // frees a TOTAL permit only
+        gate.Release();                 // frees a TOTAL + a general permit
+        Assert.Equal(0, gate.Held);
+
+        // Both kinds of slot are obtainable again.
+        Assert.True(await gate.TryAcquireAsync(default, Now));                 // general restored
+        Assert.True(await gate.TryAcquireAsync(default, Now, priority: true)); // reserved restored
+    }
+
+    [Fact]
+    public async Task Reserved_zero_behaves_like_plain_gate()
+    {
+        // The default (reserved: 0) must be byte-for-byte the old behavior.
+        var gate = new ServerLoginGate("acct", 2, 2);
+        Assert.Equal(0, gate.Reserved);
+        Assert.True(await gate.TryAcquireAsync(default, Now));
+        Assert.True(await gate.TryAcquireAsync(default, Now));
+        Assert.False(await gate.TryAcquireAsync(default, Now));
+    }
+
+    [Fact]
+    public void Registry_reserves_one_fxp_permit_when_usable_allows()
+    {
+        var two = ServerLoginGateRegistry.GetOrCreate("rsv.test", 2121, "u", cap: 3, headroom: 1);
+        Assert.Equal(2, two.Limit);
+        Assert.Equal(1, two.Reserved); // usable 2 → reserve 1 for FXP
+
+        var one = ServerLoginGateRegistry.GetOrCreate("rsv.test2", 2121, "u", cap: 1, headroom: 0);
+        Assert.Equal(1, one.Limit);
+        Assert.Equal(0, one.Reserved); // only 1 login — nothing to reserve
+    }
+
+    [Fact]
+    public async Task TightenTo_preserves_the_fxp_reservation()
+    {
+        // Start at 3 usable with 1 reserved (general sub-cap = 2). A 530 tightens
+        // total to 2 → general must drop to 1, reserved stays 1.
+        var gate = new ServerLoginGate("acct", limit: 3, maxLimit: 3, reserved: 1);
+        gate.TightenTo(2);
+        Assert.Equal(2, gate.Limit);
+
+        Assert.True(await gate.TryAcquireAsync(default, Now));          // main #1
+        Assert.False(await gate.TryAcquireAsync(default, Now));         // main #2 blocked (general now 1)
+        Assert.True(await gate.TryAcquireAsync(default, Now, priority: true)); // FXP still has its reserved slot
+    }
 }
