@@ -330,6 +330,12 @@ public class SpreadManager : IDisposable
             }
         };
         job.LivePoolResolver = id => { lock (_lock) { _spreadPools.TryGetValue(id, out var p); return p; } };
+        job.SourceSearch = async (release, exclude, ct) =>
+        {
+            var r = await SearchReleaseOnServers(release, exclude, ct);
+            return r == null ? null : (r.ServerId, r.RemotePath, r.Category);
+        };
+        job.ServerConfigResolver = id => _config.Servers.FirstOrDefault(s => s.Id == id);
 
         lock (_lock) _activeJobs.Add(job);
         JobStarted?.Invoke(job);
