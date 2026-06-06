@@ -37,6 +37,10 @@ public class RaceHistoryItem
     // PRD O3 — failure taxonomy. One of: "", "config", "upload-denied",
     // "bnc-pressure", "transport", "not-found", "nuked", "no-activity".
     public string FailureCategory { get; set; } = "";
+
+    // Per-destination completion summary captured at race end, e.g. "2 complete · 1 timeout".
+    // Empty for legacy/file-count completion or when no dest state was tracked.
+    public string DestinationState { get; set; } = "";
 }
 
 /// <summary>PRD R1/O3 aggregate. CleanRate = Clean / Finished (0 when none).</summary>

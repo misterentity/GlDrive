@@ -440,7 +440,8 @@ public class SpreadManager : IDisposable
                 Score = job.Score,
                 FailureCategory = job.State == SpreadJobState.Failed
                     ? SpreadJob.ClassifyFailure(job.LastError)
-                    : ""
+                    : "",
+                DestinationState = job.DestinationStateSummary(),
             });
         }
         catch (Exception ex)
