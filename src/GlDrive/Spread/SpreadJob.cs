@@ -26,7 +26,7 @@ public class SpreadJob : IDisposable
 {
     private readonly SpreadConfig _spreadConfig;
     private Dictionary<string, FtpConnectionPool> _pools;
-    private readonly Dictionary<string, ServerConfig> _serverConfigs;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, ServerConfig> _serverConfigs;
     private readonly SpeedTracker _speedTracker;
     private readonly SkiplistEvaluator _skiplist;
     private readonly SectionBlacklistStore? _blacklist;
@@ -248,7 +248,7 @@ public class SpreadJob : IDisposable
         Mode = mode;
         _spreadConfig = spreadConfig;
         _pools = pools;
-        _serverConfigs = serverConfigs;
+        _serverConfigs = new System.Collections.Concurrent.ConcurrentDictionary<string, ServerConfig>(serverConfigs);
         _speedTracker = speedTracker;
         _skiplist = skiplist;
         _blacklist = blacklist;
@@ -638,7 +638,7 @@ public class SpreadJob : IDisposable
                     viableDestCount = sitePaths.Keys
                         .Count(id => !sourceServers.Contains(id)
                                   && !_serverConfigs[id].SpreadSite.DownloadOnly
-                                  && !IsDestDropped(id));
+                                  && !IsDestDroppedNoLock(id));
                 }
                 if (viableDestCount == 0)
                 {
