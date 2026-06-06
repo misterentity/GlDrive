@@ -68,6 +68,12 @@ public class RaceHistoryStore
     private readonly Lock _lock = new();
     private const int MaxItems = 500;
 
+    // Set true when Load() threw (corrupt/locked file). While true, Save() refuses
+    // to overwrite the on-disk file so a single failed load can't silently truncate
+    // hundreds of persisted races to whatever accumulated this session. Reset to
+    // false on the next successful Load().
+    private bool _loadFailed;
+
     public IReadOnlyList<RaceHistoryItem> Items
     {
         get { lock (_lock) return _items.ToList(); }
@@ -97,17 +103,48 @@ public class RaceHistoryStore
     {
         try
         {
-            if (!File.Exists(FilePath)) return;
+            if (!File.Exists(FilePath)) { _loadFailed = false; return; }
             var json = File.ReadAllText(FilePath);
             var items = JsonSerializer.Deserialize<List<RaceHistoryItem>>(json);
             if (items != null)
             {
                 lock (_lock) _items.AddRange(items);
             }
+            _loadFailed = false;
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "Failed to load race history");
+            // The file exists but couldn't be read/parsed (corrupt, mid-write, locked
+            // by OneDrive/AV). Set the guard so the next Add()->Save() does NOT blow
+            // away the on-disk data, and snapshot the bad file for post-mortem.
+            _loadFailed = true;
+            Log.Warning(ex, "Failed to load race history — Save() suppressed to avoid truncating persisted races");
+            try
+            {
+                if (File.Exists(FilePath))
+                    File.Copy(FilePath, FilePath + ".corrupt", overwrite: true);
+            }
+            catch { /* best effort */ }
+        }
+    }
+
+    /// <summary>
+    /// Read persisted history straight from disk without touching the in-memory store.
+    /// Used by the dashboard as a fallback when the SpreadManager isn't ready yet at
+    /// open time, so the History tab is never blank while races sit on disk.
+    /// Returns an empty list on any failure (never throws).
+    /// </summary>
+    public static List<RaceHistoryItem> ReadFromDisk()
+    {
+        try
+        {
+            if (!File.Exists(FilePath)) return new();
+            var json = File.ReadAllText(FilePath);
+            return JsonSerializer.Deserialize<List<RaceHistoryItem>>(json) ?? new();
+        }
+        catch
+        {
+            return new();
         }
     }
 
@@ -124,6 +161,15 @@ public class RaceHistoryStore
 
     private void Save()
     {
+        // If the last Load() failed, the on-disk file holds races we never read into
+        // _items. Overwriting it now would discard them. Skip persistence until a
+        // future successful Load() clears the guard (or the process restarts and
+        // re-loads cleanly).
+        if (_loadFailed)
+        {
+            Log.Warning("Race history Save() skipped — prior load failed; not overwriting on-disk history");
+            return;
+        }
         try
         {
             List<RaceHistoryItem> snapshot;

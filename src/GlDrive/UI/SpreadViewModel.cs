@@ -606,8 +606,18 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
     private void LoadHistory()
     {
         var spread = _serverManager.Spread;
-        if (spread == null) return;
-        foreach (var item in spread.History.Items
+
+        // Source the rows from the live store when available; otherwise fall back to
+        // reading race-history.json straight off disk. The fallback matters when the
+        // dashboard opens before SpreadManager has finished initializing (e.g. right
+        // after a crash-restart while the pools are still coming up) — without it the
+        // History tab renders blank even though hundreds of races are persisted.
+        IReadOnlyList<RaceHistoryItem> source =
+            spread != null ? spread.History.Items : RaceHistoryStore.ReadFromDisk();
+        if (source.Count == 0 && spread != null)
+            source = RaceHistoryStore.ReadFromDisk();
+
+        foreach (var item in source
                      .Where(i => !string.IsNullOrWhiteSpace(i.ReleaseName))
                      .Take(100))
         {
@@ -627,7 +637,13 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
             });
         }
 
-        // PRD R1/O3 — compute + surface the session summary.
+        // PRD R1/O3 — compute + surface the session summary. Skip when the manager
+        // isn't ready yet; a later RefreshHistory tick fills it in once it's up.
+        if (spread == null)
+        {
+            SessionSummary = RaceHistory.Count > 0 ? $"{RaceHistory.Count} races (history)" : "No races yet";
+            return;
+        }
         var sum = spread.History.Summarize();
         if (sum.Finished == 0)
         {
