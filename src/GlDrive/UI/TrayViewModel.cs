@@ -268,6 +268,11 @@ public class TrayViewModel : INotifyPropertyChanged
                 ShowNotification("BNC Rate Limit", $"{serverName}: {message}"));
         };
 
+        // Auto-install updates, but never restart mid-race — defer while a spread job
+        // is active (the next check retries). Downloads resume on restart, so they
+        // don't need to block; races would lose in-flight transfers.
+        _updateChecker.CanInstallNow = () => (_serverManager.Spread?.ActiveJobs.Count ?? 0) == 0;
+
         _updateChecker.StartPeriodicCheck();
 
         UpdateStatusText();
