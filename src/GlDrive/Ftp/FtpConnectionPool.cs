@@ -248,23 +248,81 @@ public class FtpConnectionPool : IAsyncDisposable
         }
     }
 
+    /// <summary>Outcome of a liveness probe — distinguishes a read that RETURNED
+    /// (safe to neutralize now) from one we ABANDONED at the managed timeout while the
+    /// native GnuTLS recv keeps running (must NOT touch the session/socket yet).</summary>
+    private enum LiveProbe { Healthy, DeadCompleted, TimedOut }
+
+    // Managed deadline for the NOOP liveness probe. Kept short so a dead idle/borrow
+    // connection is detected fast.
+    private static readonly TimeSpan ProbeDeadline = TimeSpan.FromSeconds(3);
+
+    // How long to wait before tearing down a connection whose probe TIMED OUT. The
+    // FluentFTP.GnuTLS native recv runs until GnuConfig.CommTimeout (15000ms, the
+    // package minimum) regardless of our managed CancellationToken — so the socket
+    // close + session mutation in NeutralizeGnuTls MUST be deferred past that, or it
+    // races the in-flight native read and SEGVs the process (5 watchdog restarts
+    // observed 2026-06-06, every one ~3s after a quarantine). 15s CommTimeout + grace.
+    private const int AbandonedReclaimSeconds = 20;
+
     /// <summary>
-    /// NOOP-probe a connection with a short timeout. Returns false on any error
-    /// — caller should quarantine and replace. Never throws.
+    /// NOOP-probe a connection with a short managed deadline. Reports whether the
+    /// probe came back healthy, came back with a definite failure (read returned —
+    /// safe to tear down immediately), or hit our managed deadline (read ABANDONED —
+    /// the native recv is still in flight; the caller must defer any teardown).
+    /// Never throws.
     /// </summary>
-    private static async Task<bool> IsLive(AsyncFtpClient client, CancellationToken ct)
+    private static async Task<LiveProbe> ProbeLive(AsyncFtpClient client, CancellationToken ct)
     {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(ProbeDeadline);
         try
         {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(3));
             var reply = await client.Execute("NOOP", cts.Token);
-            return reply.Success;
+            return reply.Success ? LiveProbe.Healthy : LiveProbe.DeadCompleted;
+        }
+        catch (OperationCanceledException)
+        {
+            // We stopped awaiting because a token fired — the underlying native
+            // GnuTLS recv was NOT cancelled and keeps running until CommTimeout.
+            return LiveProbe.TimedOut;
         }
         catch
         {
-            return false;
+            // The read completed with an error (connection reset, protocol error,
+            // etc.). No native read is in flight — safe to neutralize immediately.
+            return LiveProbe.DeadCompleted;
         }
+    }
+
+    /// <summary>Result of validating a pooled connection for hand-out.</summary>
+    private enum BorrowCheck { Usable, Dead }
+
+    /// <summary>
+    /// Validate a pooled connection before handing it to a borrower. When the
+    /// connection is dead this routes it to the correct teardown path — immediate
+    /// neutralize for a completed-failure probe, deferred reclaim for an abandoned
+    /// (timed-out) probe — and returns <see cref="BorrowCheck.Dead"/>. Callers should
+    /// still <see cref="IncrementDisconnect"/> for stats on the Dead result.
+    /// </summary>
+    private async Task<BorrowCheck> CheckPooledForBorrow(AsyncFtpClient client, CancellationToken ct)
+    {
+        if (client.IsConnected && IsGnuTlsHealthy(client))
+        {
+            if (!_validateOnBorrow) return BorrowCheck.Usable;
+            var probe = await ProbeLive(client, ct);
+            if (probe == LiveProbe.Healthy) return BorrowCheck.Usable;
+            if (probe == LiveProbe.TimedOut)
+            {
+                QuarantineAbandoned(client); // native read may be live — defer teardown
+                return BorrowCheck.Dead;
+            }
+            // DeadCompleted — fall through to immediate neutralize.
+        }
+        // Not connected / unhealthy session / completed-failure probe: no native read
+        // is in flight, so neutralizing now is safe.
+        QuarantineDecCreated(client);
+        return BorrowCheck.Dead;
     }
 
     /// <summary>
@@ -297,10 +355,16 @@ public class FtpConnectionPool : IAsyncDisposable
             if (!_pool.Reader.TryRead(out var client)) return; // no idle connections left this tick
             try
             {
-                if (await IsLive(client, CancellationToken.None))
+                var probe = await ProbeLive(client, CancellationToken.None);
+                if (probe == LiveProbe.Healthy)
                 {
                     if (!_pool.Writer.TryWrite(client))
-                        QuarantineDecCreated(client);
+                        QuarantineDecCreated(client); // healthy but no room — read done, safe
+                }
+                else if (probe == LiveProbe.TimedOut)
+                {
+                    // Native recv still in flight — defer teardown (see QuarantineAbandoned).
+                    QuarantineAbandoned(client);
                 }
                 else
                 {
@@ -413,18 +477,16 @@ public class FtpConnectionPool : IAsyncDisposable
         // Try to get from pool first
         if (_pool.Reader.TryRead(out var client))
         {
-            if (client.IsConnected && IsGnuTlsHealthy(client)
-                && (!_validateOnBorrow || await IsLive(client, ct)))
+            // Stale, corrupt, or NOOP-dead connections are routed to quarantine inside
+            // CheckPooledForBorrow (immediate neutralize when safe, deferred reclaim
+            // when the probe was abandoned) — exactly the kind we most fear running
+            // gnutls_deinit() on.
+            if (await CheckPooledForBorrow(client, ct) == BorrowCheck.Usable)
             {
                 Interlocked.Increment(ref _active);
                 return new PooledConnection(client, this);
             }
-
-            // Stale, corrupt, or NOOP-dead connection — quarantine instead of
-            // dispose. A connection that failed IsGnuTlsHealthy or the NOOP
-            // probe is exactly the kind we most fear running gnutls_deinit() on.
             IncrementDisconnect();
-            QuarantineDecCreated(client);
         }
 
         // PRD H2: if the server is in a BNC cooldown, don't attempt a new
@@ -441,14 +503,12 @@ public class FtpConnectionPool : IAsyncDisposable
                     "Server in BNC cooldown — not attempting new connection");
             }
             client = await _pool.Reader.ReadAsync(ct);
-            if (client.IsConnected && IsGnuTlsHealthy(client)
-                && (!_validateOnBorrow || await IsLive(client, ct)))
+            if (await CheckPooledForBorrow(client, ct) == BorrowCheck.Usable)
             {
                 Interlocked.Increment(ref _active);
                 return new PooledConnection(client, this);
             }
             IncrementDisconnect();
-            QuarantineDecCreated(client);
             throw new InvalidOperationException(
                 "Server in BNC cooldown — pooled connection was dead");
         }
@@ -598,16 +658,15 @@ public class FtpConnectionPool : IAsyncDisposable
 
         // At capacity — wait for one to be returned
         client = await _pool.Reader.ReadAsync(ct);
-        if (client.IsConnected && IsGnuTlsHealthy(client)
-            && (!_validateOnBorrow || await IsLive(client, ct)))
+        if (await CheckPooledForBorrow(client, ct) == BorrowCheck.Usable)
         {
             Interlocked.Increment(ref _active);
             return new PooledConnection(client, this);
         }
 
-        // Stale or NOOP-dead — quarantine (decrements _created internally).
+        // Stale or NOOP-dead — already quarantined inside CheckPooledForBorrow
+        // (decrements _created). Count the disconnect and replace.
         IncrementDisconnect();
-        QuarantineDecCreated(client);
         if (Interlocked.Increment(ref _created) <= _maxSize)
         {
             try
@@ -691,6 +750,43 @@ public class FtpConnectionPool : IAsyncDisposable
     /// oldest entry via best-effort force-dispose in a fire-and-forget task.
     /// Caller is responsible for decrementing <see cref="_active"/> first.
     /// </summary>
+    /// <summary>
+    /// Quarantine a connection whose liveness probe TIMED OUT. Unlike
+    /// <see cref="QuarantineDecCreated"/>, this does NOT neutralize (close socket /
+    /// mutate the GnuTLS session) now: the managed probe gave up at
+    /// <see cref="ProbeDeadline"/> but the native GnuTLS recv keeps running until
+    /// GnuConfig.CommTimeout (15s, package minimum). Touching the session while that
+    /// read is in flight races it and SEGVs the process — the crash observed
+    /// 2026-06-06 (5 watchdog restarts, each ~3s after a quarantine line). Instead we
+    /// drop the pool's accounting now and hold the only managed reference inside the
+    /// deferred task (so the GC finalizer can't run gnutls_deinit during the window),
+    /// then neutralize + dispose + release the login permit once the native read has
+    /// provably returned. The permit is released LATE on purpose: the BNC login stays
+    /// held until the socket actually closes, so accounting matches reality.
+    /// </summary>
+    private void QuarantineAbandoned(AsyncFtpClient client)
+    {
+        Interlocked.Decrement(ref _created);
+        Log.Information(
+            "Pool: liveness probe timed out — deferring teardown {Delay}s for in-flight native read (created={Created})",
+            AbandonedReclaimSeconds, _created);
+
+        _ = Task.Run(async () =>
+        {
+            // Hold `client` reachable across the delay so GC never finalizes the
+            // not-yet-drained GnuTLS session.
+            try { await Task.Delay(TimeSpan.FromSeconds(AbandonedReclaimSeconds)).ConfigureAwait(false); }
+            catch { }
+            // Native recv has returned by now (> CommTimeout) — session is quiescent.
+            try { NeutralizeGnuTls(client); }
+            catch (Exception ex) { Log.Debug(ex, "Pool: deferred neutralize (abandoned) threw"); }
+            try { client.Dispose(); }
+            catch (Exception ex) { Log.Debug(ex, "Pool: deferred dispose (abandoned) threw"); }
+            try { ReleasePermit(); }
+            catch (Exception ex) { Log.Debug(ex, "Pool: deferred permit release (abandoned) threw"); }
+        });
+    }
+
     private void QuarantineDecCreated(AsyncFtpClient client)
     {
         try { NeutralizeGnuTls(client); }
