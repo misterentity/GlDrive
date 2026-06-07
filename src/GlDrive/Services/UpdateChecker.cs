@@ -34,7 +34,10 @@ public record GitHubRelease(
 public class UpdateChecker : IDisposable
 {
     private const string RepoApiUrl = "https://api.github.com/repos/misterentity/GlDrive/releases/latest";
-    private static readonly TimeSpan CheckInterval = TimeSpan.FromHours(24);
+    // Lowered 24h -> 3h so an auto-install that's deferred (a race is running) retries
+    // within hours instead of a full day. The check itself is a single cheap GitHub
+    // API call.
+    private static readonly TimeSpan CheckInterval = TimeSpan.FromHours(3);
 
     /// <summary>
     /// Host allowlist for update-artifact downloads. Even though GitHub's JSON response
@@ -67,6 +70,25 @@ public class UpdateChecker : IDisposable
         Assembly.GetExecutingAssembly().GetName().Version ?? new Version(0, 0, 0);
 
     public event Action<GitHubRelease>? UpdateAvailable;
+
+    /// <summary>
+    /// When true (default), the periodic check downloads + installs a newer release
+    /// automatically instead of only notifying. Without this, notify-only updates sat
+    /// unapplied for days because they required a manual tray click (observed: stuck on
+    /// 3.8.0 while 3.8.1/3.8.2 shipped).
+    /// </summary>
+    public bool AutoInstall { get; set; } = true;
+
+    /// <summary>
+    /// Gate for auto-install timing. Returns false to defer (e.g. a spread race is in
+    /// flight) — the update retries on the next <see cref="CheckInterval"/> tick. Null
+    /// means "always OK to install now".
+    /// </summary>
+    public Func<bool>? CanInstallNow { get; set; }
+
+    // Tag we've already attempted an auto-install for this process lifetime, so a
+    // deferred-then-eligible release isn't downloaded twice concurrently.
+    private string? _autoInstallAttemptedTag;
 
     /// <summary>
     /// Fired when the app should shut down immediately so the updater can replace files.
@@ -662,10 +684,42 @@ public class UpdateChecker : IDisposable
             while (!token.IsCancellationRequested)
             {
                 var release = await CheckForUpdateAsync();
-                if (release != null && release.TagName != _lastNotifiedTag)
+                if (release != null)
                 {
-                    _lastNotifiedTag = release.TagName;
-                    UpdateAvailable?.Invoke(release);
+                    if (release.TagName != _lastNotifiedTag)
+                    {
+                        _lastNotifiedTag = release.TagName;
+                        UpdateAvailable?.Invoke(release);
+                    }
+
+                    // Auto-install: download + apply without a manual tray click. Gated
+                    // by CanInstallNow so we don't restart mid-race; if deferred, the
+                    // next tick retries. On success DownloadAndInstallAsync launches the
+                    // updater and fires RestartRequested, so this process exits and the
+                    // loop ends.
+                    if (AutoInstall && release.TagName != _autoInstallAttemptedTag)
+                    {
+                        bool ok = true;
+                        try { ok = CanInstallNow?.Invoke() ?? true; }
+                        catch (Exception ex) { Log.Debug(ex, "CanInstallNow predicate threw — assuming OK"); }
+
+                        if (ok)
+                        {
+                            _autoInstallAttemptedTag = release.TagName;
+                            Log.Information("Auto-installing update {Tag}", release.TagName);
+                            try { await DownloadAndInstallAsync(release); }
+                            catch (Exception ex)
+                            {
+                                // Allow a retry on the next tick if it failed.
+                                _autoInstallAttemptedTag = null;
+                                Log.Warning(ex, "Auto-install of {Tag} failed — will retry", release.TagName);
+                            }
+                        }
+                        else
+                        {
+                            Log.Information("Update {Tag} ready but deferred (busy) — retrying next check", release.TagName);
+                        }
+                    }
                 }
 
                 await Task.Delay(CheckInterval, token);
