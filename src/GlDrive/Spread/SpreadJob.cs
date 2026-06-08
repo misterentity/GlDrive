@@ -558,10 +558,38 @@ public class SpreadJob : IDisposable
 
             if (viableDestinations.Count == 0)
             {
-                var affilBlocked = sitePaths.Keys
-                    .Where(id => !sourceServers.Contains(id) && _affilCache.GetValueOrDefault(id))
-                    .Select(id => _serverConfigs[id].Name);
-                SetFailed($"No viable destinations — all targets are affil-blocked ({string.Join(", ", affilBlocked)}) for [{Section}] {ReleaseName}");
+                // Build a truthful diagnosis. viableDestinations is empty for one of
+                // three reasons that the old "all targets are affil-blocked ()"
+                // message conflated — most commonly the release already exists on
+                // every candidate site (all sources), which printed empty parens
+                // because the affil list only contains NON-source servers.
+                var nonSource = sitePaths.Keys
+                    .Where(id => !sourceServers.Contains(id))
+                    .ToList();
+                string reason;
+                if (nonSource.Count == 0)
+                {
+                    reason = $"release already present on all {sourceServers.Count} candidate site(s) — " +
+                             "no new destination to spread to";
+                }
+                else
+                {
+                    var downOnly = nonSource
+                        .Where(id => _serverConfigs[id].SpreadSite.DownloadOnly)
+                        .Select(id => _serverConfigs[id].Name)
+                        .ToList();
+                    var affilBlocked = nonSource
+                        .Where(id => _affilCache.GetValueOrDefault(id))
+                        .Select(id => _serverConfigs[id].Name)
+                        .ToList();
+                    var parts = new List<string>();
+                    if (downOnly.Count > 0) parts.Add($"download-only ({string.Join(", ", downOnly)})");
+                    if (affilBlocked.Count > 0) parts.Add($"affil-blocked ({string.Join(", ", affilBlocked)})");
+                    reason = parts.Count > 0
+                        ? "all destinations excluded — " + string.Join("; ", parts)
+                        : "all destinations excluded (no reason recorded)";
+                }
+                SetFailed($"No viable destinations for [{Section}] {ReleaseName} — {reason}");
                 return;
             }
 
@@ -2780,6 +2808,7 @@ public class SpreadJob : IDisposable
         if (m.Contains("No activity", StringComparison.OrdinalIgnoreCase)) return "no-activity";
         if (m.Contains("Need 2+ servers", StringComparison.OrdinalIgnoreCase)
             || m.Contains("no eligible destination", StringComparison.OrdinalIgnoreCase)
+            || m.Contains("No viable destinations", StringComparison.OrdinalIgnoreCase)
             || m.Contains("affil-blocked", StringComparison.OrdinalIgnoreCase))
             return "config";
         return "other";
