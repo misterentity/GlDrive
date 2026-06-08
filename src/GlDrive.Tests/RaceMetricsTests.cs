@@ -19,6 +19,8 @@ public class ClassifyFailureTests
     [InlineData("No activity for 60 seconds, no viable transfers", "no-activity")]
     [InlineData("Need 2+ servers — found release on 1, no eligible destination for [mp3]", "config")]
     [InlineData("No viable destinations — all targets are affil-blocked (zephyr)", "config")]
+    [InlineData("No viable destinations for [bookware] Some.Release — release already present on all 2 candidate site(s) — no new destination to spread to", "config")]
+    [InlineData("No viable destinations for [apps] Some.Release — all destinations excluded — download-only (SYN)", "config")]
     public void Classifies_known_failures(string msg, string expected)
         => Assert.Equal(expected, SpreadJob.ClassifyFailure(msg));
 

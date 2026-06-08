@@ -85,14 +85,58 @@ public class BlacklistStoreTests
     }
 
     [Fact]
-    public void Persistent_and_transient_reasons_count_separately()
+    public void Mkd_path_and_disk_full_denials_excluded_from_distinct_count()
     {
+        // v3.8.4: MKD path rejections ("Not allowed to make directories here.")
+        // mean the section path is wrong for THIS server — not that it's leech-only
+        // — so they must NOT count toward the auto-download-only blanket (which
+        // deadlocked SYN out of every race on 2026-06-08). Disk-full stays
+        // transient-excluded. Only the persistent, non-MKD-path "Permission denied"
+        // remains in the count.
         var s = new SectionBlacklistStore();
         s.RecordPermanentFailure("srv1", "Server One", "mp3",   "/mp3",   "Not allowed to make directories here.");
         s.RecordPermanentFailure("srv1", "Server One", "flac",  "/flac",  "Permission denied");
         s.RecordPermanentFailure("srv1", "Server One", "tv-hd", "/tv-hd", "out of disk space, contact the siteop!");
-        Assert.Equal(2, s.DistinctActiveSectionCount("srv1"));   // tv-hd excluded
+        Assert.Equal(1, s.DistinctActiveSectionCount("srv1"));   // mp3 (mkd-path) + tv-hd (disk) excluded
+        // The per-section blacklist still applies to the MKD-denied section.
+        Assert.True(s.IsBlacklisted("srv1", "mp3"));
     }
+
+    [Fact]
+    public void Three_mkd_path_denials_do_not_trigger_auto_download_only()
+    {
+        // Regression for the 2026-06-08 SYN deadlock: flac/mp3/nsw all returned
+        // 550 "Not allowed to make directories here." and the >=3 distinct-section
+        // count wrongly flagged the whole site download-only, blocking EVERY race.
+        var s = new SectionBlacklistStore();
+        s.RecordPermanentFailure("770fa16a", "SYN", "flac", "/flac/x", "550 Error: Not allowed to make directories here.");
+        s.RecordPermanentFailure("770fa16a", "SYN", "mp3",  "/mp3/y",  "550 Error: Not allowed to make directories here.");
+        s.RecordPermanentFailure("770fa16a", "SYN", "nsw",  "/nsw/z",  "550 Error: Not allowed to make directories here.");
+        Assert.Equal(0, s.DistinctActiveSectionCount("770fa16a"));   // NOT auto-download-only
+        Assert.True(s.IsBlacklisted("770fa16a", "flac"));            // each section still individually skipped
+    }
+
+    [Fact]
+    public void Three_upload_rights_denials_still_trigger_auto_download_only()
+    {
+        // R2 preserved for the genuine signal: a leech site that reaches STOR and is
+        // rejected with "no upload rights" SHOULD still be auto-flagged download-only.
+        var s = new SectionBlacklistStore();
+        s.RecordPermanentFailure("srv9", "Leech", "mp3",  "/mp3",  "STOR failed: 553 Error: you have no upload rights for this directory!");
+        s.RecordPermanentFailure("srv9", "Leech", "flac", "/flac", "STOR failed: 553 Error: you have no upload rights for this directory!");
+        s.RecordPermanentFailure("srv9", "Leech", "x265", "/x265", "STOR failed: 553 Error: you have no upload rights for this directory!");
+        Assert.True(s.DistinctActiveSectionCount("srv9") >= 3);
+    }
+
+    [Theory]
+    [InlineData("550 Error: Not allowed to make directories here.", true)]
+    [InlineData("You cannot create that directory", true)]
+    [InlineData("MKD failed: 550 MKD Denied by dirscript.", true)]
+    [InlineData("STOR failed: 553 Error: you have no upload rights for this directory!", false)]
+    [InlineData("Permission denied", false)]
+    [InlineData("", false)]
+    public void IsPermanentMkdPathDenial_classifies_correctly(string reason, bool expected)
+        => Assert.Equal(expected, MkdFailureClassifier.IsPermanentMkdPathDenial(reason));
 
     [Theory]
     [InlineData("out of disk space, contact the siteop!", true)]

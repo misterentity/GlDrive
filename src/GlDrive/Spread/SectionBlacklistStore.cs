@@ -166,10 +166,16 @@ public sealed class SectionBlacklistStore
             // 2026-05-27: disk-full failures on May 25 blacklisted zephyr for
             // 3 sections, triggering auto-DL-only, so no race reached zephyr
             // for two days even though the disk had long since been cleared.
+            // Also exclude MKD path denials ("Not allowed to make directories
+            // here." etc.): those mean a wrong/forbidden section PATH on this
+            // server, not a site-wide inability to upload. Counting them blanket-
+            // flagged a capable site as download-only (2026-06-08 SYN deadlock).
+            // The per-section IsBlacklisted check still skips those sections.
             return _entries.Count(kv =>
                 kv.Key.serverId == serverId &&
                 now - kv.Value.LastFailedAt <= TtlFor(kv.Value) &&
-                !IsTransientReason(kv.Value.Reason));
+                !IsTransientReason(kv.Value.Reason) &&
+                !MkdFailureClassifier.IsPermanentMkdPathDenial(kv.Value.Reason));
         }
     }
 
@@ -314,6 +320,31 @@ public static class MkdFailureClassifier
     ///   553 file: path-filter denied permission. (Filename deny)
     ///   553 Permission denied
     /// </summary>
+    /// <summary>
+    /// MKD path/name rejections — the destination directory can't be created at
+    /// this specific path (wrong section root, dirscript/path-filter on the dir
+    /// NAME, or no mkd rights in this one tree). Unlike a STOR upload-rights
+    /// denial, this is NOT evidence the account is leech-only; it most often means
+    /// the section path is misconfigured for this server. Excluded from
+    /// DistinctActiveSectionCount so a handful of wrong-path MKD failures can't
+    /// blanket-flag an otherwise-capable uploader as download-only. (Observed
+    /// 2026-06-08: SYN was deadlocked out of EVERY race by 3 such MKD denials on
+    /// flac/mp3/nsw — the per-section blacklist already skips those sections, but
+    /// the >=3 distinct-section count wrongly promoted them to a site-wide leech
+    /// verdict.) Scoped to the unambiguous MKD-only phrases: the shared
+    /// "path-filter"/"Permission denied" tokens are deliberately NOT matched here
+    /// because they also surface on genuine STOR upload denials that SHOULD count.
+    /// </summary>
+    public static bool IsPermanentMkdPathDenial(string? reason)
+    {
+        if (string.IsNullOrEmpty(reason)) return false;
+        var r = reason;
+        if (r.Contains("Not allowed to make directories", StringComparison.OrdinalIgnoreCase)) return true;
+        if (r.Contains("You cannot create", StringComparison.OrdinalIgnoreCase)) return true;
+        if (r.Contains("Denied by dirscript", StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
     public static bool IsPermanentUploadDenial(string? errorMessage)
     {
         if (string.IsNullOrEmpty(errorMessage)) return false;
