@@ -68,6 +68,12 @@ public class SpreadJob : IDisposable
     // _ownershipLock.
     private readonly HashSet<string> _destDirConfirmed = new(StringComparer.Ordinal);
 
+    // GlDrive's OWN successful (non-dupe) deliveries per dest. Compared against
+    // the scan-derived owned count in cleanup: owned > delivered means files we
+    // did NOT send are present (other racers / dupe-skips), i.e. the dir is part
+    // of a shared race and must not be wiped. Guarded by _ownershipLock.
+    private readonly Dictionary<string, int> _destDelivered = new();
+
     // Per-destination zipscript signals captured on each scan (see CompletionDetector).
     // _destSawMarker[id] = a completion marker was visible in id's release dir this scan.
     // _destHasMissingStub[id] = a -MISSING- stub was visible this scan.
@@ -1085,12 +1091,14 @@ public class SpreadJob : IDisposable
         HashSet<string> created;
         Dictionary<string, int> ownedCounts;
         Dictionary<string, DestState> destStates;
+        Dictionary<string, int> deliveredCounts;
         int total;
         lock (_ownershipLock)
         {
             created = [.._dirsCreated];
             ownedCounts = new Dictionary<string, int>(_serverFileCount);
             destStates = new Dictionary<string, DestState>(_destStates);
+            deliveredCounts = new Dictionary<string, int>(_destDelivered);
             total = _expectedFileCount > 0 ? _expectedFileCount : _fileInfos.Count;
         }
 
@@ -1109,6 +1117,18 @@ public class SpreadJob : IDisposable
             {
                 Log.Information("Spread cleanup: skipping {Server} — dest is zipscript-complete ({Owned}/{Total} per our count)",
                     _serverConfigs.TryGetValue(serverId, out var c) ? c.Name : serverId, owned, total);
+                continue;
+            }
+
+            // Files we did NOT deliver are present (other racers uploaded, or our
+            // STORs were dupe-skipped against theirs) — the dir belongs to a live
+            // shared race. Wiping it would destroy other traders' work; leave it
+            // for their zipscript to finish.
+            var deliveredHere = deliveredCounts.GetValueOrDefault(serverId);
+            if (owned > deliveredHere)
+            {
+                Log.Information("Spread cleanup: skipping {Server} — {Owned} files present but only {Delivered} delivered by us (shared race, foreign uploads)",
+                    _serverConfigs.TryGetValue(serverId, out var c2) ? c2.Name : serverId, owned, deliveredHere);
                 continue;
             }
 
@@ -1968,6 +1988,11 @@ public class SpreadJob : IDisposable
                         _serverFileCount.TryGetValue(dstId, out var cnt);
                         _serverFileCount[dstId] = cnt + 1;
                     }
+                    if (!transfer.WasDupe)
+                    {
+                        _destDelivered.TryGetValue(dstId, out var dd);
+                        _destDelivered[dstId] = dd + 1;
+                    }
                     _serversWithSuccessfulTransfer.Add(dstId);
                     // A single success proves the dest is working — clear any
                     // accumulated failure count + backoff window so future
@@ -2088,19 +2113,19 @@ public class SpreadJob : IDisposable
         }
         catch (OperationCanceledException)
         {
-            // Borrow timeout — pool exhausted, likely ghost connections on server
+            // Borrow timeout — pool exhausted, likely ghost connections on server.
+            // Deliberately does NOT bump _failureCounts: the transfer never
+            // started, so this is pool congestion, not a problem with the FILE.
+            // Counting these burned the pair (4) / file (7) retry budgets during
+            // login-cap storms and permanently blocked the last few files of a
+            // race (My.Family 2026-06-10: 25 min of borrow timeouts on 5 files
+            // → 19/22 partial → wipe). Mirrors the gate-timeout handling above:
+            // the file simply gets re-scored on the next pass.
             Log.Warning("FXP borrow timeout: {File} ({Src} -> {Dst}) — pool exhausted, " +
                 "server may have ghost connections (try !username login to kill them)",
                 file.Name, _serverConfigs[srcId].Name, _serverConfigs[dstId].Name);
             if (srcConn != null) srcConn.Poisoned = true;
             if (dstConn != null) dstConn.Poisoned = true;
-
-            lock (_failureLock)
-            {
-                var failKey = (file.Name, srcId, dstId);
-                _failureCounts.TryGetValue(failKey, out var count);
-                _failureCounts[failKey] = count + 1;
-            }
         }
         catch (Exception ex)
         {
