@@ -37,6 +37,9 @@ public class SpreadManager : IDisposable
     private static readonly TimeSpan AffilBlockedTtl = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan ReleaseNotFoundTtl = TimeSpan.FromMinutes(60);
     private static readonly TimeSpan NoActivityTtl = TimeSpan.FromMinutes(30);
+    // Short on purpose: the source was never even LISTed (pool starvation), so the
+    // release may be perfectly raceable minutes later once pressure clears.
+    private static readonly TimeSpan SourceScanFailedTtl = TimeSpan.FromMinutes(5);
 
     // In-memory TTL map of (section, release) -> (expiry, reason). Used to suppress
     // re-queueing of races that just failed with a known dead-end class (originally
@@ -1101,16 +1104,22 @@ public class SpreadManager : IDisposable
     private static string SanitizeFtpPath(string path) =>
         path.Replace("\r", "").Replace("\n", "").Replace("\0", "");
 
+    // Same release name = same content, regardless of which section label the
+    // announce carried. The old section-qualified comparison let the SAME release
+    // race twice concurrently when a dest site's own bot re-announced GlDrive's
+    // MKD under a different section name ("-TV-" vs "tv-hd" self-echo loop,
+    // 2026-06-08): the second race re-raced into the dirs the first had just
+    // cleaned up, and the remnant got auto-nuked. Sections intentionally ignored.
     private static bool IsSameRace(string sectionA, string releaseA, string sectionB, string releaseB) =>
-        string.Equals(releaseA, releaseB, StringComparison.OrdinalIgnoreCase) &&
-        string.Equals(sectionA, sectionB, StringComparison.OrdinalIgnoreCase);
+        string.Equals(releaseA, releaseB, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Normalize (section, release) to a case-insensitive key for the dead-race
-    /// TTL map. Mirrors IsSameRace semantics. (Was AffilBlockKey pre-v1.66.)
+    /// Normalize a release to a case-insensitive key for the dead-race TTL map.
+    /// Mirrors IsSameRace semantics (release-only — see comment there); the
+    /// section slot is kept empty for tuple-shape compatibility.
     /// </summary>
     private static (string section, string release) DeadRaceKey(string section, string release) =>
-        (section.ToLowerInvariant(), release.ToLowerInvariant());
+        ("", release.ToLowerInvariant());
 
     /// <summary>
     /// True iff this (section, release) was recently failed with a class we
@@ -1155,6 +1164,9 @@ public class SpreadManager : IDisposable
         if (errorMessage.Contains("No activity for", StringComparison.OrdinalIgnoreCase) &&
             errorMessage.Contains("no viable transfers", StringComparison.OrdinalIgnoreCase))
             return (NoActivityTtl, "no-activity");
+
+        if (errorMessage.Contains("Source scan never succeeded", StringComparison.OrdinalIgnoreCase))
+            return (SourceScanFailedTtl, "source-scan-failed");
 
         return null;
     }

@@ -23,6 +23,22 @@ public class CompletionDetectorTests
     public void IsCompletionMarker_empty_marker_list_never_matches()
         => Assert.False(CompletionDetector.IsCompletionMarker("[ COMPLETE ]", System.Array.Empty<string>()));
 
+    // The glftpd race progress bar contains "NN% Complete" while the race is
+    // STILL RUNNING — it must never satisfy a completion marker (the bare
+    // "COMPLETE" config entry substring-matched it and ended races at 2/14
+    // files on 2026-06-08). A 100% bar is a real completion signal.
+    [Theory]
+    [InlineData("[#####:::::] - 27% Complete - [SITE]", false)]
+    [InlineData("[::::::::::] - 0% Complete - [SITE]", false)]
+    [InlineData("[#########:] - 99% Complete - [SITE]", false)]
+    [InlineData("[##########] - 100% Complete - [SITE]", true)]
+    [InlineData("27% complete", false)]                  // lowercase, no brackets
+    [InlineData("[xxx] - 50%-Complete - [xxx]", false)]  // dash separator variant
+    [InlineData("[ COMPLETE ] - 1080p", true)]           // real tag unaffected
+    [InlineData("-=COMPLETE=- (TEAM)", true)]
+    public void IsCompletionMarker_rejects_in_progress_race_bar(string name, bool expected)
+        => Assert.Equal(expected, CompletionDetector.IsCompletionMarker(name, Markers));
+
     [Theory]
     [InlineData("-MISSING-file.r01", 0, true)]
     [InlineData("-missing-file.r01", 0, true)]

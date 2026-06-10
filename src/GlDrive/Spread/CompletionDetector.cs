@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace GlDrive.Spread;
 
 /// <summary>Per-destination completion lifecycle state.</summary>
@@ -10,11 +12,25 @@ public enum DestState { Transferring, AwaitingCompletion, Complete, TimedOut }
 /// </summary>
 public static class CompletionDetector
 {
+    // glftpd's live race progress bar ("[#####:::::] - 27% Complete - [site]")
+    // contains the word COMPLETE but means the exact OPPOSITE — the release is
+    // explicitly NOT done yet. Any sub-100 percentage attached to "complete"
+    // disqualifies the entire name as a completion marker. A "100% Complete"
+    // bar IS a legitimate completion indicator on bar-only sites.
+    private static readonly Regex InProgressBar = new(
+        @"(\d{1,3})\s*%[\s\-]*complete", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     /// <summary>True if a listing entry name contains any configured completion marker
-    /// (case-insensitive). Empty marker list never matches.</summary>
+    /// (case-insensitive). Empty marker list never matches. Names carrying an
+    /// in-progress percentage ("27% Complete") never match — that is the race
+    /// progress bar, the inverse signal (caused races to end at 2/14 files when
+    /// the bare "COMPLETE" marker substring-matched the bar, 2026-06-08).</summary>
     public static bool IsCompletionMarker(string name, IReadOnlyList<string> markers)
     {
         if (string.IsNullOrEmpty(name) || markers == null) return false;
+        var bar = InProgressBar.Match(name);
+        if (bar.Success && int.TryParse(bar.Groups[1].Value, out var pct) && pct < 100)
+            return false;
         foreach (var m in markers)
         {
             if (string.IsNullOrEmpty(m)) continue;
