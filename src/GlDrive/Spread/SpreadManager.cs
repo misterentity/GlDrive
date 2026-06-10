@@ -1015,7 +1015,20 @@ public class SpreadManager : IDisposable
     }
 
     private ServerGate GetOrCreateGate(string serverId) =>
-        _serverGates.GetOrAdd(serverId, id => new ServerGate(id, DefaultPerServerConcurrentTransfers));
+        _serverGates.GetOrAdd(serverId, id =>
+        {
+            // Cap concurrent transfer PAIRS strictly below the account's login
+            // budget so one permit always remains for scans/cleanup. With
+            // usable=3 logins and a gate of 3, active transfers consumed every
+            // permit: mid-race source LISTs starved for 25+ minutes and new
+            // transfer borrows piled into 30s timeouts (My.Family 2026-06-10,
+            // ended 19/22 with 5 undelivered). usable-1 keeps the engine's
+            // eyes open; 530 auto-tune can still tighten further.
+            var cap = DefaultPerServerConcurrentTransfers;
+            var lg = ResolveAccountLoginGate(id);
+            if (lg != null) cap = Math.Max(1, Math.Min(cap, lg.Limit - 1));
+            return new ServerGate(id, cap);
+        });
 
     /// <summary>
     /// Resolve the account-wide login gate for a server (shared with its main +
