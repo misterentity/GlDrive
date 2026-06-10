@@ -44,11 +44,22 @@ public class SpreadJob : IDisposable
     private readonly Dictionary<string, int> _serverFileCount = new(); // per-server owned file count
     private readonly Dictionary<string, SiteProgress> _siteProgress = new();
     private int _expectedFileCount;
-    private (string serverId, string path)? _pendingSfv;
-    // SFV paths already counted into _expectedFileCount. Without this, the SFV is
-    // re-found on every scan (ProcessFiles re-arms _pendingSfv) and the count grows
-    // unbounded, so completion is never reached. Guarded by _ownershipLock.
+    private (string serverId, string path, string relName)? _pendingSfv;
+    // SFVs already counted into _expectedFileCount, keyed by RELEASE-RELATIVE path
+    // (file.Name), NOT the full site path: the same SFV exists at a different full
+    // path on every site, and keying by full path counted it once per site after we
+    // FXPed it to a dest — doubling the expected total ((17+1)*2=36 for a 20-file
+    // release on 2026-06-08), which blocked completion and made cleanup SITE WIPE a
+    // zipscript-complete dir. Distinct SFVs (CD1/x.sfv vs CD2/y.sfv) still sum.
+    // Guarded by _ownershipLock.
     private readonly HashSet<string> _parsedSfvs = new(StringComparer.OrdinalIgnoreCase);
+
+    // True once ANY source listing has completed (even with 0 files). While false,
+    // the engine cannot distinguish "release has no files" from "every source scan
+    // failed (pool starvation)" — 29 of 35 races died as no-activity on 2026-06-08
+    // with exclusively FAILED source scans, one of them 12s before its first
+    // successful listing would have found 22 files.
+    private volatile bool _sourceScanSucceeded;
 
     // Per-destination zipscript signals captured on each scan (see CompletionDetector).
     // _destSawMarker[id] = a completion marker was visible in id's release dir this scan.
@@ -698,7 +709,7 @@ public class SpreadJob : IDisposable
                 if (_pendingSfv is { } sfv)
                 {
                     _pendingSfv = null;
-                    _ = ParseSfvForCount(sfv.serverId, sfv.path);
+                    _ = ParseSfvForCount(sfv.serverId, sfv.path, sfv.relName);
                 }
 
                 // 3. Find best transfer — pre-compute speed map outside lock
@@ -706,16 +717,6 @@ public class SpreadJob : IDisposable
 
                 if (transfer == null)
                 {
-                    var done = _spreadConfig.WaitForDestinationComplete
-                        ? AllDestinationsTerminal(sitePaths, sourceServers)
-                        : IsJobComplete();
-                    if (done)
-                    {
-                        State = SpreadJobState.Completed;
-                        Completed?.Invoke(this);
-                        return;
-                    }
-
                     int activeCount;
                     int trackedTransfers;
                     lock (_progressLock)
@@ -734,6 +735,29 @@ public class SpreadJob : IDisposable
                                 progress.ActiveTransfers = 0;
                             activeCount = 0;
                         }
+                    }
+
+                    var done = _spreadConfig.WaitForDestinationComplete
+                        ? AllDestinationsTerminal(sitePaths, sourceServers)
+                        : IsJobComplete();
+                    if (done)
+                    {
+                        // Fire-and-forget transfers may still be in flight — let
+                        // them land so their results are counted (and not wiped
+                        // as "missing") before exiting. Bounded by the per-
+                        // transfer hard timeout, so this cannot spin forever.
+                        if (activeCount > 0)
+                        {
+                            await Task.Delay(1000, token);
+                            continue;
+                        }
+                        // This exit was previously silent — the only trace of a
+                        // race ending was the tray notification.
+                        Log.Information("Spread race complete: {Release} — {Summary}",
+                            ReleaseName, DestinationStateSummary());
+                        State = SpreadJobState.Completed;
+                        Completed?.Invoke(this);
+                        return;
                     }
 
                     // A dest sitting inside its backoff window is pending work,
@@ -785,7 +809,11 @@ public class SpreadJob : IDisposable
                             }
                         }
 
-                        if (missingFiles > 0 && _completionRetries < 2)
+                        // Also sweep when the source has NEVER been listed
+                        // successfully: missingFiles is 0 only because _fileInfos
+                        // is empty, and the sweep's pool reinit is exactly the
+                        // remedy for the starved scans that caused that.
+                        if ((missingFiles > 0 || !_sourceScanSucceeded) && _completionRetries < 2)
                         {
                             _completionRetries++;
                             lock (_failureLock) _failureCounts.Clear();
@@ -821,9 +849,13 @@ public class SpreadJob : IDisposable
                             }
                             if (freshPools.Count >= 2) UpdatePools(freshPools);
 
-                            Log.Information("Spread completion sweep: {Missing} files still missing, " +
-                                "resetting failures and reinitializing pools — {Release}",
-                                missingFiles, ReleaseName);
+                            if (_sourceScanSucceeded)
+                                Log.Information("Spread completion sweep: {Missing} files still missing, " +
+                                    "resetting failures and reinitializing pools — {Release}",
+                                    missingFiles, ReleaseName);
+                            else
+                                Log.Information("Spread completion sweep: source never scanned successfully, " +
+                                    "reinitializing pools for another attempt — {Release}", ReleaseName);
                             continue;
                         }
 
@@ -838,6 +870,14 @@ public class SpreadJob : IDisposable
                             Completed?.Invoke(this);
                             Log.Information("Spread completed{Partial}: {Release} — {Missing} files undelivered",
                                 missingFiles > 0 ? " (partial)" : "", ReleaseName, missingFiles);
+                        }
+                        else if (!_sourceScanSucceeded)
+                        {
+                            // Distinct class: the race didn't fail for lack of work,
+                            // we never managed to LIST the source at all. Gets a
+                            // shorter dead-race TTL so a retry can catch the release
+                            // once pool pressure clears.
+                            SetFailed("Source scan never succeeded — pools unavailable (login cap?)");
                         }
                         else
                         {
@@ -900,6 +940,20 @@ public class SpreadJob : IDisposable
         }
         finally
         {
+            // Let in-flight fire-and-forget transfers settle before the cleanup
+            // decision — late deliveries used to land AFTER the wipe judged the
+            // dir partial and were destroyed (200MB on 2026-06-08). On cancel
+            // paths the linked transfer tokens abort quickly, so this drains
+            // fast; 60s caps the wait either way.
+            var drainDeadline = DateTime.UtcNow.AddSeconds(60);
+            while (DateTime.UtcNow < drainDeadline)
+            {
+                int inFlight;
+                lock (_progressLock) inFlight = _activeTransfers.Count;
+                if (inFlight == 0) break;
+                await Task.Delay(1000);
+            }
+
             // Clean up any destination directory we created where the release
             // didn't finish (either zero files or partial). SITE WIPE -r removes
             // the directory WITHOUT deducting user credits — glftpd's whole
@@ -988,11 +1042,13 @@ public class SpreadJob : IDisposable
     {
         HashSet<string> created;
         Dictionary<string, int> ownedCounts;
+        Dictionary<string, DestState> destStates;
         int total;
         lock (_ownershipLock)
         {
             created = [.._dirsCreated];
             ownedCounts = new Dictionary<string, int>(_serverFileCount);
+            destStates = new Dictionary<string, DestState>(_destStates);
             total = _expectedFileCount > 0 ? _expectedFileCount : _fileInfos.Count;
         }
 
@@ -1003,6 +1059,17 @@ public class SpreadJob : IDisposable
             // Leave it alone (don't wipe a good release!).
             if (total > 0 && owned >= total) continue;
 
+            // The dest's zipscript declared it complete (marker seen). NEVER wipe
+            // it, even when our own count disagrees — an inflated expected total
+            // (SFV double-count) made this path SITE WIPE a validated-complete
+            // 3.2GB release on 2026-06-08, which then got re-raced and auto-nuked.
+            if (destStates.GetValueOrDefault(serverId) == DestState.Complete)
+            {
+                Log.Information("Spread cleanup: skipping {Server} — dest is zipscript-complete ({Owned}/{Total} per our count)",
+                    _serverConfigs.TryGetValue(serverId, out var c) ? c.Name : serverId, owned, total);
+                continue;
+            }
+
             if (!sitePaths.TryGetValue(serverId, out var path)) continue;
             if (!_pools.TryGetValue(serverId, out var pool)) continue;
 
@@ -1011,7 +1078,11 @@ public class SpreadJob : IDisposable
 
             try
             {
-                await using var conn = await pool.Borrow(CancellationToken.None);
+                // Bounded — Borrow(CancellationToken.None) on a login-cap-starved
+                // pool blocked a finished race here for 15+ minutes while it held
+                // a maxConcurrentRaces slot (2026-06-08), and one job hung forever.
+                using var cleanupCts = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+                await using var conn = await pool.Borrow(cleanupCts.Token);
 
                 // Prefer SITE WIPE -r: removes dir + contents without credit
                 // deduction. This is the critical difference — if we use DELE
@@ -1019,7 +1090,7 @@ public class SpreadJob : IDisposable
                 // files behind AND pays the credit penalty for deleting their
                 // own upload. SITE WIPE is glftpd's explicit "no penalty"
                 // removal command.
-                var wipeReply = await conn.Client.Execute($"SITE WIPE -r {sanitized}", CancellationToken.None);
+                var wipeReply = await conn.Client.Execute($"SITE WIPE -r {sanitized}", cleanupCts.Token);
                 if (wipeReply.Success ||
                     (wipeReply.Message ?? "").Contains("wiped", StringComparison.OrdinalIgnoreCase) ||
                     (wipeReply.Message ?? "").Contains("removed", StringComparison.OrdinalIgnoreCase))
@@ -1035,7 +1106,7 @@ public class SpreadJob : IDisposable
                 // but it's worth trying as a last resort.
                 Log.Warning("Spread cleanup: SITE WIPE failed on {Server} ({Code} {Msg}), trying RMD",
                     serverName, wipeReply.Code, wipeReply.Message);
-                var rmdReply = await conn.Client.Execute($"RMD {sanitized}", CancellationToken.None);
+                var rmdReply = await conn.Client.Execute($"RMD {sanitized}", cleanupCts.Token);
                 if (rmdReply.Success)
                 {
                     Log.Information("Spread cleanup: RMD {Path} on {Server} (fallback)", path, serverName);
@@ -1190,6 +1261,8 @@ public class SpreadJob : IDisposable
                 ProcessFiles(serverId, files);
                 _destSawMarker[serverId] = signals.SawCompletionMarker;
                 _destHasMissingStub[serverId] = signals.HasMissingStub;
+                if (_sourceServersField.Contains(serverId))
+                    _sourceScanSucceeded = true;
             }
 
             if (results.Count == 0)
@@ -1391,8 +1464,11 @@ public class SpreadJob : IDisposable
                     _fileActions[file.Name] = action;
             }
 
-            if (fileName.EndsWith(".sfv", StringComparison.OrdinalIgnoreCase))
-                _pendingSfv = (serverId, file.FullPath);
+            // Only arm for SFVs not already counted — re-arming for a parsed SFV
+            // wasted a download every scan cycle. (Called under _ownershipLock.)
+            if (fileName.EndsWith(".sfv", StringComparison.OrdinalIgnoreCase)
+                && !_parsedSfvs.Contains(file.Name))
+                _pendingSfv = (serverId, file.FullPath, file.Name);
         }
 
         // Snapshot counts under ownership lock, then update progress outside it
@@ -1405,7 +1481,11 @@ public class SpreadJob : IDisposable
             {
                 progress.FilesOwned = owned;
                 progress.FilesTotal = total;
-                progress.IsSource = owned > 0;
+                // Actual race role, NOT "has files" — the old `owned > 0` test
+                // reclassified every dest as a source the moment it received its
+                // first file, which zeroed FilesDelivered in race history and
+                // mislabeled roles in telemetry.
+                progress.IsSource = _sourceServersField.Contains(serverId);
                 progress.IsComplete = owned >= total && total > 0;
             }
         }
@@ -1413,7 +1493,7 @@ public class SpreadJob : IDisposable
         ProgressChanged?.Invoke(this);
     }
 
-    private async Task ParseSfvForCount(string serverId, string sfvPath)
+    private async Task ParseSfvForCount(string serverId, string sfvPath, string relName)
     {
         try
         {
@@ -1441,9 +1521,9 @@ public class SpreadJob : IDisposable
 
             lock (_ownershipLock)
             {
-                // Count each distinct SFV exactly once — re-parsing on every scan
-                // would inflate the expected total without bound and block completion.
-                if (_parsedSfvs.Add(sfvPath))
+                // Count each distinct SFV exactly once, keyed by release-relative
+                // path so the same SFV seen on source AND dest counts once.
+                if (_parsedSfvs.Add(relName))
                     _expectedFileCount += lineCount + 1; // +1 for the SFV itself; accumulates across DISTINCT SFVs
             }
         }
@@ -2367,7 +2447,14 @@ public class SpreadJob : IDisposable
     {
         lock (_ownershipLock)
         {
-            foreach (var (serverId, _) in _siteProgress)
+            // Only actual race participants — _siteProgress holds every pooled
+            // server, so a site excluded at race start (section-blacklisted,
+            // rules-denied) would otherwise haunt the race as a phantom
+            // forever-"pending" destination in DestinationState and sweep
+            // missing-counts (observed: SYN reported pending in races it
+            // never joined, 2026-06-08).
+            var participants = _sitePathsRef?.Keys ?? (IEnumerable<string>)_siteProgress.Keys;
+            foreach (var serverId in participants)
             {
                 if (!_serverConfigs.TryGetValue(serverId, out var cfg)) continue;
                 if (cfg.SpreadSite.DownloadOnly) continue;
@@ -2805,6 +2892,7 @@ public class SpreadJob : IDisposable
             || m.Contains("timed out", StringComparison.OrdinalIgnoreCase)
             || m.Contains("transport connection", StringComparison.OrdinalIgnoreCase))
             return "transport";
+        if (m.Contains("Source scan never succeeded", StringComparison.OrdinalIgnoreCase)) return "source-scan-failed";
         if (m.Contains("No activity", StringComparison.OrdinalIgnoreCase)) return "no-activity";
         if (m.Contains("Need 2+ servers", StringComparison.OrdinalIgnoreCase)
             || m.Contains("no eligible destination", StringComparison.OrdinalIgnoreCase)
