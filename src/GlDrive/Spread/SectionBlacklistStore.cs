@@ -71,6 +71,11 @@ public sealed class SectionBlacklistStore
         _path = Path.Combine(dir, "GlDrive", "section-blacklist.json");
     }
 
+    /// <summary>Path-override ctor for tests. The default ctor points at the LIVE
+    /// %AppData% store — unit tests using it were persisting fixture entries into
+    /// (and over) the user's real section-blacklist.json on every test run.</summary>
+    public SectionBlacklistStore(string path) => _path = path;
+
     public void Load()
     {
         lock (_lock)

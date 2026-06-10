@@ -9,18 +9,23 @@ public class BlacklistStoreTests
     // RecordPermanentFailure persists; tests use a fresh store and rely on the
     // in-memory state. The Load() path is exercised on startup; here we focus on
     // logic (Distinct count + IsBlacklisted) that drives PRD R2 self-healing.
+    // MUST use the path-override ctor: the default ctor points at the user's
+    // LIVE %AppData% store, and these tests were overwriting it on every run.
+    private static SectionBlacklistStore NewStore() => new(
+        System.IO.Path.Combine(System.IO.Path.GetTempPath(), "gldrive-tests",
+            Guid.NewGuid().ToString("N") + "-blacklist.json"));
 
     [Fact]
     public void DistinctActiveSectionCount_zero_for_unknown_server()
     {
-        var s = new SectionBlacklistStore();
+        var s = NewStore();
         Assert.Equal(0, s.DistinctActiveSectionCount("any-server"));
     }
 
     [Fact]
     public void DistinctActiveSectionCount_grows_with_distinct_sections()
     {
-        var s = new SectionBlacklistStore();
+        var s = NewStore();
         s.RecordPermanentFailure("srv1", "Server One", "mp3", "/mp3/x", "denied");
         s.RecordPermanentFailure("srv1", "Server One", "flac", "/flac/y", "denied");
         s.RecordPermanentFailure("srv1", "Server One", "x265", "/x265/z", "denied");
@@ -32,7 +37,7 @@ public class BlacklistStoreTests
     [Fact]
     public void DistinctActiveSectionCount_does_not_double_count_same_section()
     {
-        var s = new SectionBlacklistStore();
+        var s = NewStore();
         s.RecordPermanentFailure("srv1", "Server One", "mp3", "/mp3/a", "denied");
         s.RecordPermanentFailure("srv1", "Server One", "mp3", "/mp3/b", "denied again");
         Assert.Equal(1, s.DistinctActiveSectionCount("srv1"));
@@ -41,7 +46,7 @@ public class BlacklistStoreTests
     [Fact]
     public void IsBlacklisted_true_after_record_and_within_ttl()
     {
-        var s = new SectionBlacklistStore();
+        var s = NewStore();
         s.RecordPermanentFailure("srv1", "Server One", "mp3", "/mp3/x", "denied");
         Assert.True(s.IsBlacklisted("srv1", "mp3"));
         Assert.True(s.IsBlacklisted("srv1", "MP3"));   // case-insensitive
@@ -50,7 +55,7 @@ public class BlacklistStoreTests
     [Fact]
     public void IsBlacklisted_false_when_section_not_recorded()
     {
-        var s = new SectionBlacklistStore();
+        var s = NewStore();
         s.RecordPermanentFailure("srv1", "Server One", "mp3", "/mp3/x", "denied");
         Assert.False(s.IsBlacklisted("srv1", "x265"));
         Assert.False(s.IsBlacklisted("srv2", "mp3"));
@@ -60,7 +65,7 @@ public class BlacklistStoreTests
     public void DistinctActiveSectionCount_threshold_3_drives_auto_download_only()
     {
         // PRD R2 acceptance: ">=3 distinct-section permanent denials"
-        var s = new SectionBlacklistStore();
+        var s = NewStore();
         s.RecordPermanentFailure("srv1", "Server One", "mp3", "/mp3", "x");
         s.RecordPermanentFailure("srv1", "Server One", "flac", "/flac", "x");
         Assert.True(s.DistinctActiveSectionCount("srv1") < 3); // not yet
@@ -74,7 +79,7 @@ public class BlacklistStoreTests
         // v3.5.2 regression guard. Three disk-full denials should NOT trip the
         // auto-download-only blanket — the dest will accept uploads again once
         // the siteop frees space.
-        var s = new SectionBlacklistStore();
+        var s = NewStore();
         s.RecordPermanentFailure("srv1", "Server One", "tv-hd",     "/tv-hd",     "out of disk space, contact the siteop!");
         s.RecordPermanentFailure("srv1", "Server One", "tv-sports", "/tv-sports", "out of disk space, contact the siteop!");
         s.RecordPermanentFailure("srv1", "Server One", "games",     "/games",     "disk full");
@@ -93,7 +98,7 @@ public class BlacklistStoreTests
         // deadlocked SYN out of every race on 2026-06-08). Disk-full stays
         // transient-excluded. Only the persistent, non-MKD-path "Permission denied"
         // remains in the count.
-        var s = new SectionBlacklistStore();
+        var s = NewStore();
         s.RecordPermanentFailure("srv1", "Server One", "mp3",   "/mp3",   "Not allowed to make directories here.");
         s.RecordPermanentFailure("srv1", "Server One", "flac",  "/flac",  "Permission denied");
         s.RecordPermanentFailure("srv1", "Server One", "tv-hd", "/tv-hd", "out of disk space, contact the siteop!");
@@ -108,7 +113,7 @@ public class BlacklistStoreTests
         // Regression for the 2026-06-08 SYN deadlock: flac/mp3/nsw all returned
         // 550 "Not allowed to make directories here." and the >=3 distinct-section
         // count wrongly flagged the whole site download-only, blocking EVERY race.
-        var s = new SectionBlacklistStore();
+        var s = NewStore();
         s.RecordPermanentFailure("770fa16a", "SYN", "flac", "/flac/x", "550 Error: Not allowed to make directories here.");
         s.RecordPermanentFailure("770fa16a", "SYN", "mp3",  "/mp3/y",  "550 Error: Not allowed to make directories here.");
         s.RecordPermanentFailure("770fa16a", "SYN", "nsw",  "/nsw/z",  "550 Error: Not allowed to make directories here.");
@@ -121,7 +126,7 @@ public class BlacklistStoreTests
     {
         // R2 preserved for the genuine signal: a leech site that reaches STOR and is
         // rejected with "no upload rights" SHOULD still be auto-flagged download-only.
-        var s = new SectionBlacklistStore();
+        var s = NewStore();
         s.RecordPermanentFailure("srv9", "Leech", "mp3",  "/mp3",  "STOR failed: 553 Error: you have no upload rights for this directory!");
         s.RecordPermanentFailure("srv9", "Leech", "flac", "/flac", "STOR failed: 553 Error: you have no upload rights for this directory!");
         s.RecordPermanentFailure("srv9", "Leech", "x265", "/x265", "STOR failed: 553 Error: you have no upload rights for this directory!");

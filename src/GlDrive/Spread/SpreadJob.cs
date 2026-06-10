@@ -61,6 +61,13 @@ public class SpreadJob : IDisposable
     // successful listing would have found 22 files.
     private volatile bool _sourceScanSucceeded;
 
+    // Dests whose release dir is CONFIRMED to exist (a scan saw at least one
+    // entry in it). Lifts the MKD-denial gate for fill-only dests: a site that
+    // may not CREATE the dir can still FILL it once another racer creates it
+    // (EnsureDirectoryExists short-circuits on CWD, no MKD sent). Guarded by
+    // _ownershipLock.
+    private readonly HashSet<string> _destDirConfirmed = new(StringComparer.Ordinal);
+
     // Per-destination zipscript signals captured on each scan (see CompletionDetector).
     // _destSawMarker[id] = a completion marker was visible in id's release dir this scan.
     // _destHasMissingStub[id] = a -MISSING- stub was visible this scan.
@@ -406,6 +413,7 @@ public class SpreadJob : IDisposable
             var blacklistedDests = new List<(string Name, string Reason)>();
             var unmappedDests = new List<string>();
             var downloadOnlyDests = new List<string>();
+            var fillOnlyDests = new List<string>();
             foreach (var (serverId, config) in _serverConfigs)
             {
                 if (sitePaths.ContainsKey(serverId)) continue; // Already has it
@@ -434,19 +442,36 @@ public class SpreadJob : IDisposable
                 // Skip sites that have permanently failed MKD for this section.
                 // Without this check, every race re-discovers the 550 the hard
                 // way (5 retries per file * N files), burning minutes per race.
+                // EXCEPTION — fill-only: an MKD *path* denial ("Not allowed to
+                // make directories here") means the account can't CREATE dirs,
+                // not that it can't receive files. SYN denied every MKD yet
+                // accepted 51 files into a dir another racer had created
+                // (2026-06-07). Keep such dests in the race; the per-job denial
+                // set (pre-seeded below) prevents MKD spam and the dir-confirmed
+                // gate in FindBestTransfer opens them once the dir appears.
                 if (_blacklist != null && _blacklist.IsBlacklisted(serverId, Section))
                 {
                     var entry = _blacklist.Get(serverId, Section);
                     var reason = entry?.Reason ?? "unknown";
-                    Log.Information("Spread: {Server} blacklisted for [{Section}] — {Reason} " +
-                        "(first failed {When:u}, {Count} total). Skipping. " +
-                        "Delete entry from section-blacklist.json or wait {Ttl} days from {Last:u} to auto-retry.",
-                        config.Name, Section, reason,
-                        entry?.FirstFailedAt ?? DateTime.UtcNow, entry?.FailureCount ?? 0,
-                        (int)SectionBlacklistStore.EntryTtl.TotalDays,
-                        entry?.LastFailedAt ?? DateTime.UtcNow);
-                    blacklistedDests.Add((config.Name, reason));
-                    continue;
+                    if (MkdFailureClassifier.IsPermanentMkdPathDenial(reason))
+                    {
+                        Log.Information("Spread: {Server} is FILL-ONLY for [{Section}] (MKD denied: {Reason}) — " +
+                            "will receive once the release dir exists", config.Name, Section, reason);
+                        fillOnlyDests.Add(serverId);
+                        // fall through to normal path resolution below
+                    }
+                    else
+                    {
+                        Log.Information("Spread: {Server} blacklisted for [{Section}] — {Reason} " +
+                            "(first failed {When:u}, {Count} total). Skipping. " +
+                            "Delete entry from section-blacklist.json or wait {Ttl} days from {Last:u} to auto-retry.",
+                            config.Name, Section, reason,
+                            entry?.FirstFailedAt ?? DateTime.UtcNow, entry?.FailureCount ?? 0,
+                            (int)SectionBlacklistStore.EntryTtl.TotalDays,
+                            entry?.LastFailedAt ?? DateTime.UtcNow);
+                        blacklistedDests.Add((config.Name, reason));
+                        continue;
+                    }
                 }
 
                 // section→folder learning: consult the learned SectionMappings FIRST so
@@ -537,6 +562,23 @@ public class SpreadJob : IDisposable
                         "not participating in this race (add a '{Section}' entry to its section map)",
                         config.Name, Section);
                     unmappedDests.Add(config.Name);
+                }
+            }
+
+            // Pre-seed the per-job MKD-denial set for fill-only dests so the race
+            // never attempts the doomed MKD; the dir-confirmed gate in
+            // FindBestTransfer admits candidates once a scan sees the dir exist.
+            if (fillOnlyDests.Count > 0)
+            {
+                lock (_ownershipLock)
+                {
+                    foreach (var id in fillOnlyDests)
+                    {
+                        if (!sitePaths.TryGetValue(id, out var p)) continue;
+                        if (!_destDirscriptDenied.TryGetValue(id, out var set))
+                            _destDirscriptDenied[id] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        set.Add(p);
+                    }
                 }
             }
 
@@ -1263,6 +1305,10 @@ public class SpreadJob : IDisposable
                 _destHasMissingStub[serverId] = signals.HasMissingStub;
                 if (_sourceServersField.Contains(serverId))
                     _sourceScanSucceeded = true;
+                // Any entry (real file or zipscript artifact) proves the release
+                // dir exists on this site — opens fill-only dests for transfers.
+                if (files.Count > 0 || signals.SawCompletionMarker || signals.HasMissingStub)
+                    _destDirConfirmed.Add(serverId);
             }
 
             if (results.Count == 0)
@@ -1681,9 +1727,14 @@ public class SpreadJob : IDisposable
                         // this dest's base path during the current job, don't
                         // try again — dirscript is deterministic and re-MKDing
                         // just spams 553 "Denied by dirscript" warnings.
-                        // Treated identically to a backoff skip.
+                        // Treated identically to a backoff skip — UNLESS a scan
+                        // has since confirmed the dir exists (another racer
+                        // created it): then CWD succeeds without any MKD and a
+                        // fill-only dest can receive (SYN accepted 51 files
+                        // into a pre-existing dir while denying every MKD).
                         if (_destDirscriptDenied.TryGetValue(dstId, out var deniedSet)
-                            && CandidatePredicates.DirscriptBlocked(dstBasePath, deniedSet))
+                            && CandidatePredicates.DirscriptBlocked(dstBasePath, deniedSet)
+                            && !_destDirConfirmed.Contains(dstId))
                         { skippedBackoff++; continue; }
 
                         // SFV-first: block non-SFV files until SFV is delivered to this dest
@@ -2735,8 +2786,11 @@ public class SpreadJob : IDisposable
         // Self-heal: this dest just successfully MKD'd for this section, so any
         // stale blacklist entry from a prior permission issue is no longer true.
         // Clear it so the user doesn't have to hand-edit section-blacklist.json
-        // after fixing site perms / section paths.
-        ClearBlacklistOnSuccess(dstId);
+        // after fixing site perms / section paths. Only on a REAL MKD though —
+        // a CWD "already exists" hit on a fill-only dest must not erase the
+        // MKD-denial lesson (the site still refuses dir creation).
+        if (!msg.StartsWith("exists", StringComparison.Ordinal))
+            ClearBlacklistOnSuccess(dstId);
 
         // If file is in a subdirectory (e.g. "CD1/file.rar"), create nested dirs.
         var dirPart = Path.GetDirectoryName(relativePath)?.Replace('\\', '/');

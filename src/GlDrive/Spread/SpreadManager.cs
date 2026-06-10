@@ -630,7 +630,11 @@ public class SpreadManager : IDisposable
         {
             var serverConfig = _config.Servers.FirstOrDefault(s => s.Id == serverId);
             if (serverConfig == null) continue;
-            if (_blacklist.IsBlacklisted(serverId, category)) { missing.Add(serverConfig.Name); continue; }
+            // MKD path denials don't make a section infeasible — the dest joins
+            // as fill-only (see TryAutoRaceInternalAsync blacklist exception).
+            if (_blacklist.IsBlacklisted(serverId, category)
+                && !MkdFailureClassifier.IsPermanentMkdPathDenial(_blacklist.Get(serverId, category)?.Reason ?? ""))
+            { missing.Add(serverConfig.Name); continue; }
             if (SectionMapper.HasSectionFor(serverConfig.SpreadSite, category))
                 eligible.Add(serverId);
             else
@@ -670,12 +674,19 @@ public class SpreadManager : IDisposable
             // this section (550 path-filter, permission denied) are dropped here
             // so we don't waste borrow timeouts rediscovering the same NO every
             // race. SpreadJob also enforces this at dest selection for manually
-            // started (non-auto) races.
+            // started (non-auto) races. EXCEPTION: an MKD *path* denial only
+            // means the account can't CREATE dirs — SpreadJob admits such dests
+            // as fill-only (they receive once another racer creates the dir),
+            // so they must stay in the participant list here.
             if (_blacklist.IsBlacklisted(serverId, category))
             {
                 var entry = _blacklist.Get(serverId, category);
-                denials.Add($"{serverConfig.Name}: blacklisted ({entry?.Reason ?? "permanent MKD failure"})");
-                continue;
+                var reason = entry?.Reason ?? "permanent MKD failure";
+                if (!MkdFailureClassifier.IsPermanentMkdPathDenial(reason))
+                {
+                    denials.Add($"{serverConfig.Name}: blacklisted ({reason})");
+                    continue;
+                }
             }
 
             if (debug)
