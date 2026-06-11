@@ -81,6 +81,24 @@ public class SpreadJob : IDisposable
     private volatile string? _lastSkipSummary;
     private DateTime _lastSkipLogAt;
 
+    // Dests admitted as fill-only (MKD denied; can only receive into a dir some
+    // other racer creates). While their dir is UNCONFIRMED they must not count
+    // as pending/missing work: on 2026-06-11 every completed zephyr race sat
+    // idle waiting on fill-only SYN, ran pointless recovery sweeps for its
+    // "missing" files, and recorded itself partial. Guarded by _ownershipLock.
+    private readonly HashSet<string> _fillOnlyDests = new(StringComparer.Ordinal);
+
+    // Caller must hold _ownershipLock.
+    private bool IsUnopenedFillOnlyNoLock(string id)
+        => _fillOnlyDests.Contains(id) && !_destDirConfirmed.Contains(id);
+
+    /// <summary>Fill-only dests whose release dir never appeared — excluded from
+    /// history's delivered/clean-complete accounting (they never participated).</summary>
+    public IReadOnlyCollection<string> UnopenedFillOnlyDests
+    {
+        get { lock (_ownershipLock) return _fillOnlyDests.Where(id => !_destDirConfirmed.Contains(id)).ToList(); }
+    }
+
     // Per-destination zipscript signals captured on each scan (see CompletionDetector).
     // _destSawMarker[id] = a completion marker was visible in id's release dir this scan.
     // _destHasMissingStub[id] = a -MISSING- stub was visible this scan.
@@ -588,10 +606,26 @@ public class SpreadJob : IDisposable
                     foreach (var id in fillOnlyDests)
                     {
                         if (!sitePaths.TryGetValue(id, out var p)) continue;
+                        _fillOnlyDests.Add(id);
                         if (!_destDirscriptDenied.TryGetValue(id, out var set))
                             _destDirscriptDenied[id] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                         set.Add(p);
                     }
+                }
+
+                // A race whose EVERY destination is fill-only can't move a single
+                // byte until some other racer creates the dirs — running it just
+                // burns a race slot, 1-3 min of scans, and a junk history entry
+                // (190 such races in 7h on 2026-06-11, all SYN-only music). Fail
+                // fast; the dead-race TTL stops announce re-fires.
+                var realDests = sitePaths.Keys
+                    .Where(id => !sourceServers.Contains(id)
+                              && !_serverConfigs[id].SpreadSite.DownloadOnly)
+                    .ToList();
+                if (realDests.Count > 0 && realDests.All(id => fillOnlyDests.Contains(id)))
+                {
+                    SetFailed("All destinations are fill-only (MKD denied) — no site can create the release dir");
+                    return;
                 }
             }
 
@@ -858,6 +892,11 @@ public class SpreadJob : IDisposable
                             foreach (var (serverId, _) in _siteProgress)
                             {
                                 if (_serverConfigs[serverId].SpreadSite.DownloadOnly) continue;
+                                // An unopened fill-only dest isn't missing work —
+                                // nothing can be sent there until someone else
+                                // creates the dir. Counting it kept finished races
+                                // idling and sweeping for unreachable files.
+                                if (IsUnopenedFillOnlyNoLock(serverId)) continue;
                                 var owned = _serverFileCount.GetValueOrDefault(serverId);
                                 var total = _fileInfos.Count;
                                 if (owned < total) missingFiles += total - owned;
@@ -2551,6 +2590,10 @@ public class SpreadJob : IDisposable
                 if (!_serverConfigs.TryGetValue(serverId, out var cfg)) continue;
                 if (cfg.SpreadSite.DownloadOnly) continue;
                 if (_sourceServersField.Contains(serverId)) continue; // sources aren't dests
+                // Unopened fill-only dests get no completion state at all — they
+                // never participated, and a "pending" entry here made every
+                // otherwise-complete race report partial.
+                if (IsUnopenedFillOnlyNoLock(serverId)) { _destStates.Remove(serverId); continue; }
                 var owned = _serverFileCount.GetValueOrDefault(serverId);
                 var sawMarker = _destSawMarker.GetValueOrDefault(serverId);
                 var hasMissing = _destHasMissingStub.GetValueOrDefault(serverId);
@@ -2587,6 +2630,10 @@ public class SpreadJob : IDisposable
                 if (sourceServers.Contains(id)) continue;
                 if (_serverConfigs[id].SpreadSite.DownloadOnly) continue;
                 if (IsDestDroppedNoLock(id)) { states.Add(DestState.TimedOut); continue; }
+                // Unopened fill-only dest = terminal for gating purposes (the race
+                // must not wait on it), but evaluated dynamically so it revives if
+                // a scan later confirms the dir appeared.
+                if (IsUnopenedFillOnlyNoLock(id)) { states.Add(DestState.TimedOut); continue; }
 
                 var state = _destStates.GetValueOrDefault(id, DestState.Transferring);
                 if (state == DestState.AwaitingCompletion &&
@@ -2998,6 +3045,7 @@ public class SpreadJob : IDisposable
             || m.Contains("transport connection", StringComparison.OrdinalIgnoreCase))
             return "transport";
         if (m.Contains("Source scan never succeeded", StringComparison.OrdinalIgnoreCase)) return "source-scan-failed";
+        if (m.Contains("All destinations are fill-only", StringComparison.OrdinalIgnoreCase)) return "fill-only";
         if (m.Contains("No activity", StringComparison.OrdinalIgnoreCase)) return "no-activity";
         if (m.Contains("Need 2+ servers", StringComparison.OrdinalIgnoreCase)
             || m.Contains("no eligible destination", StringComparison.OrdinalIgnoreCase)
