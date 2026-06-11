@@ -86,12 +86,25 @@ public sealed class SectionBlacklistStore
             {
                 var json = File.ReadAllText(_path);
                 var list = JsonSerializer.Deserialize<List<Entry>>(json) ?? new();
+                var scrubbed = 0;
                 foreach (var e in list)
                 {
                     if (string.IsNullOrWhiteSpace(e.ServerId) || string.IsNullOrWhiteSpace(e.Section))
                         continue;
+                    // Migration scrub (v3.8.8): dirscript denials are release-scoped
+                    // and must never have been section-blacklisted (see
+                    // MkdFailureClassifier.IsReleaseScopedDirscriptDenial). Drop any
+                    // such entries persisted by earlier versions — they soft-locked
+                    // zephyr out of entire sections.
+                    if (MkdFailureClassifier.IsReleaseScopedDirscriptDenial(e.Reason))
+                    {
+                        scrubbed++;
+                        continue;
+                    }
                     _entries[(e.ServerId, Normalize(e.Section))] = e;
                 }
+                if (scrubbed > 0)
+                    Log.Information("Section blacklist: scrubbed {Count} release-scoped dirscript entries (v3.8.8 migration)", scrubbed);
                 var now = DateTime.UtcNow;
                 var expired = _entries.Values.Where(e => now - e.LastFailedAt > EntryTtl).ToList();
                 if (expired.Count > 0)
@@ -349,6 +362,21 @@ public static class MkdFailureClassifier
         if (r.Contains("Denied by dirscript", StringComparison.OrdinalIgnoreCase)) return true;
         return false;
     }
+
+    /// <summary>
+    /// Dirscript denials are RELEASE-scoped, not section-scoped: glftpd dirscripts
+    /// most commonly reject a specific dir NAME (dupe protection — including dirs
+    /// GlDrive itself just SITE WIPEd — banned words, age rules), while other
+    /// releases in the same section MKD fine. Recording them in the per-SECTION
+    /// blacklist poisoned the whole section: after cleanup wiped two partial dirs
+    /// on zephyr (2026-06-10), the re-race dupe-denial blacklisted (zephyr,
+    /// tv-sports) and the fill-only logic then zero-dispatched EVERY tv race
+    /// (x72 denials, all races no-activity). These must only feed the in-race
+    /// per-path block and the dead-race TTL — never the section blacklist.
+    /// </summary>
+    public static bool IsReleaseScopedDirscriptDenial(string? reason)
+        => !string.IsNullOrEmpty(reason)
+           && reason.Contains("Denied by dirscript", StringComparison.OrdinalIgnoreCase);
 
     public static bool IsPermanentUploadDenial(string? errorMessage)
     {

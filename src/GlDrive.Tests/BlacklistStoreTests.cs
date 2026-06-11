@@ -144,6 +144,32 @@ public class BlacklistStoreTests
         => Assert.Equal(expected, MkdFailureClassifier.IsPermanentMkdPathDenial(reason));
 
     [Theory]
+    [InlineData("550 MKD Denied by dirscript.", true)]
+    [InlineData("MKD failed: 550 Denied by dirscript", true)]
+    [InlineData("550 Error: Not allowed to make directories here.", false)]   // section-scoped, stays blacklisted
+    [InlineData("out of disk space", false)]
+    [InlineData("", false)]
+    public void IsReleaseScopedDirscriptDenial_classifies_correctly(string reason, bool expected)
+        => Assert.Equal(expected, MkdFailureClassifier.IsReleaseScopedDirscriptDenial(reason));
+
+    [Fact]
+    public void Load_scrubs_release_scoped_dirscript_entries()
+    {
+        // v3.8.8 migration: dirscript denials recorded per-section by earlier
+        // versions soft-locked zephyr out of entire sections (x72 on 2026-06-10).
+        var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "gldrive-tests",
+            Guid.NewGuid().ToString("N") + "-blacklist.json");
+        var w = new SectionBlacklistStore(path);
+        w.RecordPermanentFailure("zephyr", "zephyr", "tv-sports", "/TV/Some.Release", "550 MKD Denied by dirscript.");
+        w.RecordPermanentFailure("syn", "SYN", "mp3", "/mp3/x", "550 Error: Not allowed to make directories here.");
+
+        var r = new SectionBlacklistStore(path);
+        r.Load();
+        Assert.False(r.IsBlacklisted("zephyr", "tv-sports"));   // scrubbed
+        Assert.True(r.IsBlacklisted("syn", "mp3"));             // kept
+    }
+
+    [Theory]
     [InlineData("out of disk space, contact the siteop!", true)]
     [InlineData("disk full", true)]
     [InlineData("no space on device", true)]

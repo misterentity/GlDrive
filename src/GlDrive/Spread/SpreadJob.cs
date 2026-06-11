@@ -74,6 +74,13 @@ public class SpreadJob : IDisposable
     // of a shared race and must not be wiped. Guarded by _ownershipLock.
     private readonly Dictionary<string, int> _destDelivered = new();
 
+    // Last skip breakdown from a zero-candidate FindBestTransfer pass — surfaced
+    // in the no-activity failure message so race history explains WHY nothing
+    // moved (a section-blacklist regression zero-dispatched every race for hours
+    // on 2026-06-10 with no log trace at INF level).
+    private volatile string? _lastSkipSummary;
+    private DateTime _lastSkipLogAt;
+
     // Per-destination zipscript signals captured on each scan (see CompletionDetector).
     // _destSawMarker[id] = a completion marker was visible in id's release dir this scan.
     // _destHasMissingStub[id] = a -MISSING- stub was visible this scan.
@@ -929,7 +936,8 @@ public class SpreadJob : IDisposable
                         }
                         else
                         {
-                            SetFailed("No activity for 60 seconds, no viable transfers");
+                            var skips = _lastSkipSummary is { } s ? $" (last pass: {s})" : "";
+                            SetFailed($"No activity for 60 seconds, no viable transfers{skips}");
                         }
                         return;
                     }
@@ -1835,9 +1843,17 @@ public class SpreadJob : IDisposable
         {
             if (_fileInfos.Count > 0 && candidateCount == 0)
             {
-                Log.Debug("FindBestTransfer: {Files} files, 0 candidates. Skipped: owned={Owned} downloadOnly={DL} affil={Affil} slots={Slots} failures={Fail} backoff={BO} cooldown={CD}",
-                    _fileInfos.Count, skippedOwned, skippedDownloadOnly, skippedAffil,
-                    skippedSlots, skippedFailures, skippedBackoff, skippedCooldown);
+                var summary = $"owned={skippedOwned} downloadOnly={skippedDownloadOnly} affil={skippedAffil} " +
+                              $"slots={skippedSlots} failures={skippedFailures} backoff/dirscript={skippedBackoff} cooldown={skippedCooldown}";
+                _lastSkipSummary = summary;
+                // Information (rate-limited), was Debug — invisible stalls hid a
+                // zero-dispatch regression for hours.
+                if ((DateTime.UtcNow - _lastSkipLogAt).TotalSeconds >= 30)
+                {
+                    _lastSkipLogAt = DateTime.UtcNow;
+                    Log.Information("FindBestTransfer: {Files} files, 0 candidates ({Summary}) — {Release}",
+                        _fileInfos.Count, summary, ReleaseName);
+                }
                 if (skippedSlots > 0 && skippedOwned == 0)
                     Log.Debug("FindBestTransfer slot details: {SlotInfo}",
                         string.Join(", ", activeTransferSnapshot.Select(kv =>
@@ -2868,6 +2884,16 @@ public class SpreadJob : IDisposable
     {
         if (_blacklist == null) return;
         if (!MkdFailureClassifier.IsPermanent(code, msg)) return;
+        // Dirscript denials are release-scoped (dupe protection on THIS dir name,
+        // commonly after our own cleanup wiped it) — the in-race path block +
+        // dead-race TTL handle them. Recording them per-SECTION poisoned zephyr
+        // out of all tv races on 2026-06-10 (x72).
+        if (MkdFailureClassifier.IsReleaseScopedDirscriptDenial(msg))
+        {
+            Log.Information("Spread: dirscript denied {Path} on {Server} — release-scoped (dupe?), not blacklisting the section",
+                path, _serverConfigs.TryGetValue(dstId, out var c) ? c.Name : dstId);
+            return;
+        }
         var name = _serverConfigs.TryGetValue(dstId, out var cfg) ? cfg.Name : dstId;
         _blacklist.RecordPermanentFailure(dstId, name, Section, path, $"{code} {msg}".Trim());
     }
