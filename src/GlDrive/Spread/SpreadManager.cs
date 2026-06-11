@@ -412,10 +412,16 @@ public class SpreadManager : IDisposable
             var siteNames = string.Join(", ", job.Sites.Values.Select(s => s.ServerName));
 
             // PRD R1 — outcome metrics. FilesTotal = release file count (max across
-            // sites). Destinations = non-source sites. FilesDelivered = best dest's
-            // owned count. CleanComplete = every dest got the full set.
+            // sites). Destinations = non-source sites, excluding fill-only dests
+            // whose dir never appeared (they never participated — counting them
+            // kept CleanComplete permanently false while the real dest finished).
+            // FilesDelivered = best dest's owned count. CleanComplete = every
+            // participating dest got the full set.
             var filesTotal = job.Sites.Values.Any() ? job.Sites.Values.Max(s => s.FilesTotal) : 0;
-            var dests = job.Sites.Values.Where(s => !s.IsSource).ToList();
+            var unopened = job.UnopenedFillOnlyDests;
+            var dests = job.Sites.Values
+                .Where(s => !s.IsSource && !unopened.Contains(s.ServerId))
+                .ToList();
             var filesDelivered = dests.Count > 0 ? dests.Max(s => s.FilesOwned) : 0;
             var cleanComplete = job.State == SpreadJobState.Completed
                 && filesTotal > 0
@@ -1191,6 +1197,12 @@ public class SpreadManager : IDisposable
 
         if (errorMessage.Contains("Source scan never succeeded", StringComparison.OrdinalIgnoreCase))
             return (SourceScanFailedTtl, "source-scan-failed");
+
+        // All dests fill-only: structurally unwinnable until another racer creates
+        // the dir (or the siteop grants MKD). Park it so every announce/poll
+        // doesn't re-spawn the same doomed race (190 in 7h on 2026-06-11).
+        if (errorMessage.Contains("All destinations are fill-only", StringComparison.OrdinalIgnoreCase))
+            return (NoActivityTtl, "fill-only");
 
         return null;
     }
