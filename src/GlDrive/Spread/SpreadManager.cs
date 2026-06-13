@@ -476,6 +476,17 @@ public class SpreadManager : IDisposable
             if (!pool.IsExhausted) continue;
 
             var serverName = _config.Servers.FirstOrDefault(s => s.Id == id)?.Name ?? id;
+
+            // Don't revive an exhausted pool while the account is in a login-cap /
+            // BNC cooldown — every reinit attempt just re-hits the gate timeout and
+            // feeds the quarantine churn. The cooldown auto-clears (login-cap 20s,
+            // refusal 90s) or on the next successful connect; the next race retries.
+            if (pool.IsInCooldown)
+            {
+                Log.Information("Spread pool exhausted for {Server} but in cooldown — skipping reinit until it clears", serverName);
+                continue;
+            }
+
             Log.Warning("Spread pool exhausted for {Server} — reinitializing", serverName);
             try
             {

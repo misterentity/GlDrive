@@ -34,6 +34,13 @@ public class FtpConnectionPool : IAsyncDisposable
     // for CooldownWindow; existing pooled connections are still served.
     private long _refusedUntilTicks;
     private static readonly TimeSpan CooldownWindow = TimeSpan.FromSeconds(90);
+    // Shorter backoff for a login-GATE timeout (the account is at its simultaneous-login
+    // cap and no permit freed within PermitAcquireTimeout). This is the dominant storm
+    // failure and is transient (a slot frees when an active transfer ends), so the
+    // cooldown is short — long enough to stop Borrow re-spinning a doomed 30s gate wait
+    // every cycle (the v3.8.9 churn that pinned the quarantine teardown queue), short
+    // enough to resume racing promptly. RecordConnect clears it on the next success.
+    private static readonly TimeSpan LoginGateCooldown = TimeSpan.FromSeconds(20);
 
     // Health counters — flushed hourly by HealthRollup
     public double AvgConnectMs { get; private set; }
@@ -52,19 +59,23 @@ public class FtpConnectionPool : IAsyncDisposable
     private int _disconnects, _exhaustCount, _ghostKills, _errors5xx, _reinitCount;
 
     // Poisoned-connection quarantine. After mid-transfer SSL errors ("forcibly
-    // closed by the remote host"), the affected GnuTLS session is in a
-    // corrupted native state. Calling client.Dispose() ends up invoking
-    // gnutls_deinit() which SEGVs the process — observed 6 times on
-    // 2026-05-16 with AppDomain.UnhandledException firing zero times because
-    // native crashes bypass every managed handler. Solution: never Dispose
-    // poisoned connections; hold a permanent managed reference so the GC
-    // finalizer thread never runs SafeHandle.ReleaseHandle on the corrupt
-    // native session. Native memory (~few KB per quarantined session) leaks
-    // intentionally — bounded by the number of failures per process lifetime
-    // (dozens, not thousands), well worth the alternative of a dead process.
-    private readonly List<AsyncFtpClient> _quarantine = new();
-    private readonly Lock _quarantineLock = new();
-    public int QuarantineSize { get { lock (_quarantineLock) return _quarantine.Count; } }
+    // closed by the remote host"), or any teardown of a connection whose native
+    // GnuTLS recv may still be in flight, calling client.Dispose() runs
+    // gnutls_deinit() — and if that frees the session UNDER a live recv inside
+    // GnuTlsInternalStream.Read it SEGVs the process, bypassing every managed
+    // handler (AppDomain.UnhandledException fires zero times; no crashdump is
+    // written — the 2026-05/06 watchdog-restart storm, escalating to 7/day at
+    // v3.8.9). The ONLY safe teardown is time-based: never touch the socket or
+    // session while a recv might be live; instead hold the one managed reference
+    // in a deferred task and dispose AFTER the native recv has provably drained
+    // (> GnuTLS CommTimeout, 15s). See Quarantine() below.
+    //
+    // _quarantineLive counts the in-flight deferred-teardown tasks (each holds one
+    // client for AbandonedReclaimSeconds then disposes it). Self-bounded at
+    // arrival-rate x window — NOT a permanent leak — and surfaced for health/
+    // observability (SpreadManager) so a runaway is visible.
+    private int _quarantineLive;
+    public int QuarantineSize => Volatile.Read(ref _quarantineLive);
 
     /// <summary>PRD O2 — true while a BNC cooldown is active (no new connections).</summary>
     public bool IsInCooldown => Interlocked.Read(ref _refusedUntilTicks) > DateTime.UtcNow.Ticks;
@@ -314,7 +325,7 @@ public class FtpConnectionPool : IAsyncDisposable
             if (probe == LiveProbe.Healthy) return BorrowCheck.Usable;
             if (probe == LiveProbe.TimedOut)
             {
-                QuarantineAbandoned(client); // native read may be live — defer teardown
+                QuarantineDeferred(client, "borrow-probe-timeout"); // native read may be live — defer teardown
                 return BorrowCheck.Dead;
             }
             // DeadCompleted — fall through to immediate neutralize.
@@ -363,8 +374,8 @@ public class FtpConnectionPool : IAsyncDisposable
                 }
                 else if (probe == LiveProbe.TimedOut)
                 {
-                    // Native recv still in flight — defer teardown (see QuarantineAbandoned).
-                    QuarantineAbandoned(client);
+                    // Native recv still in flight — defer teardown (see Quarantine).
+                    QuarantineDeferred(client, "keepalive-probe-timeout");
                 }
                 else
                 {
@@ -531,11 +542,26 @@ public class FtpConnectionPool : IAsyncDisposable
                 var refused = ex.Message?.Contains("actively refused", StringComparison.OrdinalIgnoreCase) == true
                     || ex.Message?.Contains("target machine actively refused", StringComparison.OrdinalIgnoreCase) == true
                     || (HasLoginLimitError(ex) && Interlocked.CompareExchange(ref _ghostKilledSinceSuccess, 1, 1) == 1);
+                // A login-GATE timeout ("Account login cap reached — no login permit
+                // available", thrown by AcquireAndConnect) is the dominant storm failure
+                // and had NO cooldown before v3.9.0 — so Borrow re-attempted a doomed 30s
+                // gate wait every cycle, generating the relentless quarantine churn. Arm a
+                // SHORT backoff so subsequent Borrows fall through to wait-on-channel /
+                // fail-fast instead of re-spinning the gate. (Mutually exclusive with the
+                // 90s refusal cooldown above; refusal wins.)
+                var gateCapped = !refused && ex is InvalidOperationException
+                    && ex.Message?.Contains("login cap reached", StringComparison.OrdinalIgnoreCase) == true;
                 if (refused)
                 {
                     Interlocked.Exchange(ref _refusedUntilTicks, DateTime.UtcNow.Add(CooldownWindow).Ticks);
                     Log.Information("Pool: server entering {Sec}s BNC cooldown (refusal detected) — pausing new connections",
                         (int)CooldownWindow.TotalSeconds);
+                }
+                else if (gateCapped)
+                {
+                    Interlocked.Exchange(ref _refusedUntilTicks, DateTime.UtcNow.Add(LoginGateCooldown).Ticks);
+                    Log.Information("Pool: server entering {Sec}s login-cap backoff (no permit available) — pausing new connections",
+                        (int)LoginGateCooldown.TotalSeconds);
                 }
                 Interlocked.Decrement(ref _created);
                 // PRD O4 — demote to Information. The underlying cause (login limit,
@@ -695,12 +721,11 @@ public class FtpConnectionPool : IAsyncDisposable
         {
             // !IsConnected on the return path means the connection died during
             // the borrowed operation — same SEGV risk as a Poisoned discard
-            // (the GnuTLS session may be in a corrupted state we just haven't
-            // proven yet). Quarantine it instead of Disposing. _active already
-            // decremented above, so call QuarantineDecCreated which only
-            // decrements _created.
+            // (the GnuTLS session may be in a corrupted state, and a native recv
+            // may still be draining). Defer teardown past CommTimeout instead of
+            // touching the socket now. _active already decremented above.
             IncrementDisconnect();
-            QuarantineDecCreated(client);
+            QuarantineDeferred(client, "dead-return");
             return;
         }
 
@@ -713,129 +738,98 @@ public class FtpConnectionPool : IAsyncDisposable
     }
 
     /// <summary>
-    /// Discard a poisoned connection — DO NOT dispose. Calling Dispose on a
-    /// connection whose GnuTLS session is corrupted (e.g. after a mid-transfer
-    /// "forcibly closed" SSL error) ends up running gnutls_deinit() on bad
-    /// native state, which SEGVs the process bypassing every managed handler.
-    /// Instead we close the socket so the network resource is freed, then
-    /// keep a permanent reference in <see cref="_quarantine"/> so the GC
-    /// finalizer never runs and the SafeHandle.ReleaseHandle native call
-    /// never fires. The managed AsyncFtpClient is ~a few KB; the native
-    /// session leaks ~similar; bounded by error rate. Better than dying.
+    /// Discard a poisoned connection (e.g. after a mid-transfer "forcibly closed"
+    /// SSL error or an FXP borrow timeout). Its GnuTLS session is corrupt AND its
+    /// native control-channel recv may still be draining (the managed await unwound
+    /// but the native recv runs to CommTimeout). Touching the socket/session now —
+    /// socket.Close, gnutls_deinit — races that live read and SEGVs the process
+    /// bypassing every managed handler. Route through the DEFERRED teardown so the
+    /// socket close + dispose only fire once the recv has provably returned. This was
+    /// the dominant crash funnel pre-v3.9.0 (poisoned Discard -> inline socket.Close).
     /// </summary>
     internal void Discard(AsyncFtpClient client)
     {
         Interlocked.Decrement(ref _active);
         IncrementDisconnect();
-        QuarantineDecCreated(client);
+        QuarantineDeferred(client, "poisoned-discard");
     }
 
-    // Quarantine cap. v2.5.0 introduced unbounded quarantine to dodge the
-    // gnutls_deinit() SEGV — that fixed crashes but observed in production
-    // 6.7h after upgrade: 575 threads, 2.1GB working set because each
-    // quarantined AsyncFtpClient still runs its FluentFTP NoopDaemon +
-    // keepalive timer against the closed socket. v2.5.1 caps the live
-    // quarantine at MaxQuarantineSize and force-disposes the oldest entry
-    // when full — by the time an entry hits 50-deep in the FIFO, several
-    // minutes have passed and the native corruption window is much smaller
-    // (still nonzero, but a calculated trade vs runaway resource leak).
-    // Lowered 50 -> 30 (PRD H1): combined with stopping the NOOP daemon on
-    // quarantine, keeps thread count bounded under sustained race churn.
-    private const int MaxQuarantineSize = 30;
+    /// <summary>
+    /// Quarantine a connection whose native recv has PROVABLY returned (NOOP probe
+    /// came back, the client is not connected, or a healthy connection had no room
+    /// in the channel). Closing the socket now is safe and frees the BNC login
+    /// promptly, so we neutralize inline. The session's gnutls_deinit is still
+    /// deferred (see <see cref="Quarantine"/>). Caller decrements _active first.
+    /// </summary>
+    private void QuarantineDecCreated(AsyncFtpClient client)
+        => Quarantine(client, "recv-returned", recvQuiescent: true);
 
     /// <summary>
-    /// Quarantine helper: neutralize the GnuTLS session (close socket, mark
-    /// session unusable), add the client to the bounded retain list, and
-    /// decrement <see cref="_created"/>. When quarantine is full, evicts the
-    /// oldest entry via best-effort force-dispose in a fire-and-forget task.
-    /// Caller is responsible for decrementing <see cref="_active"/> first.
+    /// Quarantine a connection whose native GnuTLS recv MIGHT still be in flight —
+    /// a poisoned mid-transfer Discard, an abandoned liveness probe (managed cancel
+    /// fired but the native recv runs to CommTimeout), or a borrow that died unproven.
+    /// We must NOT touch the socket/session now: doing so races the live recv and
+    /// SEGVs the process inside GnuTlsInternalStream.Read. The neutralize is deferred
+    /// past CommTimeout (see <see cref="Quarantine"/>). Caller decrements _active first.
     /// </summary>
+    private void QuarantineDeferred(AsyncFtpClient client, string reason)
+        => Quarantine(client, reason, recvQuiescent: false);
+
     /// <summary>
-    /// Quarantine a connection whose liveness probe TIMED OUT. Unlike
-    /// <see cref="QuarantineDecCreated"/>, this does NOT neutralize (close socket /
-    /// mutate the GnuTLS session) now: the managed probe gave up at
-    /// <see cref="ProbeDeadline"/> but the native GnuTLS recv keeps running until
-    /// GnuConfig.CommTimeout (15s, package minimum). Touching the session while that
-    /// read is in flight races it and SEGVs the process — the crash observed
-    /// 2026-06-06 (5 watchdog restarts, each ~3s after a quarantine line). Instead we
-    /// drop the pool's accounting now and hold the only managed reference inside the
-    /// deferred task (so the GC finalizer can't run gnutls_deinit during the window),
-    /// then neutralize + dispose + release the login permit once the native read has
-    /// provably returned. The permit is released LATE on purpose: the BNC login stays
-    /// held until the socket actually closes, so accounting matches reality.
+    /// Single teardown funnel. Drops the pool's _created accounting, releases the login
+    /// permit immediately, and disposes the client on a deferred task once its native
+    /// recv has provably drained (> GnuTLS CommTimeout).
+    ///
+    /// recvQuiescent=true  : the recv has returned — close the socket NOW (frees the BNC
+    ///                       login promptly), defer only the gnutls_deinit.
+    /// recvQuiescent=false : the recv MIGHT be live — defer the socket close + neutralize
+    ///                       too, or it races the read and SEGVs the process.
+    ///
+    /// The login permit is released SYNCHRONOUSLY (pure accounting; it does not touch the
+    /// socket). Deferring it would pin the scarce FXP login permits for the whole 20s
+    /// window and, under storm churn against a 1-2 permit account, LIVELOCK the gate
+    /// (AcquireAndConnect 30s-timeouts -> re-quarantine -> re-defer). The BNC login is
+    /// physically freed when the (possibly deferred) NeutralizeGnuTls closes the socket;
+    /// the brief over-subscription skew is tolerable (at worst a handled 530) — a permit
+    /// deadlock is not. There is no count-based eviction: the live set self-bounds at
+    /// (arrival-rate x AbandonedReclaimSeconds); a fixed cap with force-dispose was the
+    /// v2.5.1 ring-eviction SEGV (fixed v3.9.0). Caller decrements _active first.
     /// </summary>
-    private void QuarantineAbandoned(AsyncFtpClient client)
+    private void Quarantine(AsyncFtpClient client, string reason, bool recvQuiescent)
     {
+        if (recvQuiescent)
+        {
+            try { NeutralizeGnuTls(client); }
+            catch (Exception ex) { Log.Debug(ex, "Pool: NeutralizeGnuTls during quarantine failed"); }
+        }
+
         Interlocked.Decrement(ref _created);
-        Log.Information(
-            "Pool: liveness probe timed out — deferring teardown {Delay}s for in-flight native read (created={Created})",
-            AbandonedReclaimSeconds, _created);
+        ReleasePermit();
+
+        var live = Interlocked.Increment(ref _quarantineLive);
+        Log.Information("Pool: quarantined connection ({Reason}, deferred teardown {Delay}s, live={Live}, created={Created})",
+            reason, AbandonedReclaimSeconds, live, _created);
+        if (live > 200)
+            Log.Warning("Pool: deferred-teardown backlog high (live={Live}) — quarantine arrival outrunning the {Delay}s drain window",
+                live, AbandonedReclaimSeconds);
 
         _ = Task.Run(async () =>
         {
-            // Hold `client` reachable across the delay so GC never finalizes the
-            // not-yet-drained GnuTLS session.
+            // Hold `client` reachable across the delay so the GC finalizer can't run
+            // gnutls_deinit on a not-yet-drained session. After AbandonedReclaimSeconds
+            // (> CommTimeout 15s) the native recv has provably returned — socket close
+            // + session free are now safe.
             try { await Task.Delay(TimeSpan.FromSeconds(AbandonedReclaimSeconds)).ConfigureAwait(false); }
             catch { }
-            // Native recv has returned by now (> CommTimeout) — session is quiescent.
-            try { NeutralizeGnuTls(client); }
-            catch (Exception ex) { Log.Debug(ex, "Pool: deferred neutralize (abandoned) threw"); }
-            try { client.Dispose(); }
-            catch (Exception ex) { Log.Debug(ex, "Pool: deferred dispose (abandoned) threw"); }
-            try { ReleasePermit(); }
-            catch (Exception ex) { Log.Debug(ex, "Pool: deferred permit release (abandoned) threw"); }
-        });
-    }
-
-    private void QuarantineDecCreated(AsyncFtpClient client)
-    {
-        try { NeutralizeGnuTls(client); }
-        catch (Exception ex) { Log.Debug(ex, "Pool: NeutralizeGnuTls during quarantine failed"); }
-
-        AsyncFtpClient? evicted = null;
-        int qSize;
-        lock (_quarantineLock)
-        {
-            _quarantine.Add(client);
-            if (_quarantine.Count > MaxQuarantineSize)
+            if (!recvQuiescent)
             {
-                evicted = _quarantine[0];
-                _quarantine.RemoveAt(0);
+                try { NeutralizeGnuTls(client); }
+                catch (Exception ex) { Log.Debug(ex, "Pool: deferred neutralize ({Reason}) threw", reason); }
             }
-            qSize = _quarantine.Count;
-        }
-        Interlocked.Decrement(ref _created);
-        // The connection's socket was just closed by NeutralizeGnuTls, freeing its
-        // BNC login — so release its account login permit. This is the single
-        // teardown funnel (Discard, stale-borrow, unhealthy-return, dead-keepalive
-        // all route here), making permit release symmetric with AcquireAndConnect.
-        // Failed-create backouts decrement _created elsewhere but never reach here —
-        // AcquireAndConnect already released their permit on the connect failure.
-        ReleasePermit();
-
-        // Evict the oldest entry off-thread so the FluentFTP NoopDaemon +
-        // keepalive timer don't keep the managed object alive forever. By
-        // the time an entry reaches the head of the FIFO, several minutes
-        // have passed since its socket close — most native corruption has
-        // settled or torn down with the OS socket cleanup. We still wrap
-        // Dispose() in try/catch (managed exceptions) but accept that a
-        // native SEGV on the evicted entry is possible. Better than 2GB
-        // of leaked threads.
-        if (evicted != null)
-        {
-            var victim = evicted;
-            _ = Task.Run(() =>
-            {
-                try { victim.Dispose(); }
-                catch (Exception ex) { Log.Debug(ex, "Pool: quarantine eviction dispose threw (managed)"); }
-            });
-        }
-
-        // Bumped from Debug to Information so the user can see quarantine
-        // pressure without enabling Debug logging — useful for the next
-        // round of memory/thread tuning.
-        Log.Information("Pool: quarantined connection (quarantine={Q}/{Max}, created={Created}{Evict})",
-            qSize, MaxQuarantineSize, _created, evicted != null ? ", evicted oldest" : "");
+            try { client.Dispose(); }
+            catch (Exception ex) { Log.Debug(ex, "Pool: deferred dispose ({Reason}) threw", reason); }
+            finally { Interlocked.Decrement(ref _quarantineLive); }
+        });
     }
 
     /// <summary>
