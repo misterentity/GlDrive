@@ -128,6 +128,16 @@ public partial class App
             bool suppress = false;
             foreach (var ex in inner)
             {
+                // 3. Background socket reads (NOOP keepalive, SITE STATS / NewRelease
+                //    polls) get their CancellationToken fired on timeout or teardown.
+                //    The resulting OperationCanceledException is never observed because
+                //    we deliberately fire-and-forget those probes — it's an expected
+                //    cancellation, not an error. (~75/day of ERR noise pre-fix.)
+                if (ex is OperationCanceledException)
+                {
+                    suppress = true;
+                    break;
+                }
                 if (ex is NullReferenceException &&
                     ((ex.StackTrace?.Contains("BaseFtpClient.NoopDaemon", StringComparison.Ordinal) ?? false)
                      // Background GnuTLS read raced a connection teardown (socket
