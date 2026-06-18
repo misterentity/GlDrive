@@ -7,6 +7,7 @@ public class AppConfig
     public DownloadConfig Downloads { get; set; } = new();
     public SpreadConfig Spread { get; set; } = new();
     public AgentConfig Agent { get; set; } = new();
+    public PlexConfig Plex { get; set; } = new();
 
     public string ResolveAgentModel() => string.IsNullOrWhiteSpace(Agent.ModelId)
         ? "anthropic/claude-sonnet-4-6" : Agent.ModelId;

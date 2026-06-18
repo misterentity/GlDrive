@@ -1853,6 +1853,147 @@
                 </Border>
             </TabItem>
 
+            <!-- Plex Tab -->
+            <TabItem>
+                <TabItem.Header>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="17" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="Plex" VerticalAlignment="Center"/>
+                    </Grid>
+                </TabItem.Header>
+                <DockPanel Margin="12" DataContext="{Binding Plex}">
+                    <Border Style="{DynamicResource HudPanelStyle}">
+                        <DockPanel>
+                            <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                                <TextBlock Text="&gt;&gt; PLEX INVITE MANAGER" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                            </Border>
+
+                            <!-- Toolbar: connection + server picker -->
+                            <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
+                                    BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
+                                    Padding="8,6" Margin="0,0,0,6">
+                                <DockPanel>
+                                    <Button DockPanel.Dock="Right" Content="Login to Plex" Command="{Binding LoginCommand}"
+                                            Padding="14,4" Margin="6,0,0,0" Style="{StaticResource PrimaryButton}"
+                                            Visibility="{Binding IsLoggedOut, Converter={StaticResource BoolToVisibility}}"/>
+                                    <Button DockPanel.Dock="Right" Content="Logout" Command="{Binding LogoutCommand}"
+                                            Padding="10,4" Margin="6,0,0,0" Style="{StaticResource SecondaryButton}" FontSize="11"
+                                            Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVisibility}}"/>
+                                    <Button DockPanel.Dock="Right" Content="Test" Command="{Binding TestConnectionCommand}"
+                                            Padding="10,4" Margin="6,0,0,0" Style="{StaticResource SecondaryButton}" FontSize="11"
+                                            Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVisibility}}"/>
+                                    <Button DockPanel.Dock="Right" Content="Refresh" Command="{Binding RefreshCommand}"
+                                            Padding="10,4" Margin="6,0,0,0" Style="{StaticResource SecondaryButton}" FontSize="11"
+                                            Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVisibility}}"/>
+                                    <ComboBox DockPanel.Dock="Right" Width="200" Margin="6,0,0,0"
+                                              ItemsSource="{Binding Servers}" SelectedItem="{Binding SelectedServer}"
+                                              DisplayMemberPath="Name"
+                                              Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVisibility}}"/>
+                                    <Button DockPanel.Dock="Right" Content="Load Servers" Command="{Binding RefreshServersCommand}"
+                                            Padding="10,4" Margin="6,0,0,0" Style="{StaticResource SecondaryButton}" FontSize="11"
+                                            Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVisibility}}"/>
+                                    <Button DockPanel.Dock="Right" Content="Use" Command="{Binding SelectServerCommand}"
+                                            CommandParameter="{Binding SelectedServer}"
+                                            Padding="10,4" Margin="6,0,0,0" Style="{StaticResource SecondaryButton}" FontSize="11"
+                                            Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVisibility}}"/>
+                                    <TextBlock Text="{Binding StatusMessage}" TextTrimming="CharacterEllipsis"
+                                               Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"
+                                               VerticalAlignment="Center"/>
+                                </DockPanel>
+                            </Border>
+
+                            <Grid>
+                                <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
+                                <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
+                                <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
+                                <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                <Grid Margin="6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="300"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <!-- Invite panel -->
+                                    <Border Grid.Column="0" Margin="0,0,6,0" Style="{DynamicResource HudPanelStyle}">
+                                        <DockPanel>
+                                            <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                                                <TextBlock Text="&gt;&gt; INVITE USER" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                            </Border>
+                                            <StackPanel DockPanel.Dock="Top" Margin="8">
+                                                <TextBlock Text="Plex username or email" FontSize="11"
+                                                           Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,2"/>
+                                                <TextBox Text="{Binding InviteTarget, UpdateSourceTrigger=PropertyChanged}"
+                                                         VerticalContentAlignment="Center" Margin="0,0,0,8"/>
+                                                <CheckBox Content="Allow downloads / sync" IsChecked="{Binding AllowDownloads}"
+                                                          Foreground="{DynamicResource ForegroundBrush}" Margin="0,0,0,8"/>
+                                                <TextBlock Text="Libraries (none = all)" FontSize="11"
+                                                           Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,2"/>
+                                            </StackPanel>
+                                            <Button DockPanel.Dock="Bottom" Content="Send Invite" Command="{Binding InviteCommand}"
+                                                    IsEnabled="{Binding IsNotBusy}" Margin="8" Padding="0,8"
+                                                    Style="{StaticResource PrimaryButton}"/>
+                                            <Border Margin="8,0,8,8" Style="{DynamicResource HudPanelStyle}">
+                                                <ListBox ItemsSource="{Binding Libraries}" Background="Transparent" BorderThickness="0">
+                                                    <ListBox.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <CheckBox IsChecked="{Binding IsSelected}"
+                                                                      Foreground="{DynamicResource ForegroundBrush}">
+                                                                <StackPanel Orientation="Horizontal">
+                                                                    <TextBlock Text="{Binding Title}"/>
+                                                                    <TextBlock Text="{Binding Type}" Margin="6,0,0,0"
+                                                                               Foreground="{DynamicResource ForegroundDimBrush}" FontSize="10"
+                                                                               VerticalAlignment="Center"/>
+                                                                </StackPanel>
+                                                            </CheckBox>
+                                                        </DataTemplate>
+                                                    </ListBox.ItemTemplate>
+                                                </ListBox>
+                                            </Border>
+                                        </DockPanel>
+                                    </Border>
+
+                                    <!-- Current access -->
+                                    <Border Grid.Column="1" Style="{DynamicResource HudPanelStyle}">
+                                        <DockPanel>
+                                            <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                                                <TextBlock Text="&gt;&gt; CURRENT ACCESS" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                            </Border>
+                                            <DataGrid ItemsSource="{Binding SharedUsers}" SelectedItem="{Binding SelectedSharedUser}"
+                                                      AutoGenerateColumns="False" IsReadOnly="True"
+                                                      Background="Transparent" BorderThickness="0" Margin="6"
+                                                      HeadersVisibility="Column" GridLinesVisibility="Horizontal">
+                                                <DataGrid.Columns>
+                                                    <DataGridTextColumn Header="User" Binding="{Binding Username}" Width="140"/>
+                                                    <DataGridTextColumn Header="Email" Binding="{Binding Email}" Width="180"/>
+                                                    <DataGridTextColumn Header="Libraries" Binding="{Binding LibrariesDisplay}" Width="*"/>
+                                                    <DataGridTextColumn Header="Sync" Binding="{Binding DownloadsDisplay}" Width="50"/>
+                                                    <DataGridTextColumn Header="Status" Binding="{Binding StatusDisplay}" Width="70"/>
+                                                    <DataGridTemplateColumn Header="" Width="80">
+                                                        <DataGridTemplateColumn.CellTemplate>
+                                                            <DataTemplate>
+                                                                <Button Content="Revoke" Padding="8,2" FontSize="11"
+                                                                        Style="{StaticResource SecondaryButton}"
+                                                                        Command="{Binding DataContext.Plex.RevokeCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                        CommandParameter="{Binding}"/>
+                                                            </DataTemplate>
+                                                        </DataGridTemplateColumn.CellTemplate>
+                                                    </DataGridTemplateColumn>
+                                                </DataGrid.Columns>
+                                            </DataGrid>
+                                        </DockPanel>
+                                    </Border>
+                                </Grid>
+                            </Grid>
+                        </DockPanel>
+                    </Border>
+                </DockPanel>
+            </TabItem>
+
             <!-- ===== COMMS group ===== -->
             <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,12,14,4">
                 <TabItem.Header>

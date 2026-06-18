@@ -25,6 +25,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private readonly WishlistStore _wishlistStore;
     private readonly NotificationStore _notificationStore;
     private readonly IrcViewModel _ircViewModel;
+    private readonly PlexViewModel _plexViewModel;
     private string _searchQuery = "";
     private string _searchStatus = "";
     private bool _isSearching;
@@ -104,6 +105,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private readonly Random _overviewRng = new();
 
     public IrcViewModel Irc => _ircViewModel;
+    public PlexViewModel Plex => _plexViewModel;
 
     /// <summary>Header tagline shown in the dashboard chrome — bound from XAML.
     /// Computed from the running assembly version so it stops going stale every
@@ -930,6 +932,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         _wishlistStore.Load();
 
         _ircViewModel = new IrcViewModel(serverManager, config);
+        _plexViewModel = new PlexViewModel(config);
 
         // Mounts-tab actions.
         OpenMountCommand = new RelayCommand<string>(serverId =>
@@ -2606,6 +2609,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         _serverManager.NewReleaseDetected -= _newReleaseHandler;
         UnsubscribeAllServers();
         _ircViewModel.Dispose();
+        _plexViewModel.Dispose();
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
