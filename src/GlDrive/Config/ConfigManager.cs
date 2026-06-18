@@ -24,6 +24,16 @@ public class ConfigManager
     public static string ConfigPath => ConfigFilePath;
     public static bool ConfigExists => File.Exists(ConfigFilePath);
 
+    /// <summary>
+    /// When true, Save() is a no-op. Set by transient/diagnostic modes that load the
+    /// real config, mutate it in memory (e.g. seeding demo data), and must NEVER write
+    /// it back — most importantly the --screenshots renderer, which replaces the real
+    /// servers with demo placeholders. Without this guard, any incidental Save() on a
+    /// background path (a VM constructor, a timer) clobbers the user's real config.
+    /// (Root cause of the 2026-06-17 "all servers gone" incident.)
+    /// </summary>
+    public static bool ReadOnly { get; set; }
+
     public static AppConfig Load()
     {
         if (!File.Exists(ConfigFilePath))
@@ -74,6 +84,11 @@ public class ConfigManager
 
     public static void Save(AppConfig config)
     {
+        if (ReadOnly)
+        {
+            Log.Debug("ConfigManager.Save suppressed (ReadOnly mode)");
+            return;
+        }
         Directory.CreateDirectory(AppDataFolder);
         string? beforeJson = File.Exists(ConfigFilePath) ? File.ReadAllText(ConfigFilePath) : null;
         var json = JsonSerializer.Serialize(config, JsonOptions);

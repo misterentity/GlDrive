@@ -81,9 +81,13 @@ public partial class App
         Irc.IrcLogStore.PruneOld();
         try { File.Delete(Path.Combine(ConfigManager.AppDataPath, ".updating")); } catch { }
 
-        // Screenshot mode — capture all UI windows to PNGs and exit
+        // Screenshot mode — capture all UI windows to PNGs and exit.
+        // ReadOnly guard: this path loads the real config then seeds demo data into
+        // it (and constructs VMs that may persist on a background path). It must never
+        // write back, or it clobbers the user's real servers with demo placeholders.
         if (e.Args.Contains("--screenshots", StringComparer.OrdinalIgnoreCase))
         {
+            ConfigManager.ReadOnly = true;
             ScreenshotCapture.CaptureAll(ConfigManager.Load());
             Shutdown();
             return;
