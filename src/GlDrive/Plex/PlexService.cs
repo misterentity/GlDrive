@@ -39,9 +39,12 @@ public sealed class PlexService : IDisposable
 
     private void EnsureClientId()
     {
-        if (!string.IsNullOrEmpty(_config.Plex.ClientIdentifier)) return;
-        _config.Plex.ClientIdentifier = Guid.NewGuid().ToString("N");
-        SaveConfig();
+        // Generate in memory only. We must NOT persist config from a constructor —
+        // the VM is built whenever the dashboard opens, and an incidental Save() there
+        // was what let --screenshots clobber the real config (2026-06-17). The id is
+        // persisted lazily on successful login, when there's a token worth keeping.
+        if (string.IsNullOrEmpty(_config.Plex.ClientIdentifier))
+            _config.Plex.ClientIdentifier = Guid.NewGuid().ToString("N");
     }
 
     private void SaveConfig()
@@ -72,6 +75,7 @@ public sealed class PlexService : IDisposable
             {
                 _client.Token = polled!.AuthToken;
                 CredentialStore.SaveApiKey(TokenService, polled.AuthToken!);
+                SaveConfig(); // persist the now-meaningful client identifier
                 Log.Information("Plex: OAuth login succeeded");
                 return true;
             }
