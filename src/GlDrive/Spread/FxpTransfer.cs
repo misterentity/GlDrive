@@ -563,30 +563,58 @@ public class FxpTransfer
         AsyncFtpClient src, AsyncFtpClient dst,
         int timeoutSec, CancellationToken ct)
     {
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec > 0 ? timeoutSec : 60));
+        var deadline = TimeSpan.FromSeconds(timeoutSec > 0 ? timeoutSec : 60);
+        var sw = Stopwatch.StartNew();
 
-        try
-        {
-            // Source sends 226 when RETR is done
-            var srcReply = await src.GetReply(timeoutCts.Token);
-            if (srcReply.Code != "226" && srcReply.Code != "250")
-                Log.Warning("FXP source unexpected reply: {Code} {Msg}", srcReply.Code, srcReply.Message);
+        // Source sends 226 when RETR is done
+        var srcReply = await ReadReplyManagedTimeout(src, deadline, ct);
+        if (srcReply is null) return TimedOut();
+        if (srcReply.Value.Code != "226" && srcReply.Value.Code != "250")
+            Log.Warning("FXP source unexpected reply: {Code} {Msg}", srcReply.Value.Code, srcReply.Value.Message);
 
-            // Dest sends 226 when STOR is done
-            var dstReply = await dst.GetReply(timeoutCts.Token);
-            if (dstReply.Code != "226" && dstReply.Code != "250")
-                Log.Warning("FXP dest unexpected reply: {Code} {Msg}", dstReply.Code, dstReply.Message);
+        // Dest sends 226 when STOR is done
+        var remaining = deadline - sw.Elapsed;
+        if (remaining <= TimeSpan.Zero) return TimedOut();
+        var dstReply = await ReadReplyManagedTimeout(dst, remaining, ct);
+        if (dstReply is null) return TimedOut();
+        if (dstReply.Value.Code != "226" && dstReply.Value.Code != "250")
+            Log.Warning("FXP dest unexpected reply: {Code} {Msg}", dstReply.Value.Code, dstReply.Value.Message);
 
-            SetState(TransferState.Complete);
-            return true;
-        }
-        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
-        {
-            SetState(TransferState.Error);
-            ErrorMessage = "Transfer timed out";
-            return false;
-        }
+        SetState(TransferState.Complete);
+        return true;
+    }
+
+    private bool TimedOut()
+    {
+        SetState(TransferState.Error);
+        ErrorMessage = "Transfer timed out";
+        return false;
+    }
+
+    /// <summary>
+    /// Read a control-channel reply with a NON-cancellable underlying read, enforcing the
+    /// timeout purely at the managed level. Cancelling FluentFTP's GetReply abandons the
+    /// native GnuTLS recv() mid-syscall; if the connection is then torn down (or merely
+    /// misclassified as "recv-returned" and neutralized inline) while that recv is still
+    /// draining, GnuTlsInternalStream.Read faults with an AccessViolationException that
+    /// terminates the whole process — uncatchable, the dominant residual crash signature.
+    /// On timeout we return null and deliberately leave the read task running so the recv
+    /// drains naturally; the caller poisons the connection so the pool's deferred (20s)
+    /// teardown reclaims it only after the recv has finished.
+    /// </summary>
+    private static async Task<FtpReply?> ReadReplyManagedTimeout(
+        AsyncFtpClient client, TimeSpan timeout, CancellationToken ct)
+    {
+        var readTask = client.GetReply(CancellationToken.None);
+        var winner = await Task.WhenAny(readTask, Task.Delay(timeout, ct));
+        if (winner == readTask)
+            return await readTask;
+
+        // Timed out or outer-cancelled: never cancel the in-flight read — observe its
+        // eventual exception so it isn't an unobserved-task fault, and let it drain.
+        _ = readTask.ContinueWith(t => { _ = t.Exception; }, TaskScheduler.Default);
+        ct.ThrowIfCancellationRequested(); // propagate a genuine job cancel
+        return null;                        // pure transfer timeout
     }
 
     private static string ExtractPasvAddress(string message)
