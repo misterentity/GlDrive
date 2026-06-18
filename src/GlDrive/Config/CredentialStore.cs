@@ -189,4 +189,16 @@ public static class CredentialStore
             Log.Warning(ex, "Failed to save API key for {Service}", service);
         }
     }
+
+    public static void DeleteApiKey(string service)
+    {
+        try
+        {
+            CredentialManager.DeleteCredential($"GlDrive:api:{service}");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to delete API key for {Service}", service);
+        }
+    }
 }

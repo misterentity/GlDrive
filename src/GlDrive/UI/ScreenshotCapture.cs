@@ -115,6 +115,7 @@ internal static class ScreenshotCapture
             ("downloads",     "Downloads"),
             ("search",        "Search"),
             ("upcoming",      "Upcoming"),
+            ("plex",          "Plex"),
         };
 
         if (tabControl != null)
