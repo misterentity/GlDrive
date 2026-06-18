@@ -138,12 +138,14 @@ public sealed class PlexViewModel : INotifyPropertyChanged, IDisposable
         server ??= SelectedServer;
         if (server == null || IsBusy) return;
         IsBusy = true;
+        StatusMessage = $"Connecting to {server.Name}…";
         try
         {
-            _service.SelectServer(server);
+            await _service.SelectServerAsync(server, CancellationToken.None);
             ServerName = server.Name;
             await RefreshAllInternalAsync();
         }
+        catch (PlexException ex) { StatusMessage = ex.Message; }
         catch (Exception ex) { Fail("Couldn't select server", ex); }
         finally { IsBusy = false; }
     }

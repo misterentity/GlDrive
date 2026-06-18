@@ -51,8 +51,9 @@ public class PlexClientTests
         Assert.Equal("Home Server", owned[0].Name);
         Assert.Equal("abc123", owned[0].ClientIdentifier);
 
-        // Picker prefers the remote https connection over the local one.
-        Assert.Equal("https://1-2-3-4.hash.plex.direct:32400", PlexClient.PickConnectionUri(owned[0]));
+        // Picker prefers a local (same-LAN) https connection as the best-guess fallback;
+        // real selection probes all connections via FindWorkingConnectionAsync.
+        Assert.Equal("https://10-0-0-5.hash.plex.direct:32400", PlexClient.PickConnectionUri(owned[0]));
     }
 
     [Fact]

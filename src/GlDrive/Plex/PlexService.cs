@@ -104,21 +104,48 @@ public sealed class PlexService : IDisposable
         return all.Where(r => r.Owned && r.IsServer).ToList();
     }
 
-    public void SelectServer(PlexResource server)
+    public async Task SelectServerAsync(PlexResource server, CancellationToken ct)
     {
-        var uri = PlexClient.PickConnectionUri(server)
-                  ?? throw new PlexException($"Server '{server.Name}' has no reachable connection.");
+        var uri = await _client.FindWorkingConnectionAsync(server, ct)
+                  ?? throw new PlexException(
+                      $"Found '{server.Name}' but none of its connections were reachable. " +
+                      "Enable Remote Access (or Relay) on the server, or check it's online.");
         _config.Plex.ServerMachineId = server.ClientIdentifier;
         _config.Plex.ServerName = server.Name;
         _config.Plex.ServerUri = uri;
         SaveConfig();
-        Log.Information("Plex: selected server {Name} ({Id})", server.Name, server.ClientIdentifier);
+        Log.Information("Plex: selected server {Name} ({Id}) via {Uri}", server.Name, server.ClientIdentifier, uri);
     }
 
-    public Task<List<PlexLibrary>> GetLibrariesAsync(CancellationToken ct)
+    /// <summary>
+    /// Guarantee <c>ServerUri</c> points at a connection that currently responds.
+    /// The cached URI can go stale (the server's public IP/port changes, remote access
+    /// toggled, switched networks), so if a quick probe fails we re-resolve from the
+    /// live resource list. This is what makes "connection refused" self-heal instead of
+    /// sticking to a dead connection.
+    /// </summary>
+    private async Task EnsureWorkingConnectionAsync(CancellationToken ct)
     {
         RequireServer();
-        return _client.GetLibrariesAsync(_config.Plex.ServerUri, ct);
+        if (await _client.ProbeAsync(_config.Plex.ServerUri, ct)) return;
+
+        Log.Information("Plex: cached connection unreachable, re-resolving for {Id}", _config.Plex.ServerMachineId);
+        var server = (await _client.GetResourcesAsync(ct))
+            .FirstOrDefault(r => r.ClientIdentifier == _config.Plex.ServerMachineId)
+            ?? throw new PlexException("Selected Plex server is no longer on your account.");
+        var uri = await _client.FindWorkingConnectionAsync(server, ct)
+                  ?? throw new PlexException(
+                      $"'{server.Name}' is unreachable on every connection. " +
+                      "Enable Remote Access/Relay on the server, or check it's online.");
+        _config.Plex.ServerUri = uri;
+        SaveConfig();
+        Log.Information("Plex: re-resolved connection to {Uri}", uri);
+    }
+
+    public async Task<List<PlexLibrary>> GetLibrariesAsync(CancellationToken ct)
+    {
+        await EnsureWorkingConnectionAsync(ct);
+        return await _client.GetLibrariesAsync(_config.Plex.ServerUri, ct);
     }
 
     public Task<List<PlexSharedUser>> GetSharedUsersAsync(CancellationToken ct)
@@ -132,7 +159,7 @@ public sealed class PlexService : IDisposable
     public async Task InviteAsync(string emailOrUsername, IEnumerable<string> libraryTitles,
         bool allowDownloads, CancellationToken ct)
     {
-        RequireServer();
+        await EnsureWorkingConnectionAsync(ct);
         if (string.IsNullOrWhiteSpace(emailOrUsername))
             throw new PlexException("Enter a Plex username or email to invite.");
 

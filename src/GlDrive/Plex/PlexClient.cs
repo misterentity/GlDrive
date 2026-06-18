@@ -242,17 +242,60 @@ public sealed class PlexClient : IDisposable
         return result;
     }
 
-    /// <summary>Pick the best reachable connection: prefer remote + https + non-relay,
-    /// fall back through relay, then any local. Mirrors PlexAPI's connection ordering.</summary>
+    /// <summary>Best-guess connection ordering (no probing): direct before relay,
+    /// local before remote, https first. Used as a last-resort fallback and in tests;
+    /// real selection goes through FindWorkingConnectionAsync which actually probes.</summary>
     public static string? PickConnectionUri(PlexResource server)
     {
         if (server.Connections.Count == 0) return null;
-        return server.Connections
-            .OrderBy(c => c.Relay ? 1 : 0)
-            .ThenBy(c => c.Local ? 1 : 0)
-            .ThenBy(c => c.Protocol.Equals("https", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+        return OrderConnections(server)
             .Select(c => c.Uri)
             .FirstOrDefault(u => !string.IsNullOrEmpty(u));
+    }
+
+    private static IEnumerable<PlexConnection> OrderConnections(PlexResource server) =>
+        server.Connections
+            .Where(c => !string.IsNullOrEmpty(c.Uri))
+            .OrderBy(c => c.Relay ? 1 : 0)       // direct before relay (relay is bandwidth-capped)
+            .ThenBy(c => c.Local ? 0 : 1)         // local before remote (fast on same LAN)
+            .ThenBy(c => c.Protocol.Equals("https", StringComparison.OrdinalIgnoreCase) ? 0 : 1);
+
+    /// <summary>Lightweight reachability check — hits /identity with a short timeout.</summary>
+    public async Task<bool> ProbeAsync(string uri, CancellationToken ct)
+    {
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(5));
+            using var resp = await _http.SendAsync(Build(HttpMethod.Get, $"{uri.TrimEnd('/')}/identity"), cts.Token);
+            return resp.IsSuccessStatusCode;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// Probe a server's connections and return the first that actually responds.
+    /// A server typically advertises local, remote-direct, and relay connections;
+    /// any single one may be refused (no port forward, wrong LAN, offline), so we
+    /// must test rather than guess. Probes concurrently and takes the first success.
+    /// </summary>
+    public async Task<string?> FindWorkingConnectionAsync(PlexResource server, CancellationToken ct)
+    {
+        var uris = OrderConnections(server).Select(c => c.Uri).Distinct().ToList();
+        if (uris.Count == 0) return null;
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var probes = uris.ToDictionary(u => ProbeAsync(u, cts.Token));
+        var pending = new List<Task<bool>>(probes.Keys);
+        string? winner = null;
+        while (pending.Count > 0)
+        {
+            var done = await Task.WhenAny(pending);
+            pending.Remove(done);
+            if (done.Result) { winner = probes[done]; break; }
+        }
+        cts.Cancel(); // stop the losers
+        return winner;
     }
 
     public void Dispose() => _http.Dispose();
