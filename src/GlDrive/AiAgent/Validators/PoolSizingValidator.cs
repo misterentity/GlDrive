@@ -27,7 +27,16 @@ public sealed class PoolSizingValidator : IChangeValidator
         {
             var before = config.Spread?.MaxConcurrentRaces ?? 1;
             if (!WithinPct(before, after, 0.25)) return new(false, "change-too-large", null);
-            return new(true, null, cfg => { if (cfg.Spread != null) cfg.Spread.MaxConcurrentRaces = after; });
+            // Concurrent races each consume a login permit on the (shared) source
+            // server, so this MUST stay ≤ the source's spread-usable logins or every
+            // race burst exhausts the source pools. Observed 2026-06-17: the agent
+            // had ratcheted this to 5 against a loginCap-4 source → 971 "main pool
+            // exhausted" warnings, scan failures, and FXP borrow timeouts. Clamp to
+            // the smallest spread-usable login budget across servers.
+            int ceiling = MaxConcurrentRaceCeiling(config);
+            if (after > ceiling) after = ceiling;
+            var applied = after;
+            return new(true, null, cfg => { if (cfg.Spread != null) cfg.Spread.MaxConcurrentRaces = applied; });
         }
 
         // Per-server: /servers/{id}/spread/maxUploadSlots or /servers/{id}/spread/maxDownloadSlots
@@ -53,6 +62,24 @@ public sealed class PoolSizingValidator : IChangeValidator
         }
 
         return new(false, "target-shape-unsupported", null);
+    }
+
+    // Largest safe MaxConcurrentRaces: races share the source server's login
+    // budget, so cap to the smallest (LoginCap − LoginHeadroom) across servers,
+    // minus one for the main/keepalive pool that already squats a permit. This
+    // mirrors the documented invariant "maxConcurrentRaces ≤ source spread-usable
+    // logins" (e.g. loginCap 4, headroom 1 → usable 3 → ceiling 2).
+    private static int MaxConcurrentRaceCeiling(AppConfig config)
+    {
+        int minUsable = int.MaxValue;
+        foreach (var s in config.Servers)
+        {
+            if (s.Pool is null) continue;
+            int usable = s.Pool.LoginCap - s.Pool.LoginHeadroom;
+            if (usable < minUsable) minUsable = usable;
+        }
+        if (minUsable == int.MaxValue) return 2; // no servers configured — conservative default
+        return Math.Max(1, minUsable - 1);
     }
 
     private static bool WithinPct(int before, int after, double pct)
