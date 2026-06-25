@@ -531,10 +531,7 @@ public class SpreadJob : IDisposable
                     if (!string.IsNullOrEmpty(mappedBase))
                     {
                         var sectionBase = mappedBase.TrimEnd('/');
-                        var destPath = await ProbeDatedDirectory(serverId, sectionBase, ct)
-                            is { } datedBase
-                                ? datedBase + "/" + ReleaseName
-                                : sectionBase + "/" + ReleaseName;
+                        var destPath = DatedBase(sectionBase) + "/" + ReleaseName;
 
                         sitePaths[serverId] = destPath;
                         // Capture the route so EmitRaceOutcome can attribute it; null
@@ -576,12 +573,9 @@ public class SpreadJob : IDisposable
                 {
                     var sectionBase = sectionMatch.Value.TrimEnd('/');
 
-                    // Probe for glftpd dated directory (MMDD format, e.g. /mp3/0409/)
-                    // If the section root has a dated subfolder for today, use it.
-                    var destPath = await ProbeDatedDirectory(serverId, sectionBase, ct)
-                        is { } datedBase
-                            ? datedBase + "/" + ReleaseName
-                            : sectionBase + "/" + ReleaseName;
+                    // Route mp3/0day through today's dated subdir (/mp3/MMDD/); the
+                    // CWD/MKD navigation creates it if missing. Other sections flat.
+                    var destPath = DatedBase(sectionBase) + "/" + ReleaseName;
 
                     sitePaths[serverId] = destPath;
                     Log.Information("Spread: {Server} is DESTINATION at [{Section}] {Path}",
@@ -2832,85 +2826,95 @@ public class SpreadJob : IDisposable
     }
 
     /// <summary>
-    /// Probe for a glftpd dated subdirectory (MMDD format) under the section root.
-    /// Sections like 0DAY and MP3 use dated dirs (e.g. /mp3/0409/).
-    /// Returns the dated path if found, null otherwise.
+    /// glftpd mp3/0day sections store releases under a dated subdirectory
+    /// (e.g. /mp3/0625/Release). ALWAYS route those sections through today's date
+    /// dir — the CWD/MKD navigation in EnsureDirectoryExists creates it if missing.
+    /// (Previously this PROBED for the date dir and only used it when it already
+    /// existed, otherwise dropping the release into the section ROOT — /mp3/Release —
+    /// where glftpd denies MKD, so the first release of each day failed.) Other
+    /// sections return the base unchanged.
     /// </summary>
-    private async Task<string?> ProbeDatedDirectory(string serverId, string sectionBase, CancellationToken ct)
+    private static string DatedBase(string sectionBase)
     {
-        // Only probe sections that commonly use dated dirs
-        var sectionName = sectionBase.TrimStart('/').Split('/')[0];
-        if (!sectionName.Equals("mp3", StringComparison.OrdinalIgnoreCase) &&
-            !sectionName.Equals("0day", StringComparison.OrdinalIgnoreCase))
-            return null;
-
-        FtpConnectionPool? pool = null;
-        if (_mainPools.TryGetValue(serverId, out var mainPool)) pool = mainPool;
-        else if (_pools.TryGetValue(serverId, out var spreadPool)) pool = spreadPool;
-        if (pool == null) return null;
-
-        var datePath = sectionBase + "/" + DateTime.UtcNow.ToString("MMdd");
-        try
-        {
-            using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            borrowCts.CancelAfter(TimeSpan.FromSeconds(10));
-            await using var conn = await pool.Borrow(borrowCts.Token);
-            if (await conn.Client.DirectoryExists(datePath, ct))
-            {
-                Log.Information("Spread: dated directory found: {Path}", datePath);
-                return datePath;
-            }
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex)
-        {
-            Log.Debug(ex, "Spread: dated dir probe failed for {Path}", datePath);
-        }
-        return null;
+        var trimmed = sectionBase.TrimEnd('/');
+        var sectionName = trimmed.TrimStart('/').Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? "";
+        if (sectionName.Equals("mp3", StringComparison.OrdinalIgnoreCase) ||
+            sectionName.Equals("0day", StringComparison.OrdinalIgnoreCase))
+            return trimmed + "/" + DateTime.UtcNow.ToString("MMdd");
+        return trimmed;
     }
 
     private async Task EnsureDirectoryExists(FluentFTP.AsyncFtpClient client, string dstId,
         string basePath, string relativePath, CancellationToken ct)
     {
-        // TryMakeDirWithResult handles missing-parent recursion internally.
-        // On failure we classify the reply code+message: permanent (550 path-filter,
-        // permission denied, etc.) → add to section blacklist so future races skip
-        // this dst at selection. Transient (timeout, 4xx, GnuTLS hiccup) → just throw
-        // and let the existing destFailure backoff ladder handle it.
-        var (ok, code, msg) = await TryMakeDirWithResult(client, basePath, ct);
+        // cbftp-style navigation: CWD to root, then CWD into each path component,
+        // issuing a RELATIVE MKD for any that doesn't exist (incl. the dated parent
+        // /mp3/MMDD/ and any release subdir like CD1/). glftpd dirscripts and
+        // path-filters evaluate the new dir name relative to the CWD — an absolute
+        // "MKD /a/b/c" is widely rejected ("Denied by dirscript" / "Not allowed to
+        // make directories here") where the equivalent CWD-then-relative-MKD is
+        // allowed. (This was the long-standing reason races delivered 0 files.)
+        var dirPart = Path.GetDirectoryName(relativePath)?.Replace('\\', '/');
+        var fullDir = string.IsNullOrEmpty(dirPart)
+            ? basePath
+            : basePath.TrimEnd('/') + "/" + dirPart.Trim('/');
+
+        var (ok, code, msg) = await EnsurePathByNavigation(client, fullDir, ct);
         if (!ok)
         {
             RecordIfPermanent(dstId, basePath, code, msg);
             RecordPermanentMkdDenialIfMatch(dstId, basePath, code, msg);
-            throw new IOException($"MKD failed for {basePath}");
+            // Carry the FTP reply text so the failure handler can classify it
+            // (permanent path/rights deny vs transient hiccup).
+            throw new IOException($"MKD failed for {basePath}: {code} {msg}".TrimEnd());
         }
 
-        // Self-heal: this dest just successfully MKD'd for this section, so any
-        // stale blacklist entry from a prior permission issue is no longer true.
-        // Clear it so the user doesn't have to hand-edit section-blacklist.json
-        // after fixing site perms / section paths. Only on a REAL MKD though —
-        // a CWD "already exists" hit on a fill-only dest must not erase the
-        // MKD-denial lesson (the site still refuses dir creation).
+        // Self-heal: a REAL create (not a CWD "already exists") means a prior
+        // blacklist entry for this section is stale — clear it so the user doesn't
+        // have to hand-edit section-blacklist.json after fixing site perms/paths.
         if (!msg.StartsWith("exists", StringComparison.Ordinal))
             ClearBlacklistOnSuccess(dstId);
+    }
 
-        // If file is in a subdirectory (e.g. "CD1/file.rar"), create nested dirs.
-        var dirPart = Path.GetDirectoryName(relativePath)?.Replace('\\', '/');
-        if (string.IsNullOrEmpty(dirPart)) return;
+    /// <summary>
+    /// Ensure an absolute directory path exists using cbftp-style navigation: CWD to
+    /// the server root, then CWD into each path component, issuing a RELATIVE MKD for
+    /// any component that doesn't exist yet. Returns the FTP reply code+message of the
+    /// first failure. Relative MKD (vs an absolute "MKD /a/b/c") is what glftpd
+    /// dirscripts/path-filters expect; the absolute form is widely denied even on a
+    /// fully-permissioned account.
+    /// </summary>
+    private static async Task<(bool ok, string code, string msg)> EnsurePathByNavigation(
+        FluentFTP.AsyncFtpClient client, string fullPath, CancellationToken ct)
+    {
+        var sanitized = Ftp.CpsvDataHelper.SanitizeFtpPath(fullPath);
 
-        var parts = dirPart.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        var current = basePath.TrimEnd('/');
+        // Fast path: the whole directory already exists. CWD is cheap + idempotent.
+        var whole = await client.Execute($"CWD {sanitized}", ct);
+        if (whole.Success) return (true, whole.Code ?? "250", "exists (CWD)");
+
+        var parts = sanitized.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) return (false, "ERR", "empty path");
+
+        var root = await client.Execute("CWD /", ct);
+        if (!root.Success) return (false, root.Code ?? "", root.Message ?? "CWD / failed");
+
+        var createdAny = false;
         foreach (var part in parts)
         {
-            current += "/" + part;
-            var (okSub, codeSub, msgSub) = await TryMakeDirWithResult(client, current, ct);
-            if (!okSub)
-            {
-                RecordIfPermanent(dstId, current, codeSub, msgSub);
-                RecordPermanentMkdDenialIfMatch(dstId, current, codeSub, msgSub);
-                throw new IOException($"MKD failed for {current}");
-            }
+            var cwd = await client.Execute($"CWD {part}", ct);
+            if (cwd.Success) continue; // component already exists — descend into it
+
+            var mkd = await client.Execute($"MKD {part}", ct);
+            if (!IsMkdSuccess(mkd))
+                return (false, mkd.Code ?? "", mkd.Message ?? "(no reply text)");
+            createdAny = true;
+
+            var cwd2 = await client.Execute($"CWD {part}", ct);
+            if (!cwd2.Success)
+                return (false, cwd2.Code ?? "", cwd2.Message ?? "CWD after MKD failed");
         }
+        return (true, createdAny ? "257" : "250", createdAny ? "created" : "exists");
     }
 
     /// <summary>
