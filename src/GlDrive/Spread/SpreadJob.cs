@@ -2064,6 +2064,23 @@ public class SpreadJob : IDisposable
             }
             else
             {
+                // mkdir filter denied (path-filter / dirscript). The 550 came back on the
+                // control channel — no data channel opened, both connections are clean, and
+                // the denial is deterministic. FAIL FAST: return now so the finally returns
+                // both connections to the pool UN-poisoned, with no backoff ladder and no
+                // per-file retry bump. The dest was already dropped for this release in
+                // EnsureDirectoryExists, so a filter-rejected release can't hold up the race.
+                // (StopRaceOnMkdDenied governs whether the section is also blacklisted.)
+                if (IsMkdError(transfer.ErrorMessage) &&
+                    (MkdFailureClassifier.IsPermanentMkdPathDenial(transfer.ErrorMessage) ||
+                     MkdFailureClassifier.IsReleaseScopedDirscriptDenial(transfer.ErrorMessage)))
+                {
+                    Log.Information("Spread: {Dst} mkdir denied [{Section}] {File} — fast-skip, " +
+                        "dropped for this release (no poison, no backoff)",
+                        _serverConfigs.TryGetValue(dstId, out var cmk) ? cmk.Name : dstId, Section, file.Name);
+                    return;
+                }
+
                 // Poison connections after failed transfer — FluentFTP.GnuTLS has a bug
                 // where GnuTlsRecordSend error codes (-10 etc.) corrupt the session state
                 // internally. The managed ArgumentOutOfRangeException is caught, but the
