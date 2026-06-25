@@ -108,6 +108,17 @@ public class RaceHistoryStore
             var items = JsonSerializer.Deserialize<List<RaceHistoryItem>>(json);
             if (items != null)
             {
+                // Reclaim legacy full-trace bloat immediately: pre-slim entries stored
+                // ~19KB of per-rule skiplist trace each (98% of a 9.9MB file). Keep only
+                // the matched (denying) rule; the next Save() persists the slimmed shape.
+                foreach (var it in items)
+                {
+                    if (it.SkiplistTrace is { Count: > 1 } tr)
+                    {
+                        var m = tr.Where(t => t.IsMatch).Take(1).ToList();
+                        it.SkiplistTrace = m.Count > 0 ? m : null;
+                    }
+                }
                 lock (_lock) _items.AddRange(items);
             }
             _loadFailed = false;
