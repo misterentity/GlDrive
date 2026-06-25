@@ -2959,6 +2959,18 @@ public class SpreadJob : IDisposable
                 path, _serverConfigs.TryGetValue(dstId, out var c) ? c.Name : dstId);
             return;
         }
+        // StopRaceOnMkdDenied: an mkdir-FILTER / path denial ("Not allowed to make
+        // directories here", path-filter) is also release-scoped on filter-based
+        // sites (SYNAPSE et al. enforce per-release rules via mkdir filters). The
+        // dest is already dropped for THIS race (RecordPermanentMkdDenialIfMatch);
+        // do NOT blacklist the section so the next release can still be tried.
+        if (_spreadConfig.StopRaceOnMkdDenied && MkdFailureClassifier.IsPermanentMkdPathDenial(msg))
+        {
+            Log.Information("Spread: {Server} mkdir filter denied {Path} ({Reason}) — release-scoped, " +
+                "skipping this release; section NOT blacklisted (StopRaceOnMkdDenied)",
+                _serverConfigs.TryGetValue(dstId, out var cf) ? cf.Name : dstId, path, msg.Trim());
+            return;
+        }
         var name = _serverConfigs.TryGetValue(dstId, out var cfg) ? cfg.Name : dstId;
         _blacklist.RecordPermanentFailure(dstId, name, Section, path, $"{code} {msg}".Trim());
     }

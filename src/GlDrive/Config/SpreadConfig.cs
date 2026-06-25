@@ -62,6 +62,19 @@ public class SpreadConfig
     /// <summary>Per-server timeout (seconds) for the mid-race alternate-source search.</summary>
     public int AlternateSourceSearchTimeoutSeconds { get; set; } = 20;
 
+    /// <summary>
+    /// When a destination DENIES MKD (glftpd mkdir-filter / path-filter rejection),
+    /// treat it as RELEASE-scoped: drop that destination for THIS race only and do
+    /// NOT persist a section blacklist. Many sites (e.g. SYNAPSE) enforce per-release
+    /// rules entirely via mkdir filters — banned genre, wrong year, not on the TV
+    /// allowlist — so a denial means THIS release failed the rule, not that the whole
+    /// section is forbidden. The next release in the same section is still tried.
+    /// Off = legacy behavior (section-blacklist permanent path/rights denials for 14
+    /// days, freezing the section). Default on. (Dirscript denials are always
+    /// release-scoped regardless of this flag.)
+    /// </summary>
+    public bool StopRaceOnMkdDenied { get; set; } = true;
+
     public List<SkiplistRule> GlobalSkiplist { get; set; } = [];
 
     /// <summary>
