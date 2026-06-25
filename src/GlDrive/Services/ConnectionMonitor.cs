@@ -15,6 +15,11 @@ public class ConnectionMonitor
     private bool _wasConnected = true;
     private int _healthCheckCount;
 
+    // Managed timeout for the keepalive NOOP. Kept under FluentFTP.GnuTLS's 15s
+    // CommTimeout floor so the health check yields promptly without cancelling the
+    // native recv (see MonitorLoop for why cancelling it is fatal).
+    private static readonly TimeSpan NoopTimeout = TimeSpan.FromSeconds(10);
+
     public event Action? ConnectionLost;
     public event Action? ConnectionRestored;
     public event Action<string>? BncRateLimitDetected;
@@ -72,11 +77,44 @@ public class ConnectionMonitor
                 try
                 {
                     await using var conn = await _pool.Borrow(ct);
-                    await conn.Client.Execute("NOOP", ct);
-                    healthy = true;
+                    try
+                    {
+                        // Managed-timeout NOOP with a NON-cancellable underlying read.
+                        // Passing a cancellable token into FluentFTP's read abandons the
+                        // native GnuTLS recv() mid-syscall; if the pool then tears the
+                        // connection down while that recv drains, GnuTlsInternalStream.Read
+                        // faults with an uncatchable AccessViolationException that kills the
+                        // whole process (dominant crash signature, Event Log .NET Runtime
+                        // id 1026). On timeout we leave the read draining (observing its
+                        // exception) and poison the connection so the pool's DEFERRED
+                        // teardown reclaims it only after the recv has finished.
+                        var noop = conn.Client.Execute("NOOP", CancellationToken.None);
+                        var winner = await Task.WhenAny(noop, Task.Delay(NoopTimeout, ct));
+                        if (winner == noop)
+                        {
+                            await noop;          // surface a genuine NOOP failure as unhealthy
+                            healthy = true;
+                        }
+                        else
+                        {
+                            _ = noop.ContinueWith(t => { _ = t.Exception; }, TaskScheduler.Default);
+                            ct.ThrowIfCancellationRequested(); // propagate a real shutdown cancel
+                            conn.Poisoned = true;              // draining recv — defer teardown
+                            healthy = false;
+                        }
+                    }
+                    catch
+                    {
+                        // NOOP failed (dropped / SSL fault). The session may be mid-recv or
+                        // corrupt — poison so the pool discards it via the deferred path
+                        // rather than returning a possibly-live connection for reuse.
+                        conn.Poisoned = true;
+                        healthy = false;
+                    }
                 }
                 catch
                 {
+                    // Borrow itself failed (pool exhausted / cooldown) — nothing to poison.
                     healthy = false;
                 }
 

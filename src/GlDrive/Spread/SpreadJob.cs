@@ -486,8 +486,13 @@ public class SpreadJob : IDisposable
                     var reason = entry?.Reason ?? "unknown";
                     if (MkdFailureClassifier.IsPermanentMkdPathDenial(reason))
                     {
-                        Log.Information("Spread: {Server} is FILL-ONLY for [{Section}] (MKD denied: {Reason}) — " +
-                            "will receive once the release dir exists", config.Name, Section, reason);
+                        // Path/rights denial (not dirscript-dupe — those never reach the
+                        // blacklist). The dest can't CREATE the dir but CAN fill it. Surface
+                        // it as an actionable misconfig so Dave can grep "FIX section path".
+                        Log.Information("Spread: {Server} is FILL-ONLY for [{Section}] (MKD path/rights denied: {Reason}) — " +
+                            "will receive once another racer creates the dir. To let {Server} CREATE dirs here, " +
+                            "FIX section path / mkd rights for [{Section}] on this site.",
+                            config.Name, Section, reason);
                         fillOnlyDests.Add(serverId);
                         // fall through to normal path resolution below
                     }
@@ -2179,8 +2184,17 @@ public class SpreadJob : IDisposable
             Log.Warning("FXP borrow timeout: {File} ({Src} -> {Dst}) — pool exhausted, " +
                 "server may have ghost connections (try !username login to kill them)",
                 file.Name, _serverConfigs[srcId].Name, _serverConfigs[dstId].Name);
-            if (srcConn != null) srcConn.Poisoned = true;
-            if (dstConn != null) dstConn.Poisoned = true;
+            // Congestion (no login permit free), NOT corruption. The borrow timed
+            // out DURING Borrow, before any STOR/RETR — so the surviving peer (if
+            // any) never touched its GnuTLS data channel and is pristine. Do NOT
+            // poison it: poisoning forced a Discard -> quarantine -> _created
+            // decrement that collapsed the spread pool toward 0 -> reinit/login-cap
+            // churn. On 2026-06-24 this turned 319 superbnc->zephyr borrow timeouts
+            // into 2354 poison-discards (88% of all quarantines) against only ~14
+            // real transfer failures. Leaving Poisoned=false lets the finally
+            // Return the live connection to the pool for the next pass. (Genuine
+            // mid-transfer GnuTLS corruption is still poisoned by the generic catch
+            // below and by ApplyPoisonAttribution.)
         }
         catch (Exception ex)
         {

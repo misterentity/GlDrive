@@ -241,6 +241,19 @@ public sealed class AgentRunner : IDisposable
             _activeRunCts?.Dispose();
             _activeRunCts = null;
             try { ScheduleNext(); } catch (Exception ex) { Log.Warning(ex, "ScheduleNext failed"); }
+            // Prune ai-briefs: one .md is written per run and nothing ever deleted them
+            // (4150+ files / 7MB observed). Keep the newest 60. Non-recursive GetFiles so
+            // the ai-briefs/issues subdir is untouched. Runs on EVERY path (incl. the
+            // early-return failure briefs above), since it's in the finally.
+            try
+            {
+                foreach (var old in Directory.GetFiles(_briefsDir, "*.md")
+                                            .OrderByDescending(f => f).Skip(60).ToList())
+                {
+                    try { File.Delete(old); } catch { }
+                }
+            }
+            catch (Exception ex) { Log.Debug(ex, "ai-briefs prune failed"); }
             Log.Information("AgentRunner run {Id} finished status={Status}", runId, status);
         }
     }

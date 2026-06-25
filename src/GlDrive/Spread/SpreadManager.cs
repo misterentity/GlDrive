@@ -428,6 +428,13 @@ public class SpreadManager : IDisposable
                 && dests.Count > 0
                 && dests.All(s => s.FilesOwned >= filesTotal);
 
+            // Persist only the matched (denying) skiplist rule. The full per-rule
+            // trace was 98% of race-history.json (9.9MB / 500 entries, ~10MB held
+            // resident for the whole process lifetime) yet only the denying rule
+            // drives the history detail popup; allowed races match no rule -> null.
+            var slimTrace = job.SkiplistTrace?.Where(t => t.IsMatch).Take(1).ToList();
+            if (slimTrace is { Count: 0 }) slimTrace = null;
+
             _history.Add(new RaceHistoryItem
             {
                 Id = job.Id,
@@ -442,7 +449,7 @@ public class SpreadManager : IDisposable
                 BytesTransferred = totalBytes,
                 SiteNames = siteNames,
                 SkiplistResult = job.SkiplistResult,
-                SkiplistTrace = job.SkiplistTrace,
+                SkiplistTrace = slimTrace,
                 FilesTotal = filesTotal,
                 FilesDelivered = filesDelivered,
                 CleanComplete = cleanComplete,
@@ -1034,16 +1041,20 @@ public class SpreadManager : IDisposable
     private ServerGate GetOrCreateGate(string serverId) =>
         _serverGates.GetOrAdd(serverId, id =>
         {
-            // Cap concurrent transfer PAIRS strictly below the account's login
-            // budget so one permit always remains for scans/cleanup. With
-            // usable=3 logins and a gate of 3, active transfers consumed every
-            // permit: mid-race source LISTs starved for 25+ minutes and new
-            // transfer borrows piled into 30s timeouts (My.Family 2026-06-10,
-            // ended 19/22 with 5 undelivered). usable-1 keeps the engine's
-            // eyes open; 530 auto-tune can still tighten further.
+            // Cap concurrent transfer PAIRS by the spread pool's GUARANTEED
+            // priority permits (gate.Reserved), NOT Limit-1. The warmed main pool
+            // pins the general permits for its whole connection lifetime, so the
+            // priority spread pool can only reliably CREATE `Reserved` (=1)
+            // connections. Allowing Limit-1 (=2) meant every 2nd transfer's source
+            // borrow waited out the full 30s timeout it could never satisfy, then
+            // (pre-fix) poisoned the pristine peer — collapsing the pool and
+            // feeding the reinit/login-cap storm (2026-06-24: 319 superbnc->zephyr
+            // borrow timeouts, 652 "login cap reached", 2354 poison-discards).
+            // Reserved is the count the source can actually serve alongside its
+            // 2s-cadence completion scan; 530 auto-tune can still tighten further.
             var cap = DefaultPerServerConcurrentTransfers;
             var lg = ResolveAccountLoginGate(id);
-            if (lg != null) cap = Math.Max(1, Math.Min(cap, lg.Limit - 1));
+            if (lg != null) cap = Math.Max(1, Math.Min(cap, lg.Reserved));
             return new ServerGate(id, cap);
         });
 
