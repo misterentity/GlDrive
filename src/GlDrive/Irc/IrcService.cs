@@ -348,21 +348,15 @@ public class IrcService : IDisposable
         AddSystemMessage("*", $"Invited to {channel} by {msg.Nick}");
         _invitedChannels.Add(channel);
 
-        // Auto-join if this channel is in our config
+        // Auto-join EVERY channel we're invited to, whether or not it's in config
+        // (Dave's request). Prefer the configured entry when present so its FiSH key
+        // and settings apply; otherwise join with defaults. Clear any pending-invite
+        // retry bookkeeping (this invite satisfies a prior 473 wait, if any).
         var configured = _serverConfig.Irc.Channels
             .FirstOrDefault(c => c.Name.Equals(channel, StringComparison.OrdinalIgnoreCase));
-        if (configured != null)
-        {
-            Log.Information("Auto-joining invited channel {Channel}", channel);
-            _ = JoinConfiguredChannelAsync(configured);
-        }
-
-        // Also join if we were waiting for this invite after a 473
-        if (_pendingInviteJoins.Remove(channel))
-        {
-            Log.Information("Joining channel {Channel} after receiving pending invite", channel);
-            _ = JoinConfiguredChannelAsync(configured ?? new IrcChannelConfig { Name = channel, AutoJoin = true });
-        }
+        _pendingInviteJoins.Remove(channel);
+        Log.Information("Auto-joining invited channel {Channel} (invited by {Nick})", channel, msg.Nick);
+        _ = JoinConfiguredChannelAsync(configured ?? new IrcChannelConfig { Name = channel, AutoJoin = true });
     }
 
     private void HandleJoinError(IrcMessage msg, string reason)
