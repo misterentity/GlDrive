@@ -52,8 +52,12 @@ public class SpreadConfig
 
     /// <summary>Substrings (case-insensitive) that mark a release dir as complete in
     /// a destination listing. Site-tunable, like NukeMarkers. Empty = heuristic only.</summary>
+    // NOTE: the bare "COMPLETE" token was REMOVED — it substring-matched glftpd's
+    // "[ Incomplete ]" status stubs and the "27% Complete" progress bar, falsely
+    // ending races (2026-06-08, 2026-06-26). Keep only delimited forms. (IsCompletionMarker
+    // also guards against "incomplete" + requires word-boundary matches as defence in depth.)
     public List<string> CompletionMarkers { get; set; } =
-        ["[ COMPLETE ]", "[ COMPLETED ]", "(COMPLETE)", "COMPLETE", "-=COMPLETE=-"];
+        ["[ COMPLETE ]", "[ COMPLETED ]", "(COMPLETE)", "-=COMPLETE=-"];
 
     /// <summary>When a release moves off its source mid-race, search other connected
     /// sites for an alternate source and continue feeding the target from it.</summary>
