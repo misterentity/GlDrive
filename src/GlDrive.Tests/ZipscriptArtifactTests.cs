@@ -13,6 +13,8 @@ public class ZipscriptArtifactTests
     [InlineData("[###:::::::::::] - 27% Complete - [zephyr]", 0)]  // progress bar
     [InlineData("[ NUKED ] reason here", 0)]
     [InlineData("-somezerobyte", 0)]
+    [InlineData("Ryan.Hamilton.This.Just.Hit.Me.2026.2160p.WEB.h265-EDITH.imdb.html", 8192)]  // site imdb sidecar
+    [InlineData("release.imdb.nfo", 4096)]
     public void Detects_zipscript_artifacts(string name, long size)
         => Assert.True(SpreadJob.IsZipscriptArtifact(name, size));
 

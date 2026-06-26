@@ -1444,6 +1444,14 @@ public class SpreadJob : IDisposable
         if (name.EndsWith(".missing", StringComparison.OrdinalIgnoreCase)) return true;
         if (name.EndsWith("-missing", StringComparison.OrdinalIgnoreCase)) return true;
 
+        // Per-release metadata sidecars generated SERVER-SIDE by the destination's own
+        // glftpd zipscript (PSXC-IMDB etc.). They live inside the release dir but are
+        // regenerated locally on every site, so racing them ships pseudo-files — often
+        // BACKWARD to a no-upload-rights source (553) — and inflates the file total
+        // (observed 2026-06-26: Ryan.Hamilton .imdb.html FXP'd SYN->superbnc, 553).
+        if (name.EndsWith(".imdb.html", StringComparison.OrdinalIgnoreCase)) return true;
+        if (name.EndsWith(".imdb.nfo", StringComparison.OrdinalIgnoreCase)) return true;
+
         // Race progress / completion-state indicators. glftpd's zipscript writes
         // 0-byte marker files (or dirs) named with bracketed status text and a
         // percentage. Real releases never contain "% Complete" or start with '['.

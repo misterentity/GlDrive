@@ -39,6 +39,23 @@ public class CompletionDetectorTests
     public void IsCompletionMarker_rejects_in_progress_race_bar(string name, bool expected)
         => Assert.Equal(expected, CompletionDetector.IsCompletionMarker(name, Markers));
 
+    // glftpd writes a "[ Incomplete ]"-style status stub for a release that received
+    // the SFV but is still missing files. It contains the substring "complete" yet means
+    // the OPPOSITE — the bare "COMPLETE" marker substring-matched it and ended SYN's race
+    // at 4/22 files (Ryan.Hamilton, 2026-06-26). It must never count as a marker.
+    [Theory]
+    [InlineData("[ Incomplete ]", false)]
+    [InlineData("incomplete", false)]
+    [InlineData("INCOMPLETE", false)]
+    [InlineData("[ INCOMPLETE ] - awaiting 21F", false)]
+    [InlineData("release.incomplete.html", false)]
+    [InlineData("in-complete", false)]
+    [InlineData("uncompleted", false)]               // word-boundary: bare COMPLETE doesn't substring-hit
+    [InlineData("[ COMPLETE ]", true)]               // real tag still matches
+    [InlineData("[##########] - 100% Complete", true)]
+    public void IsCompletionMarker_rejects_incomplete_status_stub(string name, bool expected)
+        => Assert.Equal(expected, CompletionDetector.IsCompletionMarker(name, Markers));
+
     [Theory]
     [InlineData("-MISSING-file.r01", 0, true)]
     [InlineData("-missing-file.r01", 0, true)]
