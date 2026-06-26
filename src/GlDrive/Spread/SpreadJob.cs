@@ -848,6 +848,20 @@ public class SpreadJob : IDisposable
                         return;
                     }
 
+                    // Fail FAST when every destination has permanently denied this
+                    // release (mkdir filter / dirscript) and nothing is in flight. A
+                    // filter-rejected release (e.g. SYNAPSE's per-release mkdir rules)
+                    // otherwise pins the single race slot through the 60s idle timer +
+                    // 2 sweep retries (~3min) while the announce queue (often 100s deep)
+                    // backs up behind it, starving the races that CAN deliver.
+                    if (activeCount == 0 && _sourceScanSucceeded
+                        && NoViableDestinations(sitePaths, sourceServers))
+                    {
+                        var s = _lastSkipSummary is { } sm ? $" ({sm})" : "";
+                        SetFailed($"All destinations denied this release — mkdir filter{s}");
+                        return;
+                    }
+
                     // A dest sitting inside its backoff window is pending work,
                     // not idle — the retry is scheduled. Hard-cap the total
                     // time we'll wait on backoffs (3min, above the 2min tier
@@ -2636,6 +2650,36 @@ public class SpreadJob : IDisposable
                 else if (state == DestState.Transferring)
                     _destAllFilesAt.Remove(serverId);
             }
+        }
+    }
+
+    /// <summary>
+    /// True when EVERY (non-source, non-download-only, non-fill-only) destination has
+    /// permanently denied this release — its base path is mkdir/dirscript-denied and
+    /// hasn't since been confirmed by another racer. Such a release is filter-rejected
+    /// everywhere: no transient backoff/cooldown will change it, so the race should
+    /// fail FAST instead of pinning the single race slot through the 60s idle timer and
+    /// its sweep retries (~3min) while the queue backs up. Fill-only dests are treated
+    /// as pending (a peer may still create the dir), not blocked.
+    /// </summary>
+    private bool NoViableDestinations(Dictionary<string, string> sitePaths, HashSet<string> sourceServers)
+    {
+        lock (_ownershipLock)
+        {
+            int dests = 0, blocked = 0;
+            foreach (var (dstId, basePath) in sitePaths)
+            {
+                if (sourceServers.Contains(dstId)) continue;
+                if (_serverConfigs.TryGetValue(dstId, out var cfg) && cfg.SpreadSite.DownloadOnly) continue;
+                // Fill-only dest waiting on a peer to create the dir is pending, not blocked.
+                if (_fillOnlyDests.Contains(dstId) && !_destDirConfirmed.Contains(dstId)) continue;
+                dests++;
+                if (_destDirscriptDenied.TryGetValue(dstId, out var deniedSet)
+                    && CandidatePredicates.DirscriptBlocked(basePath, deniedSet)
+                    && !_destDirConfirmed.Contains(dstId))
+                    blocked++;
+            }
+            return dests > 0 && blocked == dests;
         }
     }
 
