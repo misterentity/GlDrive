@@ -194,6 +194,15 @@ public class SpreadJob : IDisposable
     // Scan debouncing
     private DateTime _lastScanTime = DateTime.MinValue;
     private Task? _backgroundScan;
+
+    // Source re-LIST throttle. The SOURCE's file set is static once discovered (it HAS
+    // the release), but re-LISTing it on the fast 2s dest cadence borrows a source login
+    // the FXP transfers need — on a tight BNC (superbnc cap=4) the scan-vs-transfer
+    // collision drives "login cap reached" -> 90s cooldown -> remaining files can't be
+    // pulled and the race ends PARTIAL (543 login-cap hits / 66 cooldowns in 11h,
+    // 2026-06-26). Once a source has scanned successfully, re-LIST it only this often.
+    private DateTime _lastSourceScanTime = DateTime.MinValue;
+    private const double SourceRescanIntervalSeconds = 20.0;
     private volatile bool _forceScan;
     private volatile bool _isNuked;
     private int _completionRetries;
@@ -1277,6 +1286,29 @@ public class SpreadJob : IDisposable
         {
             scanTargets = new Dictionary<string, string>(sitePaths);
             foreach (var kv in _extraSourcePaths) scanTargets[kv.Key] = kv.Value;
+        }
+
+        // Source self-contention guard: once a source has been LISTed successfully, its
+        // file set is effectively static (it HAS the release), so re-LISTing it every
+        // 2s just burns a source login the FXP transfers need. Drop sources from the
+        // fast cycles and re-LIST them only every SourceRescanIntervalSeconds; keep
+        // scanning DESTS every cycle for completion tracking. _fileInfos/_expectedFileCount
+        // accumulate (never cleared), so a skipped source never loses its files or total.
+        // Alternate-source failover re-probes the source directly (HandleSourceMigration),
+        // not via this scan, so it is unaffected.
+        if (_sourceScanSucceeded && _sourceServersField.Count > 0)
+        {
+            if ((DateTime.UtcNow - _lastSourceScanTime).TotalSeconds < SourceRescanIntervalSeconds)
+            {
+                var destOnly = scanTargets
+                    .Where(kv => !_sourceServersField.Contains(kv.Key))
+                    .ToDictionary(kv => kv.Key, kv => kv.Value);
+                if (destOnly.Count > 0) scanTargets = destOnly; // never scan nothing
+            }
+            else
+            {
+                _lastSourceScanTime = DateTime.UtcNow; // including the source this cycle
+            }
         }
 
         Log.Information("Spread scan starting for {Count} servers: {Paths}",
