@@ -205,7 +205,14 @@ public class SpreadJob : IDisposable
     private const double SourceRescanIntervalSeconds = 20.0;
     private volatile bool _forceScan;
     private volatile bool _isNuked;
+    // Consecutive completion-sweep cycles that delivered NOTHING new. Reset to 0 whenever
+    // a sweep sees the missing-file count drop, so a slowly-progressing race (source
+    // throttled by its login cap) keeps re-queuing + refreshing until it finishes rather
+    // than declaring partial after a fixed couple of retries. Bounded by MaxNoProgressSweeps
+    // and the overall hard ceiling.
     private int _completionRetries;
+    private int _lastSweepMissing = -1;
+    private const int MaxNoProgressSweeps = 6;
 
     // Per-destination completion lifecycle (see CompletionDetector). Keyed by dest
     // serverId. _destAllFilesAt stamps when a dest first held the full file set, so
@@ -925,11 +932,23 @@ public class SpreadJob : IDisposable
                             }
                         }
 
+                        // Keep the race ALIVE — re-queue the undelivered files and refresh
+                        // the directories — as long as it's still DELIVERING, instead of
+                        // declaring partial after a fixed 2 retries. Reset the no-progress
+                        // counter whenever the missing-file count dropped since the last
+                        // sweep, so a release crawling in behind a login-capped source
+                        // finishes rather than stalling out. Only bail after
+                        // MaxNoProgressSweeps CONSECUTIVE empty sweeps; the hard ceiling
+                        // (HardTimeoutSeconds + completion-wait) still caps the whole race.
+                        var madeProgress = _lastSweepMissing >= 0 && missingFiles < _lastSweepMissing;
+                        _lastSweepMissing = missingFiles;
+                        if (madeProgress) _completionRetries = 0;
+
                         // Also sweep when the source has NEVER been listed
                         // successfully: missingFiles is 0 only because _fileInfos
                         // is empty, and the sweep's pool reinit is exactly the
                         // remedy for the starved scans that caused that.
-                        if ((missingFiles > 0 || !_sourceScanSucceeded) && _completionRetries < 2)
+                        if ((missingFiles > 0 || !_sourceScanSucceeded) && _completionRetries < MaxNoProgressSweeps)
                         {
                             _completionRetries++;
                             lock (_failureLock) _failureCounts.Clear();
