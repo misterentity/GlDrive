@@ -1311,6 +1311,26 @@ public class SpreadJob : IDisposable
             }
         }
 
+        // Also stop LISTing destinations already HARD-DROPPED for this race (mkdir/dirscript
+        // -denied and not fill-only). They won't receive a file, so re-LISTing them every
+        // cycle just burns THEIR login budget — SYN was LISTed 9246x in a day for releases
+        // its mkdir filter denies, arming 25 of the day's BNC cooldowns (2026-06-29). Keep
+        // fill-only and dir-confirmed dests (they can still receive once a peer makes the dir).
+        {
+            Dictionary<string, string> live;
+            lock (_ownershipLock)
+            {
+                live = scanTargets.Where(kv =>
+                    _sourceServersField.Contains(kv.Key) ||
+                    !(_destDirscriptDenied.TryGetValue(kv.Key, out var denied)
+                      && CandidatePredicates.DirscriptBlocked(kv.Value, denied)
+                      && !_destDirConfirmed.Contains(kv.Key)
+                      && !_fillOnlyDests.Contains(kv.Key)))
+                    .ToDictionary(kv => kv.Key, kv => kv.Value);
+            }
+            if (live.Count > 0) scanTargets = live; // never scan nothing
+        }
+
         Log.Information("Spread scan starting for {Count} servers: {Paths}",
             scanTargets.Count, string.Join(", ", scanTargets.Select(kv =>
             {
