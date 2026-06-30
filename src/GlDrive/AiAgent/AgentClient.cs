@@ -47,21 +47,27 @@ public sealed class AgentClient : IDisposable
     {
         var outcome = await RunInternalAsync(_model, systemPrompt, userPrompt, ct);
 
-        // Free models (notably openai/gpt-oss-120b:free) periodically emit malformed JSON —
-        // unescaped newlines mid-key, stray escaped quotes, unbalanced brackets — that no
-        // amount of repair can recover. Auto-retry once with a paid quality model so the
-        // run produces useful output instead of failing.
-        if (outcome.ErrorMessage == "failed-to-parse-json"
+        // Free models (notably openai/gpt-oss-120b:free) fail two ways the paid tier doesn't:
+        //   1. malformed JSON — unescaped newlines mid-key, stray quotes, unbalanced brackets;
+        //   2. HTTP 429 rate-limits — the free quota is exhausted (observed: 5 of 6 scheduled
+        //      runs returned 429/day, incl. the 04:00 job, so the agent applied nothing).
+        // Either way the run produces no useful output. Auto-retry once with a paid quality
+        // model. This keeps "free first" economics — we only spend a paid call when the free
+        // model actually fails, not on every run.
+        bool freeParseFail = outcome.ErrorMessage == "failed-to-parse-json";
+        bool freeRateLimited = outcome.ErrorMessage == "HTTP 429"
+            || (outcome.ErrorMessage?.StartsWith("upstream:429", StringComparison.OrdinalIgnoreCase) ?? false);
+        if ((freeParseFail || freeRateLimited)
             && _model.Contains(":free", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(_model, FallbackModel, StringComparison.OrdinalIgnoreCase))
         {
-            Log.Warning("AgentClient: free model {Model} returned malformed JSON — retrying with {Fallback}",
-                _model, FallbackModel);
+            Log.Warning("AgentClient: free model {Model} {Reason} — retrying with {Fallback}",
+                _model, freeRateLimited ? "was rate-limited (HTTP 429)" : "returned malformed JSON", FallbackModel);
             var retry = await RunInternalAsync(FallbackModel, systemPrompt, userPrompt, ct);
             if (retry.Result is not null)
             {
-                Log.Information("AgentClient: fallback {Fallback} succeeded after {Primary} parse failure",
-                    FallbackModel, _model);
+                Log.Information("AgentClient: fallback {Fallback} succeeded after {Primary} {Reason}",
+                    FallbackModel, _model, freeRateLimited ? "rate-limit" : "parse failure");
                 return retry;
             }
             Log.Warning("AgentClient: fallback {Fallback} also failed: {Err}", FallbackModel, retry.ErrorMessage);
