@@ -43,6 +43,16 @@ public class MountService : IDisposable
     /// <summary>Latest SITE STATS scrape (credits + ratio). Null until first refresh.</summary>
     public SiteStats? Stats { get; private set; }
 
+    // SITE STATS probe caching. On ACL-restricted sites (no access to SITE STATS/USER/
+    // TRAFFIC) the full candidate chain + LIST trailer fall through every tick — observed
+    // ~2,000 "You do not have access" probes/day per site, each burning a login on accounts
+    // capped at ~4 logins (directly starving FXP transfers). Once we learn the working
+    // command we reuse it; once we confirm NOTHING works we back off for a TTL instead of
+    // re-probing every tick.
+    private string? _workingStatsCommand;
+    private DateTime _statsUnavailableUntil = DateTime.MinValue;
+    private static readonly TimeSpan StatsUnavailableTtl = TimeSpan.FromHours(6);
+
     public string ServerId => _serverConfig.Id;
     public string ServerName => _serverConfig.Name;
     public string DriveLetter => _serverConfig.Mount.DriveLetter;
@@ -470,11 +480,22 @@ public class MountService : IDisposable
             return;
         }
 
+        // Negative cache: if we already learned this site grants NO stats access, don't
+        // re-probe the whole candidate chain (+ LIST trailer) every tick — that burns a
+        // login per command on accounts capped at ~4 logins. Re-probe only after the TTL.
+        if (_workingStatsCommand == null && DateTime.UtcNow < _statsUnavailableUntil)
+            return;
+
         // Try the configured command first, then fall back through common glftpd variants
         // until one yields parsed credits or ratio. SITE USER <self> is the only command
         // that reliably exposes per-user credits/ratio on glftpd; the others are site totals.
         var user = _serverConfig.Connection.Username;
-        var candidates = new List<string> { _serverConfig.SiteStatsCommand };
+        var candidates = new List<string>();
+        // Positive cache: once a command worked, reuse it first (and let the rest follow
+        // as fallback in case the site changed).
+        if (_workingStatsCommand != null) candidates.Add(_workingStatsCommand);
+        if (!candidates.Contains(_serverConfig.SiteStatsCommand, StringComparer.OrdinalIgnoreCase))
+            candidates.Add(_serverConfig.SiteStatsCommand);
         var fallbacks = new List<string>();
         if (!string.IsNullOrWhiteSpace(user))
         {
@@ -515,6 +536,7 @@ public class MountService : IDisposable
                     if (stats.Credits != null || stats.Ratio != null)
                     {
                         best = stats;
+                        _workingStatsCommand = cmd; // positive cache: reuse next tick
                         break;
                     }
                     best ??= stats; // remember first attempt for null fallback
@@ -561,6 +583,20 @@ public class MountService : IDisposable
                         _serverConfig.Name, listEx.Message);
                     if (!conn.Client.IsConnected) conn.Poisoned = true;
                 }
+            }
+
+            // Negative cache: a CLEAN no-access result (every candidate fell through and
+            // the LIST trailer yielded nothing, with the connection still alive) means this
+            // site simply doesn't expose stats to us. Back off for the TTL so we stop
+            // re-probing it every tick. A transient drop (connDied) is NOT cached — the next
+            // tick borrows a fresh connection and tries again.
+            bool gotStats = best?.Credits != null || best?.Ratio != null;
+            if (!gotStats && !connDied)
+            {
+                _workingStatsCommand = null;
+                _statsUnavailableUntil = DateTime.UtcNow + StatsUnavailableTtl;
+                Log.Information("SITE STATS unavailable for {Server} (no command grants access) — " +
+                    "backing off probes for {Hours}h", _serverConfig.Name, StatsUnavailableTtl.TotalHours);
             }
 
             Stats = best;

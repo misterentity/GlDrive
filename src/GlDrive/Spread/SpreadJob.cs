@@ -926,6 +926,13 @@ public class SpreadJob : IDisposable
                                 // creates the dir. Counting it kept finished races
                                 // idling and sweeping for unreachable files.
                                 if (IsUnopenedFillOnlyNoLock(serverId)) continue;
+                                // A dest that mkdir/dirscript-denied this release will NEVER
+                                // accept it — its "missing" files are undeliverable, not
+                                // pending. Counting them kept the completion sweep re-MKD'ing
+                                // a doomed dest (burning the scarce login budget) and labelled
+                                // an otherwise-complete race "partial".
+                                if (sitePaths.TryGetValue(serverId, out var bp)
+                                    && IsDestDirscriptDeniedNoLock(serverId, bp)) continue;
                                 var owned = _serverFileCount.GetValueOrDefault(serverId);
                                 var total = _fileInfos.Count;
                                 if (owned < total) missingFiles += total - owned;
@@ -2686,6 +2693,21 @@ public class SpreadJob : IDisposable
         => _destRetryAt.TryGetValue(dstId, out var until) && until == DateTime.MaxValue;
 
     /// <summary>
+    /// True when a dest's release dir is mkdir/dirscript-denied for THIS race and no peer
+    /// has since confirmed the dir — the same "permanently filter-rejected this release"
+    /// signal <see cref="NoViableDestinations"/> uses. Such a dest will never accept the
+    /// release, so it must not count as a pending/"undelivered" destination: otherwise a
+    /// race that fully delivered to every ACCEPTING dest gets mislabelled "completed
+    /// (partial)" and the completion sweep burns the scarce login budget re-MKD'ing a
+    /// doomed dest (observed: SYN mkdir-denies every TV release → 9 false partials/day
+    /// while zephyr got 100%). Caller must already hold _ownershipLock.
+    /// </summary>
+    private bool IsDestDirscriptDeniedNoLock(string dstId, string basePath)
+        => _destDirscriptDenied.TryGetValue(dstId, out var deniedSet)
+           && CandidatePredicates.DirscriptBlocked(basePath, deniedSet)
+           && !_destDirConfirmed.Contains(dstId);
+
+    /// <summary>
     /// Recompute every non-download-only destination's completion state from the
     /// latest scan. Marker/heuristic -> Complete; full file set but unconfirmed ->
     /// AwaitingCompletion (stamping _destAllFilesAt); otherwise Transferring. The
@@ -2753,9 +2775,7 @@ public class SpreadJob : IDisposable
                 // Fill-only dest waiting on a peer to create the dir is pending, not blocked.
                 if (_fillOnlyDests.Contains(dstId) && !_destDirConfirmed.Contains(dstId)) continue;
                 dests++;
-                if (_destDirscriptDenied.TryGetValue(dstId, out var deniedSet)
-                    && CandidatePredicates.DirscriptBlocked(basePath, deniedSet)
-                    && !_destDirConfirmed.Contains(dstId))
+                if (IsDestDirscriptDeniedNoLock(dstId, basePath))
                     blocked++;
             }
             return dests > 0 && blocked == dests;
@@ -2782,6 +2802,12 @@ public class SpreadJob : IDisposable
                 // must not wait on it), but evaluated dynamically so it revives if
                 // a scan later confirms the dir appeared.
                 if (IsUnopenedFillOnlyNoLock(id)) { states.Add(DestState.TimedOut); continue; }
+                // A dest that filter-denied this release's mkdir is terminal for THIS
+                // race — never going to accept it. Treat as TimedOut so the race
+                // completes on the ACCEPTING dests instead of idling 60s → sweeping →
+                // declaring a misleading "partial" (the denied dest's files are not
+                // deliverable). Revives if a peer later confirms the dir.
+                if (IsDestDirscriptDeniedNoLock(id, sitePaths[id])) { states.Add(DestState.TimedOut); continue; }
 
                 var state = _destStates.GetValueOrDefault(id, DestState.Transferring);
                 if (state == DestState.AwaitingCompletion &&
