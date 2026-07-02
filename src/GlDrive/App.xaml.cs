@@ -216,8 +216,13 @@ public partial class App
                 staleHeartbeatAge = age;
             }
             else
-                Log.Information("Previous instance shut down cleanly — last heartbeat age={AgeSec}s",
-                    (int)age.TotalSeconds);
+                // A fresh heartbeat only proves the previous instance was ALIVE until
+                // shortly before this start — the file is never deleted on clean exit,
+                // so it can NOT distinguish clean shutdown from a native crash (the
+                // watchdog's [FTL] line is the crash signal). The old wording claimed
+                // "shut down cleanly" one second after watchdog-confirmed crashes.
+                Log.Information("Previous instance alive until ~{AgeSec}s before this start (no pre-exit hang; " +
+                    "see watchdog for crash-vs-clean)", (int)age.TotalSeconds);
         }
         else
         {
