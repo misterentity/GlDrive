@@ -803,7 +803,11 @@ public class FtpConnectionPool : IAsyncDisposable
             catch (Exception ex) { Log.Debug(ex, "Pool: NeutralizeGnuTls during quarantine failed"); }
         }
 
-        Interlocked.Decrement(ref _created);
+        // Clamp at 0: Reinitialize() resets _created=1 while pre-reinit connections
+        // are still borrowed — their eventual discard lands here and drove the count
+        // to -1 (77 quarantine lines on 2026-06-30/07-01), skewing the fail-fast and
+        // capacity checks by one until the next successful create.
+        if (Interlocked.Decrement(ref _created) < 0) Interlocked.Increment(ref _created);
         ReleasePermit();
 
         var live = Interlocked.Increment(ref _quarantineLive);

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -25,6 +26,45 @@ public enum FxpFaultSide { None, Source, Dest, Both }
 public class FxpTransfer
 {
     private static readonly Regex PasvRegex = new(@"\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)\)", RegexOptions.Compiled);
+
+    // Route memory for Relay mode's direct-transfer probe. The CpsvPasv attempt
+    // is an optimization (direct site-to-site beats piping through local memory),
+    // but a FAILED attempt is not free: the GnuTLS sessions are unrecoverable
+    // afterwards, so BOTH connections are poisoned and the route pays two fresh
+    // logins for the file that follows. When the failure is topological (the BNC
+    // backend can't reach the dest), it repeats for EVERY file: on 2026-07-01 all
+    // 852 delivered files on superbnc->zephyr ended in a double poisoned-discard
+    // (~1700 extra logins, 146 BNC-cooldown mentions), and each teardown is
+    // GnuTLS recv-race crash exposure. Remember a failed route and go straight
+    // to Relay; re-probe direct after the TTL in case reachability changed.
+    private static readonly ConcurrentDictionary<(string Src, string Dst), DateTime> _relayOnlyRoutes = new();
+    internal static readonly TimeSpan RelayRouteRetry = TimeSpan.FromHours(6);
+
+    internal static bool ShouldAttemptDirect(string srcServerId, string dstServerId, DateTime nowUtc)
+    {
+        if (string.IsNullOrEmpty(srcServerId) || string.IsNullOrEmpty(dstServerId)) return true;
+        return !_relayOnlyRoutes.TryGetValue((srcServerId, dstServerId), out var failedAt)
+            || nowUtc - failedAt >= RelayRouteRetry;
+    }
+
+    /// <summary>Returns true if this is the first recorded failure for the route
+    /// (caller logs it prominently once; repeats are re-probe expiries).</summary>
+    internal static bool RecordDirectFailure(string srcServerId, string dstServerId, DateTime nowUtc)
+    {
+        if (string.IsNullOrEmpty(srcServerId) || string.IsNullOrEmpty(dstServerId)) return false;
+        var key = (srcServerId, dstServerId);
+        var first = !_relayOnlyRoutes.ContainsKey(key);
+        _relayOnlyRoutes[key] = nowUtc;
+        return first;
+    }
+
+    internal static void RecordDirectSuccess(string srcServerId, string dstServerId)
+    {
+        if (string.IsNullOrEmpty(srcServerId) || string.IsNullOrEmpty(dstServerId)) return;
+        _relayOnlyRoutes.TryRemove((srcServerId, dstServerId), out _);
+    }
+
+    internal static void ResetRelayRoutesForTests() => _relayOnlyRoutes.Clear();
 
     public event Action<TransferState>? StateChanged;
     public event Action<long>? BytesTransferred;
@@ -116,20 +156,36 @@ public class FxpTransfer
             // Poison both connections so they're discarded after this transfer attempt.
             if (mode == FxpMode.Relay)
             {
-                try
+                if (!ShouldAttemptDirect(srcServerId, dstServerId, DateTime.UtcNow))
                 {
-                    ok = await ExecuteCpsvPasv(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct, pasvSw);
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    Log.Debug("CpsvPasv failed ({Error}), trying Relay mode — connections will be poisoned", ex.Message);
-                    source.Poisoned = true;
-                    dest.Poisoned = true;
-                    // Both are already poisoned (floor); clear the CpsvPasv attribution
-                    // so any subsequent Relay failure attributes to the Relay outcome.
-                    FaultSide = FxpFaultSide.None;
-                    pasvSw.Restart();
+                    // Route already known to fail direct CPSV-PASV — go straight to
+                    // Relay and keep both connections reusable.
                     ok = await ExecuteRelay(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct, pasvSw);
+                }
+                else
+                {
+                    try
+                    {
+                        ok = await ExecuteCpsvPasv(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct, pasvSw);
+                        RecordDirectSuccess(srcServerId, dstServerId);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        if (RecordDirectFailure(srcServerId, dstServerId, DateTime.UtcNow))
+                            Log.Information("FXP route {Src}->{Dst}: direct CPSV-PASV failed ({Error}) — " +
+                                "using Relay for this route for the next {Hours}h (a failed direct attempt " +
+                                "poisons both connections, costing two fresh logins per file)",
+                                srcServerId, dstServerId, ex.Message, RelayRouteRetry.TotalHours);
+                        else
+                            Log.Debug("CpsvPasv failed ({Error}), trying Relay mode — connections will be poisoned", ex.Message);
+                        source.Poisoned = true;
+                        dest.Poisoned = true;
+                        // Both are already poisoned (floor); clear the CpsvPasv attribution
+                        // so any subsequent Relay failure attributes to the Relay outcome.
+                        FaultSide = FxpFaultSide.None;
+                        pasvSw.Restart();
+                        ok = await ExecuteRelay(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct, pasvSw);
+                    }
                 }
             }
             else

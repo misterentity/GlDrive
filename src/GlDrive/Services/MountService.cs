@@ -50,6 +50,7 @@ public class MountService : IDisposable
     // command we reuse it; once we confirm NOTHING works we back off for a TTL instead of
     // re-probing every tick.
     private string? _workingStatsCommand;
+    private bool _statsViaListTrailer;
     private DateTime _statsUnavailableUntil = DateTime.MinValue;
     private static readonly TimeSpan StatsUnavailableTtl = TimeSpan.FromHours(6);
 
@@ -515,6 +516,13 @@ public class MountService : IDisposable
             await using var conn = await _pool.Borrow(statsCts.Token);
             SiteStats? best = null;
             bool connDied = false;
+            // Trailer-only sites (e.g. SYN): every SITE candidate is ACL-denied but the
+            // 226 LIST trailer carries credits. Trailer success is neither a "clean
+            // no-access" (negative cache) nor a working SITE command (positive cache),
+            // so without this flag the 5-command dead chain re-ran every 5-min tick
+            // (~1,170 wasted SITE probes/day observed 2026-07-01). Go straight to the
+            // trailer; if it ever stops yielding, re-probe the chain next tick.
+            if (!_statsViaListTrailer)
             foreach (var cmd in candidates)
             {
                 // If the BNC silently dropped this control connection between candidates,
@@ -575,7 +583,10 @@ public class MountService : IDisposable
                         _serverConfig.Name, body.Length, body.Length > 600 ? body[..600] + "...(truncated)" : body);
                     var trailer = SiteStatsCollector.Parse(body);
                     if (trailer.Credits != null || trailer.Ratio != null)
+                    {
                         best = trailer;
+                        _statsViaListTrailer = true; // positive cache: skip the dead SITE chain next tick
+                    }
                 }
                 catch (Exception listEx)
                 {
@@ -593,10 +604,20 @@ public class MountService : IDisposable
             bool gotStats = best?.Credits != null || best?.Ratio != null;
             if (!gotStats && !connDied)
             {
-                _workingStatsCommand = null;
-                _statsUnavailableUntil = DateTime.UtcNow + StatsUnavailableTtl;
-                Log.Information("SITE STATS unavailable for {Server} (no command grants access) — " +
-                    "backing off probes for {Hours}h", _serverConfig.Name, StatsUnavailableTtl.TotalHours);
+                if (_statsViaListTrailer)
+                {
+                    // The cached trailer path stopped yielding — the SITE chain was
+                    // skipped this tick, so re-probe it next tick before concluding
+                    // the site grants no stats access at all.
+                    _statsViaListTrailer = false;
+                }
+                else
+                {
+                    _workingStatsCommand = null;
+                    _statsUnavailableUntil = DateTime.UtcNow + StatsUnavailableTtl;
+                    Log.Information("SITE STATS unavailable for {Server} (no command grants access) — " +
+                        "backing off probes for {Hours}h", _serverConfig.Name, StatsUnavailableTtl.TotalHours);
+                }
             }
 
             Stats = best;

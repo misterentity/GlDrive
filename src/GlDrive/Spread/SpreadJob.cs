@@ -898,9 +898,18 @@ public class SpreadJob : IDisposable
                     // legitimately wait for zipscript. Bounded by the await budget.
                     var awaitingCompletion = _spreadConfig.WaitForDestinationComplete && AnyDestAwaiting();
                     var awaitCapSeconds = _spreadConfig.DestinationCompletionWaitMinutes * 60 + 60;
-                    if (((nextBackoff is { } bAt && bAt > DateTime.UtcNow) || anyCooldown
-                         || (awaitingCompletion && idleSeconds < awaitCapSeconds))
-                        && idleSeconds < Math.Max(180, awaitCapSeconds))
+                    // The 180s cap applies to the backoff/cooldown refresh ONLY; the
+                    // longer awaitCap belongs to the completion-wait refresh alone.
+                    // Lumping them under Math.Max(180, awaitCap) let a cooldown-cycling
+                    // pool pin the race for the full await window instead of 180s — a
+                    // SYN-only flac race spun 28 min with "0 candidates (cooldown=6)"
+                    // before its first MKD attempt discovered the denial (2026-07-01
+                    // 17:04-17:32), holding one of the two serial race slots. Capping
+                    // at 180s hands the stall to the completion sweep, whose pool
+                    // reinit + forced rescan actually unblocks the transfer attempt.
+                    var pendingWork = (nextBackoff is { } bAt && bAt > DateTime.UtcNow) || anyCooldown;
+                    if ((pendingWork && idleSeconds < 180)
+                        || (awaitingCompletion && idleSeconds < awaitCapSeconds))
                     {
                         lastActivity = DateTime.UtcNow;
                         idleSeconds = 0;

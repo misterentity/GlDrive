@@ -24,6 +24,11 @@ public sealed class AgentRunner : IDisposable
     private readonly SemaphoreSlim _runGate = new(1, 1);
     private Timer? _timer;
     private DateTime _lastRunUtc = DateTime.MinValue;
+    // Consecutive transient run failures (model HTTP errors / exceptions). Drives
+    // exponential retry backoff in ScheduleNext — the old flat 1-min catch-up retry
+    // hammered OpenRouter while rate-limited (18 runs in 21 min on 2026-07-01, all
+    // HTTP 429), and a failed scheduled 04:00 run previously waited a full day.
+    private int _consecutiveFailedRuns;
     private CancellationTokenSource? _activeRunCts;
 
     public AgentRunner(
@@ -102,12 +107,18 @@ public sealed class AgentRunner : IDisposable
         if (!cfg.Enabled) return;
 
         var now = DateTime.Now;
-        if (_lastRunUtc != DateTime.MinValue && (DateTime.UtcNow - _lastRunUtc).TotalHours >= 23)
+        var needCatchUp = _lastRunUtc != DateTime.MinValue && (DateTime.UtcNow - _lastRunUtc).TotalHours >= 23;
+        if (needCatchUp || _consecutiveFailedRuns > 0)
         {
-            // Catch-up: schedule immediate run
+            // Catch up a missed run, or retry a transiently-failed one, with
+            // exponential backoff: 1, 2, 4 ... 64 min cap. Retrying keeps a failed
+            // scheduled run from losing the whole day; the backoff keeps the retry
+            // from hammering a rate-limited API every minute.
+            var minutes = Math.Min(64, 1 << Math.Min(6, _consecutiveFailedRuns));
             _timer = new Timer(_ => _ = RunOnceAsync(), null,
-                TimeSpan.FromMinutes(1), Timeout.InfiniteTimeSpan);
-            Log.Information("AgentRunner catch-up scheduled in 1 min");
+                TimeSpan.FromMinutes(minutes), Timeout.InfiniteTimeSpan);
+            Log.Information("AgentRunner {Kind} scheduled in {Minutes} min (consecutive failures: {Failures})",
+                needCatchUp ? "catch-up" : "retry", minutes, _consecutiveFailedRuns);
             return;
         }
 
@@ -201,6 +212,7 @@ public sealed class AgentRunner : IDisposable
             if (outcome.Result is null)
             {
                 status = outcome.ErrorMessage ?? "model-failure";
+                _consecutiveFailedRuns++; // transient (429/5xx/parse) — retry with backoff
                 try { File.WriteAllText(briefPath, $"# Agent run failed\n\nReason: {status}\n"); } catch { }
                 return;
             }
@@ -227,11 +239,13 @@ public sealed class AgentRunner : IDisposable
             try { File.WriteAllText(briefPath, (outcome.Result.BriefMarkdown ?? "# (no brief)") + footer); } catch { }
 
             _lastRunUtc = DateTime.UtcNow;
+            _consecutiveFailedRuns = 0;
             SaveLastRun();
         }
         catch (Exception ex)
         {
             Log.Warning(ex, "AgentRunner partial-failure");
+            _consecutiveFailedRuns++;
             status = "partial-failure";
             try { File.WriteAllText(briefPath, $"# Agent partial failure\n\n```\n{ex}\n```\n"); } catch { }
         }

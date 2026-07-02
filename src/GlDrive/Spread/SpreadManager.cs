@@ -317,7 +317,11 @@ public class SpreadManager : IDisposable
         };
         job.Error += (j, msg) =>
         {
-            Log.Warning("Spread job error: {Release} — {Error}", j.ReleaseName, msg);
+            // SetFailed already logged this exact message at WRN ("Spread job
+            // failed") one line earlier — keep this handler's copy at Debug so
+            // every failure isn't double-counted in log reviews (268 duplicate
+            // pairs on 2026-07-01).
+            Log.Debug("Spread job error: {Release} — {Error}", j.ReleaseName, msg);
 
             // Issue #4 (+ v1.66 expansion): when a race fails with a known dead-
             // end class, park (section, release) on a TTL so notification polling
