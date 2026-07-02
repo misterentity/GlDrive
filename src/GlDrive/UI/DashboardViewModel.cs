@@ -122,6 +122,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     public ObservableCollection<NotificationItemVm> NotificationItems { get; } = new();
     public ObservableCollection<WishlistItemVm> WishlistItems { get; } = new();
     public ObservableCollection<DownloadItemVm> DownloadItems { get; } = new();
+    private readonly Dictionary<string, DownloadItemVm> _downloadItemById = new();
 
     // Stat card values for the Downloads tab. Computed live each time the
     // download collection refreshes; the dashboard polls these via property
@@ -289,10 +290,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                     .FirstOrDefault();
                 if (latest != null)
                 {
-                    using var fs = new System.IO.FileStream(latest.FullName,
-                        System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.ReadWrite);
-                    using var sr = new System.IO.StreamReader(fs);
-                    var lines = sr.ReadToEnd().Split('\n');
+                    var lines = ReadRecentLogLines(latest.FullName, maxBytes: 64 * 1024);
                     var tail = lines.Length > 12
                         ? string.Join('\n', lines.Skip(lines.Length - 12))
                         : string.Join('\n', lines);
@@ -306,6 +304,18 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         RefreshTelemetry();
         EnsureThroughputSeed();
         StartOverviewLive();
+    }
+
+    private static string[] ReadRecentLogLines(string path, int maxBytes)
+    {
+        using var fs = new System.IO.FileStream(path,
+            System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.ReadWrite);
+        if (fs.Length > maxBytes)
+            fs.Seek(-maxBytes, System.IO.SeekOrigin.End);
+
+        using var sr = new System.IO.StreamReader(fs);
+        var text = sr.ReadToEnd();
+        return text.Split('\n');
     }
 
     // Mounts tab: reload the trusted-cert TOFU list from disk.
@@ -427,8 +437,8 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                     : (mbps >= 1.0 ? $"{mbps:0.0} MB/s" : $"{progress.BytesPerSecond / 1024.0:0} KB/s");
                 Application.Current?.Dispatcher.BeginInvoke(() =>
                 {
-                    var vm = DownloadItems.FirstOrDefault(d => d.Id == item.Id);
-                    if (vm != null) vm.SpeedDisplay = display;
+                    if (_downloadItemById.TryGetValue(item.Id, out var vm))
+                        vm.SpeedDisplay = display;
                 });
             };
         }
@@ -1522,8 +1532,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             UpdateActiveDownloadSummary();
 
             // Update the grid row's Progress column
-            var vm = DownloadItems.FirstOrDefault(d => d.Id == item.Id);
-            if (vm != null)
+            if (_downloadItemById.TryGetValue(item.Id, out var vm))
             {
                 var pctInt = (int)pct;
                 var fileName = progress.CurrentFileName ?? "";
@@ -2174,6 +2183,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private void RefreshDownloads()
     {
         DownloadItems.Clear();
+        _downloadItemById.Clear();
         foreach (var server in _serverManager.GetMountedServers())
         {
             var store = server.Downloads?.Store;
@@ -2181,7 +2191,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
             foreach (var item in store.Items)
             {
-                DownloadItems.Add(new DownloadItemVm
+                var vm = new DownloadItemVm
                 {
                     Id = item.Id,
                     ReleaseName = item.ReleaseName,
@@ -2205,7 +2215,9 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                     LocalPath = item.LocalPath,
                     ServerId = server.ServerId,
                     ServerName = server.ServerName
-                });
+                };
+                DownloadItems.Add(vm);
+                _downloadItemById[item.Id] = vm;
             }
         }
         OnPropertyChanged(nameof(ActiveDownloadCount));
