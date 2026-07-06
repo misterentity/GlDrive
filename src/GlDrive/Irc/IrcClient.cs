@@ -91,20 +91,37 @@ public class IrcClient : IDisposable
             var buffer = new char[MaxLineLength];
             while (!ct.IsCancellationRequested && _reader != null)
             {
+                // Only a failure of the READ itself (socket/IO error, cancellation, bounded-line
+                // overflow) means the connection is gone and the loop should exit → reconnect.
                 var line = await ReadLineBoundedAsync(_reader, buffer, ct);
                 if (line == null) break;
 
-                Log.Verbose("[IRC <] {Line}", line);
-                var msg = IrcMessage.Parse(line);
-
-                // Auto PONG
-                if (msg.Command == "PING")
+                // Parsing and handler dispatch run in an isolated try so that a single
+                // malformed message or a bug in a message handler (e.g. a FiSH decrypt
+                // throwing on a bad key) is logged and the message dropped — it must NEVER
+                // tear down the whole IRC connection. This was the root cause of spurious
+                // IRC disconnects: a DH1080-derived over-length Blowfish key threw out of
+                // the FiSH decrypt path, unwound the read loop, and forced a full reconnect.
+                try
                 {
-                    await SendRawAsync($"PONG :{msg.Trailing ?? msg.Params.FirstOrDefault() ?? ""}");
-                    continue;
-                }
+                    Log.Verbose("[IRC <] {Line}", line);
+                    var msg = IrcMessage.Parse(line);
 
-                MessageReceived?.Invoke(msg);
+                    // Auto-reply to server PING immediately (works even before/without a handler
+                    // attached). Do NOT `continue` — the PING must still flow to the handler so the
+                    // liveness tracker counts it as inbound traffic. Otherwise a quiet connection
+                    // whose only inbound data is periodic server PINGs looks "dead" to the 180s
+                    // liveness check and gets a needless disconnect+reconnect (which can trip a
+                    // ~2h BNC reconnect cooldown).
+                    if (msg.Command == "PING")
+                        await SendRawAsync($"PONG :{msg.Trailing ?? msg.Params.FirstOrDefault() ?? ""}");
+
+                    MessageReceived?.Invoke(msg);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "IRC message handling error — message dropped, connection kept");
+                }
             }
         }
         catch (OperationCanceledException) { }
