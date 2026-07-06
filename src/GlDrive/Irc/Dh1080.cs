@@ -56,6 +56,18 @@ public class Dh1080
         _publicKey = BigInteger.ModPow(Generator, _privateKey, Prime);
     }
 
+    /// <summary>
+    /// Test-only constructor with a fixed private key. Used to validate our derivation
+    /// byte-for-byte against reference FiSH implementations (mIRC FiSH 10 / py-fishcrypt)
+    /// using deterministic known-answer vectors. NOT for production use — real exchanges
+    /// must use the random-keypair constructor.
+    /// </summary>
+    internal Dh1080(BigInteger privateKey)
+    {
+        _privateKey = privateKey;
+        _publicKey = BigInteger.ModPow(Generator, _privateKey, Prime);
+    }
+
     public string GetPublicKeyBase64()
     {
         // Pad to exactly 135 bytes. BigInteger.ToByteArray(isUnsigned, isBigEndian)
@@ -136,18 +148,7 @@ public class Dh1080
 
     private byte[] ComputeSharedSecretBytes(string theirPubKeyBase64)
     {
-        // Normalize the incoming pubkey to match fish-irssi b64toh semantics:
-        // strip ALL trailing 'A' chars (B64ABC[0] = 'A', value 0), not just one.
-        // See class-level comment for the trailing-A interop background.
-        var normalized = theirPubKeyBase64;
-        while (normalized.Length > 0 && normalized[^1] == 'A')
-            normalized = normalized[..^1];
-        while (normalized.Length % 4 != 0)
-            normalized += '=';
-
-        byte[] theirBytes;
-        try { theirBytes = Convert.FromBase64String(normalized); }
-        catch (FormatException ex) { throw new CryptographicException("Invalid DH1080 public key encoding", ex); }
+        var theirBytes = DecodeDh1080PublicKey(theirPubKeyBase64);
 
         var theirPubKey = new BigInteger(theirBytes, isUnsigned: true, isBigEndian: true);
         if (theirPubKey <= 1 || theirPubKey >= Prime - 1)
@@ -159,6 +160,62 @@ public class Dh1080
         // produce different hashes than fish-irssi-compatible peers and break
         // interop for the 0.4% of exchanges whose shared secret has a leading zero byte.
         return shared.ToByteArray(isUnsigned: true, isBigEndian: true);
+    }
+
+    /// <summary>
+    /// Decodes a DH1080 public key from its base64 wire form to raw big-endian bytes.
+    ///
+    /// This is a faithful port of the canonical fish-irssi / py-fishcrypt / mIRC FiSH 10
+    /// `b64toh`/`dh1080_b64decode`: it uses the STANDARD RFC-4648 alphabet and strips the
+    /// trailing flush char(s) the encoder appends for byte-aligned input, then unpacks the
+    /// remaining sextets MSB-first.
+    ///
+    /// The previous homegrown decoder ("strip ALL trailing 'A' then pad with '='") was WRONG:
+    /// when a public key's natural base64 encoding itself ended in an 'A' (≈1/64 of keys,
+    /// i.e. the low 6 bits of the last byte are zero), it stripped one 'A' too many, dropped
+    /// low-order bits, and derived a different shared secret than the peer. That silently
+    /// broke ~1.5% of DH1080 exchanges per direction (~3% of exchanges overall) — the real
+    /// "DH1080 key exchange doesn't work" symptom. This port matches the rest of the FiSH
+    /// ecosystem byte-for-byte, so GlDrive fails only on the same rare inputs every FiSH
+    /// client fails on (and those simply prompt a retry).
+    /// </summary>
+    private static byte[] DecodeDh1080PublicKey(string s)
+    {
+        var buf = new int[128];
+        for (var idx = 0; idx < 64; idx++) buf[StdB64Alphabet[idx]] = idx;
+        int Val(char c) => c < 128 ? buf[c] : 0; // non-alphabet chars decode to 0, matching the reference
+
+        int L = s.Length;
+        if (L < 2) throw new CryptographicException("Invalid DH1080 public key (too short)");
+
+        // Strip trailing zero-value chars starting from the second-to-last position
+        // (the encoder's flush char plus any genuinely-zero trailing sextets).
+        for (var idx = L - 2; idx >= 0; idx--)
+        {
+            if (Val(s[idx]) == 0) L--;
+            else break;
+        }
+        if (L < 2) throw new CryptographicException("Invalid DH1080 public key (too short)");
+
+        var d = new byte[L];
+        int i = 0, k = 0;
+        while (true)
+        {
+            i++;
+            if (k + 1 < L) d[i - 1] = (byte)((Val(s[k]) << 2) & 0xFF); else break;
+            k++;
+            if (k < L) d[i - 1] |= (byte)(Val(s[k]) >> 4); else break;
+            i++;
+            if (k + 1 < L) d[i - 1] = (byte)((Val(s[k]) << 4) & 0xFF); else break;
+            k++;
+            if (k < L) d[i - 1] |= (byte)(Val(s[k]) >> 2); else break;
+            i++;
+            if (k + 1 < L) d[i - 1] = (byte)((Val(s[k]) << 6) & 0xFF); else break;
+            k++;
+            if (k < L) d[i - 1] |= (byte)(Val(s[k]) & 0xFF); else break;
+            k++;
+        }
+        return d[..(i - 1)];
     }
 
     public static string FormatInit(string pubKeyBase64) => $"DH1080_INIT {pubKeyBase64}";
