@@ -77,33 +77,34 @@ public class Dh1080
 
     /// <summary>
     /// Returns both alphabet variants of the SHA-256-hashed derived FiSH key.
-    /// Kept for backward compat — prefer <see cref="ComputeAllKeyVariants"/> which
-    /// also returns the raw-shared-secret variant used by older mIRC fish_inj.dll.
     /// </summary>
     public (string Standard, string Fish) ComputeSharedSecretBoth(string theirPubKeyBase64)
-    {
-        var (s, f, _) = ComputeAllKeyVariants(theirPubKeyBase64);
-        return (s, f);
-    }
+        => ComputeAllKeyVariants(theirPubKeyBase64);
 
     /// <summary>
-    /// Returns three Blowfish-key-string variants derived from the DH1080 shared secret.
-    /// Different FiSH clients use different KDFs and we don't know which until decrypt
-    /// time, so we try all three:
-    ///   standard: base64(SHA256(shared))                        — fish-irssi, HexChat FiSH, KVIrc, mIRC fish10
-    ///   fish:     fish-base64(SHA256(shared))                   — variant of the above with FiSH ECB alphabet
-    ///   fishRaw:  fish-base64(shared_bytes) (no SHA256)         — older mIRC fish_inj.dll, common on scene IRC
-    /// Caller stores all three and tries-all-on-decrypt; encrypt uses whichever variant
-    /// produced the most recent successful decrypt (alt-promotion swap).
+    /// Returns the two Blowfish-key-string variants derived from the DH1080 shared secret.
+    /// Every real FiSH client derives the key as base64(SHA256(shared)); the only ambiguity
+    /// is the base64 alphabet, so we compute both and try-all-on-decrypt:
+    ///   standard: base64(SHA256(shared)) using the RFC-4648 alphabet
+    ///             — mIRC FiSH 10, weechat fish.py, HexChat FiSH, KVIrc, py-fishcrypt (canonical)
+    ///   fish:     the same 43-char key mapped onto the FiSH ECB alphabet ("./0-9a-zA-Z")
+    ///             — defensive fallback for clients that reuse the ECB alphabet for the key
+    /// Both are 43 chars (32-byte SHA-256 digest → 43 base64 chars), well within Blowfish's
+    /// 4..56-byte key range. Encrypt uses whichever variant produced the most recent
+    /// successful decrypt (alt-promotion swap).
+    ///
+    /// NOTE: a former third variant (fish-base64 of the RAW ~135-byte shared secret, no
+    /// SHA-256) was removed — it produced a ~180-byte string that exceeds Blowfish's 56-byte
+    /// key limit, so it could never decrypt anything and instead threw ArgumentException that
+    /// unwound the IRC read loop. No real client uses a raw-secret KDF.
     /// </summary>
-    public (string Standard, string Fish, string FishRaw) ComputeAllKeyVariants(string theirPubKeyBase64)
+    public (string Standard, string Fish) ComputeAllKeyVariants(string theirPubKeyBase64)
     {
         var sharedBytes = ComputeSharedSecretBytes(theirPubKeyBase64);
         var hash = SHA256.HashData(sharedBytes);
         var standard = Convert.ToBase64String(hash).TrimEnd('=');
         var fish = MapStandardToFishAlphabet(standard);
-        var fishRaw = MapStandardToFishAlphabet(Convert.ToBase64String(sharedBytes).TrimEnd('='));
-        return (standard, fish, fishRaw);
+        return (standard, fish);
     }
 
     private const string StdB64Alphabet  = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

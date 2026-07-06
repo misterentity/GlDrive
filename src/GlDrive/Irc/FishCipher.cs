@@ -29,8 +29,13 @@ public static class FishCipher
                 return DecryptEcb(ciphertext[EcbPrefix.Length..], key);
             return null;
         }
-        catch (FormatException)
+        catch (Exception)
         {
+            // Decrypt operates on untrusted network input with a possibly-malformed key
+            // (bad base64, non-block-aligned ciphertext, out-of-range Blowfish key length).
+            // ANY failure just means "this key can't decrypt this message" — return null.
+            // Never let a crypto exception propagate: it used to unwind the IRC read loop
+            // (via DecryptWithFallback) and force a full reconnect.
             return null;
         }
     }
@@ -105,16 +110,30 @@ public static class FishCipher
         return (double)ok / s.Length;
     }
 
-    public static string EncryptEcb(string plaintext, string key)
+    /// <summary>
+    /// Builds a Blowfish key parameter from a FiSH key string. Blowfish accepts 32..448-bit
+    /// keys (4..56 bytes); FiSH clients cap the key at 56 bytes and truncate anything longer,
+    /// so we do the same. This guard is load-bearing: an over-length key (e.g. a mis-derived
+    /// DH1080 variant) would otherwise make BouncyCastle throw ArgumentException, which
+    /// historically propagated out of the decrypt path and killed the IRC read loop.
+    /// </summary>
+    private static KeyParameter BlowfishKey(string key)
     {
         var keyBytes = Encoding.Latin1.GetBytes(key);
+        if (keyBytes.Length > 56)
+            keyBytes = keyBytes[..56];
+        return new KeyParameter(keyBytes);
+    }
+
+    public static string EncryptEcb(string plaintext, string key)
+    {
         var data = Encoding.UTF8.GetBytes(plaintext);
 
         // Pad to 8-byte boundary
         var padded = PadToBlock(data);
 
         var engine = new BlowfishEngine();
-        engine.Init(true, new KeyParameter(keyBytes));
+        engine.Init(true, BlowfishKey(key));
 
         var output = new byte[padded.Length];
         for (var i = 0; i < padded.Length; i += 8)
@@ -125,11 +144,10 @@ public static class FishCipher
 
     public static string DecryptEcb(string encoded, string key)
     {
-        var keyBytes = Encoding.Latin1.GetBytes(key);
         var data = FishBase64.Decode(encoded);
 
         var engine = new BlowfishEngine();
-        engine.Init(false, new KeyParameter(keyBytes));
+        engine.Init(false, BlowfishKey(key));
 
         var output = new byte[data.Length];
         for (var i = 0; i < data.Length; i += 8)
@@ -140,7 +158,6 @@ public static class FishCipher
 
     public static string EncryptCbc(string plaintext, string key)
     {
-        var keyBytes = Encoding.Latin1.GetBytes(key);
         var data = Encoding.UTF8.GetBytes(plaintext);
         var padded = PadToBlock(data);
 
@@ -148,7 +165,7 @@ public static class FishCipher
         var iv = RandomNumberGenerator.GetBytes(8);
 
         var cipher = new CbcBlockCipher(new BlowfishEngine());
-        cipher.Init(true, new ParametersWithIV(new KeyParameter(keyBytes), iv));
+        cipher.Init(true, new ParametersWithIV(BlowfishKey(key), iv));
 
         var output = new byte[padded.Length];
         for (var i = 0; i < padded.Length; i += 8)
@@ -165,7 +182,6 @@ public static class FishCipher
 
     public static string DecryptCbc(string encoded, string key)
     {
-        var keyBytes = Encoding.Latin1.GetBytes(key);
         // FiSH CBC uses standard base64, not FiSH base64
         var data = Convert.FromBase64String(encoded);
 
@@ -174,7 +190,7 @@ public static class FishCipher
         var ciphertext = data[8..];
 
         var cipher = new CbcBlockCipher(new BlowfishEngine());
-        cipher.Init(false, new ParametersWithIV(new KeyParameter(keyBytes), iv));
+        cipher.Init(false, new ParametersWithIV(BlowfishKey(key), iv));
 
         var output = new byte[ciphertext.Length];
         for (var i = 0; i < ciphertext.Length; i += 8)
