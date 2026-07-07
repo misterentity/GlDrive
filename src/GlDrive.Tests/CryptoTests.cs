@@ -182,6 +182,20 @@ public class Dh1080Tests
     public void Public_key_is_nonempty()
         => Assert.False(string.IsNullOrEmpty(new Dh1080().GetPublicKeyBase64()));
 
+    // Auto-recovery policy: a stale/corrupt DH1080 key re-negotiates itself after a few
+    // consecutive decrypt failures, but is rate-limited (cooldown) AND capped (max attempts per
+    // episode) so a peer a fresh exchange can never repair can't drive an endless /keyx stream.
+    [Theory]
+    [InlineData(1, 999, 0, false)] // first failure — below threshold
+    [InlineData(2, 999, 0, false)] // second failure — still below threshold
+    [InlineData(3, 999, 0, true)]  // third consecutive failure, cooldown elapsed, budget left — re-key
+    [InlineData(5, 999, 1, true)]  // past threshold, cooldown elapsed, 1 prior attempt — re-key
+    [InlineData(3, 1, 0, false)]   // threshold reached but within cooldown — suppressed
+    [InlineData(9, 999, 3, false)] // budget exhausted (3 prior attempts) — give up, no more /keyx
+    [InlineData(9, 999, 2, true)]  // exactly at the last allowed attempt — still re-key
+    public void Auto_rekey_policy_respects_threshold_cooldown_and_cap(int streak, int minutesSinceLast, int priorAttempts, bool expected)
+        => Assert.Equal(expected, IrcService.ShouldAutoRekey(streak, TimeSpan.FromMinutes(minutesSinceLast), priorAttempts));
+
     // The canonical DH1080 Blowfish key (mIRC FiSH 10, weechat fish.py, HexChat, KVIrc,
     // py-fishcrypt) is standard-RFC4648-base64(SHA256(shared_secret)) with '=' padding
     // stripped. Our Standard variant must equal exactly that, and must be a valid
