@@ -54,6 +54,21 @@ public class IrcService : IDisposable
     private readonly Dictionary<string, int> _pendingInviteJoins = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _invitedChannels = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _decryptFailHintSent = new(StringComparer.OrdinalIgnoreCase);
+    // Auto-recovery for stale/corrupt DH1080 keys: a private-message key derived by an older
+    // build (e.g. pre-v3.10.16, whose public-key decoder could drop bits and derive the wrong
+    // key) makes a peer's messages permanently unreadable. After a few consecutive decrypt
+    // failures we transparently re-run the key exchange. Bounded + rate-limited so a peer using
+    // an unrelated static key can't trigger /keyx spam. Touched only under _decryptPromoteLock.
+    private readonly Dictionary<string, int> _decryptFailStreak = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, DateTime> _lastAutoRekey = new(StringComparer.OrdinalIgnoreCase);
+    // Auto-rekeys fired for this target WITHOUT an intervening successful decrypt. Caps the
+    // total attempts per staleness episode so a peer a fresh exchange can never repair (e.g. one
+    // using a separate static key, or spamming "+OK <garbage>") can't drive an endless stream of
+    // DH1080_INIT NOTICEs. Reset to 0 on the next successful decrypt (episode boundary).
+    private readonly Dictionary<string, int> _autoRekeyAttempts = new(StringComparer.OrdinalIgnoreCase);
+    private const int AutoRekeyFailThreshold = 3;
+    private const int MaxAutoRekeyAttempts = 3;
+    private static readonly TimeSpan AutoRekeyCooldown = TimeSpan.FromMinutes(5);
     // Serializes the GetKey→(sync)decrypt→SetKeyWithAlt variant-promotion compound so two
     // incoming messages can't both read the same pre-promotion snapshot and race the write,
     // promoting the wrong base64-alphabet variant. Decrypt is fully synchronous — this lock
@@ -430,6 +445,7 @@ public class IrcService : IDisposable
 
         // FiSH decryption
         var effectiveTarget = IsChannel(target) ? target : nick;
+        string? autoRekeyTarget = null;
         if (_serverConfig.Irc.FishEnabled && FishCipher.IsEncrypted(text))
         {
             var prefix = text.StartsWith("+OK *") ? "CBC" : "ECB";
@@ -474,6 +490,7 @@ public class IrcService : IDisposable
 
                         text = decrypted;
                         wasEncrypted = true;
+                        ResetDecryptFailStreak(effectiveTarget);
                     }
                     else
                     {
@@ -487,6 +504,8 @@ public class IrcService : IDisposable
                         text = $"🔒 [FiSH decrypt failed — {prefix}, cipher {ch}]";
                         wasEncrypted = false;
                         PostDecryptFailureHint(effectiveTarget, keyEntry, prefix);
+                        if (ShouldAutoReKeyOnFailure(effectiveTarget, keyEntry))
+                            autoRekeyTarget = effectiveTarget;
                     }
                 }
                 else
@@ -497,7 +516,25 @@ public class IrcService : IDisposable
             }
         }
 
+        // Fired OUTSIDE _decryptPromoteLock (InitiateKeyExchange does async I/O).
+        if (autoRekeyTarget != null)
+            TriggerAutoReKey(autoRekeyTarget);
+
         AddMessage(effectiveTarget, new IrcMessageItem { Nick = nick, Text = StripFormatting(text), WasEncrypted = wasEncrypted });
+    }
+
+    /// <summary>
+    /// Transparently re-runs a DH1080 exchange for a target whose stored key stopped decrypting.
+    /// Fire-and-forget. The caller (<see cref="ShouldAutoReKeyOnFailure"/>) is what bounds this —
+    /// via the per-target cooldown and the <see cref="MaxAutoRekeyAttempts"/> per-episode cap — so
+    /// a peer a fresh exchange can't repair gets at most a few INIT NOTICEs, not an endless stream.
+    /// </summary>
+    private void TriggerAutoReKey(string target)
+    {
+        Log.Information("FiSH auto-recovery: {Target} DH1080 key failed to decrypt {N}x — re-initiating key exchange",
+            target, AutoRekeyFailThreshold);
+        AddSystemMessage(target, "🔑 Encrypted messages stopped decrypting — automatically re-running the key exchange...");
+        _ = InitiateKeyExchange(target);
     }
 
     private void HandleNotice(IrcMessage msg)
@@ -520,6 +557,7 @@ public class IrcService : IDisposable
         var target = msg.Params.FirstOrDefault() ?? "";
         var effectiveTarget = IsChannel(target) ? target : nick;
         var wasEncrypted = false;
+        string? autoRekeyTarget = null;
 
         if (_serverConfig.Irc.FishEnabled && FishCipher.IsEncrypted(text))
         {
@@ -555,6 +593,7 @@ public class IrcService : IDisposable
 
                         text = decrypted;
                         wasEncrypted = true;
+                        ResetDecryptFailStreak(effectiveTarget);
                     }
                     else
                     {
@@ -567,10 +606,15 @@ public class IrcService : IDisposable
                         text = $"🔒 [FiSH decrypt failed — {prefix}, cipher {ch}]";
                         wasEncrypted = false;
                         PostDecryptFailureHint(effectiveTarget, keyEntry, prefix);
+                        if (ShouldAutoReKeyOnFailure(effectiveTarget, keyEntry))
+                            autoRekeyTarget = effectiveTarget;
                     }
                 }
             }
         }
+
+        if (autoRekeyTarget != null)
+            TriggerAutoReKey(autoRekeyTarget);
 
         text = StripFormatting(text);
         if (string.IsNullOrEmpty(nick))
@@ -1082,11 +1126,73 @@ public class IrcService : IDisposable
         if (_decryptFailHintSent.Contains(target)) return;
         if (keyEntry.Manual) return; // manual key already in use — user knows what they did
         if (string.IsNullOrEmpty(keyEntry.AltKey)) return; // no DH1080 — likely no-key situation, different problem
+        // Auto-recovery re-runs the key exchange first; only fall back to the manual-key advice
+        // once we've EXHAUSTED the automatic re-key budget for this staleness episode (i.e. a
+        // fresh exchange demonstrably isn't fixing it — likely a static/manual key on their side).
+        if (_autoRekeyAttempts.GetValueOrDefault(target) < MaxAutoRekeyAttempts) return;
 
         _decryptFailHintSent.Add(target);
         AddSystemMessage(target,
             $"⚠ DH1080 succeeded but {prefix} decrypt is failing. Peer's client likely uses a separate static key for {prefix} mode. " +
             $"Ask {target} for a passphrase, then run /key {target} <passphrase> on both sides. /unkey {target} to retry /keyx later.");
+    }
+
+    /// <summary>
+    /// Records a decrypt failure for <paramref name="target"/> and returns true if we should
+    /// transparently re-run the DH1080 key exchange (a stale/corrupt DH-derived key can never
+    /// recover otherwise). Only applies to private-message, DH-derived (non-manual) keys, and
+    /// is rate-limited by <see cref="AutoRekeyCooldown"/>. Must be called while holding
+    /// <see cref="_decryptPromoteLock"/>. Reset the streak via <see cref="ResetDecryptFailStreak"/>
+    /// on a successful decrypt.
+    /// </summary>
+    private bool ShouldAutoReKeyOnFailure(string target, FishKeyEntry keyEntry)
+    {
+        // Manual keys and channel keys are never DH-negotiated — leave them alone.
+        // A DH1080-derived key always has a non-empty alternate-alphabet variant.
+        if (keyEntry.Manual || IsChannel(target) || string.IsNullOrEmpty(keyEntry.AltKey))
+            return false;
+
+        // Already exhausted our re-key budget for this episode — stop (a fresh exchange isn't
+        // fixing it). Don't even grow the streak; ResetDecryptFailStreak on a good decrypt clears
+        // this and lets a genuinely-recovered key re-key again in a future episode.
+        var attempts = _autoRekeyAttempts.GetValueOrDefault(target);
+        if (attempts >= MaxAutoRekeyAttempts) return false;
+
+        var streak = _decryptFailStreak.GetValueOrDefault(target) + 1;
+        _decryptFailStreak[target] = streak;
+
+        var sinceLast = _lastAutoRekey.TryGetValue(target, out var last)
+            ? DateTime.UtcNow - last
+            : TimeSpan.MaxValue;
+        if (!ShouldAutoRekey(streak, sinceLast, attempts)) return false;
+
+        _lastAutoRekey[target] = DateTime.UtcNow;
+        _autoRekeyAttempts[target] = attempts + 1;
+        _decryptFailStreak[target] = 0;
+        return true;
+    }
+
+    /// <summary>
+    /// Pure decision: given the current consecutive-failure streak (including the failure being
+    /// handled), how long since the last automatic re-key for this target, and how many auto-rekeys
+    /// we've already fired without a successful decrypt, should we re-key? Requires the streak to
+    /// reach <see cref="AutoRekeyFailThreshold"/>, the cooldown to have elapsed, AND the per-episode
+    /// attempt budget (<see cref="MaxAutoRekeyAttempts"/>) not to be exhausted. Internal for testing.
+    /// </summary>
+    internal static bool ShouldAutoRekey(int failStreakIncludingThis, TimeSpan sinceLastRekey, int priorAttempts)
+        => priorAttempts < MaxAutoRekeyAttempts
+           && failStreakIncludingThis >= AutoRekeyFailThreshold
+           && sinceLastRekey >= AutoRekeyCooldown;
+
+    // A successful decrypt ends the staleness episode: clear the failure streak, the auto-rekey
+    // attempt budget, the cooldown stamp, and the one-shot manual-key hint latch, so a future
+    // episode starts clean (and can auto-recover + hint again).
+    private void ResetDecryptFailStreak(string target)
+    {
+        _decryptFailStreak.Remove(target);
+        _autoRekeyAttempts.Remove(target);
+        _lastAutoRekey.Remove(target);
+        _decryptFailHintSent.Remove(target);
     }
 
     private async Task HandleDh1080InitAsync(string nick, string theirPubKey)
