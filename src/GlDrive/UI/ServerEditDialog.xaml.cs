@@ -126,6 +126,7 @@ public partial class ServerEditDialog : Window
             IrcInviteNickBox.Text = existing.Irc.InviteNick;
             IrcFishEnabledBox.IsChecked = existing.Irc.FishEnabled;
             IrcFishModeBox.SelectedIndex = existing.Irc.FishMode == FishMode.CBC ? 1 : 0;
+            IrcFishCharsetBox.Text = existing.Irc.FallbackCharset;
             IrcChannelsBox.Text = string.Join("\n", existing.Irc.Channels.Select(c =>
             {
                 var prefix = c.AutoJoin ? "" : "-";
@@ -401,6 +402,7 @@ public partial class ServerEditDialog : Window
         _serverConfig.Irc.InviteNick = IrcInviteNickBox.Text ?? "";
         _serverConfig.Irc.FishEnabled = IrcFishEnabledBox.IsChecked == true;
         _serverConfig.Irc.FishMode = IrcFishModeBox.SelectedIndex == 1 ? FishMode.CBC : FishMode.ECB;
+        _serverConfig.Irc.FallbackCharset = IrcFishCharsetBox.Text.Trim();
 
         // Parse channels (prefix with - to disable auto-join)
         _serverConfig.Irc.Channels = (IrcChannelsBox.Text ?? "")

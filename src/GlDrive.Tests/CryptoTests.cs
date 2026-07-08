@@ -198,6 +198,62 @@ public class FishCipherTests
         Assert.Equal("hello world", FishCipher.Decrypt(cipher, hugeKey));
     }
 
+    // A peer whose client uses a legacy 8-bit charset (windows-1251 Cyrillic) instead of UTF-8:
+    // with the configured fallback charset its messages decode correctly; without it they are
+    // garbage (invalid UTF-8), so the UTF-8 wrong-key signal is preserved.
+    [Theory]
+    [InlineData(FishMode.ECB)]
+    [InlineData(FishMode.CBC)]
+    public void Legacy_charset_peer_decodes_with_fallback(FishMode mode)
+    {
+        System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+        var cp1251 = System.Text.Encoding.GetEncoding("windows-1251");
+        const string key = "correcthorsebatterystaple";
+        const string plain = "Привет мир, как твои дела сегодня друг";
+
+        // Peer encrypts the CP1251 bytes of the message (not UTF-8).
+        var cipher = FishCipher.Encrypt(plain, key, mode, cp1251);
+
+        // With the fallback charset we recover the Cyrillic text...
+        var (withCharset, wIdx, wQ) = FishCipher.DecryptWithFallback(cipher, cp1251, key, "wrongwrong123456");
+        Assert.Equal(plain, withCharset);
+        Assert.Equal(0, wIdx);
+        Assert.True(wQ[0] >= 0.85);
+
+        // ...but without it, UTF-8 decoding of CP1251 bytes yields U+FFFD garbage (not the plaintext).
+        Assert.NotEqual(plain, FishCipher.Decrypt(cipher, key));
+    }
+
+    // Windows-1252 text using common typographic glyphs that live at 0x80-0x9F (apostrophe 0x92,
+    // em-dash 0x97, curly quotes 0x93/0x94, ellipsis 0x85) must still decode — the gate is
+    // charset-aware (checks decoded chars, not raw C1 bytes), so real punctuation is accepted.
+    [Fact]
+    public void Legacy_charset_decodes_windows1252_smart_punctuation()
+    {
+        System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+        var cp1252 = System.Text.Encoding.GetEncoding("windows-1252");
+        const string key = "correcthorsebatterystaple";
+        const string plain = "It’s over here — “the café” closes at 8…";
+        var cipher = FishCipher.Encrypt(plain, key, FishMode.ECB, cp1252);
+        var (text, idx, _) = FishCipher.DecryptWithFallback(cipher, cp1252, key, "wrongwrong123456");
+        Assert.Equal(plain, text);
+        Assert.Equal(0, idx);
+    }
+
+    // A sub-16-byte legacy decrypt is NOT trusted as legacy text (too short to distinguish from a
+    // random wrong-key block), so the fallback is refused even with the charset set — this is the
+    // guard that stops a wrong key from "decoding" short random bytes into bogus glyphs.
+    [Fact]
+    public void Legacy_charset_refuses_too_short_messages()
+    {
+        System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+        var cp1251 = System.Text.Encoding.GetEncoding("windows-1251");
+        const string key = "correcthorsebatterystaple";
+        const string shortPlain = "Привет"; // 6 CP1251 bytes — below the 16-byte legacy gate
+        var cipher = FishCipher.Encrypt(shortPlain, key, FishMode.ECB, cp1251);
+        Assert.NotEqual(shortPlain, FishCipher.Decrypt(cipher, key, cp1251));
+    }
+
     [Fact]
     public void DecryptWithFallback_never_throws_on_bad_keys()
     {
