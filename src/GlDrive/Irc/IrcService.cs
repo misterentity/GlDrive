@@ -543,8 +543,7 @@ public class IrcService : IDisposable
                     else
                     {
                         // All keys produced garbage (wrong key entirely — peer using a different KDF or static key).
-                        var ch = CipherHash(text);
-                        LogFishKdfDiag(effectiveTarget, text, keyEntry);
+                        var ch = CipherHash(text);
                         Log.Warning("FiSH PM {Target}: decrypt failed. prefix={Prefix} cipherLen={CL} cipherHash={Hash} keyMask={KM} qualities=[{Q0:F2},{Q1:F2}] manual={Manual} hasSecret={HasSecret}",
                             effectiveTarget, prefix, text.Length, ch, MaskKey(keyEntry.Key),
                             qualities.Length > 0 ? qualities[0] : 0,
@@ -669,8 +668,7 @@ public class IrcService : IDisposable
                     }
                     else
                     {
-                        var ch = CipherHash(text);
-                        LogFishKdfDiag(effectiveTarget, text, keyEntry);
+                        var ch = CipherHash(text);
                         Log.Warning("FiSH NOTICE {Target}: decrypt failed. prefix={Prefix} cipherLen={CL} cipherHash={Hash} keyMask={KM} qualities=[{Q0:F2},{Q1:F2}] manual={Manual} hasSecret={HasSecret}",
                             effectiveTarget, prefix, text.Length, ch, MaskKey(keyEntry.Key),
                             qualities.Length > 0 ? qualities[0] : 0,
@@ -1173,19 +1171,6 @@ public class IrcService : IDisposable
         return $"len={s.Length},printable={printable}/{s.Length}";
     }
 
-    /// <summary>
-    /// TEMPORARY DIAGNOSTIC (v3.10.20): on a DH-keyed decrypt failure, log the raw ciphertext AND
-    /// the DH shared secret so a peer's exact (non-canonical) key derivation can be reverse-
-    /// engineered offline. Fires only for DH-derived keys (secret present). Remove once the peer's
-    /// KDF is identified — this intentionally writes key material to the log for debugging.
-    /// </summary>
-    private static void LogFishKdfDiag(string target, string cipher, FishKeyEntry keyEntry)
-    {
-        if (string.IsNullOrEmpty(keyEntry.DhSecretHex)) return;
-        Log.Information("FiSH KDF-DIAG {Target}: cipher={Cipher} secretHex={Secret} keyPrimary={Key} keyAlt={Alt}",
-            target, cipher, keyEntry.DhSecretHex, keyEntry.Key, keyEntry.AltKey);
-    }
-
     /// <summary>Short stable hash of a ciphertext for triage logs (does not leak plaintext).</summary>
     private static string CipherHash(string cipher) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(cipher)))[..16].ToLowerInvariant();
@@ -1401,10 +1386,7 @@ public class IrcService : IDisposable
             }
 
             Log.Information("DH1080 FINISH send to {Nick}: ourPubLen={Len} ourPubMask={Mask} primaryKey={KM} altKey={AM}",
-                nick, ourPub.Length, MaskMid(ourPub), MaskKey(primaryKey), MaskKey(altKey));
-            // TEMPORARY DIAGNOSTIC (v3.10.20): full exchange material to reverse-engineer a peer's KDF/DH.
-            Log.Information("DH1080 XCHG-DIAG {Nick} (recv-INIT): theirPub={TheirPub} ourPub={OurPub} secretHex={Secret} std={Std} fish={Fish}",
-                nick, theirPubKey, ourPub, secretHex, primaryKey, altKey);
+                nick, ourPub.Length, MaskMid(ourPub), MaskKey(primaryKey), MaskKey(altKey));
 
             await _client.NoticeAsync(nick, Dh1080.FormatFinish(ourPub));
             AddSystemMessage(nick, $"DH1080 key exchange completed (initiated by {nick}) — {dhMode} mode");
@@ -1436,10 +1418,7 @@ public class IrcService : IDisposable
             }
 
             Log.Information("DH1080 derived for {Nick}: primaryKey={KM} altKey={AM}",
-                nick, MaskKey(primaryKey), MaskKey(altKey));
-            // TEMPORARY DIAGNOSTIC (v3.10.20): full exchange material to reverse-engineer a peer's KDF/DH.
-            Log.Information("DH1080 XCHG-DIAG {Nick} (recv-FINISH): theirPub={TheirPub} ourPub={OurPub} secretHex={Secret} std={Std} fish={Fish}",
-                nick, theirPubKey, entry.dh.GetPublicKeyBase64(), secretHex, primaryKey, altKey);
+                nick, MaskKey(primaryKey), MaskKey(altKey));
 
             AddSystemMessage(nick, $"DH1080 key exchange completed — {dhMode} mode");
         }
