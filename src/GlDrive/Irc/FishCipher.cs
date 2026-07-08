@@ -99,11 +99,16 @@ public static class FishCipher
     private static double Quality(string? s)
     {
         if (string.IsNullOrEmpty(s)) return 0;
-        if (s.IndexOf('�') >= 0) return 0;
+        if (s.IndexOf('�') >= 0) return 0; // invalid UTF-8 → wrong key
         var ok = 0;
         foreach (var c in s)
         {
-            if (c >= 0x20 && c < 0x7F) ok++;
+            // Count any NON-control character: printable ASCII AND valid non-ASCII text
+            // (Cyrillic, CJK, emoji, accented Latin, …) — a correct decrypt of a non-English
+            // message is real text and must score high. A wrong Blowfish key yields random
+            // bytes that either fail UTF-8 (caught above) or are peppered with control chars,
+            // which we do NOT count. Plus the handful of IRC formatting control codes.
+            if (!char.IsControl(c)) ok++;
             else if (c is '\t' or '\n' or '\r' or '\x02' or '\x03' or '\x0F'
                           or '\x16' or '\x1D' or '\x1E' or '\x1F') ok++;
         }
