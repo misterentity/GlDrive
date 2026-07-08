@@ -19,6 +19,12 @@ public class FishKeyEntry
     /// encrypts use the alphabet peer's client expects.
     /// </summary>
     public string AltKey { get; set; } = "";
+    /// <summary>
+    /// Raw DH1080 shared secret (hex) for DH-derived keys. Empty for manual keys. Kept so we can
+    /// derive a peer's non-canonical KDF variant on the fly if the canonical key fails to decrypt
+    /// (see Dh1080.AlternateKdfCandidates) without forcing a re-key.
+    /// </summary>
+    public string DhSecretHex { get; set; } = "";
     public FishMode Mode { get; set; } = FishMode.CBC;
     public DateTime SetAt { get; set; } = DateTime.UtcNow;
 
@@ -80,10 +86,14 @@ public class FishKeyStore
     {
         // Read-manual-flag + replace must be atomic so a concurrent SetDh1080Keys/SetKey can't
         // interleave and flip the Manual decision or lose the promoted dual-alphabet variant.
+        // Preserve the DH shared secret so alternate-KDF recovery still works after a mode flip
+        // or an alphabet-variant promotion.
         lock (_keyLock)
         {
-            var manual = _keys.TryGetValue(target, out var existing) && existing.Manual;
-            _keys[target] = new FishKeyEntry { Key = key, AltKey = altKey, Mode = mode, Manual = manual, SetAt = DateTime.UtcNow };
+            var existed = _keys.TryGetValue(target, out var existing);
+            var manual = existed && existing!.Manual;
+            var secret = existed ? existing!.DhSecretHex : "";
+            _keys[target] = new FishKeyEntry { Key = key, AltKey = altKey, DhSecretHex = secret, Mode = mode, Manual = manual, SetAt = DateTime.UtcNow };
             Save();
         }
     }
@@ -93,7 +103,7 @@ public class FishKeyStore
     /// key so /keyx doesn't blow away a working static key the user explicitly set.
     /// Returns true on success, false if a manual key blocked the write.
     /// </summary>
-    public bool SetDh1080Keys(string target, string key, string altKey, FishMode mode)
+    public bool SetDh1080Keys(string target, string key, string altKey, string secretHex, FishMode mode)
     {
         // Check-manual + write atomic: protects the manual-key invariant from a racing /key
         // that could otherwise let DH1080 overwrite a just-set manual key (or vice-versa).
@@ -101,7 +111,7 @@ public class FishKeyStore
         {
             if (_keys.TryGetValue(target, out var existing) && existing.Manual)
                 return false;
-            _keys[target] = new FishKeyEntry { Key = key, AltKey = altKey, Mode = mode, Manual = false, SetAt = DateTime.UtcNow };
+            _keys[target] = new FishKeyEntry { Key = key, AltKey = altKey, DhSecretHex = secretHex, Mode = mode, Manual = false, SetAt = DateTime.UtcNow };
             Save();
             return true;
         }

@@ -112,11 +112,59 @@ public class Dh1080
     /// </summary>
     public (string Standard, string Fish) ComputeAllKeyVariants(string theirPubKeyBase64)
     {
+        var (standard, fish, _) = ComputeAllKeyVariantsWithSecret(theirPubKeyBase64);
+        return (standard, fish);
+    }
+
+    /// <summary>
+    /// Same as <see cref="ComputeAllKeyVariants"/> but also returns the raw DH shared secret
+    /// (hex). Storing the secret lets us derive OTHER clients' non-canonical KDF variants later
+    /// (see <see cref="AlternateKdfCandidates"/>) if a peer's messages don't decrypt with the
+    /// canonical key — without needing the peer to re-key.
+    /// </summary>
+    internal (string Standard, string Fish, string SecretHex) ComputeAllKeyVariantsWithSecret(string theirPubKeyBase64)
+    {
         var sharedBytes = ComputeSharedSecretBytes(theirPubKeyBase64);
         var hash = SHA256.HashData(sharedBytes);
         var standard = Convert.ToBase64String(hash).TrimEnd('=');
         var fish = MapStandardToFishAlphabet(standard);
-        return (standard, fish);
+        return (standard, fish, Convert.ToHexString(sharedBytes));
+    }
+
+    private const int PrimeByteLength = 135; // 1080 bits
+
+    /// <summary>
+    /// Non-canonical DH1080 Blowfish-key variants some clients use, derived from the stored
+    /// shared secret. Tried only when the canonical key (standard/fish) fails to decrypt a peer's
+    /// messages — a peer that completes the DH handshake but derives its key differently would
+    /// otherwise be permanently unreadable. All candidates are valid Blowfish key lengths
+    /// (4..56 bytes). Covers the observed real-world differences:
+    ///   - keeping the base64 '=' padding (44-char key) instead of trimming it (our 43-char key)
+    ///   - hashing a FIXED-WIDTH (zero-padded to the prime length) shared secret instead of the
+    ///     natural minimal big-endian form
+    ///   - using the raw 32-byte SHA-256 digest directly as the key (no base64)
+    /// </summary>
+    internal static IEnumerable<string> AlternateKdfCandidates(string secretHex)
+    {
+        if (string.IsNullOrEmpty(secretHex)) yield break;
+        byte[] natural;
+        try { natural = Convert.FromHexString(secretHex); }
+        catch (FormatException) { yield break; }
+
+        var shaNatural = SHA256.HashData(natural);
+        var padded = natural.Length >= PrimeByteLength ? natural : PadLeft(natural, PrimeByteLength);
+        var shaPadded = SHA256.HashData(padded);
+
+        // base64 WITH '=' padding kept (44 chars) — natural- and fixed-width shared secret
+        yield return Convert.ToBase64String(shaNatural);
+        yield return Convert.ToBase64String(shaPadded);
+        // fixed-width shared secret, '=' trimmed (43 chars), std + fish alphabet
+        var paddedStd = Convert.ToBase64String(shaPadded).TrimEnd('=');
+        yield return paddedStd;
+        yield return MapStandardToFishAlphabet(paddedStd);
+        // raw 32-byte SHA-256 digest used directly as the Blowfish key (Latin1 round-trips bytes)
+        yield return System.Text.Encoding.Latin1.GetString(shaNatural);
+        yield return System.Text.Encoding.Latin1.GetString(shaPadded);
     }
 
     private const string StdB64Alphabet  = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

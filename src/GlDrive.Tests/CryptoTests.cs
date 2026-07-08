@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Linq;
 using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
@@ -69,6 +70,40 @@ public class FishInteropVectorTests
         Assert.Equal(expectedDerivedKey, bob.ComputeAllKeyVariants(alice.GetPublicKeyBase64()).Standard);
     }
 
+    // A peer that completes a normal DH1080 handshake but derives its Blowfish key with a
+    // NON-canonical KDF (here: keeping the base64 '=' padding, a 44-char key, instead of our
+    // canonical trimmed 43-char key) must still be readable via alternate-KDF recovery from the
+    // stored shared secret — no re-key, no manual key. This is the observed fReeq failure mode.
+    [Theory]
+    [InlineData(FishMode.ECB)]
+    [InlineData(FishMode.CBC)]
+    public void Alternate_kdf_recovers_peer_with_noncanonical_derivation(FishMode mode)
+    {
+        var alice = new Dh1080(BigInteger.Pow(3, 411) + 7);
+        var bob = new Dh1080(BigInteger.Pow(7, 366) + 11);
+
+        var aliceSecret = alice.ComputeAllKeyVariantsWithSecret(bob.GetPublicKeyBase64()).SecretHex;
+        var bobSecret = bob.ComputeAllKeyVariantsWithSecret(alice.GetPublicKeyBase64()).SecretHex;
+        Assert.Equal(aliceSecret, bobSecret); // both sides share the same secret
+
+        // The peer encrypts using the non-canonical key = base64(SHA256(shared)) WITH '=' kept.
+        var peerKey = Convert.ToBase64String(SHA256.HashData(Convert.FromHexString(bobSecret)));
+        const string plain = "clandestine drop at 0400 behind the old mill";
+        var cipher = FishCipher.Encrypt(plain, peerKey, mode);
+
+        // Our canonical key is the trimmed 43-char variant — it must NOT equal the peer's key,
+        // and decrypting with it yields garbage, not the plaintext.
+        var ourCanonical = alice.ComputeAllKeyVariants(bob.GetPublicKeyBase64()).Standard;
+        Assert.NotEqual(peerKey, ourCanonical);
+        Assert.NotEqual(plain, FishCipher.Decrypt(cipher, ourCanonical));
+
+        // Alternate-KDF recovery from the stored secret finds it.
+        var candidates = Dh1080.AlternateKdfCandidates(aliceSecret).ToArray();
+        var (decrypted, winIdx, _) = FishCipher.DecryptWithFallback(cipher, candidates);
+        Assert.Equal(plain, decrypted);
+        Assert.True(winIdx >= 0);
+    }
+
     // Regression for the DH1080 public-key over-strip bug: when a peer's public key's base64
     // encoding ends in 'A' (≈1/64 of keys — low 6 bits of the last byte are zero), the old
     // decoder stripped one 'A' too many, dropped low-order bits, and derived the WRONG key.
@@ -121,6 +156,24 @@ public class FishCipherTests
     [Fact]
     public void Decrypt_returns_null_on_garbage()
         => Assert.Null(FishCipher.Decrypt("not encrypted text", "key123key123"));
+
+    // A CORRECT decrypt of non-English text is real plaintext and must score as high quality —
+    // otherwise the fallback treats a working key as a failure and (with alt-KDF recovery) could
+    // hijack the key. The old quality heuristic only counted ASCII 0x20-0x7E and scored these ~0.
+    [Theory]
+    [InlineData("Привет мир, как твои дела сегодня")] // Cyrillic
+    [InlineData("こんにちは世界、お元気ですか今日は")]      // Japanese
+    [InlineData("naive cafe resume facade coeur soeur")] // (ASCII control)
+    [InlineData("día lluvioso — piñata, jalapeño ñoño")] // accented Latin + em dash
+    public void DecryptWithFallback_accepts_valid_non_ascii_plaintext(string plain)
+    {
+        const string key = "correcthorsebatterystaple";
+        var cipher = FishCipher.Encrypt(plain, key, FishMode.ECB);
+        var (decrypted, winIdx, qualities) = FishCipher.DecryptWithFallback(cipher, key, "wrongwrongwrong1");
+        Assert.Equal(plain, decrypted);
+        Assert.Equal(0, winIdx);
+        Assert.True(qualities[0] >= 0.85, $"correct non-ASCII decrypt scored only {qualities[0]:F2}");
+    }
 
     // Regression: an over-length Blowfish key (e.g. the old ~180-byte fishRaw DH1080
     // variant) used to make BouncyCastle throw ArgumentException out of the decrypt

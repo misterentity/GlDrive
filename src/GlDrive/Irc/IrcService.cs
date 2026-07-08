@@ -66,6 +66,11 @@ public class IrcService : IDisposable
     // using a separate static key, or spamming "+OK <garbage>") can't drive an endless stream of
     // DH1080_INIT NOTICEs. Reset to 0 on the next successful decrypt (episode boundary).
     private readonly Dictionary<string, int> _autoRekeyAttempts = new(StringComparer.OrdinalIgnoreCase);
+    // Corroboration for alternate-KDF recovery: the candidate key that matched a peer's LAST
+    // undecryptable message. We only promote a speculative KDF once the SAME candidate decrypts
+    // a SECOND message — a single short-block false match (Blowfish garbage that happens to look
+    // like text after NUL-trim) can't hijack the key. Cleared on any real decrypt or re-key.
+    private readonly Dictionary<string, string> _altKdfPending = new(StringComparer.OrdinalIgnoreCase);
     private const int AutoRekeyFailThreshold = 3;
     private const int MaxAutoRekeyAttempts = 3;
     private static readonly TimeSpan AutoRekeyCooldown = TimeSpan.FromMinutes(5);
@@ -492,15 +497,25 @@ public class IrcService : IDisposable
                         wasEncrypted = true;
                         ResetDecryptFailStreak(effectiveTarget);
                     }
+                    else if (TryDecryptWithAlternateKdf(effectiveTarget, text, keyEntry) is { } alt)
+                    {
+                        // Canonical key failed but a non-canonical KDF variant of the shared secret
+                        // decrypted it — the peer's client derives its key differently. Promoted.
+                        Log.Information("FiSH PM {Target}: recovered via alternate KDF '{Kdf}' — promoted to primary",
+                            effectiveTarget, alt.Kdf);
+                        text = alt.Text;
+                        wasEncrypted = true;
+                        ResetDecryptFailStreak(effectiveTarget);
+                    }
                     else
                     {
                         // All keys produced garbage (wrong key entirely — peer using a different KDF or static key).
                         var ch = CipherHash(text);
-                        Log.Warning("FiSH PM {Target}: decrypt failed. prefix={Prefix} cipherLen={CL} cipherHash={Hash} keyMask={KM} qualities=[{Q0:F2},{Q1:F2}] manual={Manual}",
+                        Log.Warning("FiSH PM {Target}: decrypt failed. prefix={Prefix} cipherLen={CL} cipherHash={Hash} keyMask={KM} qualities=[{Q0:F2},{Q1:F2}] manual={Manual} hasSecret={HasSecret}",
                             effectiveTarget, prefix, text.Length, ch, MaskKey(keyEntry.Key),
                             qualities.Length > 0 ? qualities[0] : 0,
                             qualities.Length > 1 ? qualities[1] : 0,
-                            keyEntry.Manual);
+                            keyEntry.Manual, !string.IsNullOrEmpty(keyEntry.DhSecretHex));
                         text = $"🔒 [FiSH decrypt failed — {prefix}, cipher {ch}]";
                         wasEncrypted = false;
                         PostDecryptFailureHint(effectiveTarget, keyEntry, prefix);
@@ -595,14 +610,22 @@ public class IrcService : IDisposable
                         wasEncrypted = true;
                         ResetDecryptFailStreak(effectiveTarget);
                     }
+                    else if (TryDecryptWithAlternateKdf(effectiveTarget, text, keyEntry) is { } alt)
+                    {
+                        Log.Information("FiSH NOTICE {Target}: recovered via alternate KDF '{Kdf}' — promoted to primary",
+                            effectiveTarget, alt.Kdf);
+                        text = alt.Text;
+                        wasEncrypted = true;
+                        ResetDecryptFailStreak(effectiveTarget);
+                    }
                     else
                     {
                         var ch = CipherHash(text);
-                        Log.Warning("FiSH NOTICE {Target}: decrypt failed. prefix={Prefix} cipherLen={CL} cipherHash={Hash} keyMask={KM} qualities=[{Q0:F2},{Q1:F2}] manual={Manual}",
+                        Log.Warning("FiSH NOTICE {Target}: decrypt failed. prefix={Prefix} cipherLen={CL} cipherHash={Hash} keyMask={KM} qualities=[{Q0:F2},{Q1:F2}] manual={Manual} hasSecret={HasSecret}",
                             effectiveTarget, prefix, text.Length, ch, MaskKey(keyEntry.Key),
                             qualities.Length > 0 ? qualities[0] : 0,
                             qualities.Length > 1 ? qualities[1] : 0,
-                            keyEntry.Manual);
+                            keyEntry.Manual, !string.IsNullOrEmpty(keyEntry.DhSecretHex));
                         text = $"🔒 [FiSH decrypt failed — {prefix}, cipher {ch}]";
                         wasEncrypted = false;
                         PostDecryptFailureHint(effectiveTarget, keyEntry, prefix);
@@ -1137,6 +1160,59 @@ public class IrcService : IDisposable
             $"Ask {target} for a passphrase, then run /key {target} <passphrase> on both sides. /unkey {target} to retry /keyx later.");
     }
 
+    // Human labels for Dh1080.AlternateKdfCandidates, in the same order it yields. Logged so a
+    // successful recovery tells us EXACTLY which non-canonical KDF the peer's client uses.
+    private static readonly string[] AlternateKdfLabels =
+    {
+        "std-base64-keep-eq/natural(44)",
+        "std-base64-keep-eq/fixed(44)",
+        "std-base64-trim/fixed(43)",
+        "fish-base64/fixed(43)",
+        "raw-sha256/natural(32)",
+        "raw-sha256/fixed(32)",
+    };
+
+    /// <summary>
+    /// The canonical key failed — try the known non-canonical DH1080 KDF variants derived from the
+    /// stored shared secret (peers that keep '=' padding, hash a fixed-width secret, or use the raw
+    /// digest). On success, PROMOTE the winning key to primary so future messages decrypt directly,
+    /// and return the plaintext plus the KDF label (for diagnostics). Null if nothing recovers it.
+    /// Called while holding <see cref="_decryptPromoteLock"/>; fully synchronous.
+    /// </summary>
+    private (string Text, string Kdf)? TryDecryptWithAlternateKdf(string target, string cipherText, FishKeyEntry keyEntry)
+    {
+        if (string.IsNullOrEmpty(keyEntry.DhSecretHex)) return null;
+        var candidates = Dh1080.AlternateKdfCandidates(keyEntry.DhSecretHex).ToArray();
+        if (candidates.Length == 0) return null;
+
+        var (decrypted, winIdx, qualities) = FishCipher.DecryptWithFallback(cipherText, candidates);
+        var bestQ = winIdx >= 0 ? qualities[winIdx] : 0;
+        // Require HIGH confidence (not the 0.5 floor): we try several speculative keys and the
+        // correct KDF yields ~1.0 quality.
+        if (decrypted == null || bestQ < 0.85) return null;
+
+        var winner = candidates[winIdx];
+
+        // CORROBORATION: don't act on a single match. Blowfish on a WRONG key can, for a short
+        // block, produce a NUL-padded fragment that trims to a plausible-looking string ≥0.85 —
+        // promoting that would discard the real key and break the peer both ways. Require the
+        // SAME candidate to decrypt a second message before we trust it. First sighting is
+        // recorded and shown as still-undecryptable.
+        if (_altKdfPending.GetValueOrDefault(target) != winner)
+        {
+            _altKdfPending[target] = winner;
+            return null;
+        }
+        _altKdfPending.Remove(target);
+
+        // Corroborated. Promote the winner to primary (so future messages + our outgoing use it),
+        // but keep the canonical standard key as the alternate so a mistaken promotion self-corrects
+        // on the next canonically-encrypted message. SetKeyWithAlt preserves DhSecretHex.
+        _fishKeyStore.SetKeyWithAlt(target, winner, keyEntry.Key, keyEntry.Mode);
+        var label = winIdx < AlternateKdfLabels.Length ? AlternateKdfLabels[winIdx] : $"candidate#{winIdx}";
+        return (decrypted, label);
+    }
+
     /// <summary>
     /// Records a decrypt failure for <paramref name="target"/> and returns true if we should
     /// transparently re-run the DH1080 key exchange (a stale/corrupt DH-derived key can never
@@ -1193,6 +1269,7 @@ public class IrcService : IDisposable
         _autoRekeyAttempts.Remove(target);
         _lastAutoRekey.Remove(target);
         _decryptFailHintSent.Remove(target);
+        _altKdfPending.Remove(target);
     }
 
     private async Task HandleDh1080InitAsync(string nick, string theirPubKey)
@@ -1214,11 +1291,11 @@ public class IrcService : IDisposable
                 nick, theirPubKey.Length, MaskMid(theirPubKey));
 
             // Offload ModPow to ThreadPool so the IRC read loop isn't blocked by ~10ms of crypto
-            var (primaryKey, altKey, ourPub) = await Task.Run(() =>
+            var (primaryKey, altKey, secretHex, ourPub) = await Task.Run(() =>
             {
                 var d = new Dh1080();
-                var v = d.ComputeAllKeyVariants(theirPubKey); // validates peer key and derives both variants
-                return (v.Standard, v.Fish, d.GetPublicKeyBase64());
+                var v = d.ComputeAllKeyVariantsWithSecret(theirPubKey); // validates peer key + derives variants + secret
+                return (v.Standard, v.Fish, v.SecretHex, d.GetPublicKeyBase64());
             });
             // Store both alphabet variants of the derived key — the canonical key is
             // standard-base64(SHA256(shared)) (mIRC FiSH 10, weechat, HexChat, KVIrc);
@@ -1229,7 +1306,7 @@ public class IrcService : IDisposable
             // peers' first incoming message will flip us to CBC via the prefix detector.
             // SetDh1080Keys refuses to overwrite a manually-set key.
             var dhMode = _serverConfig.Irc.FishMode;
-            if (!_fishKeyStore.SetDh1080Keys(nick, primaryKey, altKey, dhMode))
+            if (!_fishKeyStore.SetDh1080Keys(nick, primaryKey, altKey, secretHex, dhMode))
             {
                 Log.Warning("DH1080 INIT from {Nick} ignored: manual key already set; not overwriting", nick);
                 AddSystemMessage(nick, "Ignored incoming /keyx — a manual key is already set. Use /unkey first if you want DH1080.");
@@ -1257,11 +1334,11 @@ public class IrcService : IDisposable
             Log.Information("DH1080 FINISH recv from {Nick}: peerPubLen={Len} peerPubMask={Mask}",
                 nick, theirPubKey.Length, MaskMid(theirPubKey));
 
-            var (primaryKey, altKey) = entry.dh.ComputeAllKeyVariants(theirPubKey);
-            // Store both alphabet variants — see HandleDh1080InitAsync. Mode follows server config.
+            var (primaryKey, altKey, secretHex) = entry.dh.ComputeAllKeyVariantsWithSecret(theirPubKey);
+            // Store both alphabet variants + the shared secret — see HandleDh1080InitAsync.
             _pendingKeyExchanges.Remove(nick);
             var dhMode = _serverConfig.Irc.FishMode;
-            if (!_fishKeyStore.SetDh1080Keys(nick, primaryKey, altKey, dhMode))
+            if (!_fishKeyStore.SetDh1080Keys(nick, primaryKey, altKey, secretHex, dhMode))
             {
                 Log.Warning("DH1080 FINISH from {Nick} ignored: manual key already set; not overwriting", nick);
                 AddSystemMessage(nick, "DH1080 response received but a manual key is already set — keeping manual. Use /unkey first if you want DH1080.");
