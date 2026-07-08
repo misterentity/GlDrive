@@ -16,17 +16,17 @@ public static class FishCipher
     private const string EcbPrefix = "+OK ";
     private const string CbcPrefix = "+OK *";
 
-    public static string Encrypt(string plaintext, string key, FishMode mode) =>
-        mode == FishMode.CBC ? EncryptCbc(plaintext, key) : EncryptEcb(plaintext, key);
+    public static string Encrypt(string plaintext, string key, FishMode mode, Encoding? charset = null) =>
+        mode == FishMode.CBC ? EncryptCbc(plaintext, key, charset) : EncryptEcb(plaintext, key, charset);
 
-    public static string? Decrypt(string ciphertext, string key)
+    public static string? Decrypt(string ciphertext, string key, Encoding? fallbackCharset = null)
     {
         try
         {
             if (ciphertext.StartsWith(CbcPrefix))
-                return DecryptCbc(ciphertext[CbcPrefix.Length..], key);
+                return DecryptCbc(ciphertext[CbcPrefix.Length..], key, fallbackCharset);
             if (ciphertext.StartsWith(EcbPrefix))
-                return DecryptEcb(ciphertext[EcbPrefix.Length..], key);
+                return DecryptEcb(ciphertext[EcbPrefix.Length..], key, fallbackCharset);
             return null;
         }
         catch (Exception)
@@ -51,13 +51,21 @@ public static class FishCipher
     /// </summary>
     public static (string? Text, int WinningKeyIndex, double[] Qualities)
         DecryptWithFallback(string ciphertext, params string[] keys)
+        => DecryptWithFallback(ciphertext, null, keys);
+
+    /// <summary>
+    /// As above, with an optional legacy fallback charset (e.g. windows-1251) applied when a
+    /// decrypt is not valid UTF-8 but looks like text — for peers whose client doesn't use UTF-8.
+    /// </summary>
+    public static (string? Text, int WinningKeyIndex, double[] Qualities)
+        DecryptWithFallback(string ciphertext, Encoding? fallbackCharset, params string[] keys)
     {
         if (keys.Length == 0) return (null, -1, Array.Empty<double>());
 
         var qualities = new double[keys.Length];
         var decrypted = new string?[keys.Length];
 
-        decrypted[0] = string.IsNullOrEmpty(keys[0]) ? null : Decrypt(ciphertext, keys[0]);
+        decrypted[0] = string.IsNullOrEmpty(keys[0]) ? null : Decrypt(ciphertext, keys[0], fallbackCharset);
         qualities[0] = Quality(decrypted[0]);
 
         // Primary already looks like real text — don't bother with alts.
@@ -69,7 +77,7 @@ public static class FishCipher
         for (var i = 1; i < keys.Length; i++)
         {
             if (string.IsNullOrEmpty(keys[i])) continue;
-            decrypted[i] = Decrypt(ciphertext, keys[i]);
+            decrypted[i] = Decrypt(ciphertext, keys[i], fallbackCharset);
             qualities[i] = Quality(decrypted[i]);
             if (qualities[i] > bestAltQ)
             {
@@ -130,9 +138,9 @@ public static class FishCipher
         return new KeyParameter(keyBytes);
     }
 
-    public static string EncryptEcb(string plaintext, string key)
+    public static string EncryptEcb(string plaintext, string key, Encoding? charset = null)
     {
-        var data = Encoding.UTF8.GetBytes(plaintext);
+        var data = (charset ?? Encoding.UTF8).GetBytes(plaintext);
 
         // Pad to 8-byte boundary
         var padded = PadToBlock(data);
@@ -147,7 +155,7 @@ public static class FishCipher
         return EcbPrefix + FishBase64.Encode(output);
     }
 
-    public static string DecryptEcb(string encoded, string key)
+    public static string DecryptEcb(string encoded, string key, Encoding? fallbackCharset = null)
     {
         var data = FishBase64.Decode(encoded);
 
@@ -158,12 +166,70 @@ public static class FishCipher
         for (var i = 0; i < data.Length; i += 8)
             engine.ProcessBlock(data, i, output, i);
 
-        return Encoding.UTF8.GetString(output).TrimEnd('\0');
+        return BytesToText(output, fallbackCharset);
     }
 
-    public static string EncryptCbc(string plaintext, string key)
+    private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, throwOnInvalidBytes: true);
+
+    /// <summary>
+    /// Turns decrypted plaintext bytes into a string. Prefers UTF-8 (modern clients, and a strong
+    /// correct-key signal: random Blowfish output rarely forms valid UTF-8). If the bytes are NOT
+    /// valid UTF-8 and a legacy <paramref name="fallbackCharset"/> is configured AND they look like
+    /// text (not random garbage), decode with that charset — this is how a peer whose client uses a
+    /// legacy 8-bit charset (e.g. windows-1251 Cyrillic) becomes readable. Otherwise return the
+    /// lossy UTF-8 (with U+FFFD) so the quality check rejects it as a wrong key.
+    /// </summary>
+    private static string BytesToText(byte[] bytes, Encoding? fallbackCharset)
     {
-        var data = Encoding.UTF8.GetBytes(plaintext);
+        // Strip FiSH's trailing NUL block padding.
+        var len = bytes.Length;
+        while (len > 0 && bytes[len - 1] == 0) len--;
+        var span = bytes.AsSpan(0, len);
+
+        try { return StrictUtf8.GetString(span); }
+        catch (DecoderFallbackException) { /* not valid UTF-8 — fall through */ }
+
+        // Legacy 8-bit charset fallback. Decode with the charset, then check the resulting CHARS
+        // (charset-aware) so real punctuation that lives at 0x80-0x9F in windows-125x — apostrophe,
+        // em/en dash, curly quotes, ellipsis, euro — is accepted, while random wrong-key bytes
+        // (which decode to control chars / U+FFFD) are rejected. Caller uses this for DISPLAY only
+        // and never lets it drive key decisions, since an 8-bit charset can't reliably prove a key.
+        if (fallbackCharset != null && len >= MinLegacyTextBytes)
+        {
+            var legacy = fallbackCharset.GetString(span);
+            if (LooksLikeText(legacy)) return legacy;
+        }
+
+        return Encoding.UTF8.GetString(span); // lossy (U+FFFD) → Quality() scores 0
+    }
+
+    /// <summary>
+    /// Minimum decrypted length (bytes) before the legacy-charset fallback is even considered.
+    /// Below this a random wrong-key block is too easily mistaken for short real text.
+    /// </summary>
+    private const int MinLegacyTextBytes = 16;
+
+    /// <summary>
+    /// True if the decoded string looks like real text: no U+FFFD (invalid in the charset) and no
+    /// control characters beyond common whitespace + IRC formatting. Charset-aware — evaluates the
+    /// decoded CHARS, so windows-125x typographic glyphs at 0x80-0x9F (which decode to real Unicode
+    /// punctuation, not controls) pass, while random bytes (which decode to control chars) fail.
+    /// </summary>
+    private static bool LooksLikeText(string s)
+    {
+        foreach (var c in s)
+        {
+            if (c == '�') return false;
+            if (char.IsControl(c) && c is not ('\t' or '\n' or '\r' or '\x02' or '\x03' or '\x0F'
+                                               or '\x16' or '\x1D' or '\x1E' or '\x1F'))
+                return false;
+        }
+        return true;
+    }
+
+    public static string EncryptCbc(string plaintext, string key, Encoding? charset = null)
+    {
+        var data = (charset ?? Encoding.UTF8).GetBytes(plaintext);
         var padded = PadToBlock(data);
 
         // Random 8-byte IV
@@ -185,7 +251,7 @@ public static class FishCipher
         return CbcPrefix + Convert.ToBase64String(withIv);
     }
 
-    public static string DecryptCbc(string encoded, string key)
+    public static string DecryptCbc(string encoded, string key, Encoding? fallbackCharset = null)
     {
         // FiSH CBC uses standard base64, not FiSH base64
         var data = Convert.FromBase64String(encoded);
@@ -201,7 +267,7 @@ public static class FishCipher
         for (var i = 0; i < ciphertext.Length; i += 8)
             cipher.ProcessBlock(ciphertext, i, output, i);
 
-        return Encoding.UTF8.GetString(output).TrimEnd('\0');
+        return BytesToText(output, fallbackCharset);
     }
 
     private static byte[] PadToBlock(byte[] data)

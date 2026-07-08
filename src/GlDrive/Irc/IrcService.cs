@@ -97,11 +97,31 @@ public class IrcService : IDisposable
     public event Action<string>? NamesUpdated; // channel
     public event Action<string, string>? TopicChanged; // channel, topic
 
+    // Resolved legacy fallback charset for FiSH decode (peers not using UTF-8). Null = UTF-8 only.
+    private readonly Encoding? _fishFallbackCharset;
+
     public IrcService(ServerConfig serverConfig, CertificateManager certManager)
     {
         _serverConfig = serverConfig;
         _certManager = certManager;
         _fishKeyStore = new FishKeyStore(serverConfig.Id);
+        _fishFallbackCharset = ResolveFallbackCharset(serverConfig.Irc.FallbackCharset);
+    }
+
+    private static Encoding? ResolveFallbackCharset(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return null;
+        try
+        {
+            // windows-125x etc. live in the CodePages provider (not registered by default on .NET).
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            return Encoding.GetEncoding(name.Trim());
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "IRC FiSH fallback charset '{Charset}' is not available — using UTF-8 only", name);
+            return null;
+        }
     }
 
     public async Task StartAsync()
@@ -478,7 +498,9 @@ public class IrcService : IDisposable
                     }
 
                     var keys = new[] { keyEntry.Key, keyEntry.AltKey };
-                    var (decrypted, winIdx, qualities) = FishCipher.DecryptWithFallback(text, keys);
+                    // Key decisions (selection, promotion, streak, auto-rekey) use the reliable
+                    // UTF-8 signal ONLY. The legacy charset is applied separately, display-only.
+                    var (decrypted, winIdx, qualities) = FishCipher.DecryptWithFallback(text, null, keys);
                     var bestQ = winIdx >= 0 ? qualities[winIdx] : 0;
                     if (decrypted != null && bestQ >= FishCipher.FailedDecryptQualityThreshold)
                     {
@@ -507,6 +529,17 @@ public class IrcService : IDisposable
                         wasEncrypted = true;
                         ResetDecryptFailStreak(effectiveTarget);
                     }
+                    else if (TryLegacyDisplay(text, keys) is { } legacyText)
+                    {
+                        // Readable only via the configured legacy charset (peer not using UTF-8).
+                        // DISPLAY ONLY — key state is deliberately untouched (no streak reset, no
+                        // promotion, no auto-rekey), so a false legacy decode can't corrupt keys or
+                        // spam /keyx, and the UTF-8-driven machinery is unaffected.
+                        Log.Information("FiSH PM {Target}: displayed via legacy charset {CS} (key state unchanged)",
+                            effectiveTarget, _fishFallbackCharset!.WebName);
+                        text = legacyText;
+                        wasEncrypted = true;
+                    }
                     else
                     {
                         // All keys produced garbage (wrong key entirely — peer using a different KDF or static key).
@@ -519,7 +552,11 @@ public class IrcService : IDisposable
                         text = $"🔒 [FiSH decrypt failed — {prefix}, cipher {ch}]";
                         wasEncrypted = false;
                         PostDecryptFailureHint(effectiveTarget, keyEntry, prefix);
-                        if (ShouldAutoReKeyOnFailure(effectiveTarget, keyEntry))
+                        // Auto-rekey keys off the UTF-8-decode signal. On a server with a legacy
+                        // FallbackCharset the peer isn't using UTF-8, so a UTF-8 failure is NOT
+                        // evidence of a wrong key — suppress auto-rekey there (key management is
+                        // manual /keyx) to avoid spurious re-keys on short legacy messages.
+                        if (_fishFallbackCharset == null && ShouldAutoReKeyOnFailure(effectiveTarget, keyEntry))
                             autoRekeyTarget = effectiveTarget;
                     }
                 }
@@ -596,7 +633,9 @@ public class IrcService : IDisposable
                     }
 
                     var keys = new[] { keyEntry.Key, keyEntry.AltKey };
-                    var (decrypted, winIdx, qualities) = FishCipher.DecryptWithFallback(text, keys);
+                    // Key decisions (selection, promotion, streak, auto-rekey) use the reliable
+                    // UTF-8 signal ONLY. The legacy charset is applied separately, display-only.
+                    var (decrypted, winIdx, qualities) = FishCipher.DecryptWithFallback(text, null, keys);
                     var bestQ = winIdx >= 0 ? qualities[winIdx] : 0;
                     if (decrypted != null && bestQ >= FishCipher.FailedDecryptQualityThreshold)
                     {
@@ -618,6 +657,15 @@ public class IrcService : IDisposable
                         wasEncrypted = true;
                         ResetDecryptFailStreak(effectiveTarget);
                     }
+                    else if (TryLegacyDisplay(text, keys) is { } legacyText)
+                    {
+                        // Display-only via the configured legacy charset — see HandlePrivmsg. Key
+                        // state deliberately untouched.
+                        Log.Information("FiSH NOTICE {Target}: displayed via legacy charset {CS} (key state unchanged)",
+                            effectiveTarget, _fishFallbackCharset!.WebName);
+                        text = legacyText;
+                        wasEncrypted = true;
+                    }
                     else
                     {
                         var ch = CipherHash(text);
@@ -629,7 +677,11 @@ public class IrcService : IDisposable
                         text = $"🔒 [FiSH decrypt failed — {prefix}, cipher {ch}]";
                         wasEncrypted = false;
                         PostDecryptFailureHint(effectiveTarget, keyEntry, prefix);
-                        if (ShouldAutoReKeyOnFailure(effectiveTarget, keyEntry))
+                        // Auto-rekey keys off the UTF-8-decode signal. On a server with a legacy
+                        // FallbackCharset the peer isn't using UTF-8, so a UTF-8 failure is NOT
+                        // evidence of a wrong key — suppress auto-rekey there (key management is
+                        // manual /keyx) to avoid spurious re-keys on short legacy messages.
+                        if (_fishFallbackCharset == null && ShouldAutoReKeyOnFailure(effectiveTarget, keyEntry))
                             autoRekeyTarget = effectiveTarget;
                     }
                 }
@@ -1160,6 +1212,21 @@ public class IrcService : IDisposable
             $"Ask {target} for a passphrase, then run /key {target} <passphrase> on both sides. /unkey {target} to retry /keyx later.");
     }
 
+    /// <summary>
+    /// DISPLAY-ONLY legacy-charset decode, used when UTF-8 decoding failed and the server has a
+    /// FallbackCharset configured (peer's client doesn't use UTF-8). Returns the decoded text if it
+    /// looks like real text in that charset, else null. The caller must NOT touch key state with
+    /// this result: an 8-bit charset can't reliably confirm a key, so key management (streak,
+    /// auto-rekey, promotion) stays driven by the UTF-8 signal — this only affects what's shown.
+    /// </summary>
+    private string? TryLegacyDisplay(string cipherText, string[] keys)
+    {
+        if (_fishFallbackCharset == null) return null;
+        var (decrypted, winIdx, qualities) = FishCipher.DecryptWithFallback(cipherText, _fishFallbackCharset, keys);
+        var bestQ = winIdx >= 0 ? qualities[winIdx] : 0;
+        return decrypted != null && bestQ >= FishCipher.FailedDecryptQualityThreshold ? decrypted : null;
+    }
+
     // Human labels for Dh1080.AlternateKdfCandidates, in the same order it yields. Logged so a
     // successful recovery tells us EXACTLY which non-canonical KDF the peer's client uses.
     private static readonly string[] AlternateKdfLabels =
@@ -1185,7 +1252,12 @@ public class IrcService : IDisposable
         var candidates = Dh1080.AlternateKdfCandidates(keyEntry.DhSecretHex).ToArray();
         if (candidates.Length == 0) return null;
 
-        var (decrypted, winIdx, qualities) = FishCipher.DecryptWithFallback(cipherText, candidates);
+        // NOTE: speculative candidates are tried UTF-8-ONLY (no legacy fallback). A legacy 8-bit
+        // charset maps nearly every byte to a glyph, so allowing it here would let a WRONG candidate
+        // "decode" random bytes into plausible text and get promoted. Requiring valid UTF-8 keeps the
+        // strong wrong-key signal for key selection; the legacy fallback still applies on the primary
+        // path once the right key is promoted.
+        var (decrypted, winIdx, qualities) = FishCipher.DecryptWithFallback(cipherText, null, candidates);
         var bestQ = winIdx >= 0 ? qualities[winIdx] : 0;
         // Require HIGH confidence (not the 0.5 floor): we try several speculative keys and the
         // correct KDF yields ~1.0 quality.

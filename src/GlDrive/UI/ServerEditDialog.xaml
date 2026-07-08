@@ -247,6 +247,9 @@
                         <ComboBoxItem Content="ECB"/>
                         <ComboBoxItem Content="CBC"/>
                     </ComboBox>
+                    <TextBlock Text="Charset:" VerticalAlignment="Center" Margin="12,0,6,0"/>
+                    <TextBox x:Name="IrcFishCharsetBox" Width="110" VerticalAlignment="Center"
+                             ToolTip="Legacy charset for peers not using UTF-8 (e.g. windows-1251 for Cyrillic). Leave blank for UTF-8."/>
                 </StackPanel>
 
                 <!-- IRC Announce Rules (for auto-racing) -->

@@ -15,6 +15,12 @@ public class IrcConfig
     public string InviteNick { get; set; } = "";
     public bool FishEnabled { get; set; }
     public FishMode FishMode { get; set; } = FishMode.CBC;
+    /// <summary>
+    /// Legacy 8-bit charset (e.g. "windows-1251", "windows-1252") for FiSH peers whose client
+    /// does NOT use UTF-8. Applied only as a fallback when a decrypt is not valid UTF-8 but looks
+    /// like text. Empty = UTF-8 only (decode as UTF-8, the modern default).
+    /// </summary>
+    public string FallbackCharset { get; set; } = "";
     public List<IrcChannelConfig> Channels { get; set; } = [];
     public List<IrcAnnounceRule> AnnounceRules { get; set; } = [];
     public RequestFillerConfig RequestFiller { get; set; } = new();
