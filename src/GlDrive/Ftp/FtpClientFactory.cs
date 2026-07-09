@@ -59,8 +59,10 @@ public class FtpClientFactory
         client.Config.EncryptionMode = FtpEncryptionMode.Explicit;
         client.Config.DataConnectionEncryption = true;
 
-        // Use GnuTLS for TLS session reuse (critical for glftpd)
-        client.Config.CustomStream = typeof(GnuTlsStream);
+        // Use GnuTLS for TLS session reuse (critical for glftpd), via SerializedGnuTlsStream —
+        // a wrapper that serializes the native recv against gnutls_deinit to close the long-running
+        // GnuTlsInternalStream.Read use-after-free crash. See that type for the full root cause.
+        client.Config.CustomStream = typeof(SerializedGnuTlsStream);
 
         // TLS configuration via GnuTLS
         var gnuConfig = new GnuConfig
@@ -208,7 +210,7 @@ public class FtpClientFactory
         var client = new AsyncFtpClient(conn.Host, ghostUser, password, conn.Port);
         client.Config.EncryptionMode = FtpEncryptionMode.Explicit;
         client.Config.DataConnectionEncryption = true;
-        client.Config.CustomStream = typeof(GnuTlsStream);
+        client.Config.CustomStream = typeof(SerializedGnuTlsStream);
         var gnuConfig = new GnuConfig { SecuritySuite = GnuSuite.Secure128 };
         if (_serverConfig.Tls.PreferTls12)
             gnuConfig.AdvancedOptions = [GnuAdvanced.NoTickets];

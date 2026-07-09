@@ -74,14 +74,15 @@ internal static class GnuTlsReflectionGuard
                     missing.Add("FtpSocketStream.m_socket (field)");
             }
 
-            // --- GnuTlsStream.BaseStream: a FIELD (not a property!) holding the
-            // GnuTlsInternalStream. The pre-v3.6 helpers wrongly used GetProperty
-            // here, silently no-op'ing the IsSessionUsable protection — corrected
-            // to GetField in IsGnuTlsHealthy/NeutralizeGnuTls. ---
-            var baseStreamField = gnuStreamType.GetField("BaseStream", NonPublicInstance)
-                ?? gnuStreamType.GetField("BaseStream", BindingFlags.Public | BindingFlags.Instance);
+            // --- Injected wrapper (SerializedGnuTlsStream): Config.CustomStream is now our wrapper,
+            // so FtpSocketStream.m_customStream holds it and the pool's crash-guard reflection reads
+            // m_customStream.BaseStream (a FIELD on OUR type holding the GnuTlsInternalStream). Verify
+            // that field still exists — a rename would silently no-op IsSessionUsable/neutralize. ---
+            var wrapperType = typeof(SerializedGnuTlsStream);
+            var baseStreamField = wrapperType.GetField("BaseStream", NonPublicInstance)
+                ?? wrapperType.GetField("BaseStream", BindingFlags.Public | BindingFlags.Instance);
             if (baseStreamField == null)
-                missing.Add("GnuTlsStream.BaseStream (field)");
+                missing.Add("SerializedGnuTlsStream.BaseStream (field)");
 
             // --- GnuTlsInternalStream members ---
             if (gnuInternalType != null)
