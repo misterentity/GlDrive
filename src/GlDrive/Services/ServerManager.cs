@@ -394,7 +394,9 @@ public class ServerManager : IDisposable
             filler.Dispose();
 
         if (!_ircServices.TryGetValue(serverId, out var ircService)) return;
-        await ircService.StopAsync();
+        // Dispose() must run even if StopAsync throws — it flushes the PM-history store.
+        try { await ircService.StopAsync(); }
+        catch (Exception ex) { Log.Warning(ex, "IRC StopAsync failed for {Server} during teardown", serverId); }
         ircService.Dispose();
         _ircServices.TryRemove(serverId, out _);
     }

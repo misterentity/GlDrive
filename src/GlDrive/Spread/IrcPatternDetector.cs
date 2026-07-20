@@ -76,7 +76,7 @@ public class IrcPatternDetector : IDisposable
                 var channel = parts[1];
                 var nick = parts[2];
                 var text = parts[3];
-                if (!channel.StartsWith('#') || string.IsNullOrEmpty(nick)) continue;
+                if (!IrcLogStore.IsChannelName(channel) || string.IsNullOrEmpty(nick)) continue;
 
                 if (!_buffer.TryGetValue(channel, out var channelBuffer))
                 {
@@ -101,7 +101,7 @@ public class IrcPatternDetector : IDisposable
     private void OnMessage(string target, IrcMessageItem message)
     {
         // Only track channel messages (not PMs)
-        if (!target.StartsWith('#')) return;
+        if (!IrcLogStore.IsChannelName(target)) return;
         if (message.Type != IrcMessageType.Normal && message.Type != IrcMessageType.Notice) return;
         if (string.IsNullOrWhiteSpace(message.Text)) return;
 

@@ -35,7 +35,7 @@ public static class IrcLogStore
     public static void Append(string serverId, string channel, string nick, string text)
     {
         if (string.IsNullOrEmpty(serverId) || string.IsNullOrEmpty(channel)) return;
-        if (!channel.StartsWith('#')) return; // channel only, no PMs
+        if (!IsChannelName(channel)) return; // channel only, no PMs
         if (string.IsNullOrEmpty(text)) return;
 
         try
@@ -87,6 +87,60 @@ public static class IrcLogStore
             Log.Debug(ex, "IrcLogStore: read failed for {Server}", serverId);
         }
         return results;
+    }
+
+    /// <summary>
+    /// True for any IRC channel prefix (#, &amp;, !, +) — matches IrcService.IsChannel,
+    /// not just '#', so e.g. &amp;-channels get logged too.
+    /// </summary>
+    public static bool IsChannelName(string target) =>
+        target.Length > 0 && (target[0] == '#' || target[0] == '&' || target[0] == '!' || target[0] == '+');
+
+    /// <summary>
+    /// Like <see cref="ReadRecent"/> but parsed, with full timestamps reconstructed
+    /// from each file's date. Malformed lines are skipped. Chronological order.
+    /// Used to seed the in-memory scrollback at IrcService startup.
+    /// </summary>
+    public static List<(DateTime Timestamp, string Channel, string Nick, string Text)> ReadRecentEntries(
+        string serverId, int maxLines = 100)
+    {
+        var results = new List<(DateTime, string, string, string)>();
+        try
+        {
+            foreach (var date in new[] { DateTime.Now.AddDays(-1), DateTime.Now })
+            {
+                var path = GetLogPath(serverId, date);
+                if (!File.Exists(path)) continue;
+                foreach (var line in SafeReadAllLines(path))
+                {
+                    if (!TryParseLine(line, date.Date, out var entry)) continue;
+                    results.Add(entry);
+                }
+            }
+            if (results.Count > maxLines)
+                results.RemoveRange(0, results.Count - maxLines);
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "IrcLogStore: parsed read failed for {Server}", serverId);
+        }
+        return results;
+    }
+
+    /// <summary>
+    /// Parses one "HH:mm:ss\t#channel\tnick\ttext" log line against the file's date.
+    /// </summary>
+    public static bool TryParseLine(string line, DateTime fileDate,
+        out (DateTime Timestamp, string Channel, string Nick, string Text) entry)
+    {
+        entry = default;
+        var parts = line.Split('\t', 4);
+        if (parts.Length < 4) return false;
+        if (!TimeSpan.TryParseExact(parts[0], @"hh\:mm\:ss", null, out var time)) return false;
+        var channel = parts[1];
+        if (!IsChannelName(channel)) return false;
+        entry = (fileDate.Date + time, channel, parts[2], parts[3]);
+        return true;
     }
 
     /// <summary>

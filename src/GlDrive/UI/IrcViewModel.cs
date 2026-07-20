@@ -18,7 +18,8 @@ public class IrcChannelVm : INotifyPropertyChanged
     public string ServerId { get; set; } = "";
     public string ServerName { get; set; } = "";
     public string Name { get; set; } = "";
-    public bool IsChannel => Name.StartsWith('#') || Name.StartsWith('&');
+    public bool IsChannel => Name.Length > 0 &&
+        (Name[0] == '#' || Name[0] == '&' || Name[0] == '!' || Name[0] == '+');
     private bool _hasFishKey;
     public bool HasFishKey
     {
@@ -81,6 +82,9 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
     private readonly Dictionary<string, List<IrcMessageVm>> _messageBuffers = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<string>> _nickBuffers = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _subscribedServices = new();
+    // Items shown during scrollback hydration that may still be queued for live
+    // delivery (subscribe-vs-hydrate race) — consulted once each by OnIrcMessage.
+    private readonly HashSet<IrcMessageItem> _hydratedRecent = new();
     // Track subscribed handlers for cleanup
     private readonly Dictionary<string, (Action<string, IrcMessageItem> msg, Action<string> names, Action<string, string> topic, Action<IrcServiceState> state)> _serviceHandlers = new();
     private const int MaxMessages = 500;
@@ -226,11 +230,27 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
                     SubscribeToIrcService(irc);
 
                 UpdateStatus();
+                SelectInitialChannel();
             });
         };
         _serverManager.IrcStateChanged += _ircStateHandler;
 
         UpdateStatus();
+        SelectInitialChannel();
+    }
+
+    /// <summary>
+    /// A freshly opened dashboard has no selection, which renders an empty message
+    /// pane even though history hydrated fine — pick a sensible default: first real
+    /// channel with history, else first channel, else the server status window.
+    /// </summary>
+    private void SelectInitialChannel()
+    {
+        if (_selectedChannel != null || Channels.Count == 0) return;
+        var pick = Channels.FirstOrDefault(c => c.IsChannel && _messageBuffers.ContainsKey($"{c.ServerId}:{c.Name}"))
+            ?? Channels.FirstOrDefault(c => c.IsChannel)
+            ?? Channels[0];
+        SelectedChannel = pick;
     }
 
     private void SubscribeToIrcService(IrcService irc)
@@ -238,114 +258,108 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
         // Always ensure the server window exists so users can see connection status/errors
         EnsureChannelVm(irc.ServerId, irc.ServerName, "*");
 
-        if (!_subscribedServices.Add(irc.ServerId)) return;
-
-        Action<string, IrcMessageItem> msgHandler = (target, item) =>
-            Application.Current?.Dispatcher.InvokeAsync(() => OnIrcMessage(irc.ServerId, irc.ServerName, target, item));
-        Action<string> namesHandler = channel =>
-            Application.Current?.Dispatcher.InvokeAsync(() => OnNamesUpdated(irc.ServerId, channel, irc));
-        Action<string, string> topicHandler = (channel, topic) =>
-            Application.Current?.Dispatcher.InvokeAsync(() => OnTopicChanged(irc.ServerId, channel, topic));
-        Action<IrcServiceState> stateHandler = state =>
-            Application.Current?.Dispatcher.InvokeAsync(UpdateStatus);
-
-        irc.MessageReceived += msgHandler;
-        irc.NamesUpdated += namesHandler;
-        irc.TopicChanged += topicHandler;
-        irc.StateChanged += stateHandler;
-        _serviceHandlers[irc.ServerId] = (msgHandler, namesHandler, topicHandler, stateHandler);
-
-        // Hydrate sidebar with existing channels if IRC already connected
-        // (Dashboard opened after IRC was up)
-        if (irc.State == IrcServiceState.Connected)
+        if (_subscribedServices.Add(irc.ServerId))
         {
-            foreach (var (name, ch) in irc.Channels)
-            {
-                var vm = EnsureChannelVm(irc.ServerId, irc.ServerName, name);
-                vm.HasFishKey = ch.HasFishKey;
-            }
+            Action<string, IrcMessageItem> msgHandler = (target, item) =>
+                Application.Current?.Dispatcher.InvokeAsync(() => OnIrcMessage(irc.ServerId, irc.ServerName, target, item));
+            Action<string> namesHandler = channel =>
+                Application.Current?.Dispatcher.InvokeAsync(() => OnNamesUpdated(irc.ServerId, channel, irc));
+            Action<string, string> topicHandler = (channel, topic) =>
+                Application.Current?.Dispatcher.InvokeAsync(() => OnTopicChanged(irc.ServerId, channel, topic));
+            Action<IrcServiceState> stateHandler = state =>
+                Application.Current?.Dispatcher.InvokeAsync(UpdateStatus);
+
+            irc.MessageReceived += msgHandler;
+            irc.NamesUpdated += namesHandler;
+            irc.TopicChanged += topicHandler;
+            irc.StateChanged += stateHandler;
+            _serviceHandlers[irc.ServerId] = (msgHandler, namesHandler, topicHandler, stateHandler);
+
+            // Hydrate history from the service-lifetime scrollback: channels, PMs and
+            // system lines all survive there across dashboard close/reopen, and the
+            // service seeds it from disk at startup so app restarts keep history too.
+            HydrateFromScrollback(irc);
         }
 
-        // Rehydrate message buffers from the on-disk IRC log so the user sees their
-        // chat history when the Dashboard is closed and reopened. Without this, the
-        // in-memory _messageBuffers is empty on every fresh DashboardWindow and the
-        // user assumes the app must have restarted.
-        RehydrateFromDisk(irc.ServerId, irc.ServerName);
+        // Runs on EVERY call (incl. IrcStateChanged), not just first subscribe, so
+        // channels joined after a reconnect appear even when the dashboard was opened
+        // while IRC was still connecting — the old Connected-only block inside the
+        // subscribe guard was skipped forever in that case.
+        HydrateJoinedChannels(irc);
     }
 
-    /// <summary>
-    /// Loads recent channel messages from IrcLogStore into the per-channel buffers.
-    /// IrcLogStore line format: HH:mm:ss\t#channel\tnick\ttext (today + yesterday).
-    /// </summary>
-    private void RehydrateFromDisk(string serverId, string serverName)
+    private void HydrateJoinedChannels(IrcService irc)
+    {
+        if (irc.State != IrcServiceState.Connected) return;
+        foreach (var (name, ch) in irc.Channels)
+        {
+            var vm = EnsureChannelVm(irc.ServerId, irc.ServerName, name);
+            vm.HasFishKey = ch.HasFishKey;
+        }
+    }
+
+    private void HydrateFromScrollback(IrcService irc)
     {
         try
         {
-            // Pull a few times MaxMessages so each individual channel ends up with
-            // a reasonable buffer after the per-channel distribution.
-            var lines = IrcLogStore.ReadRecent(serverId, MaxMessages * 4);
-            if (lines.Count == 0) return;
-
-            int added = 0;
-            foreach (var line in lines)
+            var cutoff = DateTime.Now.AddSeconds(-60);
+            var total = 0;
+            foreach (var target in irc.GetScrollbackTargets())
             {
-                var parts = line.Split('\t', 4);
-                if (parts.Length < 4) continue;
-                var timestamp = parts[0];
-                var channel = parts[1];
-                var nick = parts[2];
-                var text = parts[3];
-                if (string.IsNullOrEmpty(channel) || !channel.StartsWith('#'))
-                    continue;
+                var items = irc.GetScrollback(target);
+                if (items.Count == 0) continue;
 
-                var bufferKey = $"{serverId}:{channel}";
+                var bufferKey = $"{irc.ServerId}:{target}";
                 if (!_messageBuffers.TryGetValue(bufferKey, out var buffer))
+                    _messageBuffers[bufferKey] = buffer = [];
+
+                foreach (var item in items)
                 {
-                    buffer = new List<IrcMessageVm>();
-                    _messageBuffers[bufferKey] = buffer;
+                    buffer.Add(ToVm(item));
+                    if (buffer.Count > MaxMessages)
+                        buffer.RemoveAt(0);
+                    // A message that arrives while this runs is in the snapshot AND
+                    // queued for the live handler — remember recent refs so
+                    // OnIrcMessage can drop the duplicate delivery.
+                    if (item.Timestamp >= cutoff)
+                        _hydratedRecent.Add(item);
+                    total++;
                 }
 
-                buffer.Add(new IrcMessageVm
-                {
-                    Timestamp = timestamp,
-                    Nick = nick,
-                    Text = text,
-                    Type = IrcMessageType.Normal,
-                    WasEncrypted = false,
-                    NickColor = GetNickColor(nick)
-                });
-                if (buffer.Count > MaxMessages)
-                    buffer.RemoveAt(0);
-
-                // Make sure the channel shows up in the sidebar even if the user
-                // hasn't joined it in this session yet.
-                EnsureChannelVm(serverId, serverName, channel);
-                added++;
+                // Sidebar entry even if not joined this session (incl. PM windows).
+                EnsureChannelVm(irc.ServerId, irc.ServerName, target);
             }
-            Log.Debug("IRC: rehydrated {Count} messages from disk for {Server}", added, serverId);
+            if (total > 0)
+                Log.Debug("IRC: hydrated {Count} scrollback messages for {Server}", total, irc.ServerId);
         }
         catch (Exception ex)
         {
-            Log.Debug(ex, "IRC: rehydrate from disk failed for {Server}", serverId);
+            Log.Debug(ex, "IRC: scrollback hydration failed for {Server}", irc.ServerId);
         }
     }
 
+    private static IrcMessageVm ToVm(IrcMessageItem item) => new()
+    {
+        Timestamp = item.Timestamp.ToString("HH:mm:ss"),
+        Nick = item.Nick,
+        Text = item.Text,
+        Type = item.Type,
+        WasEncrypted = item.WasEncrypted,
+        NickColor = GetNickColor(item.Nick)
+    };
+
     private void OnIrcMessage(string serverId, string serverName, string target, IrcMessageItem item)
     {
+        // Same instance already displayed by HydrateFromScrollback — skip the
+        // queued duplicate (IrcMessageItem has reference equality).
+        if (_hydratedRecent.Remove(item)) return;
+
         var bufferKey = $"{serverId}:{target}";
 
         if (!_messageBuffers.ContainsKey(bufferKey))
             _messageBuffers[bufferKey] = [];
 
-        var vm = new IrcMessageVm
-        {
-            Timestamp = item.Timestamp.ToString("HH:mm:ss"),
-            Nick = item.Nick,
-            Text = item.Text,
-            Type = item.Type,
-            WasEncrypted = item.WasEncrypted,
-            NickColor = GetNickColor(item.Nick)
-        };
+        var vm = ToVm(item);
 
         var buffer = _messageBuffers[bufferKey];
         buffer.Add(vm);
