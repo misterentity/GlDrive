@@ -103,6 +103,12 @@ public class IrcAnnounceListener : IDisposable
         if (message.Type != IrcMessageType.Normal && message.Type != IrcMessageType.Notice)
             return;
 
+        // Announces only ever arrive on channels. Ignore PMs (and the "*" status window):
+        // a bracketed FiSH-decrypted PM could otherwise false-trigger an auto-race or, via
+        // the no-match path below, write PM plaintext into the plaintext ai-data telemetry.
+        if (!IrcLogStore.IsChannelName(target))
+            return;
+
         // Trace first 5 messages per channel to diagnose matching issues
         if (_traceCount < 20 && target.StartsWith('#'))
         {

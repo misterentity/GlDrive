@@ -45,11 +45,7 @@ public partial class DashboardWindow : Window
         };
 
         // Auto-scroll IRC messages
-        vm.Irc.ScrollToBottom += () =>
-        {
-            if (IrcMessageList.Items.Count > 0)
-                IrcMessageList.ScrollIntoView(IrcMessageList.Items[^1]);
-        };
+        vm.Irc.ScrollToBottom += ScrollIrcToBottom;
 
         // Re-focus input after sending
         vm.Irc.FocusInput += () => IrcInputBox.Focus();
@@ -149,12 +145,28 @@ public partial class DashboardWindow : Window
         return tab.Header?.ToString();
     }
 
+    // The IRC message ListBox only realizes its items once its tab is shown, so the
+    // VM's ctor-time scroll (and any scroll while another tab is active) is a no-op —
+    // the hydrated backlog would open scrolled to the TOP. Scroll to the newest line
+    // once when the tab becomes active, deferred until the list has laid out.
+    private void ScrollIrcToBottom()
+    {
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        {
+            if (IrcMessageList.Items.Count > 0)
+                IrcMessageList.ScrollIntoView(IrcMessageList.Items[^1]);
+        }));
+    }
+
     private async void TabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (e.Source is not TabControl tc) return;
         if (tc.SelectedItem is not TabItem tab) return;
         var header = GetTabName(tab);
         var vm = DataContext as DashboardViewModel;
+
+        if (header == "IRC")
+            ScrollIrcToBottom();
 
         if (header == "Overview" && vm != null)
         {

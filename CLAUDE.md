@@ -104,5 +104,6 @@ This project lives in `OneDrive\Documents\CursorProjects\fmountr\`. OneDrive syn
 - Extractor settings: `%AppData%\GlDrive\extractor-settings.json`
 - Wishlist: `%AppData%\GlDrive\wishlist.json`
 - FiSH keys: `%AppData%\GlDrive\fish-keys-{serverId}.json` (DPAPI encrypted)
+- IRC PM history: `%AppData%\GlDrive\pm-history-{serverId}.json` (DPAPI encrypted; channel chat stays in plaintext `irc-logs\`)
 - Logs: `%AppData%\GlDrive\logs\gldrive-{date}.log`
 - Credentials: Windows Credential Manager, key format `GlDrive:{host}:{port}:{username}`

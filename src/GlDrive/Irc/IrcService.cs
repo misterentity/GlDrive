@@ -33,6 +33,12 @@ public class IrcService : IDisposable
     private readonly ServerConfig _serverConfig;
     private readonly CertificateManager _certManager;
     private readonly FishKeyStore _fishKeyStore;
+    // Service-lifetime scrollback + persistent PM history. The Dashboard's view-model
+    // dies with the window, so this is the only place message history (channels, PMs,
+    // system lines) survives a dashboard close — and, seeded from IrcLogStore +
+    // PmHistoryStore at construction, an app restart. Never cleared on reconnect.
+    private readonly IrcScrollbackBuffer _scrollback = new();
+    private readonly PmHistoryStore _pmHistory;
     private IrcClient? _client;
     private CancellationTokenSource? _cts;
     private Task? _serviceTask;
@@ -88,6 +94,10 @@ public class IrcService : IDisposable
     public string ServerId => _serverConfig.Id;
     public string ServerName => _serverConfig.Name;
     public IReadOnlyDictionary<string, IrcChannel> Channels => _channels;
+    /// <summary>Targets (channels, PM nicks, "*") that have scrollback history.</summary>
+    public IReadOnlyList<string> GetScrollbackTargets() => _scrollback.Targets;
+    /// <summary>Chronological snapshot of one target's scrollback.</summary>
+    public IReadOnlyList<IrcMessageItem> GetScrollback(string target) => _scrollback.Snapshot(target);
     public string CurrentNick => _currentNick;
     public FishKeyStore KeyStore => _fishKeyStore;
     public Func<string, CancellationToken, Task<string?>>? SiteInviteFunc { get; set; }
@@ -106,6 +116,47 @@ public class IrcService : IDisposable
         _certManager = certManager;
         _fishKeyStore = new FishKeyStore(serverConfig.Id);
         _fishFallbackCharset = ResolveFallbackCharset(serverConfig.Irc.FallbackCharset);
+        _pmHistory = new PmHistoryStore(serverConfig.Id);
+        SeedScrollback();
+    }
+
+    /// <summary>
+    /// Pre-loads the scrollback with persisted history so a freshly started app
+    /// still shows recent channel chat (IrcLogStore, today + yesterday) and PM
+    /// conversations (encrypted PmHistoryStore).
+    /// </summary>
+    private void SeedScrollback()
+    {
+        try
+        {
+            var channelLines = IrcLogStore.ReadRecentEntries(ServerId, 2000);
+            foreach (var (timestamp, channel, nick, text) in channelLines)
+                _scrollback.Append(channel, new IrcMessageItem { Timestamp = timestamp, Nick = nick, Text = text });
+
+            var pmCount = 0;
+            foreach (var (target, entries) in _pmHistory.GetAll())
+            {
+                foreach (var entry in entries)
+                {
+                    _scrollback.Append(target, new IrcMessageItem
+                    {
+                        Timestamp = entry.Timestamp,
+                        Nick = entry.Nick,
+                        Text = entry.Text,
+                        Type = entry.Type,
+                        WasEncrypted = entry.WasEncrypted
+                    });
+                    pmCount++;
+                }
+            }
+            if (channelLines.Count > 0 || pmCount > 0)
+                Log.Information("IRC scrollback seeded for {Server}: {ChannelLines} channel lines, {PmLines} PM lines",
+                    _serverConfig.Name, channelLines.Count, pmCount);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "IRC scrollback seed failed for {Server}", _serverConfig.Name);
+        }
     }
 
     private static Encoding? ResolveFallbackCharset(string name)
@@ -543,7 +594,7 @@ public class IrcService : IDisposable
                     else
                     {
                         // All keys produced garbage (wrong key entirely — peer using a different KDF or static key).
-                        var ch = CipherHash(text);
+                        var ch = CipherHash(text);
                         Log.Warning("FiSH PM {Target}: decrypt failed. prefix={Prefix} cipherLen={CL} cipherHash={Hash} keyMask={KM} qualities=[{Q0:F2},{Q1:F2}] manual={Manual} hasSecret={HasSecret}",
                             effectiveTarget, prefix, text.Length, ch, MaskKey(keyEntry.Key),
                             qualities.Length > 0 ? qualities[0] : 0,
@@ -668,7 +719,7 @@ public class IrcService : IDisposable
                     }
                     else
                     {
-                        var ch = CipherHash(text);
+                        var ch = CipherHash(text);
                         Log.Warning("FiSH NOTICE {Target}: decrypt failed. prefix={Prefix} cipherLen={CL} cipherHash={Hash} keyMask={KM} qualities=[{Q0:F2},{Q1:F2}] manual={Manual} hasSecret={HasSecret}",
                             effectiveTarget, prefix, text.Length, ch, MaskKey(keyEntry.Key),
                             qualities.Length > 0 ? qualities[0] : 0,
@@ -1081,6 +1132,8 @@ public class IrcService : IDisposable
     {
         if (_client == null || !_client.IsConnected) return;
         await _client.NoticeAsync(target, text);
+        // Local echo — the server never reflects our own NOTICE back.
+        AddMessage(target, new IrcMessageItem { Nick = _currentNick, Text = text, Type = IrcMessageType.Notice });
     }
 
     public async Task SendRaw(string line)
@@ -1386,7 +1439,7 @@ public class IrcService : IDisposable
             }
 
             Log.Information("DH1080 FINISH send to {Nick}: ourPubLen={Len} ourPubMask={Mask} primaryKey={KM} altKey={AM}",
-                nick, ourPub.Length, MaskMid(ourPub), MaskKey(primaryKey), MaskKey(altKey));
+                nick, ourPub.Length, MaskMid(ourPub), MaskKey(primaryKey), MaskKey(altKey));
 
             await _client.NoticeAsync(nick, Dh1080.FormatFinish(ourPub));
             AddSystemMessage(nick, $"DH1080 key exchange completed (initiated by {nick}) — {dhMode} mode");
@@ -1418,7 +1471,7 @@ public class IrcService : IDisposable
             }
 
             Log.Information("DH1080 derived for {Nick}: primaryKey={KM} altKey={AM}",
-                nick, MaskKey(primaryKey), MaskKey(altKey));
+                nick, MaskKey(primaryKey), MaskKey(altKey));
 
             AddSystemMessage(nick, $"DH1080 key exchange completed — {dhMode} mode");
         }
@@ -1495,6 +1548,16 @@ public class IrcService : IDisposable
 
     private void AddMessage(string target, IrcMessageItem item)
     {
+        target = IrcScrollbackBuffer.NormalizeTarget(target);
+        _scrollback.Append(target, item);
+        // Channel text is persisted (plaintext) by IrcPatternDetector → IrcLogStore;
+        // PM chat is persisted here, encrypted at rest. Only real conversation messages
+        // (PRIVMSG / actions) are persisted — service NOTICEs (NickServ, memoserv, bots)
+        // would otherwise churn the store and evict genuine PM threads at the target cap.
+        // System lines and channel traffic stay in-memory scrollback only.
+        if (target != "*" && !IsChannel(target) &&
+            (item.Type == IrcMessageType.Normal || item.Type == IrcMessageType.Action))
+            _pmHistory.Append(target, item);
         MessageReceived?.Invoke(target, item);
     }
 
@@ -1513,9 +1576,13 @@ public class IrcService : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        StopPingTimer();
-        _cts?.Cancel();
-        _client?.Dispose();
+        // Guard each step independently so an earlier failure (e.g. client teardown
+        // throwing) can't skip the PM-history flush — losing PM history is the exact
+        // failure this feature exists to prevent.
+        try { StopPingTimer(); } catch (Exception ex) { Log.Debug(ex, "IRC dispose: ping timer"); }
+        try { _cts?.Cancel(); } catch (Exception ex) { Log.Debug(ex, "IRC dispose: cts cancel"); }
+        try { _client?.Dispose(); } catch (Exception ex) { Log.Debug(ex, "IRC dispose: client"); }
+        try { _pmHistory.Dispose(); } catch (Exception ex) { Log.Debug(ex, "IRC dispose: PM history flush"); }
         GC.SuppressFinalize(this);
     }
 }
