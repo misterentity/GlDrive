@@ -189,47 +189,29 @@ public class MediaStreamServer : IDisposable
 
         Log.Debug("Streaming {Path} (size={Size}) from server {Server}", remotePath, fileSize, serverId);
 
-        // Parse Range header — supports `bytes=N-`, `bytes=N-M`, and suffix `bytes=-N` (last N bytes).
-        // Multi-range (`bytes=0-499,600-999`) responds 416 (multipart/byteranges not supported here).
-        long offset = 0;
         var rangeHeader = ctx.Request.Headers["Range"];
-        if (rangeHeader != null && rangeHeader.StartsWith("bytes="))
+        if (!TryResolveRange(rangeHeader, fileSize, out var range))
         {
-            var spec = rangeHeader[6..];
-            if (spec.Contains(','))
-            {
-                ctx.Response.StatusCode = 416;
-                if (fileSize > 0) ctx.Response.Headers.Add("Content-Range", $"bytes */{fileSize}");
-                ctx.Response.Close();
-                return;
-            }
-            var parts = spec.Split('-', 2);
-            if (parts.Length == 2 && parts[0].Length == 0)
-            {
-                // Suffix range: last N bytes
-                if (long.TryParse(parts[1], out var suffixLen) && suffixLen > 0 && fileSize > 0)
-                    offset = Math.Max(0, fileSize - suffixLen);
-            }
-            else if (long.TryParse(parts[0], out var start))
-            {
-                offset = start;
-            }
+            ctx.Response.StatusCode = 416;
+            if (fileSize > 0) ctx.Response.Headers.Add("Content-Range", $"bytes */{fileSize}");
+            ctx.Response.Close();
+            return;
         }
 
         // Set response headers
         ctx.Response.ContentType = GetVideoContentType(remotePath);
         ctx.Response.Headers.Add("Accept-Ranges", "bytes");
 
-        if (offset > 0 && fileSize > 0)
+        if (range.IsPartial)
         {
             ctx.Response.StatusCode = 206;
-            ctx.Response.Headers.Add("Content-Range", $"bytes {offset}-{fileSize - 1}/{fileSize}");
-            ctx.Response.ContentLength64 = fileSize - offset;
+            ctx.Response.Headers.Add("Content-Range", $"bytes {range.Offset}-{range.End}/{fileSize}");
+            ctx.Response.ContentLength64 = range.Length!.Value;
         }
         else
         {
             ctx.Response.StatusCode = 200;
-            if (fileSize > 0) ctx.Response.ContentLength64 = fileSize;
+            if (range.Length.HasValue) ctx.Response.ContentLength64 = range.Length.Value;
         }
 
         // Stream from FTP, saving to library if streaming from the start
@@ -238,7 +220,7 @@ public class MediaStreamServer : IDisposable
         FileStream? saveStream = null;
 
         // Only save to library when streaming from the beginning (no seek)
-        if (offset == 0)
+        if (!range.IsPartial && range.Offset == 0)
         {
             try { saveStream = new FileStream(tempFile, FileMode.Create, FileAccess.Write, FileShare.None); }
             catch (Exception ex) { Log.Warning(ex, "Could not open cache file for writing"); }
@@ -253,9 +235,9 @@ public class MediaStreamServer : IDisposable
             // Reset timeout — streaming can take as long as needed
             streamCts.CancelAfter(Timeout.InfiniteTimeSpan);
             if (server.Pool.UseCpsv)
-                await StreamCpsv(conn.Client, remotePath, offset, ctx.Response.OutputStream, _cts.Token, saveStream);
+                await StreamCpsv(conn.Client, remotePath, range.Offset, range.Length, ctx.Response.OutputStream, _cts.Token, saveStream);
             else
-                await StreamStandard(conn.Client, remotePath, offset, ctx.Response.OutputStream, _cts.Token, saveStream);
+                await StreamStandard(conn.Client, remotePath, range.Offset, range.Length, ctx.Response.OutputStream, _cts.Token, saveStream);
 
             // Rename .partial to final when complete
             if (saveStream != null)
@@ -483,56 +465,23 @@ public class MediaStreamServer : IDisposable
         var fi = new FileInfo(filePath);
         var fileSize = fi.Length;
 
-        // Mirror HandleDirectStream's Range validation: support `bytes=N-`, `bytes=N-M`, and suffix
-        // `bytes=-N`. An unvalidated start offset >= fileSize previously produced a negative/wrapped
-        // ContentLength64 and a bogus Content-Range — RFC 7233 requires 416 in that case.
-        long offset = 0;
-        long end = fileSize - 1;
         var rangeHeader = ctx.Request.Headers["Range"];
-        if (rangeHeader != null && rangeHeader.StartsWith("bytes="))
+        if (!TryResolveRange(rangeHeader, fileSize, out var range))
         {
-            var spec = rangeHeader[6..];
-            // Multi-range (e.g. `bytes=0-499,600-999`) is unsupported (no multipart/byteranges) → 416.
-            if (spec.Contains(','))
-            {
-                ctx.Response.StatusCode = 416;
-                if (fileSize > 0) ctx.Response.Headers.Add("Content-Range", $"bytes */{fileSize}");
-                ctx.Response.Close();
-                return;
-            }
-            var parts = spec.Split('-', 2);
-            if (parts.Length == 2 && parts[0].Length == 0)
-            {
-                // Suffix range: last N bytes
-                if (long.TryParse(parts[1], out var suffixLen) && suffixLen > 0 && fileSize > 0)
-                    offset = Math.Max(0, fileSize - suffixLen);
-            }
-            else if (long.TryParse(parts[0], out var start))
-            {
-                offset = start;
-                // Honor an explicit end bound, clamping to the last byte of the file.
-                if (parts.Length == 2 && long.TryParse(parts[1], out var rangeEnd) && rangeEnd >= start)
-                    end = Math.Min(rangeEnd, fileSize - 1);
-            }
-
-            // Reject ranges that start at or past EOF — would otherwise yield a negative Content-Length.
-            if (offset >= fileSize || offset < 0)
-            {
-                ctx.Response.StatusCode = 416;
-                if (fileSize > 0) ctx.Response.Headers.Add("Content-Range", $"bytes */{fileSize}");
-                ctx.Response.Close();
-                return;
-            }
+            ctx.Response.StatusCode = 416;
+            if (fileSize > 0) ctx.Response.Headers.Add("Content-Range", $"bytes */{fileSize}");
+            ctx.Response.Close();
+            return;
         }
 
         ctx.Response.ContentType = GetVideoContentType(filePath);
         ctx.Response.Headers.Add("Accept-Ranges", "bytes");
 
-        var length = end - offset + 1;
-        if (offset > 0 || end < fileSize - 1)
+        var length = range.Length!.Value;
+        if (range.IsPartial)
         {
             ctx.Response.StatusCode = 206;
-            ctx.Response.Headers.Add("Content-Range", $"bytes {offset}-{end}/{fileSize}");
+            ctx.Response.Headers.Add("Content-Range", $"bytes {range.Offset}-{range.End}/{fileSize}");
             ctx.Response.ContentLength64 = length;
         }
         else
@@ -542,7 +491,7 @@ public class MediaStreamServer : IDisposable
         }
 
         await using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
-        if (offset > 0) fs.Seek(offset, SeekOrigin.Begin);
+        if (range.Offset > 0) fs.Seek(range.Offset, SeekOrigin.Begin);
 
         // Cap reads to the validated [offset, end] window so a `bytes=N-M` request doesn't over-send.
         var remaining = length;
@@ -557,6 +506,72 @@ public class MediaStreamServer : IDisposable
         }
 
         ctx.Response.Close();
+    }
+
+    internal readonly record struct ResolvedRange(long Offset, long End, long? Length, bool IsPartial);
+
+    internal static bool TryResolveRange(string? header, long fileSize, out ResolvedRange range)
+    {
+        if (string.IsNullOrWhiteSpace(header))
+        {
+            range = new ResolvedRange(0, Math.Max(0, fileSize - 1), fileSize >= 0 ? fileSize : null, false);
+            return true;
+        }
+
+        if (fileSize <= 0 || !header.StartsWith("bytes=", StringComparison.OrdinalIgnoreCase))
+        {
+            range = default;
+            return false;
+        }
+
+        var spec = header[6..].Trim();
+        if (spec.Length == 0 || spec.Contains(','))
+        {
+            range = default;
+            return false;
+        }
+
+        var parts = spec.Split('-', 2);
+        long start;
+        long end;
+        if (parts.Length != 2)
+        {
+            range = default;
+            return false;
+        }
+
+        if (parts[0].Length == 0)
+        {
+            if (!long.TryParse(parts[1], out var suffixLength) || suffixLength <= 0)
+            {
+                range = default;
+                return false;
+            }
+            suffixLength = Math.Min(suffixLength, fileSize);
+            start = fileSize - suffixLength;
+            end = fileSize - 1;
+        }
+        else
+        {
+            if (!long.TryParse(parts[0], out start) || start < 0 || start >= fileSize)
+            {
+                range = default;
+                return false;
+            }
+            if (parts[1].Length == 0)
+            {
+                end = fileSize - 1;
+            }
+            else if (!long.TryParse(parts[1], out end) || end < start)
+            {
+                range = default;
+                return false;
+            }
+            end = Math.Min(end, fileSize - 1);
+        }
+
+        range = new ResolvedRange(start, end, end - start + 1, true);
+        return true;
     }
 
     private static int GetVolumeOrder(string fileName)
@@ -610,18 +625,21 @@ public class MediaStreamServer : IDisposable
         fullPath.StartsWith(Path.GetFullPath(LibraryPath) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
 
     private static async Task StreamStandard(AsyncFtpClient client, string remotePath, long offset,
-        Stream output, CancellationToken ct, FileStream? saveStream = null)
+        long? maxBytes, Stream output, CancellationToken ct, FileStream? saveStream = null)
     {
         await using var ftpStream = await client.OpenRead(remotePath, FtpDataType.Binary, offset, token: ct);
 
         var buffer = new byte[256 * 1024];
+        var remaining = maxBytes ?? long.MaxValue;
         int read;
-        while ((read = await ftpStream.ReadAsync(buffer, ct)) > 0)
+        while (remaining > 0 &&
+               (read = await ftpStream.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)), ct)) > 0)
         {
             await output.WriteAsync(buffer.AsMemory(0, read), ct);
             await output.FlushAsync(ct);
             if (saveStream != null)
                 await saveStream.WriteAsync(buffer.AsMemory(0, read), ct);
+            remaining -= read;
         }
 
         ftpStream.Close();
@@ -629,7 +647,7 @@ public class MediaStreamServer : IDisposable
     }
 
     private static async Task StreamCpsv(AsyncFtpClient client, string remotePath, long offset,
-        Stream output, CancellationToken ct, FileStream? saveStream = null)
+        long? maxBytes, Stream output, CancellationToken ct, FileStream? saveStream = null)
     {
         await client.Execute("TYPE I", ct);
         if (offset > 0)
@@ -646,13 +664,16 @@ public class MediaStreamServer : IDisposable
             try
             {
                 var buffer = new byte[256 * 1024];
+                var remaining = maxBytes ?? long.MaxValue;
                 int read;
-                while ((read = await ssl.ReadAsync(buffer, ct)) > 0)
+                while (remaining > 0 &&
+                       (read = await ssl.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)), ct)) > 0)
                 {
                     await output.WriteAsync(buffer.AsMemory(0, read), ct);
                     await output.FlushAsync(ct);
                     if (saveStream != null)
                         await saveStream.WriteAsync(buffer.AsMemory(0, read), ct);
+                    remaining -= read;
                 }
 
                 ssl.Close();

@@ -1,5 +1,6 @@
 using System.IO;
 using System.Net;
+using System.Text.Json;
 using System.Windows;
 using FluentFTP;
 using FluentFTP.GnuTLS;
@@ -41,7 +42,10 @@ public partial class ServerEditDialog : Window
         InitializeComponent();
         DataContext = this;
 
-        _serverConfig = existing ?? new ServerConfig();
+        _serverConfig = existing == null
+            ? new ServerConfig()
+            : JsonSerializer.Deserialize<ServerConfig>(JsonSerializer.Serialize(existing))
+              ?? throw new InvalidOperationException("Could not clone server configuration");
 
         SiteSkiplistGrid.ItemsSource = _siteSkiplist;
         SectionMappingsGrid.ItemsSource = _sectionMappings;
@@ -160,10 +164,10 @@ public partial class ServerEditDialog : Window
                 .Where(r => r.Enabled)
                 .Select(r => string.IsNullOrEmpty(r.Channel) ? r.Pattern : $"{r.Channel} {r.Pattern}"));
 
-            foreach (var rule in existing.SpreadSite.Skiplist)
+            foreach (var rule in _serverConfig.SpreadSite.Skiplist)
                 _siteSkiplist.Add(rule);
 
-            foreach (var mapping in existing.SpreadSite.SectionMappings)
+            foreach (var mapping in _serverConfig.SpreadSite.SectionMappings)
                 _sectionMappings.Add(mapping);
 
             // Metadata filter

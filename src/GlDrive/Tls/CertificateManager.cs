@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -11,7 +12,17 @@ namespace GlDrive.Tls;
 public class CertificateManager
 {
     private readonly string _fingerprintFile;
-    private Dictionary<string, TrustedCert> _trustedCerts = new();
+    private readonly StoreState _state;
+    private static readonly ConcurrentDictionary<string, StoreState> Stores =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private sealed class StoreState
+    {
+        public Lock Sync { get; } = new();
+        public SemaphoreSlim ValidationGate { get; } = new(1, 1);
+        public Dictionary<string, TrustedCert> TrustedCerts { get; set; } = new();
+        public bool Loaded { get; set; }
+    }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -24,6 +35,8 @@ public class CertificateManager
         _fingerprintFile = Path.Combine(
             ConfigManager.AppDataPath,
             fingerprintFileName ?? "trusted_certs.json");
+        _fingerprintFile = Path.GetFullPath(_fingerprintFile);
+        _state = Stores.GetOrAdd(_fingerprintFile, _ => new StoreState());
         Load();
     }
 
@@ -40,42 +53,54 @@ public class CertificateManager
     {
         var fingerprint = GetFingerprint(certificate);
         var key = $"{host}:{port}";
-
-        if (_trustedCerts.TryGetValue(key, out var trusted))
+        await _state.ValidationGate.WaitAsync();
+        try
         {
-            if (trusted.Fingerprint == fingerprint)
-            {
-                Log.Debug("Certificate fingerprint matches");
-                return true;
-            }
+            TrustedCert? trusted;
+            lock (_state.Sync)
+                _state.TrustedCerts.TryGetValue(key, out trusted);
 
-            // Certificate changed — possible MitM. Prompt user or reject.
-            Log.Warning("Certificate fingerprint changed for {Key} — old: {Old}, new: {New}",
-                key, trusted.Fingerprint[..16] + "...", fingerprint[..16] + "...");
-
-            if (CertificatePrompt != null)
+            if (trusted != null)
             {
-                var accepted = await CertificatePrompt(key,
-                    $"⚠ Certificate changed for {key}!\n\n" +
-                    $"Old fingerprint: {trusted.Fingerprint[..16]}...\n" +
-                    $"New fingerprint: {fingerprint[..16]}...\n\n" +
-                    "This could indicate a man-in-the-middle attack.\n" +
-                    "Accept the new certificate?");
-                if (accepted)
+                if (trusted.Fingerprint == fingerprint)
                 {
-                    TrustCertificate(key, fingerprint, certificate);
+                    Log.Debug("Certificate fingerprint matches");
                     return true;
                 }
+
+                // Certificate changed — possible MitM. Prompt user or reject.
+                Log.Warning("Certificate fingerprint changed for {Key} — old: {Old}, new: {New}",
+                    key, trusted.Fingerprint[..Math.Min(16, trusted.Fingerprint.Length)] + "...",
+                    fingerprint[..Math.Min(16, fingerprint.Length)] + "...");
+
+                if (CertificatePrompt != null)
+                {
+                    var accepted = await CertificatePrompt(key,
+                        $"⚠ Certificate changed for {key}!\n\n" +
+                        $"Old fingerprint: {trusted.Fingerprint[..Math.Min(16, trusted.Fingerprint.Length)]}...\n" +
+                        $"New fingerprint: {fingerprint[..Math.Min(16, fingerprint.Length)]}...\n\n" +
+                        "This could indicate a man-in-the-middle attack.\n" +
+                        "Accept the new certificate?");
+                    if (accepted)
+                    {
+                        TrustCertificate(key, fingerprint, certificate);
+                        return true;
+                    }
+                }
+
+                Log.Error("Certificate change rejected for {Key} — fingerprint mismatch", key);
+                return false;
             }
 
-            Log.Error("Certificate change rejected for {Key} — fingerprint mismatch", key);
-            return false;
+            // TOFU: first time seeing this cert — auto-trust
+            Log.Information("Auto-trusting new certificate for {Key}: {Fingerprint}", key, fingerprint[..16] + "...");
+            TrustCertificate(key, fingerprint, certificate);
+            return true;
         }
-
-        // TOFU: first time seeing this cert — auto-trust
-        Log.Information("Auto-trusting new certificate for {Key}: {Fingerprint}", key, fingerprint[..16] + "...");
-        TrustCertificate(key, fingerprint, certificate);
-        return true;
+        finally
+        {
+            _state.ValidationGate.Release();
+        }
     }
 
     public void TrustCertificate(string hostPort, string fingerprint)
@@ -104,51 +129,71 @@ public class CertificateManager
             }
         }
 
-        _trustedCerts[hostPort] = new TrustedCert
+        lock (_state.Sync)
         {
-            Fingerprint = fingerprint,
-            TrustedAt = DateTime.UtcNow,
-            Subject = subject,
-            Issuer = issuer,
-            NotAfter = notAfter
-        };
-        Save();
+            _state.TrustedCerts[hostPort] = new TrustedCert
+            {
+                Fingerprint = fingerprint,
+                TrustedAt = DateTime.UtcNow,
+                Subject = subject,
+                Issuer = issuer,
+                NotAfter = notAfter
+            };
+            SaveLocked();
+        }
     }
 
     public void ClearTrustedCertificates()
     {
-        _trustedCerts.Clear();
-        Save();
+        lock (_state.Sync)
+        {
+            _state.TrustedCerts.Clear();
+            SaveLocked();
+        }
     }
 
     public void RemoveTrustedCertificate(string hostPort)
     {
-        _trustedCerts.Remove(hostPort);
-        Save();
+        lock (_state.Sync)
+        {
+            _state.TrustedCerts.Remove(hostPort);
+            SaveLocked();
+        }
     }
 
-    public IReadOnlyDictionary<string, TrustedCert> GetTrustedCertificates() => _trustedCerts;
+    public IReadOnlyDictionary<string, TrustedCert> GetTrustedCertificates()
+    {
+        lock (_state.Sync)
+            return new Dictionary<string, TrustedCert>(_state.TrustedCerts);
+    }
 
     private void Load()
     {
-        if (!File.Exists(_fingerprintFile)) return;
-        try
+        lock (_state.Sync)
         {
-            var json = File.ReadAllText(_fingerprintFile);
-            _trustedCerts = JsonSerializer.Deserialize<Dictionary<string, TrustedCert>>(json, JsonOptions)
-                            ?? new();
-        }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "Failed to load trusted certificates");
-            _trustedCerts = new();
+            if (_state.Loaded) return;
+            try
+            {
+                if (File.Exists(_fingerprintFile))
+                {
+                    var json = File.ReadAllText(_fingerprintFile);
+                    _state.TrustedCerts = JsonSerializer.Deserialize<Dictionary<string, TrustedCert>>(json, JsonOptions)
+                                          ?? new();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to load trusted certificates");
+                _state.TrustedCerts = new();
+            }
+            _state.Loaded = true;
         }
     }
 
-    private void Save()
+    private void SaveLocked()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(_fingerprintFile)!);
-        var json = JsonSerializer.Serialize(_trustedCerts, JsonOptions);
+        var json = JsonSerializer.Serialize(_state.TrustedCerts, JsonOptions);
         SecureFile.WriteAllTextRestricted(_fingerprintFile, json);
     }
 }

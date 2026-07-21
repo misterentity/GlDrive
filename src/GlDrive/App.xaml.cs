@@ -38,9 +38,8 @@ public partial class App
         base.OnStartup(e);
 
         // Update applicator mode — runs elevated, replaces files, relaunches, then exits.
-        // Must force-kill the process after ApplyUpdate to prevent GnuTLS native DLL
-        // teardown crash (DllNotFoundException in __scrt_uninitialize_type_info) when
-        // running from the temp update directory.
+        // Must force-kill after ApplyUpdate because its loaded files may have been
+        // renamed during replacement; normal native teardown is unsafe at that point.
         var applyIdx = Array.IndexOf(e.Args, "--apply-update");
         if (applyIdx >= 0 && e.Args.Length >= applyIdx + 4)
         {

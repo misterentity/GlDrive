@@ -19,11 +19,8 @@ public static class Program
         }
 
         // Normal mode — spawn watchdog then start WPF app.
-        // EXCEPT during --apply-update: that process runs from a temp extract directory that
-        // does NOT contain the self-contained runtime DLLs (e.g. System.Security.Cryptography,
-        // System.Text.Json). A watchdog spawned there crashes with FileNotFoundException the
-        // moment it touches HMAC marker validation. The real app, relaunched from the install
-        // dir after the update, spawns its own watchdog normally — so nothing is lost.
+        // EXCEPT during --apply-update: the elevated updater owns restart and rollback.
+        // Spawning a second watchdog here would race file replacement and relaunch.
         if (Array.IndexOf(args, "--apply-update") < 0)
             SpawnWatchdog();
 

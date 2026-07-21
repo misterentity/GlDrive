@@ -1,4 +1,7 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using GlDrive.Config;
 using GlDrive.Downloads;
 using GlDrive.Irc;
@@ -14,6 +17,7 @@ public class ServerManager : IDisposable
     private readonly CertificateManager _certManager;
     private readonly NotificationStore _notificationStore;
     private readonly ConcurrentDictionary<string, MountService> _servers = new();
+    private readonly ConcurrentDictionary<string, string> _runtimeConfigFingerprints = new();
     private readonly ConcurrentDictionary<string, IrcService> _ircServices = new();
     private readonly ConcurrentDictionary<string, IrcAnnounceListener> _announceListeners = new();
     private readonly ConcurrentDictionary<string, IrcPatternDetector> _patternDetectors = new();
@@ -78,9 +82,25 @@ public class ServerManager : IDisposable
             _spreadManager?.TryAutoRace(category, release, serverId, remotePath);
         };
 
-        _servers[serverId] = service;
+        if (!_servers.TryAdd(serverId, service))
+        {
+            service.Dispose();
+            Log.Warning("Server {ServerName} is already mounting or mounted", serverConfig.Name);
+            return;
+        }
 
-        await service.Mount(ct);
+        try
+        {
+            await service.Mount(ct);
+            _runtimeConfigFingerprints[serverId] = ComputeRuntimeConfigFingerprint(serverConfig);
+        }
+        catch
+        {
+            _servers.TryRemove(serverId, out _);
+            _runtimeConfigFingerprints.TryRemove(serverId, out _);
+            service.Dispose();
+            throw;
+        }
 
         // Initialize spread pool for FXP
         if (_spreadManager != null && service.Factory != null)
@@ -122,6 +142,7 @@ public class ServerManager : IDisposable
         await service.UnmountAsync();
         service.Dispose();
         _servers.TryRemove(serverId, out _);
+        _runtimeConfigFingerprints.TryRemove(serverId, out _);
     }
 
     public void UnmountServer(string serverId)
@@ -139,6 +160,7 @@ public class ServerManager : IDisposable
         service.Unmount();
         service.Dispose();
         _servers.TryRemove(serverId, out _);
+        _runtimeConfigFingerprints.TryRemove(serverId, out _);
     }
 
     public async Task MountAll(CancellationToken ct = default)
@@ -233,6 +255,23 @@ public class ServerManager : IDisposable
             }
             else
             {
+                var fingerprint = ComputeRuntimeConfigFingerprint(server);
+                if (!_runtimeConfigFingerprints.TryGetValue(server.Id, out var activeFingerprint) ||
+                    !string.Equals(activeFingerprint, fingerprint, StringComparison.Ordinal))
+                {
+                    Log.Information("Configuration changed for {ServerName}, remounting", server.Name);
+                    await UnmountServerAsync(server.Id);
+                    try
+                    {
+                        await MountServer(server.Id);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning(ex, "Failed to remount changed server {ServerName}", server.Name);
+                    }
+                    continue;
+                }
+
                 // Server already mounted — check if IRC config changed
                 var ircEnabled = server.Irc.Enabled && !string.IsNullOrEmpty(server.Irc.Host);
                 var ircRunning = _ircServices.ContainsKey(server.Id);
@@ -303,6 +342,23 @@ public class ServerManager : IDisposable
     }
 
     public IDictionary<string, IrcService> GetIrcServices() => _ircServices;
+
+    private string ComputeRuntimeConfigFingerprint(ServerConfig server)
+    {
+        var connection = server.Connection;
+        var proxy = connection.Proxy;
+        var secrets = string.Join('\u001f',
+            CredentialStore.GetPassword(connection.Host, connection.Port, connection.Username) ?? "",
+            proxy is { Enabled: true }
+                ? CredentialStore.GetProxyPassword(proxy.Host, proxy.Port, proxy.Username) ?? ""
+                : "",
+            CredentialStore.GetIrcPassword(server.Irc.Host, server.Irc.Port, server.Irc.Nick) ?? "");
+        var credentialFingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(secrets)));
+        return JsonSerializer.Serialize(new RuntimeConfigSnapshot(server, _config.Downloads, credentialFingerprint));
+    }
+
+    private sealed record RuntimeConfigSnapshot(
+        ServerConfig Server, DownloadConfig Downloads, string CredentialFingerprint);
 
     /// <summary>
     /// Analyze buffered IRC messages for a server and return detected announce patterns.

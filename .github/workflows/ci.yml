@@ -5,10 +5,12 @@ on:
     branches: [ master ]
     paths:
       - 'src/**'
+      - 'installer/**'
       - '.github/workflows/ci.yml'
   pull_request:
     paths:
       - 'src/**'
+      - 'installer/**'
       - '.github/workflows/ci.yml'
   workflow_dispatch:
 
@@ -29,10 +31,13 @@ jobs:
       # WinFsp/GnuTLS native bits come from NuGet (winfsp.net, FluentFTP.GnuTLS)
       # and aren't exercised by the tests (no mount / no live FTP).
       - name: Restore
-        run: dotnet restore src/GlDrive.Tests/GlDrive.Tests.csproj
+        run: dotnet restore src/GlDrive.Tests/GlDrive.Tests.csproj -warnaserror:NU1901,NU1902,NU1903,NU1904
 
       - name: Build (Release)
         run: dotnet build src/GlDrive.Tests/GlDrive.Tests.csproj -c Release --no-restore
 
       - name: Test
         run: dotnet test src/GlDrive.Tests/GlDrive.Tests.csproj -c Release --no-build --logger "console;verbosity=normal"
+
+      - name: Audit dependencies
+        run: dotnet list src/GlDrive/GlDrive.csproj package --vulnerable --include-transitive

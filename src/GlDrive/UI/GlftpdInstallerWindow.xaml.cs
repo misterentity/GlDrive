@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using GlDrive.Config;
+using GlDrive.Tls;
 using Microsoft.Win32;
 using Renci.SshNet;
 using Serilog;
@@ -16,6 +17,7 @@ public partial class GlftpdInstallerWindow : Window
 {
     private SshClient? _ssh;
     private SftpClient? _sftp;
+    private readonly SshHostKeyManager _sshHostKeys = new();
     private bool _installing;
     private readonly DispatcherTimer _elapsedTimer;
     private Stopwatch? _stopwatch;
@@ -102,9 +104,11 @@ public partial class GlftpdInstallerWindow : Window
             connInfo.Timeout = TimeSpan.FromSeconds(10);
 
             _ssh = new SshClient(connInfo);
+            AttachHostKeyValidation(_ssh, host, port);
             _ssh.Connect();
 
             _sftp = new SftpClient(connInfo);
+            AttachHostKeyValidation(_sftp, host, port);
             _sftp.Connect();
             _sftp.OperationTimeout = TimeSpan.FromSeconds(60);
 
@@ -123,6 +127,29 @@ public partial class GlftpdInstallerWindow : Window
             AppendLog($"Connection failed: {ex.Message}", "error");
             ShowError($"Connection failed: {ex.Message}");
         }
+    }
+
+    private void AttachHostKeyValidation(BaseClient client, string host, int port)
+    {
+        client.HostKeyReceived += (_, e) =>
+        {
+            var fingerprint = e.FingerPrintSHA256;
+            var status = _sshHostKeys.Check(host, port, fingerprint, out var previous);
+            if (status == SshHostKeyStatus.Match)
+            {
+                e.CanTrust = true;
+                return;
+            }
+
+            var message = status == SshHostKeyStatus.Unknown
+                ? $"First SSH connection to {host}:{port}.\n\nAlgorithm: {e.HostKeyName}\nFingerprint: {fingerprint}\n\nTrust this host key?"
+                : $"SSH host key changed for {host}:{port}.\n\nPrevious: {previous}\nPresented: {fingerprint}\n\nOnly continue if the server key was intentionally replaced.";
+            var icon = status == SshHostKeyStatus.Changed ? MessageBoxImage.Warning : MessageBoxImage.Question;
+            e.CanTrust = MessageBox.Show(message, "Verify SSH Host Key",
+                MessageBoxButton.YesNo, icon) == MessageBoxResult.Yes;
+            if (e.CanTrust)
+                _sshHostKeys.Trust(host, port, e.HostKeyName, fingerprint);
+        };
     }
 
     private void Disconnect()
@@ -372,7 +399,7 @@ public partial class GlftpdInstallerWindow : Window
             UpdateProgress(1, totalSteps, "CREATING DIR");
             await Task.Run(() =>
             {
-                var cmd = _ssh!.RunCommand($"mkdir -p '{remotePath.Replace("'", "'\\''")}'");
+                var cmd = _ssh!.RunCommand($"umask 077 && mkdir -p '{remotePath.Replace("'", "'\\''")}' && chmod 700 '{remotePath.Replace("'", "'\\''")}'");
                 if (cmd.ExitStatus != 0) throw new Exception($"mkdir failed: {cmd.Error}");
             });
             AppendLog("Created installation directory");
@@ -411,7 +438,8 @@ public partial class GlftpdInstallerWindow : Window
             UpdateProgress(4, totalSteps, "SETTING UP");
             await Task.Run(() =>
             {
-                var cmd = _ssh!.RunCommand($"chmod +x '{remotePath.Replace("'", "'\\''")}/install.sh'");
+                var escapedPath = remotePath.Replace("'", "'\\''");
+                var cmd = _ssh!.RunCommand($"chmod 700 '{escapedPath}/install.sh' && chmod 600 '{escapedPath}/install.cache'");
                 if (cmd.ExitStatus != 0) throw new Exception($"chmod failed: {cmd.Error}");
             });
             AppendLog("Made install.sh executable");
@@ -494,11 +522,20 @@ public partial class GlftpdInstallerWindow : Window
         {
             AppendLog($"Error: {ex.Message}", "error");
             if (!installOk)
-                AppendLog($"Remote files kept at {remotePath} for debugging", "warning");
+                AppendLog($"Non-secret remote files kept at {remotePath} for debugging", "warning");
             MessageBox.Show($"Installation failed: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
         {
+            try
+            {
+                if (_ssh?.IsConnected == true)
+                    await Task.Run(() => _ssh.RunCommand($"rm -f '{remotePath.Replace("'", "'\\''")}/install.cache'"));
+            }
+            catch (Exception cleanupEx)
+            {
+                Log.Warning(cleanupEx, "Failed to remove remote installer secrets");
+            }
             _installing = false;
             InstallButton.IsEnabled = true;
             _elapsedTimer.Stop();

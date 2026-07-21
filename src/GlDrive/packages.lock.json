@@ -108,9 +108,9 @@
       },
       "SharpCompress": {
         "type": "Direct",
-        "requested": "[0.47.2, )",
-        "resolved": "0.47.2",
-        "contentHash": "UVkiFhP/Mb7uWO5YXWHpXsqyHf5v9KyteVnDzcNw2Su5nSjcIiy4Z4vwbYr6EH2iLopaZfHHwkIn1u+RebxXqQ=="
+        "requested": "[0.50.0, )",
+        "resolved": "0.50.0",
+        "contentHash": "EzoWIzA31rb/kADwHkcmdT1rzqnT91kR/Df8X/gqd3qvXhgMbCzyKIWH6M3LTDwPIr0uLoXfX9fvThidXHBdyQ=="
       },
       "SSH.NET": {
         "type": "Direct",
@@ -126,12 +126,6 @@
         "requested": "[9.0.14, )",
         "resolved": "9.0.14",
         "contentHash": "cyfW1awmZVpEPAUCVlF8orJ2NqZjr6L4VpjE88Fvhp3XHDyQNRwC10zzjUPXmpjVknh+r2xFbVDdcX7LnzJ+zg=="
-      },
-      "System.Security.Cryptography.ProtectedData": {
-        "type": "Direct",
-        "requested": "[10.0.3, )",
-        "resolved": "10.0.3",
-        "contentHash": "JCKbH/CN5l0CSoJBILEvJmNQVp5vV+FY3q2ue4K9p4eDT4mFEv0bjTQCV+MD6Qk1b/qk9fWmZZKhG1TklbXw1Q=="
       },
       "VideoLAN.LibVLC.Windows": {
         "type": "Direct",

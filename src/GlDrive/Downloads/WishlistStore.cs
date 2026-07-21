@@ -17,44 +17,47 @@ public class WishlistStore
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
-    private readonly Lock _lock = new();
-    private List<WishlistItem> _items = [];
+    private static readonly Lock Sync = new();
+    private static List<WishlistItem> _items = [];
+    private static volatile bool _loaded;
 
     public IReadOnlyList<WishlistItem> Items
     {
-        get { lock (_lock) return _items.ToList(); }
+        get { EnsureLoaded(); lock (Sync) return _items.ToList(); }
     }
 
     public void Load()
     {
-        if (!File.Exists(FilePath))
+        lock (Sync)
         {
-            lock (_lock) _items = [];
-            return;
-        }
+            if (_loaded) return;
 
-        try
-        {
-            var json = File.ReadAllText(FilePath);
-            var items = JsonSerializer.Deserialize<List<WishlistItem>>(json, JsonOptions) ?? [];
-            lock (_lock) _items = items;
-        }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "Failed to load wishlist, starting empty");
-            lock (_lock) _items = [];
+            try
+            {
+                _items = File.Exists(FilePath)
+                    ? JsonSerializer.Deserialize<List<WishlistItem>>(File.ReadAllText(FilePath), JsonOptions) ?? []
+                    : [];
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to load wishlist, starting empty");
+                _items = [];
+            }
+            _loaded = true;
         }
     }
 
     public void Save()
     {
+        EnsureLoaded();
         try
         {
-            string json;
-            lock (_lock) json = JsonSerializer.Serialize(_items, JsonOptions);
-
-            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            SecureFile.WriteAllTextRestricted(FilePath, json);
+            lock (Sync)
+            {
+                var json = JsonSerializer.Serialize(_items, JsonOptions);
+                Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+                SecureFile.WriteAllTextRestricted(FilePath, json);
+            }
         }
         catch (Exception ex)
         {
@@ -64,19 +67,22 @@ public class WishlistStore
 
     public void Add(WishlistItem item)
     {
-        lock (_lock) _items.Add(item);
+        EnsureLoaded();
+        lock (Sync) _items.Add(item);
         Save();
     }
 
     public void Remove(string id)
     {
-        lock (_lock) _items.RemoveAll(i => i.Id == id);
+        EnsureLoaded();
+        lock (Sync) _items.RemoveAll(i => i.Id == id);
         Save();
     }
 
     public void Update(WishlistItem item)
     {
-        lock (_lock)
+        EnsureLoaded();
+        lock (Sync)
         {
             var idx = _items.FindIndex(i => i.Id == item.Id);
             if (idx >= 0)
@@ -89,6 +95,13 @@ public class WishlistStore
 
     public WishlistItem? GetById(string id)
     {
-        lock (_lock) return _items.FirstOrDefault(i => i.Id == id);
+        EnsureLoaded();
+        lock (Sync) return _items.FirstOrDefault(i => i.Id == id);
+    }
+
+    private static void EnsureLoaded()
+    {
+        if (!_loaded)
+            new WishlistStore().Load();
     }
 }
