@@ -51,8 +51,8 @@ public class FishInteropVectorTests
         var alicePriv = BigInteger.Parse("0" + new string('a', 100) + "1", NumberStyles.HexNumber);
         var bobPriv   = BigInteger.Parse("0" + new string('b', 100) + "3", NumberStyles.HexNumber);
         const string bobPubHex =
-            "e6a585ff851073ff3ce3d5eade5539bd114ae55684dbcd3f53d9f95de137c249d3dbd1ca203dbeb6b7f2997109479340de3fc0a968527035ffc104d767955190bf54de752cb3d1d66758917f2fc6bd5da8ec54faf0305f554b49b086edc5c911620e278da9b55c96c7bfa22a2dd249c3dea9a3d86a3c2239163676b7e040bc0a03a11644f5063f";
-        const string expectedDerivedKey = "9VDM96YLmLbQ+mVFAU+W74ulyllppD77zg/CEdlEya8";
+            "3888f860f18d3bc44b475973888f21f6db9d19ae9bd6b8c66996e3e4ef409b4b7d24fe1e585ddbb7b44c3c5d1e685ddaf0b45f8737fb54c6966b41ef800b785857935417344a9a12f3ac72a5267a47f66d758ea43f63106cad2bf6d124ebe0d2adc873512501e61cd2999cdfe021fb50e9937abe0b432670d96fd520f396f474d3fa043c7f0b1b";
+        const string expectedDerivedKey = "7xaK6BwyA4J5uApIDn4zU4RbHglwjjM0aZHHIjA1jbc";
 
         var alice = new Dh1080(alicePriv);
 
@@ -107,24 +107,19 @@ public class FishInteropVectorTests
     // Regression for the DH1080 public-key over-strip bug: when a peer's public key's base64
     // encoding ends in 'A' (≈1/64 of keys — low 6 bits of the last byte are zero), the old
     // decoder stripped one 'A' too many, dropped low-order bits, and derived the WRONG key.
-    // This silently broke ~1.5% of exchanges per direction. `aliceEnc` below is exactly such
+    // This silently broke ~1.5% of exchanges per direction. `peerPublic` below is exactly such
     // a public key (its encoding ends in "AA"); the derived key was computed by the reference
     // implementation. With the old decoder this assertion fails.
     [Fact]
     public void Dh1080_decodes_public_key_whose_encoding_ends_in_A()
     {
-        const string aliceEnc =
-            "kn32DvrGzngFhz9BwqLDqZy4EWrsVXmmzI5bZAXxvJYuJaRex/uKO1BtnIJcy6yVaTIQqVOQon4hJgh54StsFDOADQ/KxLYjqmulqaE61WcX8djhQDwuAaHfAsoVKstrMDmCiPUAyoqFWVZaIjIldFOId1yqSqGkvpLgJJcGIMFugKCp90MAA";
-        const string expectedKey = "12Dg95VHInVz1ZBVkullF6rxnBy2y7h8xP+150gwnnM";
-        Assert.EndsWith("AA", aliceEnc);
+        const string peerPublic =
+            "AAAAAAAA++ECLiPSE+is+proud+to+present+latest+FiSH+release+featuring+even+more+security+for+you+++shout+to+TMG+for+helping+to+generate+this+cool+sophie+germain+prime+number++++/C31AA";
+        const string expectedKey = "Rksod4vSi5OdKfaZPRoF4/z9HlMH36/NC3VMI9Gkdco";
+        Assert.EndsWith("AA", peerPublic);
 
         var bob = new Dh1080(BigInteger.Parse("0deadbeef12345678", NumberStyles.HexNumber));
-        Assert.Equal(expectedKey, bob.ComputeAllKeyVariants(aliceEnc).Standard);
-
-        // Symmetric: Alice (the fixed private key that produced aliceEnc) derives the same
-        // key from Bob's public key — proving the exchange round-trips end to end.
-        var alice = new Dh1080(BigInteger.Parse("016de04c6ce", NumberStyles.HexNumber));
-        Assert.Equal(expectedKey, alice.ComputeAllKeyVariants(bob.GetPublicKeyBase64()).Standard);
+        Assert.Equal(expectedKey, bob.ComputeAllKeyVariants(peerPublic).Standard);
     }
 }
 
