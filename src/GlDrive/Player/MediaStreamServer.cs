@@ -146,13 +146,13 @@ public class MediaStreamServer : IDisposable
         // Check library cache first
         var fileName = Path.GetFileName(remotePath);
         var releaseDir = Path.GetFullPath(Path.Combine(LibraryPath, SanitizeName(release)));
-        if (!IsWithinLibrary(releaseDir))
+        var cachedFile = IsWithinLibrary(releaseDir) ? ResolveInLibrary(releaseDir, fileName) : null;
+        if (cachedFile == null)
         {
             ctx.Response.StatusCode = 400;
             ctx.Response.Close();
             return;
         }
-        var cachedFile = Path.Combine(releaseDir, fileName);
 
         if (File.Exists(cachedFile))
         {
@@ -332,7 +332,8 @@ public class MediaStreamServer : IDisposable
             var tempFiles = new List<string>();
             foreach (var vol in volumes)
             {
-                var localPath = Path.Combine(releaseDir, Path.GetFileName(vol.Name));
+                var localPath = ResolveInLibrary(releaseDir, vol.Name)
+                    ?? throw new IOException($"Unsafe RAR volume name: {vol.Name}");
                 if (!File.Exists(localPath))
                 {
                     var volNum = tempFiles.Count + 1;
@@ -393,7 +394,9 @@ public class MediaStreamServer : IDisposable
             }
 
             var videoName = videoEntry.Key ?? "video.mkv";
-            var extractedPath = Path.Combine(releaseDir, Path.GetFileName(videoName));
+            // Entry names come from a RAR fetched off a remote site — untrusted (zip-slip).
+            var extractedPath = ResolveInLibrary(releaseDir, videoName)
+                ?? throw new IOException($"Unsafe archive entry name: {videoName}");
             Log.Information("Extracting & streaming RAR entry: {Name} ({Size} bytes)", videoName, videoEntry.Size);
 
             // Set response headers
@@ -616,13 +619,27 @@ public class MediaStreamServer : IDisposable
         var invalid = Path.GetInvalidFileNameChars();
         var sanitized = string.Concat(name.Select(c =>
             (invalid.Contains(c) || c < 0x20 || c == '/' || c == '\\') ? '_' : c));
-        if (sanitized == "." || sanitized == ".." || sanitized.Contains('/') || sanitized.Contains('\\'))
+        // Reject anything that is only dots/spaces ("", ".", "..", "...", ". ") — Windows trims
+        // trailing dots and spaces, so those can still resolve to the parent directory.
+        if (sanitized.Trim(' ', '.').Length == 0 || sanitized.Contains('/') || sanitized.Contains('\\'))
             return "_invalid_";
         return sanitized;
     }
 
     private bool IsWithinLibrary(string fullPath) =>
         fullPath.StartsWith(Path.GetFullPath(LibraryPath) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Resolves <paramref name="fileName"/> inside <paramref name="releaseDir"/> and re-asserts that the
+    /// result is still under the library, returning null if it escapes. Load-bearing: Path.GetFileName
+    /// strips separators but still returns ".." for input like "foo/..", and RAR entry names arrive from
+    /// a remote archive (zip-slip). Containment must be checked on the FINAL path, not just the directory.
+    /// </summary>
+    private string? ResolveInLibrary(string releaseDir, string fileName)
+    {
+        var full = Path.GetFullPath(Path.Combine(releaseDir, SanitizeName(Path.GetFileName(fileName))));
+        return IsWithinLibrary(full) ? full : null;
+    }
 
     private static async Task StreamStandard(AsyncFtpClient client, string remotePath, long offset,
         long? maxBytes, Stream output, CancellationToken ct, FileStream? saveStream = null)
@@ -720,7 +737,8 @@ public class MediaStreamServer : IDisposable
         for (int i = 0; i < volumes.Count; i++)
         {
             var vol = volumes[i];
-            var localPath = Path.Combine(releaseDir, Path.GetFileName(vol.Name));
+            var localPath = ResolveInLibrary(releaseDir, vol.Name)
+                ?? throw new IOException($"Unsafe RAR volume name: {vol.Name}");
 
             if (firstRarPath == null && localPath.EndsWith(".rar", StringComparison.OrdinalIgnoreCase))
                 firstRarPath = localPath;
