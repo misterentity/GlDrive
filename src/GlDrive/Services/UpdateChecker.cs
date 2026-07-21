@@ -104,7 +104,95 @@ public class UpdateChecker : IDisposable
         _http = new HttpClient();
         _http.DefaultRequestHeaders.UserAgent.ParseAdd($"GlDrive/{CurrentVersion}");
         _http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+        ReconcileUpdateAttempt();
     }
+
+    private static string UpdateStatePath(string name) => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GlDrive", name);
+
+    /// <summary>
+    /// Number of consecutive failed auto-install attempts of the SAME release before we stop
+    /// retrying it. Without this, an update that always fails during ApplyUpdate becomes an
+    /// infinite loop: the failure kills the app, rollback relaunches it, the 30s startup check
+    /// finds the same release, and it tries again roughly every 40 seconds forever (observed
+    /// with the ZLibException lazy-native-load bug — see the extraction ordering in ApplyUpdate).
+    /// </summary>
+    private const int MaxFailedInstallAttempts = 3;
+
+    /// <summary>
+    /// Called at startup. If we recorded an in-flight install attempt for some tag and we are
+    /// NOT now running that version, the attempt failed — count it, and block the tag once it
+    /// has failed too many times. Running the expected version clears all failure state.
+    /// </summary>
+    private static void ReconcileUpdateAttempt()
+    {
+        var attemptPath = UpdateStatePath(".update-attempt");
+        try
+        {
+            if (!File.Exists(attemptPath)) return;
+            var tag = File.ReadAllText(attemptPath).Trim();
+            try { File.Delete(attemptPath); } catch { }
+            if (string.IsNullOrEmpty(tag)) return;
+
+            var attempted = Version.TryParse(tag.TrimStart('v', 'V'), out var v) ? v : null;
+            if (attempted != null &&
+                attempted.Major == CurrentVersion.Major &&
+                attempted.Minor == CurrentVersion.Minor &&
+                Math.Max(attempted.Build, 0) == Math.Max(CurrentVersion.Build, 0))
+            {
+                // The update landed. Forget every past failure.
+                try { File.Delete(UpdateStatePath(".update-failures")); } catch { }
+                Log.Information("Update to {Tag} confirmed installed", tag);
+                return;
+            }
+
+            var failures = ReadFailureCounts();
+            failures[tag] = failures.GetValueOrDefault(tag) + 1;
+            WriteFailureCounts(failures);
+            Log.Warning("Update attempt for {Tag} did not take effect (running {Running}) — failure {Count}/{Max}",
+                tag, CurrentVersion, failures[tag], MaxFailedInstallAttempts);
+            if (failures[tag] >= MaxFailedInstallAttempts)
+                Log.Error("Auto-install of {Tag} has failed {Count} times — giving up. " +
+                          "Install manually from the GitHub release; see %TEMP%\\gldrive-update.log for the cause.",
+                    tag, failures[tag]);
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Could not reconcile previous update attempt");
+        }
+    }
+
+    private static Dictionary<string, int> ReadFailureCounts()
+    {
+        var result = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            var path = UpdateStatePath(".update-failures");
+            if (!File.Exists(path)) return result;
+            foreach (var line in File.ReadAllLines(path))
+            {
+                var parts = line.Split('|', 2);
+                if (parts.Length == 2 && int.TryParse(parts[1], out var n))
+                    result[parts[0]] = n;
+            }
+        }
+        catch { }
+        return result;
+    }
+
+    private static void WriteFailureCounts(Dictionary<string, int> counts)
+    {
+        try
+        {
+            var path = UpdateStatePath(".update-failures");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllLines(path, counts.Select(kv => $"{kv.Key}|{kv.Value}"));
+        }
+        catch { }
+    }
+
+    internal static bool IsUpdateBlocked(string tag) =>
+        ReadFailureCounts().GetValueOrDefault(tag) >= MaxFailedInstallAttempts;
 
     public async Task<GitHubRelease?> CheckForUpdateAsync()
     {
@@ -171,6 +259,15 @@ public class UpdateChecker : IDisposable
             return;
         }
 
+        // Don't re-download a release whose install has already failed repeatedly — that is the
+        // fail/rollback/relaunch/retry loop. Manual install stays available via the tray.
+        if (IsUpdateBlocked(release.TagName))
+        {
+            Log.Warning("Skipping auto-install of {Tag}: it has failed {Max} times already",
+                release.TagName, MaxFailedInstallAttempts);
+            return;
+        }
+
         var tempZip = Path.Combine(Path.GetTempPath(), $"GlDrive-{release.TagName}.zip");
 
         // Clean up stale temp file from a previous failed download attempt
@@ -201,6 +298,15 @@ public class UpdateChecker : IDisposable
         }
 
         Log.Information("Integrity verified, preparing updater");
+        // Record the in-flight attempt so the NEXT startup can tell whether it actually landed.
+        // Written before launching, because a failed ApplyUpdate kills this process.
+        try
+        {
+            var attemptPath = UpdateStatePath(".update-attempt");
+            Directory.CreateDirectory(Path.GetDirectoryName(attemptPath)!);
+            File.WriteAllText(attemptPath, release.TagName);
+        }
+        catch (Exception ex) { Log.Debug(ex, "Could not record update attempt marker"); }
         LaunchUpdater(verifiedPackage);
     }
 
@@ -419,6 +525,58 @@ public class UpdateChecker : IDisposable
         }
     }
 
+    internal static int ExtractVerifiedArchiveToDirectory(Stream zipStream, string stagingDir)
+    {
+        var stagingRoot = Path.GetFullPath(stagingDir);
+        var stagingPrefix = stagingRoot.EndsWith(Path.DirectorySeparatorChar)
+            ? stagingRoot
+            : stagingRoot + Path.DirectorySeparatorChar;
+
+        if (Directory.Exists(stagingRoot) && Directory.EnumerateFileSystemEntries(stagingRoot).Any())
+            throw new InvalidDataException("Update staging directory is not empty");
+        Directory.CreateDirectory(stagingRoot);
+
+        using var archive = new ZipArchive(zipStream, ZipArchiveMode.Read, leaveOpen: false);
+        var fileEntries = archive.Entries.Where(entry => !string.IsNullOrEmpty(entry.Name)).ToList();
+        var executableEntry = fileEntries.FirstOrDefault(entry =>
+            entry.FullName.Replace('\\', '/').EndsWith("/GlDrive.exe", StringComparison.OrdinalIgnoreCase) ||
+            entry.FullName.Equals("GlDrive.exe", StringComparison.OrdinalIgnoreCase));
+        if (executableEntry == null)
+            throw new InvalidDataException("Verified update archive does not contain GlDrive.exe");
+
+        var executablePath = executableEntry.FullName.Replace('\\', '/');
+        var archivePrefix = executablePath[..^"GlDrive.exe".Length];
+        var destinations = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var extracted = 0;
+
+        foreach (var entry in fileEntries)
+        {
+            var archivePath = entry.FullName.Replace('\\', '/');
+            if (!archivePath.StartsWith(archivePrefix, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var relativePath = archivePath[archivePrefix.Length..];
+            if (string.IsNullOrWhiteSpace(relativePath)) continue;
+
+            var destinationPath = Path.GetFullPath(Path.Combine(stagingRoot, relativePath));
+            if (!destinationPath.StartsWith(stagingPrefix, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException($"Archive entry escapes staging directory: {archivePath}");
+            if (!destinations.Add(destinationPath))
+                throw new InvalidDataException($"Archive contains duplicate destination: {archivePath}");
+
+            Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
+            using var source = entry.Open();
+            using var destination = new FileStream(destinationPath, FileMode.CreateNew,
+                FileAccess.Write, FileShare.None);
+            source.CopyTo(destination);
+            extracted++;
+        }
+
+        if (!File.Exists(Path.Combine(stagingRoot, "GlDrive.exe")))
+            throw new InvalidDataException("Verified update archive did not stage GlDrive.exe");
+        return extracted;
+    }
+
     internal static Version? ParseUpdateAssetVersion(string assetName)
     {
         const string prefix = "GlDrive-v";
@@ -555,6 +713,22 @@ public class UpdateChecker : IDisposable
             }
             try { File.Delete(authorizationPath); } catch { }
 
+            // LOAD-BEARING ORDER: decompress the whole archive to a staging folder BEFORE any
+            // install file is renamed. .NET binds System.IO.Compression.Native.dll lazily, on the
+            // first actual decompression. That used to happen at entry.Open() in the copy loop —
+            // i.e. AFTER the rename below had moved that very DLL to .old — so every update died
+            // with "ZLibException: The underlying compression routine could not be loaded
+            // correctly" and fell into an endless fail -> rollback -> relaunch -> retry loop.
+            // Extracting first means nothing after the rename needs anything but File.Copy.
+            string? stagedDir = null;
+            if (!legacyExtractedHandoff)
+            {
+                stagedDir = Path.Combine(fullExtract, "staged");
+                var stagedCount = ExtractVerifiedArchiveToDirectory(verifiedZip!, stagedDir);
+                verifiedZip = null; // ExtractVerifiedArchiveToDirectory disposes the stream
+                LogUpdate($"Extracted {stagedCount} files from verified archive to staging");
+            }
+
             // Rename existing files to .old
             LogUpdate("Renaming existing files to .old");
             var renamed = 0;
@@ -603,36 +777,24 @@ public class UpdateChecker : IDisposable
             }
             else
             {
-                // Copy directly from the locked, publisher-verified ZIP. Mutable files in
-                // the package directory are never executed or copied into the installation.
-                LogUpdate("Copying new files from verified update archive");
-                using var archive = new ZipArchive(verifiedZip!, ZipArchiveMode.Read, leaveOpen: false);
-                var fileEntries = archive.Entries.Where(entry => !string.IsNullOrEmpty(entry.Name)).ToList();
-                var executableEntry = fileEntries.FirstOrDefault(entry =>
-                    entry.FullName.Replace('\\', '/').EndsWith("/GlDrive.exe", StringComparison.OrdinalIgnoreCase) ||
-                    entry.FullName.Equals("GlDrive.exe", StringComparison.OrdinalIgnoreCase));
-                if (executableEntry == null)
-                    throw new InvalidDataException("Verified update archive does not contain GlDrive.exe");
-
-                var executablePath = executableEntry.FullName.Replace('\\', '/');
-                var archivePrefix = executablePath[..^"GlDrive.exe".Length];
-                foreach (var entry in fileEntries)
+                // Copy from the staging folder extracted above out of the locked,
+                // publisher-verified ZIP. Nothing here decompresses, so the just-renamed
+                // native compression DLL is not needed. Mutable files in the package
+                // directory are still never executed or copied into the installation.
+                LogUpdate("Copying new files from verified update staging");
+                var stagedRoot = Path.GetFullPath(stagedDir!);
+                foreach (var source in Directory.EnumerateFiles(stagedRoot, "*", SearchOption.AllDirectories))
                 {
-                    var archivePath = entry.FullName.Replace('\\', '/');
-                    if (!archivePath.StartsWith(archivePrefix, StringComparison.OrdinalIgnoreCase))
-                        continue;
-                    var relativePath = archivePath[archivePrefix.Length..];
+                    var relativePath = Path.GetRelativePath(stagedRoot, source);
                     if (string.IsNullOrWhiteSpace(relativePath)) continue;
 
                     var destCanonical = Path.GetFullPath(Path.Combine(installDir, relativePath));
                     if (!destCanonical.StartsWith(installDirCanonical, StringComparison.OrdinalIgnoreCase))
-                        throw new InvalidDataException($"Archive entry escapes install directory: {archivePath}");
+                        throw new InvalidDataException($"Staged file escapes install directory: {relativePath}");
 
                     Directory.CreateDirectory(Path.GetDirectoryName(destCanonical)!);
                     copiedDestinations.Add(destCanonical);
-                    using var source = entry.Open();
-                    using var destination = new FileStream(destCanonical, FileMode.Create, FileAccess.Write, FileShare.None);
-                    source.CopyTo(destination);
+                    File.Copy(source, destCanonical, overwrite: true);
                     copied++;
                 }
             }
