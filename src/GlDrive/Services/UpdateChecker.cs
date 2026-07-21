@@ -468,11 +468,21 @@ public class UpdateChecker : IDisposable
                 throw new InvalidDataException("Update package directory is outside the system temp directory");
             }
 
-            // Elevated update mode is only valid when launched from the installed executable.
-            var callerExeDir = Path.GetFullPath(
-                Path.GetDirectoryName(Environment.ProcessPath ?? AppContext.BaseDirectory)!);
+            var callerExePath = Path.GetFullPath(Environment.ProcessPath ??
+                Path.Combine(AppContext.BaseDirectory, "GlDrive.exe"));
+            var callerExeDir = Path.GetFullPath(Path.GetDirectoryName(callerExePath)!);
             bool callerIsInstallDir = string.Equals(fullInstall, callerExeDir, StringComparison.OrdinalIgnoreCase);
-            if (!callerIsInstallDir)
+            var updateMarkerPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "GlDrive", ".updating");
+
+            // Releases through 3.10.23 launched the newly extracted GlDrive.exe as the
+            // elevated updater. Keep a constrained bridge for those clients: the legacy
+            // marker must be fresh and bound to the original installed executable, while
+            // the elevated executable must be GlDrive.exe in the supplied staging folder.
+            bool legacyExtractedHandoff = !callerIsInstallDir &&
+                IsLegacyExtractedHandoff(callerExePath, fullExtract, fullInstall, pid, updateMarkerPath);
+            if (!callerIsInstallDir && !legacyExtractedHandoff)
             {
                 LogUpdate($"SECURITY: updater was not launched from installDir — aborting. installDir={fullInstall}, callerDir={callerExeDir}");
                 throw new InvalidDataException("Updater executable is not running from the install directory");
@@ -482,13 +492,21 @@ public class UpdateChecker : IDisposable
             var authorizationPath = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "GlDrive", ".update-auth");
+
+            if (legacyExtractedHandoff)
+            {
+                LogUpdate("Legacy extracted updater handoff accepted; sealing staged file manifest");
+                UpdateMarkerHmac.WriteAuthorization(authorizationPath, pid, fullExtract, fullInstall);
+            }
+
             if (!UpdateMarkerHmac.IsValidAuthorization(authorizationPath, pid, fullExtract, fullInstall))
             {
                 LogUpdate("SECURITY: update authorization is missing, expired, or does not match staged files — aborting");
                 throw new InvalidDataException("Update authorization is invalid");
             }
-            using (var verifiedArchive = OpenVerifiedUpdateArchive(fullExtract))
+            if (!legacyExtractedHandoff)
             {
+                using var verifiedArchive = OpenVerifiedUpdateArchive(fullExtract);
                 if (verifiedArchive == null)
                 {
                     LogUpdate("SECURITY: publisher signature, version, or archive hash is invalid — aborting");
@@ -524,11 +542,15 @@ public class UpdateChecker : IDisposable
                 LogUpdate("SECURITY: staged update changed while waiting for shutdown — aborting");
                 throw new InvalidDataException("Update package changed during shutdown");
             }
-            using var verifiedZip = OpenVerifiedUpdateArchive(fullExtract);
-            if (verifiedZip == null)
+            FileStream? verifiedZip = null;
+            if (!legacyExtractedHandoff)
             {
-                LogUpdate("SECURITY: update package failed publisher verification after shutdown — aborting");
-                throw new InvalidDataException("Update publisher verification failed after shutdown");
+                verifiedZip = OpenVerifiedUpdateArchive(fullExtract);
+                if (verifiedZip == null)
+                {
+                    LogUpdate("SECURITY: update package failed publisher verification after shutdown — aborting");
+                    throw new InvalidDataException("Update publisher verification failed after shutdown");
+                }
             }
             try { File.Delete(authorizationPath); } catch { }
 
@@ -554,16 +576,36 @@ public class UpdateChecker : IDisposable
             }
             LogUpdate($"Renamed {renamed} files");
 
-            // Copy directly from the locked, publisher-verified ZIP. Mutable files in the
-            // package directory are never executed or copied into the installation.
-            LogUpdate("Copying new files from verified update archive");
             var copied = 0;
             var installDirCanonical = Path.GetFullPath(installDir);
             if (!installDirCanonical.EndsWith(Path.DirectorySeparatorChar))
                 installDirCanonical += Path.DirectorySeparatorChar;
 
-            using (var archive = new ZipArchive(verifiedZip, ZipArchiveMode.Read, leaveOpen: true))
+            if (legacyExtractedHandoff)
             {
+                LogUpdate("Copying files from sealed legacy update staging");
+                foreach (var source in UpdateMarkerHmac.EnumerateManifestFiles(fullExtract))
+                {
+                    var relativePath = Path.GetRelativePath(fullExtract, source);
+                    if (string.IsNullOrWhiteSpace(relativePath))
+                        continue;
+
+                    var destCanonical = Path.GetFullPath(Path.Combine(installDir, relativePath));
+                    if (!destCanonical.StartsWith(installDirCanonical, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidDataException($"Staged file escapes install directory: {relativePath}");
+
+                    Directory.CreateDirectory(Path.GetDirectoryName(destCanonical)!);
+                    copiedDestinations.Add(destCanonical);
+                    File.Copy(source, destCanonical, overwrite: true);
+                    copied++;
+                }
+            }
+            else
+            {
+                // Copy directly from the locked, publisher-verified ZIP. Mutable files in
+                // the package directory are never executed or copied into the installation.
+                LogUpdate("Copying new files from verified update archive");
+                using var archive = new ZipArchive(verifiedZip!, ZipArchiveMode.Read, leaveOpen: false);
                 var fileEntries = archive.Entries.Where(entry => !string.IsNullOrEmpty(entry.Name)).ToList();
                 var executableEntry = fileEntries.FirstOrDefault(entry =>
                     entry.FullName.Replace('\\', '/').EndsWith("/GlDrive.exe", StringComparison.OrdinalIgnoreCase) ||
@@ -593,7 +635,6 @@ public class UpdateChecker : IDisposable
                     copied++;
                 }
             }
-            verifiedZip.Dispose();
             LogUpdate($"Copied {copied} files");
 
             // Clean up
@@ -661,6 +702,31 @@ public class UpdateChecker : IDisposable
         // renamed or replaced while this updater process was running.
         Thread.Sleep(2000);
         Process.GetCurrentProcess().Kill();
+    }
+
+    internal static bool IsLegacyExtractedHandoff(
+        string callerExePath, string extractDir, string installDir, int pid, string markerPath)
+    {
+        try
+        {
+            var fullCaller = Path.GetFullPath(callerExePath);
+            var fullExtract = Path.GetFullPath(extractDir);
+            var fullInstall = Path.GetFullPath(installDir);
+            var callerDir = Path.GetFullPath(Path.GetDirectoryName(fullCaller)!);
+            var stagedExe = Path.Combine(fullExtract, "GlDrive.exe");
+            var installedExe = Path.Combine(fullInstall, "GlDrive.exe");
+
+            return string.Equals(Path.GetFileName(fullCaller), "GlDrive.exe", StringComparison.OrdinalIgnoreCase) &&
+                   string.Equals(callerDir, fullExtract, StringComparison.OrdinalIgnoreCase) &&
+                   string.Equals(fullCaller, stagedExe, StringComparison.OrdinalIgnoreCase) &&
+                   File.Exists(stagedExe) &&
+                   File.Exists(installedExe) &&
+                   UpdateMarkerHmac.IsValidForProcess(markerPath, pid, installedExe);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     public static void CleanupOldUpdateFiles()
@@ -788,10 +854,15 @@ public static class UpdateMarkerHmac
 
     public static void Write(string markerPath, int processId)
     {
+        WriteForProcess(markerPath, processId, Environment.ProcessPath ?? string.Empty);
+    }
+
+    internal static void WriteForProcess(string markerPath, int processId, string processPath)
+    {
         try
         {
             var key = GetOrCreateKey();
-            var payload = $"{processId}|{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}|{Environment.ProcessPath ?? string.Empty}";
+            var payload = $"{processId}|{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}|{processPath}";
             var mac = Convert.ToHexString(ComputeHmac(key, payload));
             var dir = Path.GetDirectoryName(markerPath)!;
             if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
@@ -864,6 +935,25 @@ public static class UpdateMarkerHmac
                Math.Abs(DateTimeOffset.UtcNow.ToUnixTimeSeconds() - ts) <= 300;
     }
 
+    internal static bool IsValidForProcess(string markerPath, int processId, string processPath)
+    {
+        if (!TryReadValidPayload(markerPath, out var payload)) return false;
+        try
+        {
+            var parts = payload.Split('|');
+            return parts.Length == 3 &&
+                   int.TryParse(parts[0], out var markerPid) && markerPid == processId &&
+                   long.TryParse(parts[1], out var ts) &&
+                   Math.Abs(DateTimeOffset.UtcNow.ToUnixTimeSeconds() - ts) <= 300 &&
+                   string.Equals(Path.GetFullPath(parts[2]), Path.GetFullPath(processPath),
+                       StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static bool TryReadValidPayload(string markerPath, out string payload)
     {
         payload = string.Empty;
@@ -885,14 +975,34 @@ public static class UpdateMarkerHmac
         }
     }
 
+    internal static IReadOnlyList<string> EnumerateManifestFiles(string directory)
+    {
+        var files = new List<string>();
+        var pending = new Queue<DirectoryInfo>();
+        pending.Enqueue(new DirectoryInfo(directory));
+        while (pending.Count > 0)
+        {
+            var current = pending.Dequeue();
+            foreach (var entry in current.EnumerateFileSystemInfos())
+            {
+                if ((entry.Attributes & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidDataException($"Reparse point in update staging: {entry.FullName}");
+                if (entry is DirectoryInfo childDirectory)
+                    pending.Enqueue(childDirectory);
+                else if (entry is FileInfo file)
+                    files.Add(file.FullName);
+            }
+        }
+
+        return files.OrderBy(path => Path.GetRelativePath(directory, path),
+            StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
     private static string ComputeDirectoryManifest(string directory)
     {
         using var manifestHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories)
-                     .OrderBy(path => Path.GetRelativePath(directory, path), StringComparer.OrdinalIgnoreCase))
+        foreach (var file in EnumerateManifestFiles(directory))
         {
-            if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0)
-                throw new InvalidDataException($"Reparse point in update staging: {file}");
             var relativePath = Path.GetRelativePath(directory, file).Replace('\\', '/');
             manifestHash.AppendData(Encoding.UTF8.GetBytes(relativePath));
             using var stream = File.OpenRead(file);

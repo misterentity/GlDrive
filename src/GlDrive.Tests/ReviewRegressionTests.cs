@@ -80,6 +80,58 @@ public class ReviewRegressionTests
     }
 
     [Fact]
+    public void Legacy_update_marker_is_bound_to_pid_and_original_process_path()
+    {
+        var marker = Path.Combine(Path.GetTempPath(), "gldrive-legacy-marker-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            UpdateMarkerHmac.Write(marker, 4242);
+
+            Assert.True(UpdateMarkerHmac.IsValidForProcess(marker, 4242, Environment.ProcessPath!));
+            Assert.False(UpdateMarkerHmac.IsValidForProcess(marker, 4243, Environment.ProcessPath!));
+            Assert.False(UpdateMarkerHmac.IsValidForProcess(marker, 4242,
+                Path.Combine(Path.GetTempPath(), "GlDrive.exe")));
+        }
+        finally
+        {
+            File.Delete(marker);
+        }
+    }
+
+    [Fact]
+    public void Legacy_extracted_updater_accepts_only_the_original_install_handoff()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "gldrive-legacy-handoff-" + Guid.NewGuid().ToString("N"));
+        var install = Path.Combine(root, "install");
+        var staging = Path.Combine(root, "gldrive-update-staged");
+        var installedExe = Path.Combine(install, "GlDrive.exe");
+        var stagedExe = Path.Combine(staging, "GlDrive.exe");
+        var marker = Path.Combine(root, "updating");
+        Directory.CreateDirectory(install);
+        Directory.CreateDirectory(staging);
+        File.WriteAllText(installedExe, "installed");
+        File.WriteAllText(stagedExe, "staged");
+
+        try
+        {
+            UpdateMarkerHmac.WriteForProcess(marker, 4242, installedExe);
+
+            Assert.True(UpdateChecker.IsLegacyExtractedHandoff(
+                stagedExe, staging, install, 4242, marker));
+            Assert.False(UpdateChecker.IsLegacyExtractedHandoff(
+                stagedExe, staging, install, 4243, marker));
+
+            UpdateMarkerHmac.WriteForProcess(marker, 4242, Path.Combine(root, "other.exe"));
+            Assert.False(UpdateChecker.IsLegacyExtractedHandoff(
+                stagedExe, staging, install, 4242, marker));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public void Certificate_managers_share_mutations_for_the_same_store()
     {
         var fileName = "trusted-certs-test-" + Guid.NewGuid().ToString("N") + ".json";
