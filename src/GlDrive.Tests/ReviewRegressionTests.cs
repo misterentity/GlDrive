@@ -111,6 +111,9 @@ public class ReviewRegressionTests
         Directory.CreateDirectory(staging);
         File.WriteAllText(installedExe, "installed");
         File.WriteAllText(stagedExe, "staged");
+        File.WriteAllText(Path.Combine(staging, "GlDrive.dll"), "staged");
+        File.WriteAllText(Path.Combine(staging, "GlDrive.deps.json"), "staged");
+        File.WriteAllText(Path.Combine(staging, "GlDrive.runtimeconfig.json"), "staged");
 
         try
         {
@@ -122,6 +125,16 @@ public class ReviewRegressionTests
                 stagedExe, staging, install, 4243, marker));
 
             UpdateMarkerHmac.WriteForProcess(marker, 4242, Path.Combine(root, "other.exe"));
+            Assert.False(UpdateChecker.IsLegacyExtractedHandoff(
+                stagedExe, staging, install, 4242, marker));
+
+            // The legacy watchdog consumes the valid marker when the original process
+            // exits, before the elevated child is guaranteed to validate it.
+            File.Delete(marker);
+            Assert.True(UpdateChecker.IsLegacyExtractedHandoff(
+                stagedExe, staging, install, 4242, marker));
+
+            File.Delete(Path.Combine(staging, "GlDrive.runtimeconfig.json"));
             Assert.False(UpdateChecker.IsLegacyExtractedHandoff(
                 stagedExe, staging, install, 4242, marker));
         }
