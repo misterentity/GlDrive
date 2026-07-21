@@ -120,30 +120,20 @@ public class ReviewRegressionTests
             UpdateMarkerHmac.WriteForProcess(marker, 4242, installedExe);
 
             Assert.True(UpdateChecker.IsLegacyExtractedHandoff(
-                stagedExe, staging, install, 4242, marker));
-            Assert.False(UpdateChecker.IsLegacyExtractedHandoff(
-                stagedExe, staging, install, 4243, marker));
-
-            UpdateMarkerHmac.WriteForProcess(marker, 4242, Path.Combine(root, "other.exe"));
-            Assert.False(UpdateChecker.IsLegacyExtractedHandoff(
-                stagedExe, staging, install, 4242, marker));
-
-            // Elevated DPAPI key access may fail even though the legacy launcher's
-            // PID, timestamp, and installed executable fields are intact.
-            File.WriteAllText(marker,
-                $"4242|{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}|{installedExe}\nINVALID-HMAC");
-            Assert.True(UpdateChecker.IsLegacyExtractedHandoff(
-                stagedExe, staging, install, 4242, marker));
+                stagedExe, staging, install));
 
             // The legacy watchdog consumes the valid marker when the original process
             // exits, before the elevated child is guaranteed to validate it.
             File.Delete(marker);
             Assert.True(UpdateChecker.IsLegacyExtractedHandoff(
-                stagedExe, staging, install, 4242, marker));
+                stagedExe, staging, install));
+
+            Assert.False(UpdateChecker.IsLegacyExtractedHandoff(
+                Path.Combine(root, "GlDrive.exe"), staging, install));
 
             File.Delete(Path.Combine(staging, "GlDrive.runtimeconfig.json"));
             Assert.False(UpdateChecker.IsLegacyExtractedHandoff(
-                stagedExe, staging, install, 4242, marker));
+                stagedExe, staging, install));
         }
         finally
         {
