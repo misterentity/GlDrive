@@ -542,11 +542,18 @@ public class DownloadManager : IDisposable
                     _store.Update(item);
                     DownloadStatusChanged?.Invoke(item);
 
-                    var extracted = await ArchiveExtractor.ExtractIfNeeded(item.LocalPath, itemCts.Token);
+                    var extraction = await ArchiveExtractor.ExtractIfNeeded(item.LocalPath, itemCts.Token);
                     Log.Information("Extraction result for {Release}: extracted={Extracted}, deleteEnabled={Delete}",
-                        item.ReleaseName, extracted, _config.DeleteArchivesAfterExtract);
-                    if (extracted && _config.DeleteArchivesAfterExtract)
-                        ArchiveExtractor.DeleteArchives(item.LocalPath);
+                        item.ReleaseName, extraction.Extracted, _config.DeleteArchivesAfterExtract);
+                    if (extraction.Extracted && _config.DeleteArchivesAfterExtract)
+                    {
+                        var cleanupSucceeded = true;
+                        foreach (var firstVolume in extraction.FirstVolumes)
+                            cleanupSucceeded &= ArchiveExtractor.DeleteArchiveSet(firstVolume);
+                        if (!cleanupSucceeded)
+                            Log.Warning("Extraction succeeded but one or more source volumes could not be deleted for {Release}",
+                                item.ReleaseName);
+                    }
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)

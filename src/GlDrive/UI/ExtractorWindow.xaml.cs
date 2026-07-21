@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using GlDrive.Config;
+using GlDrive.Downloads;
 using Microsoft.Win32;
 using Serilog;
 using SharpCompress.Archives;
@@ -20,6 +21,8 @@ public partial class ExtractorWindow : Window
     public ObservableCollection<ArchiveItem> Archives { get; } = new();
     private CancellationTokenSource? _cts;
     private bool _extracting;
+    private readonly CancellationTokenSource _lifetimeCts = new();
+    private readonly SemaphoreSlim _extractionGate = new(1, 1);
 
     // True once the constructor has finished initializing the window.
     // Guards Settings_Changed so that the Checked event handlers on the
@@ -33,6 +36,7 @@ public partial class ExtractorWindow : Window
     private readonly List<string> _watchFolders = new();
     private bool _watchEnabled;
     private readonly HashSet<string> _watchProcessed = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int> _watchRetryCounts = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _watchLock = new();
 
     private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
@@ -163,13 +167,17 @@ public partial class ExtractorWindow : Window
         if (!recursive) return;
 
         IEnumerable<string> subdirs;
-        try { subdirs = Directory.EnumerateDirectories(dir); }
+        try { subdirs = Directory.EnumerateDirectories(dir).ToList(); }
         catch (UnauthorizedAccessException) { return; }
         catch (IOException) { return; }
 
         foreach (var sub in subdirs)
         {
-            try { CollectArchivePaths(sub, true, results); }
+            try
+            {
+                if ((File.GetAttributes(sub) & FileAttributes.ReparsePoint) != 0) continue;
+                CollectArchivePaths(sub, true, results);
+            }
             catch { }
         }
     }
@@ -204,7 +212,7 @@ public partial class ExtractorWindow : Window
         IEnumerable<string> subdirs;
         try
         {
-            subdirs = Directory.EnumerateDirectories(dir);
+            subdirs = Directory.EnumerateDirectories(dir).ToList();
         }
         catch (UnauthorizedAccessException ex)
         {
@@ -221,6 +229,7 @@ public partial class ExtractorWindow : Window
         {
             try
             {
+                if ((File.GetAttributes(subdir) & FileAttributes.ReparsePoint) != 0) continue;
                 ScanDirectory(subdir, true, existing);
             }
             catch (UnauthorizedAccessException ex)
@@ -399,7 +408,7 @@ public partial class ExtractorWindow : Window
         // reads null (no-op) rather than touching a half-disposed source. The token is
         // captured once up front and used throughout — IsCancellationRequested is safe
         // to read even after the source is disposed, so the loop never needs the field.
-        var cts = new CancellationTokenSource();
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token);
         _cts = cts;
         var ct = cts.Token;
         var password = ArchivePassword.Password;
@@ -421,12 +430,20 @@ public partial class ExtractorWindow : Window
 
                 try
                 {
-                    await ExtractArchiveAsync(item, outputDir, password, overwriteIdx, ct);
-                    item.Status = "Done";
-                    item.Progress = 100;
+                    await _extractionGate.WaitAsync(ct);
+                    try
+                    {
+                        await ExtractArchiveAsync(item, outputDir, password, overwriteIdx, ct);
+                        item.Status = "Done";
+                        item.Progress = 100;
 
-                    if (deleteAfter)
-                        await Task.Run(() => DeleteSourceFiles(item.FilePath));
+                        if (deleteAfter && !await Task.Run(() => DeleteSourceFiles(item.FilePath), ct))
+                            item.ErrorMessage = "Extracted, but source cleanup was incomplete";
+                    }
+                    finally
+                    {
+                        _extractionGate.Release();
+                    }
                 }
                 catch (OperationCanceledException)
                 {
@@ -481,7 +498,7 @@ public partial class ExtractorWindow : Window
     /// </summary>
     private Task ExtractArchiveAsync(ArchiveItem item, string outputDir, string password, int overwriteMode, CancellationToken ct)
     {
-        var tcs = new TaskCompletionSource();
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
         {
             try
@@ -581,16 +598,8 @@ public partial class ExtractorWindow : Window
                     }
                 }
 
-                var entryDir = Path.GetDirectoryName(fullPath);
-                if (entryDir != null) Directory.CreateDirectory(entryDir);
-
-                // Extract with buffered write + sequential I/O hint
                 using (var entryStream = entry.OpenEntryStream())
-                using (var outStream = new FileStream(fullPath, FileMode.Create, FileAccess.Write,
-                    FileShare.None, bufferSize: 256 * 1024, FileOptions.SequentialScan))
-                {
-                    entryStream.CopyTo(outStream, 256 * 1024);
-                }
+                    ArchiveFileOperations.CopyToFileAtomically(entryStream, fullPath, ct);
 
                 processed++;
 
@@ -672,6 +681,7 @@ public partial class ExtractorWindow : Window
         if (tool == null) return false;
 
         Directory.CreateDirectory(outputDir);
+        using var staging = new ExtractionStagingDirectory(outputDir);
 
         var isUnrar = Path.GetFileName(tool).StartsWith("unrar", StringComparison.OrdinalIgnoreCase)
                    || Path.GetFileName(tool).StartsWith("rar.exe", StringComparison.OrdinalIgnoreCase);
@@ -700,7 +710,7 @@ public partial class ExtractorWindow : Window
             RedirectStandardInput = true,
             RedirectStandardOutput = false,
             RedirectStandardError = false,
-            WorkingDirectory = outputDir,
+            WorkingDirectory = staging.Path,
         };
 
         if (isUnrar)
@@ -718,7 +728,7 @@ public partial class ExtractorWindow : Window
             else
                 psi.ArgumentList.Add($"-p{password}");
             psi.ArgumentList.Add(item.FilePath);
-            psi.ArgumentList.Add(outputDir + Path.DirectorySeparatorChar);
+            psi.ArgumentList.Add(staging.Path + Path.DirectorySeparatorChar);
         }
         else if (isSevenZip)
         {
@@ -733,7 +743,7 @@ public partial class ExtractorWindow : Window
             psi.ArgumentList.Add("-bse0");                 // stderr: no messages
             psi.ArgumentList.Add("-bsp0");                 // progress: no output
             if (!string.IsNullOrEmpty(password)) psi.ArgumentList.Add($"-p{password}");
-            psi.ArgumentList.Add($"-o{outputDir}");
+            psi.ArgumentList.Add($"-o{staging.Path}");
             psi.ArgumentList.Add(item.FilePath);
         }
         else
@@ -802,23 +812,61 @@ public partial class ExtractorWindow : Window
         {
             // UnRAR exit codes: 0=ok, 1=non-fatal warning, 2=fatal, 3=CRC error,
             // 4=locked, 5=write error, 6=open, 7=usage, 8=memory, 9=create, 10=no
-            // files, 11=wrong password, 255=user stop. Treat 1 (warning) as success.
+            // files, 11=wrong password, 255=user stop. Any non-zero result is
+            // incomplete and must retain the source archive for a later retry.
             var interpretedExit = proc.ExitCode;
-            if (isUnrar && interpretedExit == 1)
-            {
-                Log.Warning("Extractor: UnRAR reported warning (exit 1) for {File} — treating as success",
-                    item.FileName);
-            }
-            else
-            {
-                throw new IOException($"{Path.GetFileName(tool)} failed (exit {interpretedExit})");
-            }
+            throw new IOException($"{Path.GetFileName(tool)} failed (exit {interpretedExit})");
         }
 
+        CommitStagedOutput(staging.Path, outputDir, overwriteMode, ct);
         Dispatcher.BeginInvoke(() => item.Progress = 100);
         Log.Information("Extractor: external tool completed for {File} (exit {Code})",
             item.FileName, proc.ExitCode);
         return true;
+    }
+
+    private static void CommitStagedOutput(string stagingDir, string outputDir,
+        int overwriteMode, CancellationToken ct)
+    {
+        var safeOutput = Path.GetFullPath(outputDir);
+        if (!safeOutput.EndsWith(Path.DirectorySeparatorChar)) safeOutput += Path.DirectorySeparatorChar;
+
+        foreach (var stagedFile in Directory.EnumerateFiles(stagingDir, "*", SearchOption.AllDirectories))
+        {
+            ct.ThrowIfCancellationRequested();
+            var relative = Path.GetRelativePath(stagingDir, stagedFile);
+            var destination = Path.GetFullPath(Path.Combine(safeOutput, relative));
+            if (!destination.StartsWith(safeOutput, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException($"External extractor produced an unsafe path: {relative}");
+
+            if (File.Exists(destination))
+            {
+                if (overwriteMode == 1) continue;
+                if (overwriteMode == 2) destination = GetUniqueFileName(destination);
+            }
+
+            var parent = Path.GetDirectoryName(destination);
+            if (parent != null) Directory.CreateDirectory(parent);
+            File.Move(stagedFile, destination, overwrite: overwriteMode == 0);
+        }
+    }
+
+    private sealed class ExtractionStagingDirectory : IDisposable
+    {
+        public string Path { get; }
+
+        public ExtractionStagingDirectory(string outputDir)
+        {
+            Path = System.IO.Path.Combine(outputDir, $".gldrive-staging-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(Path);
+            try { File.SetAttributes(Path, File.GetAttributes(Path) | FileAttributes.Hidden); } catch { }
+        }
+
+        public void Dispose()
+        {
+            try { Directory.Delete(Path, recursive: true); }
+            catch (Exception ex) { Log.Debug(ex, "Failed to remove extraction staging directory {Path}", Path); }
+        }
     }
 
     /// <summary>
@@ -907,13 +955,8 @@ public partial class ExtractorWindow : Window
                 }
             }
 
-            var entryDir = Path.GetDirectoryName(fullPath);
-            if (entryDir != null) Directory.CreateDirectory(entryDir);
-
             using var entryStream = reader.OpenEntryStream();
-            using var outStream = new FileStream(fullPath, FileMode.Create, FileAccess.Write,
-                FileShare.None, bufferSize: 256 * 1024, FileOptions.SequentialScan);
-            entryStream.CopyTo(outStream, 256 * 1024);
+            ArchiveFileOperations.CopyToFileAtomically(entryStream, fullPath, ct);
 
             processed++;
             var now = DateTime.UtcNow;
@@ -946,126 +989,9 @@ public partial class ExtractorWindow : Window
         return candidate;
     }
 
-    private static void DeleteSourceFiles(string archivePath)
+    private static bool DeleteSourceFiles(string archivePath)
     {
-        try
-        {
-            var dir = Path.GetDirectoryName(archivePath);
-            if (dir == null) return;
-
-            var baseName = Path.GetFileNameWithoutExtension(archivePath);
-            // Strip .partNN for modern multi-part naming
-            var pm = Regex.Match(baseName, @"^(.+)\.part\d+$", RegexOptions.IgnoreCase);
-            var setBase = pm.Success ? pm.Groups[1].Value : baseName;
-
-            Log.Information("Cleaning up archive set: base={Base}, dir={Dir}", setBase, dir);
-
-            var toDelete = new List<string>();
-
-            try
-            {
-                foreach (var file in Directory.EnumerateFiles(dir))
-                {
-                    var fn = Path.GetFileName(file);
-
-                    // Must start with the set base name (case-insensitive)
-                    if (!fn.StartsWith(setBase, StringComparison.OrdinalIgnoreCase))
-                        continue;
-
-                    // Character after base name must be a dot or end of name
-                    // (prevents "moviename" matching "moviename-sample.rar")
-                    if (fn.Length > setBase.Length && fn[setBase.Length] != '.')
-                        continue;
-
-                    var ext = Path.GetExtension(fn);
-
-                    // .rar (main or .partNN.rar)
-                    if (ext.Equals(".rar", StringComparison.OrdinalIgnoreCase))
-                    {
-                        toDelete.Add(file);
-                        continue;
-                    }
-
-                    // Old-style volumes: .r00-.r999, .s00-.s999, .001-.999
-                    if (VolumeExtRegex.IsMatch(ext))
-                    {
-                        toDelete.Add(file);
-                        continue;
-                    }
-
-                    // SFV checksum files
-                    if (ext.Equals(".sfv", StringComparison.OrdinalIgnoreCase))
-                    {
-                        toDelete.Add(file);
-                        continue;
-                    }
-
-                    // Split archives: .001, .002, etc
-                    if (Regex.IsMatch(ext, @"^\.\d{3,}$"))
-                    {
-                        toDelete.Add(file);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Warning(ex, "Error enumerating files for cleanup in {Dir}", dir);
-            }
-
-            if (toDelete.Count == 0)
-            {
-                Log.Warning("No archive files found to delete for set {Base} in {Dir}", setBase, dir);
-                return;
-            }
-
-            Log.Information("Deleting {Count} archive files for set {Base}: {Files}",
-                toDelete.Count, setBase, string.Join(", ", toDelete.Select(Path.GetFileName)));
-
-            // SharpCompress archive disposal races with file handle release — even
-            // after IArchive.Dispose() returns, the underlying FileStreams may still
-            // be in the finalizer queue and hold the files locked. Force GC and
-            // finalizers to drain before we try to delete, then retry each file up
-            // to 5 times with exponential backoff.
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
-
-            var deleted = 0;
-            var failed = 0;
-            foreach (var file in toDelete)
-            {
-                var attempts = 0;
-                var succeeded = false;
-                while (attempts < 5 && !succeeded)
-                {
-                    try
-                    {
-                        File.Delete(file);
-                        Log.Debug("Deleted: {File}", Path.GetFileName(file));
-                        succeeded = true;
-                        deleted++;
-                    }
-                    catch (IOException) when (attempts < 4)
-                    {
-                        // File-in-use race — wait and retry
-                        attempts++;
-                        Thread.Sleep(200 * attempts); // 200, 400, 600, 800 ms backoff
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Warning(ex, "Failed to delete {File} (after {Attempts} attempts)", file, attempts + 1);
-                        failed++;
-                        break;
-                    }
-                }
-            }
-            Log.Information("Archive cleanup: deleted {Deleted} of {Total} files ({Failed} failed)",
-                deleted, toDelete.Count, failed);
-        }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "Failed to delete source archive: {Path}", archivePath);
-        }
+        return ArchiveExtractor.DeleteArchiveSet(archivePath);
     }
 
     // ── Watch Folders ──
@@ -1229,7 +1155,16 @@ public partial class ExtractorWindow : Window
             };
             Directory.CreateDirectory(ConfigManager.AppDataPath);
             var json = JsonSerializer.Serialize(s, _jsonOptions);
-            File.WriteAllText(SettingsPath, json);
+            var tempPath = SettingsPath + $".{Guid.NewGuid():N}.tmp";
+            try
+            {
+                File.WriteAllText(tempPath, json);
+                File.Move(tempPath, SettingsPath, overwrite: true);
+            }
+            finally
+            {
+                try { File.Delete(tempPath); } catch { }
+            }
         }
         catch (Exception ex)
         {
@@ -1269,8 +1204,8 @@ public partial class ExtractorWindow : Window
             // Scan existing archives in watch folders
             foreach (var folder in _watchFolders)
             {
-                ScanAndAutoExtract(folder);
                 StartWatcherFor(folder);
+                _ = ScanAndAutoExtractAsync(folder);
             }
         }
         SaveSettings();
@@ -1284,15 +1219,19 @@ public partial class ExtractorWindow : Window
             {
                 IncludeSubdirectories = ChkRecursive.IsChecked == true,
                 NotifyFilter = NotifyFilters.FileName | NotifyFilters.Size | NotifyFilters.LastWrite,
-                EnableRaisingEvents = true,
                 InternalBufferSize = 64 * 1024
             };
 
             watcher.Created += OnWatchedFileCreated;
             watcher.Renamed += OnWatchedFileRenamed;
-            watcher.Error += (_, args) => Log.Warning(args.GetException(), "FileSystemWatcher error on {Dir}", folder);
+            watcher.Error += (_, args) =>
+            {
+                Log.Warning(args.GetException(), "FileSystemWatcher error on {Dir}; scheduling recovery scan", folder);
+                _ = RecoverWatcherAsync(folder, watcher);
+            };
 
             _watchers.Add(watcher);
+            watcher.EnableRaisingEvents = true;
             Log.Information("Watching folder: {Dir}", folder);
         }
         catch (Exception ex)
@@ -1317,9 +1256,12 @@ public partial class ExtractorWindow : Window
     private void OnWatchedFileRenamed(object sender, RenamedEventArgs e) =>
         HandleWatchedFile(e.FullPath);
 
-    private async void HandleWatchedFile(string path)
+    private void HandleWatchedFile(string path) => _ = HandleWatchedFileAsync(path);
+
+    private async Task HandleWatchedFileAsync(string eventPath)
     {
-        if (!IsArchiveFile(path)) return;
+        var path = ResolveFirstVolumePath(eventPath);
+        if (path == null || path.Contains(".gldrive-staging-", StringComparison.OrdinalIgnoreCase)) return;
 
         lock (_watchLock)
         {
@@ -1328,63 +1270,90 @@ public partial class ExtractorWindow : Window
 
         Log.Information("Extractor: watched archive detected — {Path}", path);
 
-        // Wait for the file to finish being written (e.g. download completing)
-        await WaitForFileReady(path);
-
-        if (!File.Exists(path))
+        try
         {
-            Log.Warning("Extractor: file disappeared before it became ready — {Path}", path);
-            return;
-        }
-
-        Dispatcher.Invoke(() =>
-        {
-            var existing = Archives.Any(a => a.FilePath.Equals(path, StringComparison.OrdinalIgnoreCase));
-            if (existing)
+            if (!await WaitForFileReady(path, _lifetimeCts.Token))
             {
-                Log.Debug("Extractor: already in queue — {Path}", path);
+                Log.Warning("Extractor: archive was not ready before timeout — {Path}", path);
+                ScheduleWatchRetry(path);
                 return;
             }
 
-            var item = CreateItem(path);
-            Archives.Add(item);
-            UpdateStatus();
-
-            Log.Information("Extractor: queued for auto-extract — {File}", item.FileName);
-            _ = AutoExtractItem(item);
-        });
-    }
-
-    private void ScanAndAutoExtract(string folder)
-    {
-        var existing = new HashSet<string>(Archives.Select(a => a.FilePath), StringComparer.OrdinalIgnoreCase);
-
-        ScanDirectory(folder, ChkRecursive.IsChecked == true, existing);
-
-        // Mark already-extracted archives so we don't re-extract them.
-        // An archive is "already extracted" if a non-archive file exists in the same
-        // directory that was produced by a previous extraction (i.e. the archive's
-        // content is already on disk).
-        foreach (var item in Archives.Where(a => a.Status == "Queued").ToList())
-        {
-            if (IsAlreadyExtracted(item))
+            await Dispatcher.InvokeAsync(() =>
             {
-                item.Status = "Done";
-                item.Progress = 100;
-                lock (_watchLock) _watchProcessed.Add(item.FilePath);
-                continue;
-            }
+                var item = Archives.FirstOrDefault(a =>
+                    a.FilePath.Equals(path, StringComparison.OrdinalIgnoreCase));
+                if (item?.Status is "Done" or "Extracting") return;
 
-            // Track in _watchProcessed to prevent re-extraction on next scan
-            lock (_watchLock) _watchProcessed.Add(item.FilePath);
-            _ = AutoExtractItem(item);
+                if (item == null)
+                {
+                    item = CreateItem(path);
+                    Archives.Add(item);
+                }
+                else
+                {
+                    item.Status = "Queued";
+                    item.ErrorMessage = null;
+                }
+
+                UpdateStatus();
+                Log.Information("Extractor: queued for auto-extract — {File}", item.FileName);
+                _ = AutoExtractItem(item);
+            });
+        }
+        catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Extractor: failed to queue watched archive {Path}", path);
+            ScheduleWatchRetry(path);
         }
     }
 
+    private async Task ScanAndAutoExtractAsync(string folder)
+    {
+        try
+        {
+            var recursive = await Dispatcher.InvokeAsync(() => ChkRecursive.IsChecked == true);
+            var paths = await Task.Run(() =>
+            {
+                var discovered = new List<string>();
+                CollectArchivePaths(folder, recursive, discovered);
+                return discovered;
+            }, _lifetimeCts.Token);
+
+            await Dispatcher.InvokeAsync(() =>
+            {
+                var existing = new HashSet<string>(Archives.Select(a => a.FilePath), StringComparer.OrdinalIgnoreCase);
+                foreach (var path in paths)
+                    if (existing.Add(path)) Archives.Add(CreateItem(path));
+
+                foreach (var item in Archives.Where(a => a.Status == "Queued" &&
+                             paths.Contains(a.FilePath, StringComparer.OrdinalIgnoreCase)).ToList())
+                {
+                    if (IsAlreadyExtracted(item))
+                    {
+                        item.Status = "Done";
+                        item.Progress = 100;
+                        lock (_watchLock) _watchProcessed.Add(item.FilePath);
+                        continue;
+                    }
+
+                    lock (_watchLock)
+                    {
+                        if (!_watchProcessed.Add(item.FilePath)) continue;
+                    }
+                    _ = AutoExtractItem(item);
+                }
+                UpdateStatus();
+            });
+        }
+        catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { }
+        catch (Exception ex) { Log.Warning(ex, "Watch-folder recovery scan failed for {Dir}", folder); }
+    }
+
     /// <summary>
-    /// Check if an archive has already been extracted by looking for non-archive
-    /// content files in the output directory. Opens the archive to read entry names
-    /// and checks if any exist on disk.
+    /// Check if every file entry exists in the output directory at its expected size.
+    /// Partial output must never suppress a later retry.
     /// </summary>
     private bool IsAlreadyExtracted(ArchiveItem item)
     {
@@ -1393,24 +1362,37 @@ public partial class ExtractorWindow : Window
             var outputDir = GetOutputDir(item);
             if (!Directory.Exists(outputDir)) return false;
 
-            using var archive = SharpCompress.Archives.Rar.RarArchive.OpenArchive(item.FilePath);
-            var entries = archive.Entries.Where(e => !e.IsDirectory && e.Key != null).Take(3);
+            var options = new ReaderOptions();
+            IArchive archive;
+            var volumes = TryDiscoverRarVolumes(item.FilePath);
+            if (volumes != null && volumes.Count > 1)
+                archive = ArchiveFactory.OpenArchive(volumes, options);
+            else
+                archive = ArchiveFactory.OpenArchive(item.FilePath, options);
+            using var _ = archive;
+
+            var entries = archive.Entries.Where(e => !e.IsDirectory && e.Key != null).ToList();
+            if (entries.Count == 0) return false;
+            var safeDir = Path.GetFullPath(outputDir);
+            if (!safeDir.EndsWith(Path.DirectorySeparatorChar)) safeDir += Path.DirectorySeparatorChar;
             foreach (var entry in entries)
             {
-                var outPath = Path.Combine(outputDir, entry.Key!);
-                if (File.Exists(outPath)) return true;
+                var outPath = Path.GetFullPath(Path.Combine(safeDir, entry.Key!));
+                if (!outPath.StartsWith(safeDir, StringComparison.OrdinalIgnoreCase) || !File.Exists(outPath))
+                    return false;
+                if (entry.Size >= 0 && new FileInfo(outPath).Length != entry.Size)
+                    return false;
             }
+            return true;
         }
-        catch { }
+        catch (Exception ex) { Log.Debug(ex, "Unable to verify prior extraction for {File}", item.FileName); }
         return false;
     }
 
     private async Task AutoExtractItem(ArchiveItem item)
     {
         if (item.Status != "Queued") return;
-
-        item.Status = "Extracting";
-        item.Progress = 0;
+        var gateHeld = false;
 
         var outputDir = GetOutputDir(item);
         var password = "";
@@ -1430,7 +1412,11 @@ public partial class ExtractorWindow : Window
 
         try
         {
-            await ExtractArchiveAsync(item, outputDir, password, overwriteIdx, CancellationToken.None);
+            await _extractionGate.WaitAsync(_lifetimeCts.Token);
+            gateHeld = true;
+            item.Status = "Extracting";
+            item.Progress = 0;
+            await ExtractArchiveAsync(item, outputDir, password, overwriteIdx, _lifetimeCts.Token);
             item.Status = "Done";
             item.Progress = 100;
 
@@ -1438,30 +1424,39 @@ public partial class ExtractorWindow : Window
 
             if (deleteAfter)
             {
-                // Small settling delay + GC to let SharpCompress fully release the
-                // underlying volume FileStreams before we try to delete them.
-                // DeleteSourceFiles does its own retry loop too, but this head-start
-                // avoids the first attempt hitting a doomed file-in-use exception.
-                await Task.Delay(500);
+                // Give SharpCompress and filesystem filters a brief settling period;
+                // source cleanup also retries transient file-in-use failures.
+                await Task.Delay(500, _lifetimeCts.Token);
                 Log.Information("Extractor: deleting source archive set for {File}", item.FileName);
-                await Task.Run(() => DeleteSourceFiles(item.FilePath));
+                if (!await Task.Run(() => DeleteSourceFiles(item.FilePath), _lifetimeCts.Token))
+                    item.ErrorMessage = "Extracted, but source cleanup was incomplete";
             }
+            lock (_watchLock) _watchRetryCounts.Remove(item.FilePath);
+        }
+        catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested)
+        {
+            item.Status = "Cancelled";
         }
         catch (Exception ex)
         {
             Log.Warning(ex, "Auto-extract failed: {File}", item.FileName);
             item.Status = "Error";
             item.ErrorMessage = ex.Message;
+            ScheduleWatchRetry(item.FilePath);
+        }
+        finally
+        {
+            if (gateHeld) _extractionGate.Release();
         }
 
-        Dispatcher.Invoke(UpdateStatus);
+        if (!Dispatcher.HasShutdownStarted) await Dispatcher.InvokeAsync(UpdateStatus);
     }
 
     /// <summary>
     /// Wait until a file is no longer being written to. Checks every 2 seconds for up to 5 minutes.
     /// Essential for network drives where files appear before the transfer completes.
     /// </summary>
-    private static async Task WaitForFileReady(string path, int maxWaitMs = 300_000)
+    private static async Task<bool> WaitForFileReady(string path, CancellationToken ct, int maxWaitMs = 300_000)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         long lastSize = -1;
@@ -1469,11 +1464,11 @@ public partial class ExtractorWindow : Window
 
         while (sw.ElapsedMilliseconds < maxWaitMs)
         {
-            await Task.Delay(2000);
+            await Task.Delay(2000, ct);
 
             try
             {
-                if (!File.Exists(path)) return;
+                if (!File.Exists(path)) return false;
 
                 var info = new FileInfo(path);
                 var currentSize = info.Length;
@@ -1487,7 +1482,7 @@ public partial class ExtractorWindow : Window
                         try
                         {
                             using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
-                            return; // File is ready
+                            return true; // File is ready
                         }
                         catch (IOException)
                         {
@@ -1506,6 +1501,67 @@ public partial class ExtractorWindow : Window
         }
 
         Log.Warning("Timeout waiting for file to be ready: {Path}", path);
+        return false;
+    }
+
+    private static string? ResolveFirstVolumePath(string path)
+    {
+        if (IsArchiveFile(path)) return path;
+        var ext = Path.GetExtension(path);
+        if (Regex.IsMatch(ext, @"^\.[rs]\d{2,3}$", RegexOptions.IgnoreCase))
+            return Path.ChangeExtension(path, ".rar");
+
+        var name = Path.GetFileName(path);
+        var match = Regex.Match(name, @"^(?<base>.+\.part)(?<number>\d+)\.rar$", RegexOptions.IgnoreCase);
+        if (!match.Success) return null;
+        var first = 1.ToString($"D{match.Groups["number"].Value.Length}");
+        return Path.Combine(Path.GetDirectoryName(path) ?? "", $"{match.Groups["base"].Value}{first}.rar");
+    }
+
+    private void ScheduleWatchRetry(string path)
+    {
+        int attempt;
+        lock (_watchLock)
+        {
+            _watchProcessed.Remove(path);
+            _watchRetryCounts.TryGetValue(path, out attempt);
+            attempt++;
+            _watchRetryCounts[path] = attempt;
+        }
+        if (attempt > 5)
+        {
+            Log.Error("Extractor: giving up after 5 retries for watched archive {Path}", path);
+            return;
+        }
+        _ = RetryWatchedFileAsync(path, attempt);
+    }
+
+    private async Task RetryWatchedFileAsync(string path, int attempt)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(30 * attempt), _lifetimeCts.Token);
+            await HandleWatchedFileAsync(path);
+        }
+        catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { }
+    }
+
+    private async Task RecoverWatcherAsync(string folder, FileSystemWatcher failedWatcher)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(2), _lifetimeCts.Token);
+            await Dispatcher.InvokeAsync(() =>
+            {
+                failedWatcher.EnableRaisingEvents = false;
+                failedWatcher.Dispose();
+                _watchers.Remove(failedWatcher);
+                if (_watchEnabled && Directory.Exists(folder)) StartWatcherFor(folder);
+            });
+            if (_watchEnabled) await ScanAndAutoExtractAsync(folder);
+        }
+        catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { }
+        catch (Exception ex) { Log.Warning(ex, "Failed to recover watcher for {Dir}", folder); }
     }
 
     // ── Helpers ──
@@ -1527,6 +1583,8 @@ public partial class ExtractorWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         SaveSettings();
+        _lifetimeCts.Cancel();
+        try { _cts?.Cancel(); } catch (ObjectDisposedException) { }
         StopAllWatchers();
         base.OnClosed(e);
     }

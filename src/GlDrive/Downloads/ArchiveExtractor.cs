@@ -6,6 +6,8 @@ using Serilog;
 
 namespace GlDrive.Downloads;
 
+public sealed record ArchiveExtractionResult(bool Extracted, IReadOnlyList<string> FirstVolumes);
+
 public static partial class ArchiveExtractor
 {
     // Old-style volumes: .r00-.r99, .s00-.s99 (2 digits)
@@ -16,28 +18,28 @@ public static partial class ArchiveExtractor
     // Modern RAR multi-part: name.part02.rar, name.part003.rar (non-first volumes)
     private static readonly Regex PartNonFirstRegex = PartNonFirstVolumeRegex();
 
-    private const int ExtractBufferSize = 256 * 1024; // 256 KB
-
-    public static Task<bool> ExtractIfNeeded(string dirPath, CancellationToken ct)
+    public static Task<ArchiveExtractionResult> ExtractIfNeeded(string dirPath, CancellationToken ct)
     {
         var dir = new DirectoryInfo(dirPath);
-        if (!dir.Exists) return Task.FromResult(false);
+        if (!dir.Exists) return Task.FromResult(new ArchiveExtractionResult(false, []));
 
         var rarFiles = dir.GetFiles("*.rar")
             .Where(f => !PartNonFirstRegex.IsMatch(f.Name))
             .ToList();
 
-        if (rarFiles.Count == 0) return Task.FromResult(false);
+        if (rarFiles.Count == 0) return Task.FromResult(new ArchiveExtractionResult(false, []));
 
         // Run extraction on a dedicated low-priority thread to avoid starving
         // the UI thread and thread pool. Decompression is CPU-heavy.
-        var tcs = new TaskCompletionSource<bool>();
+        var tcs = new TaskCompletionSource<ArchiveExtractionResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
         {
             try
             {
                 ExtractOnThread(dirPath, rarFiles, ct);
-                tcs.SetResult(true);
+                tcs.SetResult(new ArchiveExtractionResult(true,
+                    rarFiles.Select(f => f.FullName).ToList()));
             }
             catch (OperationCanceledException)
             {
@@ -93,16 +95,11 @@ public static partial class ArchiveExtractor
                         continue;
                     }
 
-                    // Ensure target directory exists
-                    var entryDir = Path.GetDirectoryName(fullPath);
-                    if (entryDir != null) Directory.CreateDirectory(entryDir);
-
-                    // Manual streaming extraction with large buffer and sequential I/O hints
+                    // Commit only complete entries so cancellation or corruption never
+                    // leaves a truncated file at the final destination.
                     Log.Debug("Extracting entry: {Key} ({Size} bytes)", entry.Key, entry.Size);
                     using var entryStream = entry.OpenEntryStream();
-                    using var outStream = new FileStream(fullPath, FileMode.Create, FileAccess.Write,
-                        FileShare.None, ExtractBufferSize, FileOptions.SequentialScan);
-                    entryStream.CopyTo(outStream, ExtractBufferSize);
+                    ArchiveFileOperations.CopyToFileAtomically(entryStream, fullPath, ct);
                 }
                 Log.Information("Extraction complete: {File} ({Count} files)", rarFile.Name, entries.Count);
             }
@@ -115,66 +112,8 @@ public static partial class ArchiveExtractor
         }
     }
 
-    public static void DeleteArchives(string dirPath)
-    {
-        var dir = new DirectoryInfo(dirPath);
-        if (!dir.Exists) return;
-
-        // Collect archive files to delete
-        var toDelete = dir.GetFiles("*", SearchOption.AllDirectories)
-            .Where(f => IsArchiveFile(f.Name))
-            .ToList();
-
-        if (toDelete.Count == 0)
-        {
-            Log.Information("No archive files found to delete in {Dir}", dir.Name);
-            return;
-        }
-
-        Log.Information("Deleting {Count} archive files from {Dir}: {Files}",
-            toDelete.Count, dir.Name, string.Join(", ", toDelete.Select(f => f.Name)));
-
-        var deleted = 0;
-        var failed = 0;
-        foreach (var file in toDelete)
-        {
-            if (TryDeleteWithRetry(file.FullName))
-                deleted++;
-            else
-                failed++;
-        }
-
-        Log.Information("Archive cleanup: {Deleted} deleted, {Failed} failed in {Dir}", deleted, failed, dir.Name);
-    }
-
-    /// <summary>
-    /// Try to delete a file with retries to handle Windows file handle release delays.
-    /// </summary>
-    private static bool TryDeleteWithRetry(string path, int maxAttempts = 3, int delayMs = 500)
-    {
-        for (var i = 0; i < maxAttempts; i++)
-        {
-            try
-            {
-                File.Delete(path);
-                return true;
-            }
-            catch (IOException) when (i < maxAttempts - 1)
-            {
-                Thread.Sleep(delayMs * (i + 1));
-            }
-            catch (UnauthorizedAccessException) when (i < maxAttempts - 1)
-            {
-                Thread.Sleep(delayMs * (i + 1));
-            }
-            catch (Exception ex)
-            {
-                Log.Warning(ex, "Failed to delete archive file: {File}", Path.GetFileName(path));
-                return false;
-            }
-        }
-        return false;
-    }
+    public static bool DeleteArchiveSet(string firstVolumePath) =>
+        ArchiveFileOperations.DeleteRarSet(firstVolumePath);
 
     public static bool IsArchiveFile(string fileName)
     {
