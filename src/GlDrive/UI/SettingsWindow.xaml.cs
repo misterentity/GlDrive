@@ -70,12 +70,14 @@ public partial class SettingsWindow : Window
     {
         if (ServerGrid.SelectedItem is not ServerListItem selected) return;
 
-        var serverConfig = _config.Servers.FirstOrDefault(s => s.Id == selected.Id);
-        if (serverConfig == null) return;
+        var serverIndex = _config.Servers.FindIndex(s => s.Id == selected.Id);
+        if (serverIndex < 0) return;
+        var serverConfig = _config.Servers[serverIndex];
 
         var dialog = new ServerEditDialog(serverConfig, _serverManager) { Owner = this };
         if (dialog.ShowDialog() == true)
         {
+            _config.Servers[serverIndex] = dialog.Result;
             RefreshServerList();
         }
     }

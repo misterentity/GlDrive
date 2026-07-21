@@ -5,7 +5,6 @@ using System.Net.Http;
 using System.Net.Http.Json;
 using System.Reflection;
 using System.Security.Cryptography;
-using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json.Serialization;
 using Serilog;
@@ -33,6 +32,9 @@ public record GitHubRelease(
 
 public class UpdateChecker : IDisposable
 {
+    private sealed record VerifiedUpdatePackage(
+        string ZipPath, string AssetName, string ChecksumText, string SignatureText);
+
     private const string RepoApiUrl = "https://api.github.com/repos/misterentity/GlDrive/releases/latest";
     // Lowered 24h -> 3h so an auto-install that's deferred (a race is running) retries
     // within hours instead of a full day. The check itself is a single cheap GitHub
@@ -190,7 +192,8 @@ public class UpdateChecker : IDisposable
             new FileInfo(tempZip).Length / (1024.0 * 1024));
 
         // Verify SHA-256 hash against checksums.sha256 asset
-        if (!await VerifyDownloadHash(tempZip, release))
+        var verifiedPackage = await VerifyDownloadHash(tempZip, release);
+        if (verifiedPackage == null)
         {
             Log.Error("Update integrity check failed — hash mismatch or no checksum available");
             try { File.Delete(tempZip); } catch { }
@@ -198,7 +201,7 @@ public class UpdateChecker : IDisposable
         }
 
         Log.Information("Integrity verified, preparing updater");
-        LaunchUpdater(tempZip);
+        LaunchUpdater(verifiedPackage);
     }
 
     // PEM-encoded RSA public key used to verify checksums.sha256.sig signatures.
@@ -217,24 +220,11 @@ public class UpdateChecker : IDisposable
         -----END PUBLIC KEY-----
         """;
 
-    private async Task<bool> VerifyChecksumSignature(string checksumText, GitHubRelease release)
+    private static bool VerifyChecksumSignature(string checksumText, string signatureText)
     {
-        var sigAsset = release.Assets.FirstOrDefault(a =>
-            a.Name.Equals("checksums.sha256.sig", StringComparison.OrdinalIgnoreCase));
-        if (sigAsset == null)
-        {
-            Log.Error("No checksums.sha256.sig asset — rejecting update (publisher must sign release)");
-            return false;
-        }
-        if (!IsAllowedDownloadUrl(sigAsset.BrowserDownloadUrl))
-        {
-            Log.Error("Signature asset URL not in allowed host list — rejecting. Url={Url}", sigAsset.BrowserDownloadUrl);
-            return false;
-        }
         try
         {
-            var sigBase64 = (await _http.GetStringAsync(sigAsset.BrowserDownloadUrl)).Trim();
-            var sigBytes = Convert.FromBase64String(sigBase64);
+            var sigBytes = Convert.FromBase64String(signatureText.Trim());
             using var rsa = RSA.Create();
             rsa.ImportFromPem(ChecksumPublicKeyPem);
 
@@ -261,7 +251,7 @@ public class UpdateChecker : IDisposable
         }
     }
 
-    private async Task<bool> VerifyDownloadHash(string zipPath, GitHubRelease release)
+    private async Task<VerifiedUpdatePackage?> VerifyDownloadHash(string zipPath, GitHubRelease release)
     {
         var checksumAsset = release.Assets.FirstOrDefault(a =>
             a.Name.Equals("checksums.sha256", StringComparison.OrdinalIgnoreCase));
@@ -269,20 +259,27 @@ public class UpdateChecker : IDisposable
         if (checksumAsset == null)
         {
             Log.Warning("No checksums.sha256 asset found — rejecting update");
-            return false;
+            return null;
         }
 
         if (!IsAllowedDownloadUrl(checksumAsset.BrowserDownloadUrl))
         {
             Log.Error("Checksum asset URL not in allowed host list — rejecting. Url={Url}", checksumAsset.BrowserDownloadUrl);
-            return false;
+            return null;
         }
-
         try
         {
             var checksumText = await _http.GetStringAsync(checksumAsset.BrowserDownloadUrl);
-            if (!await VerifyChecksumSignature(checksumText, release))
-                return false;
+            var sigAsset = release.Assets.FirstOrDefault(a =>
+                a.Name.Equals("checksums.sha256.sig", StringComparison.OrdinalIgnoreCase));
+            if (sigAsset == null || !IsAllowedDownloadUrl(sigAsset.BrowserDownloadUrl))
+            {
+                Log.Error("Signed checksum asset is missing or has an untrusted URL — rejecting update");
+                return null;
+            }
+            var signatureText = await _http.GetStringAsync(sigAsset.BrowserDownloadUrl);
+            if (!VerifyChecksumSignature(checksumText, signatureText))
+                return null;
             // Match against the actual asset name from GitHub, not the local temp filename
             var zipAsset = release.Assets.FirstOrDefault(a =>
                 a.Name.Contains("win-x64", StringComparison.OrdinalIgnoreCase) &&
@@ -299,7 +296,7 @@ public class UpdateChecker : IDisposable
             if (string.IsNullOrEmpty(expectedHash))
             {
                 Log.Warning("No matching hash for {File} in checksums.sha256", zipName);
-                return false;
+                return null;
             }
 
             await using var fs = File.OpenRead(zipPath);
@@ -308,72 +305,51 @@ public class UpdateChecker : IDisposable
             if (actualHash.Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
             {
                 Log.Information("SHA-256 verified: {Hash}", actualHash[..16] + "...");
-                return true;
+                return new VerifiedUpdatePackage(zipPath, zipName, checksumText, signatureText);
             }
 
             Log.Error("SHA-256 mismatch! Expected={Expected}, Actual={Actual}",
                 expectedHash[..16] + "...", actualHash[..16] + "...");
-            return false;
+            return null;
         }
         catch (Exception ex)
         {
             Log.Error(ex, "Hash verification failed — rejecting update");
-            return false;
+            return null;
         }
     }
 
-    private void LaunchUpdater(string zipPath)
+    private void LaunchUpdater(VerifiedUpdatePackage package)
     {
-        var extractDir = Path.Combine(Path.GetTempPath(), $"gldrive-update-{Guid.NewGuid():N}");
-
-        if (Directory.Exists(extractDir))
-            Directory.Delete(extractDir, true);
-
-        Log.Information("Extracting update to {Path}", extractDir);
-        ZipFile.ExtractToDirectory(zipPath, extractDir);
-
-        // Detect nested folder
-        var entries = Directory.GetDirectories(extractDir);
-        if (entries.Length == 1 && File.Exists(Path.Combine(entries[0], "GlDrive.exe")))
-        {
-            Log.Information("Detected nested folder: {Path}", entries[0]);
-            extractDir = entries[0];
-        }
-
-        var exePath = Path.Combine(extractDir, "GlDrive.exe");
-        if (!File.Exists(exePath))
-        {
-            Log.Error("Extraction failed — GlDrive.exe not found in {Path}", extractDir);
-            return;
-        }
-
-        // Verify Authenticode signature if the current binary is signed
-        if (!VerifyAuthenticode(exePath))
-        {
-            Log.Error("Update binary failed Authenticode verification — aborting");
-            try { Directory.Delete(extractDir, true); } catch { }
-            return;
-        }
-
-        try { File.Delete(zipPath); } catch { }
+        var packageDir = Path.Combine(Path.GetTempPath(), $"gldrive-update-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(packageDir);
+        File.Move(package.ZipPath, Path.Combine(packageDir, "update.zip"), overwrite: true);
+        File.WriteAllText(Path.Combine(packageDir, "checksums.sha256"), package.ChecksumText);
+        File.WriteAllText(Path.Combine(packageDir, "checksums.sha256.sig"), package.SignatureText);
+        File.WriteAllText(Path.Combine(packageDir, "asset-name.txt"), package.AssetName);
 
         var pid = Environment.ProcessId;
         var installDir = _installPath.TrimEnd(Path.DirectorySeparatorChar);
 
-        Log.Information("Launching updater: --apply-update {Pid} \"{ExtractDir}\" \"{InstallDir}\"",
-            pid, extractDir, installDir);
+        Log.Information("Launching updater: --apply-update {Pid} \"{PackageDir}\" \"{InstallDir}\"",
+            pid, packageDir, installDir);
 
         // Write HMAC-protected .updating marker so the watchdog won't restart on clean update exit
         var appDataUpdating = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "GlDrive", ".updating");
         UpdateMarkerHmac.Write(appDataUpdating, pid);
+        var appDataAuthorization = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "GlDrive", ".update-auth");
+        UpdateMarkerHmac.WriteAuthorization(appDataAuthorization, pid, packageDir, installDir);
 
         try
         {
             var psi = new ProcessStartInfo
             {
-                FileName = exePath,
+                FileName = Environment.ProcessPath
+                    ?? throw new InvalidOperationException("Cannot locate installed GlDrive executable"),
                 // ArgumentList avoids manual quoting and shell-injection via path components
                 WorkingDirectory = installDir,
                 Verb = "runas",
@@ -381,13 +357,16 @@ public class UpdateChecker : IDisposable
             };
             psi.ArgumentList.Add("--apply-update");
             psi.ArgumentList.Add(pid.ToString());
-            psi.ArgumentList.Add(extractDir);
+            psi.ArgumentList.Add(packageDir);
             psi.ArgumentList.Add(installDir);
             Process.Start(psi);
         }
         catch (Exception ex)
         {
             Log.Error(ex, "Failed to launch updater (UAC cancelled?)");
+            try { File.Delete(appDataUpdating); } catch { }
+            try { File.Delete(appDataAuthorization); } catch { }
+            try { Directory.Delete(packageDir, true); } catch { }
             return;
         }
 
@@ -395,78 +374,70 @@ public class UpdateChecker : IDisposable
         RestartRequested?.Invoke();
     }
 
-    private static bool VerifyAuthenticode(string filePath)
+    private static FileStream? OpenVerifiedUpdateArchive(string packageDir)
     {
         try
         {
-            // Check if the CURRENT binary is signed — if not, skip Authenticode check
-            // (development builds are unsigned)
-            var currentExe = Process.GetCurrentProcess().MainModule?.FileName;
-            if (currentExe == null) return true;
+            var checksumText = File.ReadAllText(Path.Combine(packageDir, "checksums.sha256"));
+            var signatureText = File.ReadAllText(Path.Combine(packageDir, "checksums.sha256.sig"));
+            var assetName = File.ReadAllText(Path.Combine(packageDir, "asset-name.txt")).Trim();
+            if (!VerifyChecksumSignature(checksumText, signatureText)) return null;
 
-            X509Certificate2? currentCert = null;
-            try
+            var packageVersion = ParseUpdateAssetVersion(assetName);
+            if (packageVersion == null || packageVersion <= CurrentVersion)
             {
-                // CreateFromSignedFile is SYSLIB0057-obsolete but has NO non-obsolete equivalent
-                // for extracting the Authenticode SIGNER cert from a signed PE: X509CertificateLoader
-                // only loads cert/PKCS12 content, and the SignedCms/PE-parse alternative drops
-                // catalog-signing support and risks subtle hand-rolled offset bugs in this
-                // signature-VERIFICATION path. Keep the exact Windows Authenticode machinery (identical
-                // semantics) and suppress the warning at this single call site instead. The X509Certificate2
-                // copy ctor below is NOT obsolete (only byte[]/string/span content ctors are).
-#pragma warning disable SYSLIB0057
-                var raw = X509Certificate.CreateFromSignedFile(currentExe);
-#pragma warning restore SYSLIB0057
-                currentCert = new X509Certificate2(raw);
-            }
-            catch (CryptographicException) { }
-
-            if (currentCert == null)
-            {
-                // Current binary is unsigned. We can't enforce issuer-match here, but we still
-                // require the UPDATE binary to be signed (checked below) — combined with the
-                // RSA-signed checksums.sha256.sig verification, this gives integrity.
-                // Once a signed release is widely deployed, flip this to fail-closed.
-                Log.Warning("Current binary is unsigned — Authenticode issuer-match disabled. Update integrity relies on checksum signature.");
-                return true;
+                Log.Error("Update package version is invalid or is not newer: {AssetName}", assetName);
+                return null;
             }
 
-            // Current binary IS signed — require the update to be signed by the same issuer
-            X509Certificate2? updateCert = null;
-            try
-            {
-                // SYSLIB0057-obsolete but intentionally retained — see currentCert site above:
-                // no non-obsolete API extracts the Authenticode signer cert from a signed PE with
-                // identical (catalog-aware) semantics, and weakening this verification path is unacceptable.
-#pragma warning disable SYSLIB0057
-                var raw = X509Certificate.CreateFromSignedFile(filePath);
-#pragma warning restore SYSLIB0057
-                updateCert = new X509Certificate2(raw);
-            }
-            catch (CryptographicException) { }
+            var expectedHash = checksumText.Split('\n')
+                .Select(line => line.Trim())
+                .Where(line => line.Length > 0)
+                .Select(line => line.Split(' ', 2, StringSplitOptions.TrimEntries))
+                .Where(parts => parts.Length == 2 &&
+                    parts[1].TrimStart('*').Equals(assetName, StringComparison.OrdinalIgnoreCase))
+                .Select(parts => parts[0])
+                .FirstOrDefault();
+            if (string.IsNullOrWhiteSpace(expectedHash)) return null;
 
-            if (updateCert == null)
+            var stream = new FileStream(Path.Combine(packageDir, "update.zip"), FileMode.Open,
+                FileAccess.Read, FileShare.Read);
+            var actualHash = Convert.ToHexStringLower(SHA256.HashData(stream));
+            stream.Position = 0;
+            if (!actualHash.Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
             {
-                Log.Error("Update binary is not signed but current binary is — rejecting");
-                return false;
+                stream.Dispose();
+                Log.Error("Elevated update verification found a ZIP hash mismatch");
+                return null;
             }
-
-            // Compare issuer to prevent cross-signed attacks
-            if (!currentCert.Issuer.Equals(updateCert.Issuer, StringComparison.Ordinal))
-            {
-                Log.Error("Update binary signed by different issuer: expected={Expected}, got={Got}",
-                    currentCert.Issuer, updateCert.Issuer);
-                return false;
-            }
-
-            Log.Information("Authenticode verification passed: {Subject}", updateCert.Subject);
-            return true;
+            return stream;
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Authenticode verification error — rejecting update");
-            return false;
+            Log.Error(ex, "Elevated update package verification failed");
+            return null;
         }
+    }
+
+    internal static Version? ParseUpdateAssetVersion(string assetName)
+    {
+        const string prefix = "GlDrive-v";
+        const string suffix = "-win-x64.zip";
+        if (!assetName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ||
+            !assetName.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            return null;
+        return Version.TryParse(assetName[prefix.Length..^suffix.Length], out var version) ? version : null;
+    }
+
+    private static Process? LaunchViaDesktopShell(string executable)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "explorer.exe",
+            UseShellExecute = true
+        };
+        startInfo.ArgumentList.Add(executable);
+        return Process.Start(startInfo);
     }
 
     public static void ApplyUpdate(int pid, string extractDir, string installDir)
@@ -477,6 +448,9 @@ public class UpdateChecker : IDisposable
             var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {msg}";
             try { File.AppendAllText(logPath, line + Environment.NewLine); } catch { }
         }
+        var backups = new List<(string Original, string Backup)>();
+        var copiedDestinations = new List<string>();
+        string? validatedInstallDir = null;
 
         try
         {
@@ -484,36 +458,42 @@ public class UpdateChecker : IDisposable
             var fullExtract = Path.GetFullPath(extractDir);
             var fullInstall = Path.GetFullPath(installDir);
             var tempDir = Path.GetFullPath(Path.GetTempPath());
+            var tempPrefix = tempDir.EndsWith(Path.DirectorySeparatorChar)
+                ? tempDir
+                : tempDir + Path.DirectorySeparatorChar;
 
-            if (!fullExtract.StartsWith(tempDir, StringComparison.OrdinalIgnoreCase))
+            if (!fullExtract.StartsWith(tempPrefix, StringComparison.OrdinalIgnoreCase))
             {
                 LogUpdate($"SECURITY: extractDir is not in temp directory — aborting. extractDir={fullExtract}");
-                Environment.Exit(1);
+                throw new InvalidDataException("Update package directory is outside the system temp directory");
             }
 
-            // Strict equality: installDir must exactly match the calling process's own exe directory.
-            // Substring "contains GlDrive" is bypassable with a path like C:\evil\GlDrive-trap\.
-            // The elevated child (running from extractDir) re-validates by confirming installDir
-            // already contains a GlDrive.exe — proving it was an existing install, not a planted path.
+            // Elevated update mode is only valid when launched from the installed executable.
             var callerExeDir = Path.GetFullPath(
                 Path.GetDirectoryName(Environment.ProcessPath ?? AppContext.BaseDirectory)!);
             bool callerIsInstallDir = string.Equals(fullInstall, callerExeDir, StringComparison.OrdinalIgnoreCase);
-            bool installHasExe = File.Exists(Path.Combine(fullInstall, "GlDrive.exe"));
-            if (!callerIsInstallDir && !installHasExe)
+            if (!callerIsInstallDir)
             {
-                LogUpdate($"SECURITY: installDir is neither caller's dir nor an existing GlDrive install — aborting. installDir={fullInstall}, callerDir={callerExeDir}");
-                Environment.Exit(1);
+                LogUpdate($"SECURITY: updater was not launched from installDir — aborting. installDir={fullInstall}, callerDir={callerExeDir}");
+                throw new InvalidDataException("Updater executable is not running from the install directory");
             }
-            if (!callerIsInstallDir && installHasExe)
-            {
-                // Elevated child running from extractDir — installDir validated by pre-existing exe
-                LogUpdate($"Elevated child: installDir validated by pre-existing GlDrive.exe at {fullInstall}");
-            }
+            validatedInstallDir = fullInstall;
 
-            if (!File.Exists(Path.Combine(fullExtract, "GlDrive.exe")))
+            var authorizationPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "GlDrive", ".update-auth");
+            if (!UpdateMarkerHmac.IsValidAuthorization(authorizationPath, pid, fullExtract, fullInstall))
             {
-                LogUpdate($"SECURITY: GlDrive.exe not found in extractDir — aborting");
-                Environment.Exit(1);
+                LogUpdate("SECURITY: update authorization is missing, expired, or does not match staged files — aborting");
+                throw new InvalidDataException("Update authorization is invalid");
+            }
+            using (var verifiedArchive = OpenVerifiedUpdateArchive(fullExtract))
+            {
+                if (verifiedArchive == null)
+                {
+                    LogUpdate("SECURITY: publisher signature, version, or archive hash is invalid — aborting");
+                    throw new InvalidDataException("Update publisher verification failed");
+                }
             }
 
             LogUpdate($"ApplyUpdate started — pid={pid}, extractDir={fullExtract}, installDir={fullInstall}");
@@ -537,10 +517,24 @@ public class UpdateChecker : IDisposable
             // Grace period for file handles
             Thread.Sleep(2000);
 
+            // Revalidate after waiting so staging changes made while the original process
+            // was shutting down cannot cross the elevation boundary.
+            if (!UpdateMarkerHmac.IsValidAuthorization(authorizationPath, pid, fullExtract, fullInstall))
+            {
+                LogUpdate("SECURITY: staged update changed while waiting for shutdown — aborting");
+                throw new InvalidDataException("Update package changed during shutdown");
+            }
+            using var verifiedZip = OpenVerifiedUpdateArchive(fullExtract);
+            if (verifiedZip == null)
+            {
+                LogUpdate("SECURITY: update package failed publisher verification after shutdown — aborting");
+                throw new InvalidDataException("Update publisher verification failed after shutdown");
+            }
+            try { File.Delete(authorizationPath); } catch { }
+
             // Rename existing files to .old
             LogUpdate("Renaming existing files to .old");
             var renamed = 0;
-            var failed = 0;
             foreach (var file in Directory.EnumerateFiles(installDir, "*", SearchOption.AllDirectories))
             {
                 if (file.EndsWith(".old", StringComparison.OrdinalIgnoreCase))
@@ -548,77 +542,70 @@ public class UpdateChecker : IDisposable
 
                 try
                 {
-                    File.Move(file, file + ".old", overwrite: true);
+                    var backup = file + ".old";
+                    File.Move(file, backup, overwrite: true);
+                    backups.Add((file, backup));
                     renamed++;
                 }
                 catch (Exception ex)
                 {
-                    failed++;
-                    LogUpdate($"  Warning: could not rename {Path.GetFileName(file)}: {ex.Message}");
+                    throw new IOException($"Could not back up {file}: {ex.Message}", ex);
                 }
             }
-            LogUpdate($"Renamed {renamed} files, {failed} failed");
+            LogUpdate($"Renamed {renamed} files");
 
-            // Copy new files — with symlink / reparse-point defense and path-escape check
-            LogUpdate("Copying new files from extract dir");
+            // Copy directly from the locked, publisher-verified ZIP. Mutable files in the
+            // package directory are never executed or copied into the installation.
+            LogUpdate("Copying new files from verified update archive");
             var copied = 0;
-            var skippedReparse = 0;
             var installDirCanonical = Path.GetFullPath(installDir);
             if (!installDirCanonical.EndsWith(Path.DirectorySeparatorChar))
                 installDirCanonical += Path.DirectorySeparatorChar;
 
-            foreach (var sourceFile in Directory.EnumerateFiles(extractDir, "*", SearchOption.AllDirectories))
+            using (var archive = new ZipArchive(verifiedZip, ZipArchiveMode.Read, leaveOpen: true))
             {
-                // Skip any file or directory traversed via a reparse point (symlink, junction).
-                // An attacker who can drop a directory symlink into the extract dir between
-                // extraction and copy would otherwise pull system files into the copy loop.
-                var sourceAttrs = File.GetAttributes(sourceFile);
-                if ((sourceAttrs & FileAttributes.ReparsePoint) != 0)
+                var fileEntries = archive.Entries.Where(entry => !string.IsNullOrEmpty(entry.Name)).ToList();
+                var executableEntry = fileEntries.FirstOrDefault(entry =>
+                    entry.FullName.Replace('\\', '/').EndsWith("/GlDrive.exe", StringComparison.OrdinalIgnoreCase) ||
+                    entry.FullName.Equals("GlDrive.exe", StringComparison.OrdinalIgnoreCase));
+                if (executableEntry == null)
+                    throw new InvalidDataException("Verified update archive does not contain GlDrive.exe");
+
+                var executablePath = executableEntry.FullName.Replace('\\', '/');
+                var archivePrefix = executablePath[..^"GlDrive.exe".Length];
+                foreach (var entry in fileEntries)
                 {
-                    LogUpdate($"  Skipping reparse-point entry: {sourceFile}");
-                    skippedReparse++;
-                    continue;
+                    var archivePath = entry.FullName.Replace('\\', '/');
+                    if (!archivePath.StartsWith(archivePrefix, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    var relativePath = archivePath[archivePrefix.Length..];
+                    if (string.IsNullOrWhiteSpace(relativePath)) continue;
+
+                    var destCanonical = Path.GetFullPath(Path.Combine(installDir, relativePath));
+                    if (!destCanonical.StartsWith(installDirCanonical, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidDataException($"Archive entry escapes install directory: {archivePath}");
+
+                    Directory.CreateDirectory(Path.GetDirectoryName(destCanonical)!);
+                    copiedDestinations.Add(destCanonical);
+                    using var source = entry.Open();
+                    using var destination = new FileStream(destCanonical, FileMode.Create, FileAccess.Write, FileShare.None);
+                    source.CopyTo(destination);
+                    copied++;
                 }
-
-                var relativePath = Path.GetRelativePath(extractDir, sourceFile);
-                var destFile = Path.Combine(installDir, relativePath);
-
-                // Canonicalize the destination and verify it stays within installDir.
-                // Defends against .. components and symlink tricks in relativePath.
-                var destCanonical = Path.GetFullPath(destFile);
-                if (!destCanonical.StartsWith(installDirCanonical, StringComparison.OrdinalIgnoreCase))
-                {
-                    LogUpdate($"  SECURITY: refusing to write outside installDir: {destCanonical}");
-                    skippedReparse++;
-                    continue;
-                }
-
-                var destDir = Path.GetDirectoryName(destCanonical)!;
-                if (!Directory.Exists(destDir))
-                    Directory.CreateDirectory(destDir);
-
-                File.Copy(sourceFile, destCanonical, overwrite: true);
-                copied++;
             }
-            LogUpdate($"Copied {copied} files (skipped {skippedReparse} reparse/escape entries)");
+            verifiedZip.Dispose();
+            LogUpdate($"Copied {copied} files");
 
             // Clean up
-            LogUpdate("Cleaning up extract directory");
+            LogUpdate("Cleaning up update package");
             try { Directory.Delete(extractDir, true); } catch { }
-            // Also clean parent if nested
-            var parent = Directory.GetParent(extractDir);
-            if (parent != null && parent.FullName.StartsWith(Path.GetTempPath()) &&
-                parent.Name.StartsWith("gldrive-update-"))
-            {
-                try { parent.Delete(true); } catch { }
-            }
 
             // Launch the updated app
             var newExe = Path.Combine(installDir, "GlDrive.exe");
             if (!File.Exists(newExe))
             {
                 LogUpdate($"ERROR: {newExe} not found after copy!");
-                return;
+                throw new FileNotFoundException("Updated executable was not copied", newExe);
             }
 
             // Clean up the update marker so the watchdog doesn't interfere on next run
@@ -629,28 +616,49 @@ public class UpdateChecker : IDisposable
             try { File.Delete(appDataUpdating); } catch { }
 
             LogUpdate($"Update complete, launching {newExe}");
-            var child = Process.Start(new ProcessStartInfo
-            {
-                FileName = newExe,
-                UseShellExecute = true
-            });
+            var child = LaunchViaDesktopShell(newExe);
 
             if (child != null)
             {
-                // Wait for the child to actually start before we exit —
-                // Process.Kill() is instant and could race with process creation
-                try { child.WaitForInputIdle(5000); } catch { }
-                LogUpdate($"Child process started: PID={child.Id}");
+                LogUpdate("Desktop shell accepted the application relaunch request");
             }
         }
         catch (Exception ex)
         {
             LogUpdate($"Update FAILED: {ex}");
+            LogUpdate("Rolling back partial update");
+            foreach (var copied in copiedDestinations.AsEnumerable().Reverse())
+            {
+                try { File.Delete(copied); }
+                catch (Exception rollbackEx) { LogUpdate($"  Could not remove {copied}: {rollbackEx.Message}"); }
+            }
+            foreach (var (original, backup) in backups.AsEnumerable().Reverse())
+            {
+                try
+                {
+                    if (File.Exists(backup)) File.Move(backup, original, overwrite: true);
+                }
+                catch (Exception rollbackEx) { LogUpdate($"  Could not restore {original}: {rollbackEx.Message}"); }
+            }
+
+            var appData = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GlDrive");
+            try { File.Delete(Path.Combine(appData, ".updating")); } catch { }
+            try { File.Delete(Path.Combine(appData, ".update-auth")); } catch { }
+
+            if (validatedInstallDir != null)
+            {
+                var restoredExe = Path.Combine(validatedInstallDir, "GlDrive.exe");
+                if (File.Exists(restoredExe))
+                {
+                    try { LaunchViaDesktopShell(restoredExe); }
+                    catch (Exception launchEx) { LogUpdate($"Could not relaunch restored app: {launchEx.Message}"); }
+                }
+            }
         }
 
-        // Force-kill instead of Environment.Exit to prevent GnuTLS native DLL
-        // teardown crash (DllNotFoundException in __scrt_uninitialize_type_info)
-        // when running from the temp update directory
+        // Force-kill instead of normal teardown because loaded files may have been
+        // renamed or replaced while this updater process was running.
         Thread.Sleep(2000);
         Process.GetCurrentProcess().Kill();
     }
@@ -795,37 +803,101 @@ public static class UpdateMarkerHmac
         }
     }
 
+    public static void WriteAuthorization(string markerPath, int processId, string extractDir, string installDir)
+    {
+        try
+        {
+            var key = GetOrCreateKey();
+            var fullExtract = Path.GetFullPath(extractDir);
+            var fullInstall = Path.GetFullPath(installDir);
+            var manifest = ComputeDirectoryManifest(fullExtract);
+            var payload = $"{processId}|{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}|{fullExtract}|{fullInstall}|{manifest}";
+            var mac = Convert.ToHexString(ComputeHmac(key, payload));
+            var dir = Path.GetDirectoryName(markerPath)!;
+            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            File.WriteAllText(markerPath, payload + "\n" + mac);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to write update authorization at {Path}", markerPath);
+        }
+    }
+
+    public static bool IsValidAuthorization(
+        string markerPath, int processId, string extractDir, string installDir)
+    {
+        if (!TryReadValidPayload(markerPath, out var payload)) return false;
+        try
+        {
+            var parts = payload.Split('|');
+            if (parts.Length != 5 || !int.TryParse(parts[0], out var markerPid) || markerPid != processId)
+                return false;
+            if (!long.TryParse(parts[1], out var ts) ||
+                Math.Abs(DateTimeOffset.UtcNow.ToUnixTimeSeconds() - ts) > 300)
+                return false;
+
+            var fullExtract = Path.GetFullPath(extractDir);
+            var fullInstall = Path.GetFullPath(installDir);
+            if (!string.Equals(parts[2], fullExtract, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(parts[3], fullInstall, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            var currentManifest = ComputeDirectoryManifest(fullExtract);
+            return CryptographicOperations.FixedTimeEquals(
+                Convert.FromHexString(parts[4]), Convert.FromHexString(currentManifest));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     /// <summary>
     /// Returns true if the marker exists AND has a valid HMAC AND the embedded timestamp
     /// is within 5 minutes of now. Plain (non-HMAC) markers from older versions are rejected.
     /// </summary>
     public static bool IsValid(string markerPath)
     {
-        if (!File.Exists(markerPath)) return false;
+        if (!TryReadValidPayload(markerPath, out var payload)) return false;
+        var parts = payload.Split('|');
+        return parts.Length >= 2 && long.TryParse(parts[1], out var ts) &&
+               Math.Abs(DateTimeOffset.UtcNow.ToUnixTimeSeconds() - ts) <= 300;
+    }
 
+    private static bool TryReadValidPayload(string markerPath, out string payload)
+    {
+        payload = string.Empty;
+        if (!File.Exists(markerPath)) return false;
         try
         {
             var text = File.ReadAllText(markerPath).Trim();
             var nl = text.IndexOf('\n');
-            if (nl < 0) return false; // Plain old-format marker — reject
-
-            var payload = text[..nl].Trim();
-            var storedMac = text[(nl + 1)..].Trim();
-
-            var parts = payload.Split('|');
-            if (parts.Length < 2) return false;
-            if (!long.TryParse(parts[1], out var ts)) return false;
-            if (Math.Abs(DateTimeOffset.UtcNow.ToUnixTimeSeconds() - ts) > 300) return false;
-
-            var key = GetOrCreateKey();
-            var expected = Convert.ToHexString(ComputeHmac(key, payload));
-            var expectedBytes = Convert.FromHexString(expected);
-            var storedBytes = Convert.FromHexString(storedMac);
-            return CryptographicOperations.FixedTimeEquals(expectedBytes, storedBytes);
+            if (nl < 0) return false;
+            payload = text[..nl].Trim();
+            var storedMac = Convert.FromHexString(text[(nl + 1)..].Trim());
+            var expectedMac = ComputeHmac(GetOrCreateKey(), payload);
+            return CryptographicOperations.FixedTimeEquals(expectedMac, storedMac);
         }
         catch
         {
+            payload = string.Empty;
             return false;
         }
+    }
+
+    private static string ComputeDirectoryManifest(string directory)
+    {
+        using var manifestHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories)
+                     .OrderBy(path => Path.GetRelativePath(directory, path), StringComparer.OrdinalIgnoreCase))
+        {
+            if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidDataException($"Reparse point in update staging: {file}");
+            var relativePath = Path.GetRelativePath(directory, file).Replace('\\', '/');
+            manifestHash.AppendData(Encoding.UTF8.GetBytes(relativePath));
+            using var stream = File.OpenRead(file);
+            manifestHash.AppendData(SHA256.HashData(stream));
+        }
+        return Convert.ToHexString(manifestHash.GetHashAndReset());
     }
 }

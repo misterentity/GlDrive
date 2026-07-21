@@ -47,7 +47,7 @@ public class DownloadStore
             foreach (var item in _items.Where(i => i.Status == DownloadStatus.Downloading))
                 item.Status = DownloadStatus.Queued;
             foreach (var item in _items.Where(i => i.Status == DownloadStatus.Extracting))
-                item.Status = DownloadStatus.Completed;
+                item.Status = DownloadStatus.Queued;
         }
         catch (Exception ex)
         {

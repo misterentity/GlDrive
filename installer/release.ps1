@@ -55,7 +55,11 @@ if (Test-Path $WinFspMsiPath) {
     Write-Host "winfsp.msi SHA-256 verified" -ForegroundColor Green
 }
 
-# --- Build ---
+# --- Test and build ---
+Write-Host "`n=== Running tests ===" -ForegroundColor Cyan
+& dotnet test (Join-Path $Root 'src\GlDrive.Tests\GlDrive.Tests.csproj') -c Release '-warnaserror:NU1901,NU1902,NU1903,NU1904'
+if ($LASTEXITCODE -ne 0) { exit 1 }
+
 Write-Host "`n=== Running build.ps1 ===" -ForegroundColor Cyan
 & "$InstallerDir\build.ps1"
 if ($LASTEXITCODE -ne 0) { exit 1 }
