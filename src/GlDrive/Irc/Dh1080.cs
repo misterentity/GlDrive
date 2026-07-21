@@ -44,6 +44,9 @@ public class Dh1080
     private static readonly BigInteger Generator = 2;
     private const int PubKeyLengthBytes = 135; // 1080 bits
 
+    /// <summary>Test hook: lets the suite assert the modulus really is the canonical safe prime.</summary>
+    internal static BigInteger PrimeForTests => Prime;
+
     private readonly BigInteger _privateKey;
     private readonly BigInteger _publicKey;
 

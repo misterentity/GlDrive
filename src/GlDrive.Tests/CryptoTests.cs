@@ -121,6 +121,78 @@ public class FishInteropVectorTests
         var bob = new Dh1080(BigInteger.Parse("0deadbeef12345678", NumberStyles.HexNumber));
         Assert.Equal(expectedKey, bob.ComputeAllKeyVariants(peerPublic).Standard);
     }
+
+    // Both sides of a real exchange must derive the SAME key — the property every FiSH peer
+    // relies on. Deliberately vector-free so it can never go stale when a constant changes;
+    // it validates the group arithmetic itself (this is what a wrong modulus breaks).
+    [Theory]
+    [InlineData("0a1b2c3d4e5f60718293a4b5c6d7e8f9")]
+    [InlineData("0deadbeef12345678")]
+    [InlineData("016de04c6ce")]
+    public void Dh1080_exchange_is_symmetric(string alicePrivHex)
+    {
+        var alice = new Dh1080(BigInteger.Parse(alicePrivHex, NumberStyles.HexNumber));
+        var bob = new Dh1080(BigInteger.Parse("0fedcba9876543210fedcba98765432", NumberStyles.HexNumber));
+
+        var aliceDerived = alice.ComputeAllKeyVariants(bob.GetPublicKeyBase64()).Standard;
+        var bobDerived = bob.ComputeAllKeyVariants(alice.GetPublicKeyBase64()).Standard;
+
+        Assert.Equal(aliceDerived, bobDerived);
+        Assert.Equal(43, aliceDerived.Length); // base64(SHA-256) with '=' trimmed
+    }
+
+    // The DH1080 modulus must be the canonical 1080-bit Sophie Germain SAFE prime.
+    // A single wrong hex digit (shipped through v3.10.31 as ...BADBADA3... instead of
+    // ...BADFADA3...) yields a COMPOSITE modulus: the exchange still computes, but lands in
+    // the wrong group, so no real FiSH client can ever agree on a key — and a composite
+    // modulus weakens the discrete log via Pohlig-Hellman. Assert the property directly.
+    [Fact]
+    public void Dh1080_prime_is_a_1080_bit_safe_prime()
+    {
+        var p = Dh1080.PrimeForTests;
+        Assert.Equal(1080, (int)Math.Floor(BigInteger.Log(p, 2)) + 1);
+        Assert.True(IsProbablePrime(p), "DH1080 modulus is not prime");
+        Assert.True(IsProbablePrime((p - 1) / 2), "DH1080 modulus is not a safe prime");
+    }
+
+    private static bool IsProbablePrime(BigInteger n, int rounds = 20)
+    {
+        if (n < 2) return false;
+        foreach (var sp in new[] { 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37 })
+        {
+            if (n == sp) return true;
+            if (n % sp == 0) return false;
+        }
+
+        var d = n - 1;
+        var r = 0;
+        while (d % 2 == 0) { d /= 2; r++; }
+
+        var rng = new Random(20260721); // fixed seed — deterministic, never flaky
+        var buf = new byte[n.ToByteArray().Length];
+        for (var i = 0; i < rounds; i++)
+        {
+            BigInteger a;
+            do
+            {
+                rng.NextBytes(buf);
+                buf[^1] &= 0x7F;
+                a = new BigInteger(buf);
+            } while (a < 2 || a >= n - 1);
+
+            var x = BigInteger.ModPow(a, d, n);
+            if (x == 1 || x == n - 1) continue;
+
+            var witnessed = false;
+            for (var j = 0; j < r - 1; j++)
+            {
+                x = BigInteger.ModPow(x, 2, n);
+                if (x == n - 1) { witnessed = true; break; }
+            }
+            if (!witnessed) return false;
+        }
+        return true;
+    }
 }
 
 public class FishCipherTests
