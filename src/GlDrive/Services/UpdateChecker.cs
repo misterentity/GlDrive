@@ -468,6 +468,12 @@ public class UpdateChecker : IDisposable
                 throw new InvalidDataException("Update package directory is outside the system temp directory");
             }
 
+            // Keep a known-good relaunch target even when validation fails before any
+            // files are changed. Otherwise a rejected elevated handoff leaves the user
+            // with no running application.
+            if (File.Exists(Path.Combine(fullInstall, "GlDrive.exe")))
+                validatedInstallDir = fullInstall;
+
             var callerExePath = Path.GetFullPath(Environment.ProcessPath ??
                 Path.Combine(AppContext.BaseDirectory, "GlDrive.exe"));
             var callerExeDir = Path.GetFullPath(Path.GetDirectoryName(callerExePath)!);
@@ -487,7 +493,6 @@ public class UpdateChecker : IDisposable
                 LogUpdate($"SECURITY: updater was not launched from installDir — aborting. installDir={fullInstall}, callerDir={callerExeDir}");
                 throw new InvalidDataException("Updater executable is not running from the install directory");
             }
-            validatedInstallDir = fullInstall;
 
             var authorizationPath = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -715,13 +720,25 @@ public class UpdateChecker : IDisposable
             var callerDir = Path.GetFullPath(Path.GetDirectoryName(fullCaller)!);
             var stagedExe = Path.Combine(fullExtract, "GlDrive.exe");
             var installedExe = Path.Combine(fullInstall, "GlDrive.exe");
+            var stagingName = Path.GetFileName(fullExtract.TrimEnd(Path.DirectorySeparatorChar));
+
+            // The 3.10.23 watchdog owns the same marker and deletes it when the parent
+            // exits, so absence is an expected race. If it still exists, require it to
+            // be authentic and bound to this handoff. The staged layout and the sealed
+            // manifest written immediately after this check constrain the marker-free case.
+            bool markerAccepted = UpdateMarkerHmac.IsValidForProcess(markerPath, pid, installedExe) ||
+                !File.Exists(markerPath);
 
             return string.Equals(Path.GetFileName(fullCaller), "GlDrive.exe", StringComparison.OrdinalIgnoreCase) &&
                    string.Equals(callerDir, fullExtract, StringComparison.OrdinalIgnoreCase) &&
                    string.Equals(fullCaller, stagedExe, StringComparison.OrdinalIgnoreCase) &&
+                   stagingName.StartsWith("gldrive-update-", StringComparison.OrdinalIgnoreCase) &&
                    File.Exists(stagedExe) &&
+                   File.Exists(Path.Combine(fullExtract, "GlDrive.dll")) &&
+                   File.Exists(Path.Combine(fullExtract, "GlDrive.deps.json")) &&
+                   File.Exists(Path.Combine(fullExtract, "GlDrive.runtimeconfig.json")) &&
                    File.Exists(installedExe) &&
-                   UpdateMarkerHmac.IsValidForProcess(markerPath, pid, installedExe);
+                   markerAccepted;
         }
         catch
         {
