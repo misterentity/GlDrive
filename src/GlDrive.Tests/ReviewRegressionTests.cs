@@ -128,6 +128,13 @@ public class ReviewRegressionTests
             Assert.False(UpdateChecker.IsLegacyExtractedHandoff(
                 stagedExe, staging, install, 4242, marker));
 
+            // Elevated DPAPI key access may fail even though the legacy launcher's
+            // PID, timestamp, and installed executable fields are intact.
+            File.WriteAllText(marker,
+                $"4242|{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}|{installedExe}\nINVALID-HMAC");
+            Assert.True(UpdateChecker.IsLegacyExtractedHandoff(
+                stagedExe, staging, install, 4242, marker));
+
             // The legacy watchdog consumes the valid marker when the original process
             // exits, before the elevated child is guaranteed to validate it.
             File.Delete(marker);

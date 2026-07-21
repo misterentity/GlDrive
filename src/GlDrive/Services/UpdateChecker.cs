@@ -727,6 +727,7 @@ public class UpdateChecker : IDisposable
             // be authentic and bound to this handoff. The staged layout and the sealed
             // manifest written immediately after this check constrain the marker-free case.
             bool markerAccepted = UpdateMarkerHmac.IsValidForProcess(markerPath, pid, installedExe) ||
+                UpdateMarkerHmac.HasExpectedLegacyPayload(markerPath, pid, installedExe) ||
                 !File.Exists(markerPath);
 
             return string.Equals(Path.GetFileName(fullCaller), "GlDrive.exe", StringComparison.OrdinalIgnoreCase) &&
@@ -958,6 +959,31 @@ public static class UpdateMarkerHmac
         try
         {
             var parts = payload.Split('|');
+            return parts.Length == 3 &&
+                   int.TryParse(parts[0], out var markerPid) && markerPid == processId &&
+                   long.TryParse(parts[1], out var ts) &&
+                   Math.Abs(DateTimeOffset.UtcNow.ToUnixTimeSeconds() - ts) <= 300 &&
+                   string.Equals(Path.GetFullPath(parts[2]), Path.GetFullPath(processPath),
+                       StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    internal static bool HasExpectedLegacyPayload(string markerPath, int processId, string processPath)
+    {
+        if (!File.Exists(markerPath)) return false;
+        try
+        {
+            // The legacy marker can be consumed by its watchdog, and DPAPI HMAC key
+            // access can differ under an elevated token. This fallback validates only
+            // the signed launcher's expected fields; IsLegacyExtractedHandoff also
+            // enforces the staged executable layout before accepting it.
+            var firstLine = File.ReadLines(markerPath).FirstOrDefault()?.Trim();
+            if (string.IsNullOrEmpty(firstLine)) return false;
+            var parts = firstLine.Split('|');
             return parts.Length == 3 &&
                    int.TryParse(parts[0], out var markerPid) && markerPid == processId &&
                    long.TryParse(parts[1], out var ts) &&
