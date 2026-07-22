@@ -54,20 +54,23 @@ public sealed class AgentClient : IDisposable
         // Either way the run produces no useful output. Auto-retry once with a paid quality
         // model. This keeps "free first" economics — we only spend a paid call when the free
         // model actually fails, not on every run.
-        bool freeParseFail = outcome.ErrorMessage == "failed-to-parse-json";
-        bool freeRateLimited = outcome.ErrorMessage == "HTTP 429"
-            || (outcome.ErrorMessage?.StartsWith("upstream:429", StringComparison.OrdinalIgnoreCase) ?? false);
-        if ((freeParseFail || freeRateLimited)
-            && _model.Contains(":free", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(_model, FallbackModel, StringComparison.OrdinalIgnoreCase))
+        //   3. HTTP 404 — the slug no longer exists. OpenRouter retires ":free" variants
+        //      without notice, and the configured model then 404s on every single run
+        //      forever (observed 2026-07-15..21: openai/gpt-oss-120b:free, 12+ consecutive
+        //      failures, so the agent applied nothing for days). Unlike 429 this never
+        //      recovers on its own, so falling back is the only way the run produces
+        //      anything — and it applies to paid slugs too, since a retired paid slug is
+        //      just as dead as a retired free one.
+        if (ShouldFallback(outcome.ErrorMessage, _model, FallbackModel))
         {
-            Log.Warning("AgentClient: free model {Model} {Reason} — retrying with {Fallback}",
-                _model, freeRateLimited ? "was rate-limited (HTTP 429)" : "returned malformed JSON", FallbackModel);
+            var reason = DescribeFallbackReason(outcome.ErrorMessage);
+            Log.Warning("AgentClient: model {Model} {Reason} — retrying with {Fallback}",
+                _model, reason, FallbackModel);
             var retry = await RunInternalAsync(FallbackModel, systemPrompt, userPrompt, ct);
             if (retry.Result is not null)
             {
                 Log.Information("AgentClient: fallback {Fallback} succeeded after {Primary} {Reason}",
-                    FallbackModel, _model, freeRateLimited ? "rate-limit" : "parse failure");
+                    FallbackModel, _model, reason);
                 return retry;
             }
             Log.Warning("AgentClient: fallback {Fallback} also failed: {Err}", FallbackModel, retry.ErrorMessage);
@@ -75,6 +78,33 @@ public sealed class AgentClient : IDisposable
 
         return outcome;
     }
+
+    /// <summary>
+    /// Whether a failed primary run should be retried once on <paramref name="fallbackModel"/>.
+    /// Rate-limit and parse failures are free-tier symptoms, so they only trigger a paid retry
+    /// for ":free" slugs. A 404 means the slug itself is gone, which no tier survives.
+    /// </summary>
+    internal static bool ShouldFallback(string? errorMessage, string model, string fallbackModel)
+    {
+        if (string.Equals(model, fallbackModel, StringComparison.OrdinalIgnoreCase)) return false;
+
+        if (IsModelUnavailable(errorMessage)) return true;
+
+        return (IsParseFailure(errorMessage) || IsRateLimited(errorMessage))
+               && model.Contains(":free", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static string DescribeFallbackReason(string? errorMessage) =>
+        IsModelUnavailable(errorMessage) ? "is unavailable (HTTP 404 — slug retired?)"
+        : IsRateLimited(errorMessage) ? "was rate-limited (HTTP 429)"
+        : "returned malformed JSON";
+
+    private static bool IsModelUnavailable(string? e) => e == "HTTP 404";
+
+    private static bool IsParseFailure(string? e) => e == "failed-to-parse-json";
+
+    private static bool IsRateLimited(string? e) =>
+        e == "HTTP 429" || (e?.StartsWith("upstream:429", StringComparison.OrdinalIgnoreCase) ?? false);
 
     private async Task<AgentRunOutcome> RunInternalAsync(string model, string systemPrompt, string userPrompt, CancellationToken ct)
     {
@@ -102,7 +132,14 @@ public sealed class AgentClient : IDisposable
                 resp.StatusCode, responseBody.Length, model);
 
             if (!resp.IsSuccessStatusCode)
+            {
+                // Log the body: a bare "HTTP 404" hid a retired model slug for days because
+                // the actual reason ("No endpoints found for ...") was never recorded.
+                Log.Warning("AgentClient: {Model} returned HTTP {Status}: {Body}",
+                    model, (int)resp.StatusCode,
+                    responseBody.Length > 500 ? responseBody[..500] + "…" : responseBody);
                 return new AgentRunOutcome { ErrorMessage = $"HTTP {(int)resp.StatusCode}" };
+            }
 
             using var doc = JsonDocument.Parse(responseBody);
             var root = doc.RootElement;

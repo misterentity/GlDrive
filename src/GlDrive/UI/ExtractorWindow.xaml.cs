@@ -36,6 +36,7 @@ public partial class ExtractorWindow : Window
     private readonly List<string> _watchFolders = new();
     private bool _watchEnabled;
     private readonly HashSet<string> _watchProcessed = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _watchAbandoned = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int> _watchRetryCounts = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _watchLock = new();
 
@@ -1265,6 +1266,7 @@ public partial class ExtractorWindow : Window
 
         lock (_watchLock)
         {
+            if (_watchAbandoned.Contains(path)) return;
             if (!_watchProcessed.Add(path)) return;
         }
 
@@ -1442,7 +1444,7 @@ public partial class ExtractorWindow : Window
             Log.Warning(ex, "Auto-extract failed: {File}", item.FileName);
             item.Status = "Error";
             item.ErrorMessage = ex.Message;
-            ScheduleWatchRetry(item.FilePath);
+            ScheduleWatchRetry(item.FilePath, ex);
         }
         finally
         {
@@ -1518,8 +1520,18 @@ public partial class ExtractorWindow : Window
         return Path.Combine(Path.GetDirectoryName(path) ?? "", $"{match.Groups["base"].Value}{first}.rar");
     }
 
-    private void ScheduleWatchRetry(string path)
+    private void ScheduleWatchRetry(string path, Exception? failure = null)
     {
+        // A failure that a retry cannot fix (notably an incomplete multi-volume set whose
+        // sibling parts are gone) must be abandoned on the first attempt. Retrying re-reads
+        // the whole set — for a 2160p release that is tens of GB of pointless I/O per cycle.
+        if (failure != null &&
+            ExtractFailureClassifier.Classify(failure) == ExtractFailureKind.Permanent)
+        {
+            AbandonWatchedPath(path, $"unrecoverable ({failure.Message})");
+            return;
+        }
+
         int attempt;
         lock (_watchLock)
         {
@@ -1530,10 +1542,31 @@ public partial class ExtractorWindow : Window
         }
         if (attempt > 5)
         {
-            Log.Error("Extractor: giving up after 5 retries for watched archive {Path}", path);
+            AbandonWatchedPath(path, "no progress after 5 retries");
             return;
         }
         _ = RetryWatchedFileAsync(path, attempt);
+    }
+
+    /// <summary>
+    /// Stop considering a watched archive. Without this the give-up path left the file
+    /// absent from <see cref="_watchProcessed"/> (ScheduleWatchRetry removes it before
+    /// counting), so the next watcher event or recovery scan restarted the full retry
+    /// cycle — observed looping indefinitely against the same two archives on 2026-07-21.
+    /// </summary>
+    private void AbandonWatchedPath(string path, string reason)
+    {
+        bool firstTime;
+        lock (_watchLock)
+        {
+            firstTime = _watchAbandoned.Add(path);
+            _watchProcessed.Add(path);
+            _watchRetryCounts.Remove(path);
+        }
+
+        if (firstTime)
+            Log.Warning("Extractor: abandoning watched archive {Path} — {Reason}. " +
+                        "It will be retried after the folder changes or the app restarts.", path, reason);
     }
 
     private async Task RetryWatchedFileAsync(string path, int attempt)
