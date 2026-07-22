@@ -307,7 +307,7 @@ public class UpdateChecker : IDisposable
             File.WriteAllText(attemptPath, release.TagName);
         }
         catch (Exception ex) { Log.Debug(ex, "Could not record update attempt marker"); }
-        LaunchUpdater(verifiedPackage);
+        LaunchUpdater(verifiedPackage, release.TagName);
     }
 
     // PEM-encoded RSA public key used to verify checksums.sha256.sig signatures.
@@ -425,7 +425,48 @@ public class UpdateChecker : IDisposable
         }
     }
 
-    private void LaunchUpdater(VerifiedUpdatePackage package)
+    /// <summary>Windows ERROR_CANCELLED — the user dismissed the UAC elevation prompt.</summary>
+    private const int ErrorCancelled = 1223;
+
+    /// <summary>
+    /// Remember that the user declined elevation for a specific release tag, so auto-install
+    /// stops re-prompting for it across restarts. Manual install from the tray is unaffected.
+    /// </summary>
+    private static void RecordDeclinedUpdate(string tagName)
+    {
+        try
+        {
+            var path = UpdateStatePath(".update-declined");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, tagName);
+        }
+        catch (Exception ex) { Log.Debug(ex, "Could not record declined-update marker"); }
+    }
+
+    /// <summary>True when the user already declined elevation for this exact release tag.</summary>
+    private static bool WasUpdateDeclined(string tagName) =>
+        WasUpdateDeclinedAt(UpdateStatePath(".update-declined"), tagName);
+
+    /// <summary>
+    /// Marker-file comparison, split out so it can be exercised against a temp path instead
+    /// of the real %AppData% state directory. Only the exact declined tag is suppressed — a
+    /// newer release stops matching and auto-install resumes on its own.
+    /// </summary>
+    internal static bool WasUpdateDeclinedAt(string markerPath, string tagName)
+    {
+        try
+        {
+            return File.Exists(markerPath) &&
+                   File.ReadAllText(markerPath).Trim().Equals(tagName, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Could not read declined-update marker");
+            return false;
+        }
+    }
+
+    private void LaunchUpdater(VerifiedUpdatePackage package, string? tagName = null)
     {
         var packageDir = Path.Combine(Path.GetTempPath(), $"gldrive-update-{Guid.NewGuid():N}");
         Directory.CreateDirectory(packageDir);
@@ -469,7 +510,22 @@ public class UpdateChecker : IDisposable
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Failed to launch updater (UAC cancelled?)");
+            // Declining the elevation prompt is a user decision, not a fault. Record it so
+            // the next app start doesn't immediately re-download the package and re-prompt:
+            // _autoInstallAttemptedTag is in-memory only, so every restart used to nag again
+            // and log this as an [ERR] (observed 3x over 2026-07-20..21).
+            if (ex is System.ComponentModel.Win32Exception { NativeErrorCode: ErrorCancelled })
+            {
+                Log.Warning("Update {Tag}: elevation prompt declined — skipping auto-install " +
+                            "for this version. Install it from the tray menu when ready.",
+                    tagName ?? "(unknown)");
+                if (tagName != null) RecordDeclinedUpdate(tagName);
+            }
+            else
+            {
+                Log.Error(ex, "Failed to launch updater");
+            }
+
             try { File.Delete(appDataUpdating); } catch { }
             try { File.Delete(appDataAuthorization); } catch { }
             try { Directory.Delete(packageDir, true); } catch { }
@@ -943,7 +999,8 @@ public class UpdateChecker : IDisposable
                     // next tick retries. On success DownloadAndInstallAsync launches the
                     // updater and fires RestartRequested, so this process exits and the
                     // loop ends.
-                    if (AutoInstall && release.TagName != _autoInstallAttemptedTag)
+                    if (AutoInstall && release.TagName != _autoInstallAttemptedTag
+                        && !WasUpdateDeclined(release.TagName))
                     {
                         bool ok = true;
                         try { ok = CanInstallNow?.Invoke() ?? true; }
