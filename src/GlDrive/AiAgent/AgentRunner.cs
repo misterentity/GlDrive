@@ -29,6 +29,8 @@ public sealed class AgentRunner : IDisposable
     // hammered OpenRouter while rate-limited (18 runs in 21 min on 2026-07-01, all
     // HTTP 429), and a failed scheduled 04:00 run previously waited a full day.
     private int _consecutiveFailedRuns;
+    /// <summary>Failure count past which the loop is stuck, not merely unlucky, and must be logged at ERR.</summary>
+    internal const int PersistentFailureThreshold = 5;
     private CancellationTokenSource? _activeRunCts;
 
     public AgentRunner(
@@ -213,6 +215,16 @@ public sealed class AgentRunner : IDisposable
             {
                 status = outcome.ErrorMessage ?? "model-failure";
                 _consecutiveFailedRuns++; // transient (429/5xx/parse) — retry with backoff
+                // A stuck loop used to be invisible: every failure logged at INF, so a retired
+                // model slug kept the agent from applying anything for days without one ERR line.
+                // Escalate once the failures stop looking transient, then periodically.
+                if (_consecutiveFailedRuns == PersistentFailureThreshold
+                    || (_consecutiveFailedRuns > PersistentFailureThreshold && _consecutiveFailedRuns % 20 == 0))
+                {
+                    Log.Error("AgentRunner: AI self-tuning has applied nothing for {Failures} consecutive runs (last reason: {Reason}). " +
+                              "Check the OpenRouter model slug and credit balance in Settings → Downloads.",
+                        _consecutiveFailedRuns, status);
+                }
                 try { File.WriteAllText(briefPath, $"# Agent run failed\n\nReason: {status}\n"); } catch { }
                 return;
             }
