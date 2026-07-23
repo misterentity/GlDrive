@@ -92,6 +92,28 @@ public class UpdateChecker : IDisposable
     // deferred-then-eligible release isn't downloaded twice concurrently.
     private string? _autoInstallAttemptedTag;
 
+    // When the current release first got deferred by CanInstallNow, and for which tag.
+    // CanInstallNow samples "is a race running?" at one instant every CheckInterval. On a
+    // continuously-racing setup that sample is essentially never idle, so the courtesy gate
+    // became an indefinite block: v3.10.37 was deferred on 3 consecutive polls across 10.5h
+    // (2026-07-23 01:23/04:23/07:23) with no path to ever installing. The gate is a courtesy,
+    // not a guarantee — past the grace period the update proceeds anyway.
+    private string? _deferredTag;
+    private DateTime _deferredSinceUtc;
+
+    /// <summary>
+    /// How long the busy gate may hold an update back before it installs regardless.
+    /// Races resume after restart (the queue re-scans), so a bounded interruption is far
+    /// cheaper than never shipping a fix to a machine that races around the clock.
+    /// </summary>
+    internal static readonly TimeSpan MaxInstallDeferral = TimeSpan.FromHours(12);
+
+    /// <summary>
+    /// Whether a busy-gated update has been held long enough to install regardless.
+    /// Split out so the starvation rule is testable without driving the polling loop.
+    /// </summary>
+    internal static bool ShouldForceDeferredInstall(TimeSpan heldFor) => heldFor >= MaxInstallDeferral;
+
     /// <summary>
     /// Fired when the app should shut down immediately so the updater can replace files.
     /// The updater has already been launched and is waiting for this PID to exit.
@@ -1006,8 +1028,27 @@ public class UpdateChecker : IDisposable
                         try { ok = CanInstallNow?.Invoke() ?? true; }
                         catch (Exception ex) { Log.Debug(ex, "CanInstallNow predicate threw — assuming OK"); }
 
+                        if (!ok)
+                        {
+                            if (_deferredTag != release.TagName)
+                            {
+                                _deferredTag = release.TagName;
+                                _deferredSinceUtc = DateTime.UtcNow;
+                            }
+
+                            var heldFor = DateTime.UtcNow - _deferredSinceUtc;
+                            if (ShouldForceDeferredInstall(heldFor))
+                            {
+                                Log.Warning("Update {Tag} has been deferred for {Hours:F1}h (busy gate never cleared) — " +
+                                            "installing anyway; in-flight races resume after restart",
+                                    release.TagName, heldFor.TotalHours);
+                                ok = true;
+                            }
+                        }
+
                         if (ok)
                         {
+                            _deferredTag = null;
                             _autoInstallAttemptedTag = release.TagName;
                             Log.Information("Auto-installing update {Tag}", release.TagName);
                             try { await DownloadAndInstallAsync(release); }
@@ -1020,7 +1061,12 @@ public class UpdateChecker : IDisposable
                         }
                         else
                         {
-                            Log.Information("Update {Tag} ready but deferred (busy) — retrying next check", release.TagName);
+                            // Include the elapsed hold: three identical "deferred (busy)" lines
+                            // looked like normal operation while the gate was in fact stuck.
+                            Log.Information("Update {Tag} ready but deferred (busy) for {Hours:F1}h — " +
+                                            "retrying next check (forced install after {Max:F0}h)",
+                                release.TagName, (DateTime.UtcNow - _deferredSinceUtc).TotalHours,
+                                MaxInstallDeferral.TotalHours);
                         }
                     }
                 }
