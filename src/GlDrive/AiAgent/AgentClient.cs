@@ -43,10 +43,13 @@ public sealed class AgentClient : IDisposable
     internal const int MinUsefulOutputTokens = 4000;
 
     /// <summary>
-    /// Replacement slug learned from a 404 body, remembered for the life of the process so
-    /// later runs don't spend a doomed call on the retired slug every single time.
+    /// Retired slug → replacement learned from its 404 body, remembered for the life of the
+    /// process so later runs don't spend a doomed call on the dead slug every single time.
+    /// Keyed by the retired slug specifically: a bare "last healed model" would keep
+    /// overriding a model the user picks in Settings afterwards.
     /// </summary>
-    private static string? _healedModel;
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> HealedModels =
+        new(StringComparer.OrdinalIgnoreCase);
 
     public AgentClient(string apiKey, string model)
     {
@@ -63,8 +66,9 @@ public sealed class AgentClient : IDisposable
 
     public async Task<AgentRunOutcome> RunAsync(string systemPrompt, string userPrompt, CancellationToken ct)
     {
-        // Start from the healed slug if a previous run in this process learned one.
-        var primary = _healedModel is not null && _healedModel != _model ? _healedModel : _model;
+        // Start from the healed slug if a previous run in this process learned one *for the
+        // configured model*. If the user switches models in Settings, the new one is used as-is.
+        var primary = HealedModels.TryGetValue(_model, out var healedFor) ? healedFor : _model;
         var outcome = await AttemptAsync(primary, systemPrompt, userPrompt, ct);
 
         // A 404 body names the successor slug outright ("use this slug instead: openai/gpt-oss-120b").
@@ -80,7 +84,7 @@ public sealed class AgentClient : IDisposable
                 var healed = await AttemptAsync(suggested, systemPrompt, userPrompt, ct);
                 if (healed.Result is not null)
                 {
-                    _healedModel = suggested;
+                    HealedModels[_model] = suggested;
                     Log.Information("AgentClient: healed model {Suggested} succeeded — using it for the rest of this session",
                         suggested);
                     return healed;
