@@ -157,11 +157,15 @@ public class ServerLoginGateTests
     }
 
     [Fact]
-    public void Registry_reserves_one_fxp_permit_when_usable_allows()
+    public void Registry_reserves_up_to_two_fxp_permits_while_leaving_one_general()
     {
         var two = ServerLoginGateRegistry.GetOrCreate("rsv.test", 2121, "u", cap: 3, headroom: 1);
         Assert.Equal(2, two.Limit);
         Assert.Equal(1, two.Reserved); // usable 2 → reserve 1 for FXP
+
+        var three = ServerLoginGateRegistry.GetOrCreate("rsv.test3", 2121, "u", cap: 4, headroom: 1);
+        Assert.Equal(3, three.Limit);
+        Assert.Equal(2, three.Reserved); // usable 3 → two concurrent FXP logins
 
         var one = ServerLoginGateRegistry.GetOrCreate("rsv.test2", 2121, "u", cap: 1, headroom: 0);
         Assert.Equal(1, one.Limit);

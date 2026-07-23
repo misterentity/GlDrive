@@ -95,6 +95,13 @@ public class MountService : IDisposable
             var loginGate = ServerLoginGateRegistry.GetOrCreate(
                 conn.Host, conn.Port, conn.Username,
                 _serverConfig.Pool.LoginCap, _serverConfig.Pool.LoginHeadroom);
+            // Do not give this non-priority pool a higher local ceiling than the
+            // gate can ever grant it. Otherwise a second concurrent main-pool
+            // borrow tries to create a login, waits for an impossible permit, and
+            // emits "Account login cap reached" instead of simply waiting for the
+            // existing pooled connection to return.
+            mainPoolSize = Math.Min(mainPoolSize,
+                Math.Max(1, loginGate.Limit - loginGate.Reserved));
             _pool = new FtpConnectionPool(_factory, mainPoolSize, loginGate);
             await _pool.Initialize(ct);
 
