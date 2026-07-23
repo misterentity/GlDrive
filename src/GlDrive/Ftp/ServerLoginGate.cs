@@ -191,12 +191,13 @@ public static class ServerLoginGateRegistry
         return Gates.GetOrAdd(key, k =>
         {
             var usable = Math.Max(1, cap - Math.Max(0, headroom));
-            // Reserve one login for the FXP/spread pool whenever there's more than a
-            // single usable permit. Without this the WinFsp main pool squats every
-            // permit (held for a connection's whole life, not freed on idle return)
-            // and the spread pool can NEVER initialize — racing dies silently. With
-            // only 1 usable login there's nothing to reserve (main pool needs it).
-            var reserved = usable >= 2 ? 1 : 0;
+            // Keep one login for the main pool and reserve up to two for FXP. A
+            // transfer holds one priority login per participating account, and the
+            // race engine allows two concurrent races in production. The old single
+            // reservation let the main pool retain 2 of 3 usable logins, so every
+            // second FXP borrow deterministically timed out at the gate. With only
+            // 1 usable login there is nothing to reserve (main needs it).
+            var reserved = Math.Min(2, usable - 1);
             Log.Information("ServerLoginGate[{Key}]: created (cap={Cap}, headroom={Head}, usable={Usable}, fxpReserved={Reserved})",
                 k, cap, headroom, usable, reserved);
             return new ServerLoginGate(k, usable, usable, reserved);

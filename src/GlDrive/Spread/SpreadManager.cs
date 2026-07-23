@@ -1048,7 +1048,7 @@ public class SpreadManager : IDisposable
             // Cap concurrent transfer PAIRS by the spread pool's GUARANTEED
             // priority permits (gate.Reserved), NOT Limit-1. The warmed main pool
             // pins the general permits for its whole connection lifetime, so the
-            // priority spread pool can only reliably CREATE `Reserved` (=1)
+            // priority spread pool can only reliably CREATE `Reserved` connections
             // connections. Allowing Limit-1 (=2) meant every 2nd transfer's source
             // borrow waited out the full 30s timeout it could never satisfy, then
             // (pre-fix) poisoned the pristine peer — collapsing the pool and

@@ -841,6 +841,20 @@ public class SpreadJob : IDisposable
                         }
                     }
 
+                    // Check deterministic destination rejection BEFORE terminal
+                    // completion. AllDestinationsTerminal intentionally treats a
+                    // mkdir-denied destination as terminal so a healthy peer can
+                    // finish without waiting on it; when every destination is
+                    // denied, however, that same rule previously reported the race
+                    // as "complete — 1 pending" before this fail-fast was reached.
+                    if (activeCount == 0 && _sourceScanSucceeded
+                        && NoViableDestinations(sitePaths, sourceServers))
+                    {
+                        var s = _lastSkipSummary is { } sm ? $" ({sm})" : "";
+                        SetFailed($"All destinations denied this release — mkdir filter{s}");
+                        return;
+                    }
+
                     var done = _spreadConfig.WaitForDestinationComplete
                         ? AllDestinationsTerminal(sitePaths, sourceServers)
                         : IsJobComplete();
@@ -861,20 +875,6 @@ public class SpreadJob : IDisposable
                             ReleaseName, DestinationStateSummary());
                         State = SpreadJobState.Completed;
                         Completed?.Invoke(this);
-                        return;
-                    }
-
-                    // Fail FAST when every destination has permanently denied this
-                    // release (mkdir filter / dirscript) and nothing is in flight. A
-                    // filter-rejected release (e.g. SYNAPSE's per-release mkdir rules)
-                    // otherwise pins the single race slot through the 60s idle timer +
-                    // 2 sweep retries (~3min) while the announce queue (often 100s deep)
-                    // backs up behind it, starving the races that CAN deliver.
-                    if (activeCount == 0 && _sourceScanSucceeded
-                        && NoViableDestinations(sitePaths, sourceServers))
-                    {
-                        var s = _lastSkipSummary is { } sm ? $" ({sm})" : "";
-                        SetFailed($"All destinations denied this release — mkdir filter{s}");
                         return;
                     }
 
