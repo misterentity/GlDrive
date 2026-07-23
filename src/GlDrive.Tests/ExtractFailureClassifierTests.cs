@@ -62,6 +62,37 @@ public sealed class ExtractFailureClassifierTests
         Assert.Equal(ExtractFailureKind.Transient, ExtractFailureClassifier.Classify(ex));
     }
 
+    // --- 2026-07-22 tail: two wordings the classifier still missed, so both archives kept
+    // burning five full re-reads per app restart for two days.
+
+    [Theory]
+    // Verbatim SharpCompress text from gldrive-20260722.log (hackers...-GAZER).
+    [InlineData("unpacked file size does not match header: expected 16924333715 found 1994329334")]
+    [InlineData("Unpacked file size does not match header")]
+    public void Classify_TruncatedPayload_IsPermanent(string message) =>
+        Assert.Equal(ExtractFailureKind.Permanent, ExtractFailureClassifier.Classify(message));
+
+    [Theory]
+    [InlineData("UnRAR.exe failed (exit 3)")]   // CRC error — the data is corrupt
+    [InlineData("UnRAR.exe failed (exit 11)")]  // wrong password
+    public void Classify_UnrecoverableUnrarExit_IsPermanent(string message) =>
+        Assert.Equal(ExtractFailureKind.Permanent, ExtractFailureClassifier.Classify(message));
+
+    [Theory]
+    [InlineData("UnRAR.exe failed (exit 6)")]   // open error — can be a transient lock
+    [InlineData("UnRAR.exe failed (exit 1)")]   // warning
+    public void Classify_RetryableUnrarExit_StaysTransient(string message) =>
+        Assert.Equal(ExtractFailureKind.Transient, ExtractFailureClassifier.Classify(message));
+
+    [Fact]
+    public void Classify_UnrecoverableExitWins_OverLockWording()
+    {
+        // A CRC error is conclusive even if the text also mentions a lock — unlike the
+        // volume-set markers, no retry can turn corrupt data into good data.
+        const string msg = "UnRAR.exe failed (exit 3); the process cannot access the file";
+        Assert.Equal(ExtractFailureKind.Permanent, ExtractFailureClassifier.Classify(msg));
+    }
+
     [Fact]
     public void Classify_NullException_IsTransient() =>
         Assert.Equal(ExtractFailureKind.Transient,
