@@ -115,6 +115,60 @@ public class UpdateChecker : IDisposable
     internal static bool ShouldForceDeferredInstall(TimeSpan heldFor) => heldFor >= MaxInstallDeferral;
 
     /// <summary>
+    /// Marker holding when the current release first got deferred. The clock MUST survive a
+    /// restart: v3.10.38 kept it in a field, so every watchdog restart, manual restart, or
+    /// crash-recovery relaunch reset it to zero. With a 3h poll interval, a box that restarts
+    /// even once per 12h could never accumulate the deferral and the forced install never
+    /// fired — the same indefinite starvation the deadline was added to end.
+    /// </summary>
+    private static string DeferralMarkerPath => UpdateStatePath(".update-deferred");
+
+    /// <summary>
+    /// When <paramref name="tagName"/> first got deferred, or null if this tag has no recorded
+    /// hold (never deferred, superseded by a newer release, or the marker is unreadable).
+    /// A start time in the future (clock skew, or a marker written under a wrong clock) is
+    /// rejected rather than trusted — it would push the deadline out indefinitely.
+    /// Split out with an explicit path so it can be exercised against a temp directory.
+    /// </summary>
+    internal static DateTime? ReadDeferralStartAt(string markerPath, string tagName, DateTime nowUtc)
+    {
+        try
+        {
+            if (!File.Exists(markerPath)) return null;
+            var parts = File.ReadAllText(markerPath).Trim().Split('\t');
+            if (parts.Length != 2) return null;
+            if (!parts[0].Equals(tagName, StringComparison.OrdinalIgnoreCase)) return null;
+            if (!DateTime.TryParse(parts[1], System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind, out var startUtc)) return null;
+            startUtc = startUtc.ToUniversalTime();
+            return startUtc > nowUtc ? null : startUtc;
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Could not read update-deferral marker");
+            return null;
+        }
+    }
+
+    /// <summary>Record (or refresh) the deferral start for a tag. One line: tag TAB ISO-8601 UTC.</summary>
+    internal static void WriteDeferralStartAt(string markerPath, string tagName, DateTime startUtc)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(markerPath)!);
+            File.WriteAllText(markerPath, $"{tagName}\t{startUtc.ToUniversalTime():O}");
+        }
+        catch (Exception ex) { Log.Debug(ex, "Could not write update-deferral marker"); }
+    }
+
+    /// <summary>Drop the deferral marker once the update is no longer being held back.</summary>
+    internal static void ClearDeferralAt(string markerPath)
+    {
+        try { if (File.Exists(markerPath)) File.Delete(markerPath); }
+        catch (Exception ex) { Log.Debug(ex, "Could not clear update-deferral marker"); }
+    }
+
+    /// <summary>
     /// Fired when the app should shut down immediately so the updater can replace files.
     /// The updater has already been launched and is waiting for this PID to exit.
     /// </summary>
@@ -1032,8 +1086,14 @@ public class UpdateChecker : IDisposable
                         {
                             if (_deferredTag != release.TagName)
                             {
+                                // Resume any hold this release already accumulated in a previous
+                                // process — the deadline is wall-clock since the update first
+                                // became installable, not since this process started.
+                                var nowUtc = DateTime.UtcNow;
                                 _deferredTag = release.TagName;
-                                _deferredSinceUtc = DateTime.UtcNow;
+                                _deferredSinceUtc =
+                                    ReadDeferralStartAt(DeferralMarkerPath, release.TagName, nowUtc) ?? nowUtc;
+                                WriteDeferralStartAt(DeferralMarkerPath, release.TagName, _deferredSinceUtc);
                             }
 
                             var heldFor = DateTime.UtcNow - _deferredSinceUtc;
@@ -1049,6 +1109,7 @@ public class UpdateChecker : IDisposable
                         if (ok)
                         {
                             _deferredTag = null;
+                            ClearDeferralAt(DeferralMarkerPath);
                             _autoInstallAttemptedTag = release.TagName;
                             Log.Information("Auto-installing update {Tag}", release.TagName);
                             try { await DownloadAndInstallAsync(release); }
