@@ -115,6 +115,34 @@ public class UpdateChecker : IDisposable
     internal static bool ShouldForceDeferredInstall(TimeSpan heldFor) => heldFor >= MaxInstallDeferral;
 
     /// <summary>
+    /// How long the busy gate may hold an update before the hold is surfaced to the user
+    /// (ERR log + tray notification). Set below <see cref="MaxInstallDeferral"/> so a
+    /// continuous racer gets a heads-up — and a window to pause and apply now — before the
+    /// forced install interrupts a transfer. A normal race (30-min hard ceiling) clears the
+    /// gate long before this, so it never fires in ordinary operation.
+    /// </summary>
+    internal static readonly TimeSpan EscalateDeferralAfter = TimeSpan.FromHours(6);
+
+    /// <summary>
+    /// Whether a busy-gated update has been held long enough to escalate visibly. Split out
+    /// so the rule is testable without driving the polling loop.
+    /// </summary>
+    internal static bool ShouldEscalateDeferral(TimeSpan heldFor) => heldFor >= EscalateDeferralAfter;
+
+    /// <summary>
+    /// Raised once per release when the busy gate has held an otherwise-ready update past
+    /// <see cref="EscalateDeferralAfter"/>. Lets the UI surface a tray notification so a
+    /// continuous racer can choose to pause and apply now, instead of the hold staying
+    /// invisible in the log until the forced install interrupts a transfer.
+    /// Args: the pending release, and how long it has been held.
+    /// </summary>
+    public event Action<GitHubRelease, TimeSpan>? UpdateInstallStalled;
+
+    // Whether we have already escalated the CURRENT deferred tag, so the notification fires
+    // once rather than on every 3h poll. Reset whenever the deferred tag changes or clears.
+    private bool _deferralEscalated;
+
+    /// <summary>
     /// Marker holding when the current release first got deferred. The clock MUST survive a
     /// restart: v3.10.38 kept it in a field, so every watchdog restart, manual restart, or
     /// crash-recovery relaunch reset it to zero. With a 3h poll interval, a box that restarts
@@ -1091,6 +1119,7 @@ public class UpdateChecker : IDisposable
                                 // became installable, not since this process started.
                                 var nowUtc = DateTime.UtcNow;
                                 _deferredTag = release.TagName;
+                                _deferralEscalated = false;
                                 _deferredSinceUtc =
                                     ReadDeferralStartAt(DeferralMarkerPath, release.TagName, nowUtc) ?? nowUtc;
                                 WriteDeferralStartAt(DeferralMarkerPath, release.TagName, _deferredSinceUtc);
@@ -1104,11 +1133,26 @@ public class UpdateChecker : IDisposable
                                     release.TagName, heldFor.TotalHours);
                                 ok = true;
                             }
+                            else if (!_deferralEscalated && ShouldEscalateDeferral(heldFor))
+                            {
+                                // Surface the stuck gate once: a continuous racer would otherwise
+                                // see only routine "deferred (busy)" INF lines until the 12h force
+                                // interrupts a transfer. ERR + a tray notification give a window to
+                                // pause racing and apply it cleanly first.
+                                _deferralEscalated = true;
+                                Log.Error("Update {Tag} has been held back {Hours:F1}h by the busy gate " +
+                                          "(active transfers never cleared). It will auto-install at {Max:F0}h; " +
+                                          "pause racing to apply it now.",
+                                    release.TagName, heldFor.TotalHours, MaxInstallDeferral.TotalHours);
+                                try { UpdateInstallStalled?.Invoke(release, heldFor); }
+                                catch (Exception ex) { Log.Debug(ex, "UpdateInstallStalled handler threw"); }
+                            }
                         }
 
                         if (ok)
                         {
                             _deferredTag = null;
+                            _deferralEscalated = false;
                             ClearDeferralAt(DeferralMarkerPath);
                             _autoInstallAttemptedTag = release.TagName;
                             Log.Information("Auto-installing update {Tag}", release.TagName);
