@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Input;
@@ -268,10 +269,23 @@ public class TrayViewModel : INotifyPropertyChanged
                 ShowNotification("BNC Rate Limit", $"{serverName}: {message}"));
         };
 
-        // Auto-install updates, but never restart mid-race — defer while a spread job
-        // is active (the next check retries). Downloads resume on restart, so they
-        // don't need to block; races would lose in-flight transfers.
-        _updateChecker.CanInstallNow = () => (_serverManager.Spread?.ActiveJobs.Count ?? 0) == 0;
+        // Auto-install updates, but never restart while bytes are moving. The gate used to
+        // require zero spread jobs, but a box that races around the clock is essentially never
+        // job-idle, so updates starved (v3.10.37 sat deferred 10.5h). Gate on in-flight
+        // TRANSFERS instead: a job that's merely queued or scanning loses nothing on restart
+        // (the queue re-scans), so those windows are safe — only an active FXP transfer blocks.
+        _updateChecker.CanInstallNow = () =>
+            (_serverManager.Spread?.ActiveJobs.Sum(j => j.ActiveTransferList.Count) ?? 0) == 0;
+
+        // If the gate still can't clear (a truly continuous transfer stream), make the hold
+        // visible so the user can pause racing and apply the update, rather than it silently
+        // waiting for the 12h forced install to interrupt a transfer.
+        _updateChecker.UpdateInstallStalled += (release, heldFor) =>
+            Application.Current?.Dispatcher.Invoke(() => ShowNotification(
+                "Update pending",
+                $"{release.TagName} has been held back {heldFor.TotalHours:F0}h by active transfers. " +
+                $"It auto-installs after {UpdateChecker.MaxInstallDeferral.TotalHours:F0}h total, " +
+                "or pause racing to apply it now."));
 
         _updateChecker.StartPeriodicCheck();
 

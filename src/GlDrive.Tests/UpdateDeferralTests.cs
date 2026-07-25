@@ -41,6 +41,38 @@ public sealed class UpdateDeferralTests
         // ...but long enough that a normal race (30 min hard ceiling) never triggers it.
         Assert.True(UpdateChecker.MaxInstallDeferral >= TimeSpan.FromHours(6));
     }
+
+    // --- Visible escalation (2026-07-25) --------------------------------------------------
+    // With the relaxed gate (block only on in-flight transfers, not any active job), a hold
+    // this long means a genuinely continuous transfer stream. Surface it before the forced
+    // install interrupts a transfer, so the user can pause and apply cleanly.
+
+    [Fact]
+    public void ShortHold_DoesNotEscalate()
+    {
+        Assert.False(UpdateChecker.ShouldEscalateDeferral(TimeSpan.Zero));
+        Assert.False(UpdateChecker.ShouldEscalateDeferral(TimeSpan.FromHours(3)));
+        Assert.False(UpdateChecker.ShouldEscalateDeferral(UpdateChecker.EscalateDeferralAfter - TimeSpan.FromMinutes(1)));
+    }
+
+    [Fact]
+    public void HoldPastTheThreshold_Escalates()
+    {
+        Assert.True(UpdateChecker.ShouldEscalateDeferral(UpdateChecker.EscalateDeferralAfter));
+        Assert.True(UpdateChecker.ShouldEscalateDeferral(TimeSpan.FromHours(8)));
+    }
+
+    [Fact]
+    public void EscalationFiresBeforeTheForcedInstall()
+    {
+        // The heads-up must land while the update is still being deferred, i.e. strictly
+        // before the forced install — otherwise it is pointless noise.
+        Assert.True(UpdateChecker.EscalateDeferralAfter < UpdateChecker.MaxInstallDeferral);
+
+        // At the escalation threshold we warn but do NOT yet force.
+        Assert.True(UpdateChecker.ShouldEscalateDeferral(UpdateChecker.EscalateDeferralAfter));
+        Assert.False(UpdateChecker.ShouldForceDeferredInstall(UpdateChecker.EscalateDeferralAfter));
+    }
 }
 
 /// <summary>
