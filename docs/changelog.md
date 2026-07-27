@@ -1,8 +1,48 @@
 # Changelog
 
-Generated from `git log --oneline --no-merges` at v1.44.55 (2026-04-13). This file lists notable versions; see `git log` for the full history.
+Notable versions; see `git log` for the full history. Commit messages in this project do
+not follow conventional-commit syntax — versions are split into **Features**, **Fixes**,
+**Security**, and **Refactors / infrastructure** by reading the message text.
 
-Commit messages in this project do not follow conventional-commit syntax — versions are split below into **Features**, **Fixes**, **Security**, and **Refactors / infrastructure** by reading the message text.
+> The middle of the history (v1.45 → v3.10.24) is not yet curated here — see `git log` for
+> that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
+> and earlier follow it.
+
+## v3.10 — AI self-tuning revival, extractor & auto-update reliability (2026-07)
+
+### Fixes
+- **v3.10.35** — revive the AI self-tuning loop, dead ~a week. OpenRouter retired the
+  `openai/gpt-oss-120b:free` slug; the 404 body names its successor (`use this slug
+  instead: …`), now parsed, retried, and cached for the process. Also: HTTP 402 was
+  misread as "out of credits" when it means `max_tokens` too large (the balance covered
+  27229 of a flat 32000 request) — now retried inside the quoted budget minus 10% headroom.
+  A stuck loop now escalates to ERR at 5 consecutive failures instead of staying invisible
+  at INF.
+- **v3.10.36** — key the healed-model cache by the slug it replaced, so switching models in
+  Settings isn't overridden by a heal learned for the previous one.
+- **v3.10.37** — classify truncated-payload (`unpacked file size does not match header`)
+  and CRC (`UnRAR.exe failed (exit 3)` / `(exit 11)`) extract failures as permanent, so the
+  watch folder stops re-reading two hopeless archives five times per restart. Exit 6 (open
+  error) stays transient.
+- **v3.10.38** — stop the auto-update busy gate from starving updates indefinitely. The
+  spread-idle gate is sampled once every 3h; a box that races nonstop is never idle, so an
+  update could defer forever. Now forces the install after 12h and logs the elapsed hold.
+  (Manual tray update bypasses the gate entirely.)
+- **v3.10.39** — persist the 12h deferral clock to `%AppData%\GlDrive\.update-deferred`; it
+  lived in a field, so every restart reset it and the deadline never fired on a box that
+  restarts within 12h.
+- **v3.10.40** — relax the update gate to block only on **in-flight FXP transfers**, not on
+  any active spread job (a queued/scanning job loses nothing on restart, so those windows
+  are now installable). Plus visible escalation: a still-stuck hold logs ERR + raises a tray
+  notification at 6h, before the forced install interrupts a transfer.
+- **v3.10.33 / v3.10.34** — earlier passes on the same failure loops: three self-perpetuating
+  log-error loops (extractor, AI loop, UAC re-prompt), then trade-login starvation and
+  denied-race reporting.
+
+### Security / infrastructure
+- Update packages are downloaded only from an allowlisted GitHub host set, verified by
+  SHA-256 against a signed `checksums.sha256`, and applied under an HMAC-authorized,
+  manifest-sealed elevation handoff (see `UpdateChecker` / `UpdateMarkerHmac`).
 
 ## v1.44 — GnuTLS stabilization, spread engine maturity, security fixes
 
