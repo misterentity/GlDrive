@@ -1,3 +1,7 @@
+---
+vault-doctor: skip
+---
+
 # Design Guidelines
 
 UI, theme, and UX conventions for the WPF surface. If you're building a new window, tab, or dialog, start here.

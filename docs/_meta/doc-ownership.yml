@@ -1,0 +1,138 @@
+# doc-ownership.yml — code-path → doc routing map.
+#
+# Consumed by `scripts/match-docs.mjs` to determine which docs are affected
+# by a given diff. Edit this file to map your code paths to your domain docs.
+#
+# Format:
+#   docs:
+#     <doc-filename-without-md>:
+#       paths:                    # file globs (relative to repo root)
+#         - 'src/auth/**'
+#         - 'src/api/auth/**'
+#       concepts:                 # optional: keywords found in changed-file content
+#         - 'verifyAuthToken'
+#         - 'createBrowserClient'
+#       db_objects:               # optional: route SQL migration diffs to this doc
+#         - table: profiles       #   - matches CREATE/ALTER/DROP TABLE profiles
+#         - function: get_user    #   - matches CREATE FUNCTION get_user
+#         - rls: "all tables"     #   - matches ANY CREATE/ALTER/DROP POLICY
+#
+# Coverage check (vault-doctor --check-coverage):
+#   For each doc with `paths:`, the linter reports files matching the glob
+#   that are not cited (by literal path) anywhere in the doc body. By default
+#   this is informational only. Pass `--enforce-coverage <n>` to fail docs
+#   below n% coverage. Config/asset extensions (.md, .json, .svg, etc.) are
+#   exempt by default; per-doc override via frontmatter:
+#       coverage-extensions: [.ts, .tsx]    # allowlist mode
+#       coverage-exclude:    [src/legacy/api/foo.ts]
+#
+# Notes:
+# - A file can be matched by multiple docs. The script reports it under each.
+# - A file matched by NO doc is reported as "unmatched" — handle in step 3 of
+#   the sync workflow (add ownership, or confirm it legitimately has no owner).
+# - Globs are evaluated relative to the repo root.
+# - db_objects is opt-in: SQL routing only activates if at least one doc
+#   declares it. Useful for Supabase/Postgres projects where migrations live
+#   in their own dir; lets the linter route a migration to the doc that owns
+#   the affected table without listing every migration filename in `paths:`.
+# - IMPORTANT: once ANY doc declares db_objects, .sql files are routed by
+#   parsed DDL ONLY (table-precise). A broad glob like
+#   'supabase/migrations/**' will no longer route .sql files for that doc.
+#   Don't use catch-all migration globs to claim SQL ownership — declare
+#   the tables/functions instead.
+
+docs:
+
+  # --- Seeded domain docs (verified against code) ---
+
+  filesystem:
+    paths:
+      - 'src/GlDrive/Filesystem/**'
+    concepts:
+      - 'GlDriveFileSystem'
+      - 'DirectoryCache'
+      - 'NtStatusMapper'
+      - 'FileSystemBase'
+
+  ftp:
+    paths:
+      - 'src/GlDrive/Ftp/**'
+    concepts:
+      - 'CpsvDataHelper'
+      - 'FtpConnectionPool'
+      - 'SerializedGnuTlsStream'
+      - 'KillGhosts'
+      - 'ServerLoginGate'
+      - 'GnuAdvanced'
+
+  spread:
+    paths:
+      - 'src/GlDrive/Spread/**'
+    concepts:
+      - 'SpreadManager'
+      - 'SpreadJob'
+      - 'FxpTransfer'
+      - 'SkiplistEvaluator'
+      - 'SectionMapper'
+      - 'IsMissingPlaceholder'
+
+  ai-agent:
+    paths:
+      - 'src/GlDrive/AiAgent/**'
+    concepts:
+      - 'AgentRunner'
+      - 'AgentClient'
+      - 'ChangeApplier'
+      - 'TelemetryRecorder'
+      - 'HealedModels'
+
+  services:
+    paths:
+      - 'src/GlDrive/Services/**'
+      - 'src/GlDrive/App.xaml.cs'
+      - 'src/GlDrive/Program.cs'
+    concepts:
+      - 'ServerManager'
+      - 'MountService'
+      - 'UpdateChecker'
+      - 'CanInstallNow'
+      - 'MaxInstallDeferral'
+
+  # --- Planned domain docs (mapped, not yet authored — see _backlog.md) ---
+
+  downloads:
+    paths:
+      - 'src/GlDrive/Downloads/**'
+    concepts:
+      - 'DownloadManager'
+      - 'WishlistMatcher'
+      - 'FtpSearchService'
+      - 'ExtractFailureClassifier'
+
+  irc:
+    paths:
+      - 'src/GlDrive/Irc/**'
+    concepts:
+      - 'IrcService'
+      - 'FishCipher'
+      - 'Dh1080'
+      - 'FishKeyStore'
+
+  config:
+    paths:
+      - 'src/GlDrive/Config/**'
+      - 'src/GlDrive/Tls/**'
+    concepts:
+      - 'AppConfig'
+      - 'ConfigManager'
+      - 'CredentialStore'
+      - 'CertificateManager'
+
+  ui:
+    paths:
+      - 'src/GlDrive/UI/**'
+    concepts:
+      - 'TrayViewModel'
+      - 'DashboardWindow'
+      - 'SettingsWindow'
+      - 'ThemeManager'

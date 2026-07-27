@@ -1,3 +1,7 @@
+---
+vault-doctor: skip
+---
+
 # GlDrive Racing/Downloads Overhaul — Master Implementation Plan (v3.6)
 
 > Synthesis of 7 workstream design specs into one sequenced, conflict-aware plan.

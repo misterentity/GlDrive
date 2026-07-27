@@ -1,3 +1,7 @@
+---
+vault-doctor: skip
+---
+
 # Deployment Guide
 
 Everything needed to go from a local checkout to a published GitHub Release, and from an older installed version to a new one via the in-app updater.

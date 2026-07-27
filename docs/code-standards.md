@@ -1,3 +1,7 @@
+---
+vault-doctor: skip
+---
+
 # Code Standards
 
 Conventions the GlDrive codebase actually uses. This is a description of the existing style, not an aspirational manifesto — if you're about to do something new, check whether the existing code already does it one way, and match.

@@ -1,3 +1,7 @@
+---
+vault-doctor: skip
+---
+
 # Configuration Guide
 
 All persistent state lives under **`%AppData%\GlDrive\`**. This guide walks through every file the app reads or writes and every config key it respects.
