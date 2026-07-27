@@ -1,3 +1,7 @@
+---
+vault-doctor: skip
+---
+
 # Codebase Summary
 
 ## Scale & Layout

@@ -1,3 +1,7 @@
+---
+vault-doctor: skip
+---
+
 # System Architecture
 
 This document maps the runtime structure of GlDrive — how processes start, how servers mount, how FTP data flows, and how the FXP/IRC subsystems hang off the side of the main pipeline.

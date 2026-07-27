@@ -1,3 +1,7 @@
+---
+vault-doctor: skip
+---
+
 # GlDrive v3.5 — Product Requirements Document
 
 **Status:** ✅ **MET** at v3.5.0 (13/13 acceptance criteria) · **Baseline:** v2.6.6

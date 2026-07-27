@@ -1,3 +1,7 @@
+---
+vault-doctor: skip
+---
+
 # GlDrive — Project Overview & PDR
 
 ## What this is

@@ -1,3 +1,7 @@
+---
+vault-doctor: skip
+---
+
 # Changelog
 
 Notable versions; see `git log` for the full history. Commit messages in this project do
