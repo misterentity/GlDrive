@@ -33,12 +33,12 @@ Per-feature design history (specs, plans, ADRs under `docs/`, and the curated `d
 | FXP racing engine, transfer modes, scoring, skiplist, completion | [[spread]] |
 | Daily LLM config self-tuning: telemetry → digest → gated validators | [[ai-agent]] |
 | Startup, multi-server lifecycle, monitors, watchdog, auto-update | [[services]] |
-| Download manager, search, wishlist, archive extraction *(planned)* | [[downloads]] |
+| Download manager, queue, resume, search, wishlist, SFV/extraction | [[downloads]] |
 | IRC client, FiSH/DH1080 encryption *(planned)* | [[irc]] |
 | Config schema, credentials, TLS TOFU *(planned)* | [[config]] |
 | Tray, dashboard, settings, theming *(planned)* | [[ui]] |
 
-*Planned docs are mapped in `_meta/doc-ownership.yml` and tracked in [[_backlog]]; not yet authored.*
+*Planned docs (irc, config, ui) are mapped in `_meta/doc-ownership.yml` and tracked in [[_backlog]]; not yet authored.*
 
 ---
 

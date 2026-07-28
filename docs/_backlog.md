@@ -21,9 +21,8 @@ last-reviewed: 2026-07-27
 
 <!-- Code paths or features that exist but have no domain doc section. Add an entry when noticed; resolve by writing the section. -->
 
-Four domain seams are mapped in `doc-ownership.yml` but not yet authored (vault-init seeded the 5 highest-traffic seams only):
+Three domain seams are mapped in `doc-ownership.yml` but not yet authored:
 
-- **downloads** — `src/GlDrive/Downloads/**` (17 files): `DownloadManager` + per-server `DownloadStore`, queue/resume/speed-limit/scheduling, SFV verify, `WishlistMatcher`, `FtpSearchService`, and `ExtractFailureClassifier` (the extractor give-up logic reworked in v3.10.33/.37).
 - **irc** — `src/GlDrive/Irc/**` (10 files): `IrcService`/`IrcClient`, FiSH (`FishCipher`), DH1080 key exchange (`Dh1080`), `FishKeyStore`, scrollback + DPAPI PM history.
 - **config** — `src/GlDrive/Config/**` + `src/GlDrive/Tls/**`: `AppConfig`/`ConfigManager` (camelCase JSON, single→multi-server migration), `CredentialStore`, `CertificateManager` TOFU.
 - **ui** — `src/GlDrive/UI/**` (30 files): `TrayViewModel`, `DashboardWindow`, `SettingsWindow`, `WizardWindow`, `ExtractorWindow`, `ThemeManager`.
