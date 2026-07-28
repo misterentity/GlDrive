@@ -39,6 +39,17 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   any active spread job (a queued/scanning job loses nothing on restart, so those windows
   are now installable). Plus visible escalation: a still-stuck hold logs ERR + raises a tray
   notification at 6h, before the forced install interrupts a transfer.
+- **v3.10.41** — a declined UAC elevation prompt no longer disables auto-install forever.
+  v3.10.33 made the decline persistent to kill a restart nag loop, but persistent meant
+  *permanent* for that release tag, and the skip logged nothing — so one dismissed prompt
+  silently stranded this box on 3.10.39 through **18 polls across 51h** while v3.10.40 sat
+  published. `.update-declined` now carries a timestamp and expires after 24h (declining
+  again just re-stamps it, so the nag loop stays dead); legacy tag-only markers count as
+  expired so an already-stranded install self-heals on the first poll. Every auto-install
+  skip now logs its reason — the silence is what hid this, since "Update available" with no
+  follow-up was indistinguishable from a healthy deferral. Note the v3.10.38/.39 forced-install
+  deadline was correct all along; it simply never ran, because this guard short-circuited
+  upstream of it.
 - **v3.10.33 / v3.10.34** — earlier passes on the same failure loops: three self-perpetuating
   log-error loops (extractor, AI loop, UAC re-prompt), then trade-login starvation and
   denied-race reporting.
