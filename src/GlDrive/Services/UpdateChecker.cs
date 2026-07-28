@@ -536,32 +536,63 @@ public class UpdateChecker : IDisposable
     /// Remember that the user declined elevation for a specific release tag, so auto-install
     /// stops re-prompting for it across restarts. Manual install from the tray is unaffected.
     /// </summary>
-    private static void RecordDeclinedUpdate(string tagName)
+    private static void RecordDeclinedUpdate(string tagName) =>
+        RecordDeclinedUpdateAt(UpdateStatePath(".update-declined"), tagName, DateTime.UtcNow);
+
+    /// <summary>
+    /// Record a decline as "not now", timestamped. One line: tag TAB ISO-8601 UTC — same shape
+    /// as the deferral marker.
+    /// </summary>
+    internal static void RecordDeclinedUpdateAt(string markerPath, string tagName, DateTime declinedAtUtc)
     {
         try
         {
-            var path = UpdateStatePath(".update-declined");
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, tagName);
+            Directory.CreateDirectory(Path.GetDirectoryName(markerPath)!);
+            File.WriteAllText(markerPath, $"{tagName}\t{declinedAtUtc.ToUniversalTime():O}");
         }
         catch (Exception ex) { Log.Debug(ex, "Could not record declined-update marker"); }
     }
 
+    /// <summary>
+    /// How long a declined release stays suppressed before auto-install offers it once more.
+    ///
+    /// v3.10.33 made the decline persistent to stop a restart nag loop, but persistent meant
+    /// FOREVER for that tag, and the skip logged nothing — so one dismissed UAC prompt stranded
+    /// this box on 3.10.39 through 18 polls / 51h of "Update available" with no diagnostic.
+    /// A decline is a "not now", not a permanent opt-out: re-offer it on the next daily cycle.
+    /// Declining again simply re-stamps the marker, so the nag loop v3.10.33 killed stays dead.
+    /// </summary>
+    internal static readonly TimeSpan DeclineSuppressionWindow = TimeSpan.FromHours(24);
+
     /// <summary>True when the user already declined elevation for this exact release tag.</summary>
     private static bool WasUpdateDeclined(string tagName) =>
-        WasUpdateDeclinedAt(UpdateStatePath(".update-declined"), tagName);
+        WasUpdateDeclinedAt(UpdateStatePath(".update-declined"), tagName, DateTime.UtcNow);
 
     /// <summary>
-    /// Marker-file comparison, split out so it can be exercised against a temp path instead
-    /// of the real %AppData% state directory. Only the exact declined tag is suppressed — a
-    /// newer release stops matching and auto-install resumes on its own.
+    /// Marker-file check, split out so it can be exercised against a temp path instead of the
+    /// real %AppData% state directory. Suppressed only when the marker names this exact tag AND
+    /// the decline is still inside <see cref="DeclineSuppressionWindow"/>. Everything else fails
+    /// open (allow the update): a newer release, an expired decline, a legacy tag-only marker
+    /// with no timestamp, a future-dated stamp from clock skew, or an unreadable marker.
+    /// Failing open matters more than honouring an ambiguous marker — the failure mode we are
+    /// fixing is auto-install wedged off, silently, forever.
     /// </summary>
-    internal static bool WasUpdateDeclinedAt(string markerPath, string tagName)
+    internal static bool WasUpdateDeclinedAt(string markerPath, string tagName, DateTime nowUtc)
     {
         try
         {
-            return File.Exists(markerPath) &&
-                   File.ReadAllText(markerPath).Trim().Equals(tagName, StringComparison.OrdinalIgnoreCase);
+            if (!File.Exists(markerPath)) return false;
+            var parts = File.ReadAllText(markerPath).Trim().Split('\t');
+            // Legacy pre-v3.10.41 marker: bare tag, no timestamp. Treat as expired so an
+            // already-stranded install self-heals on the first poll instead of needing the
+            // file deleted by hand.
+            if (parts.Length != 2) return false;
+            if (!parts[0].Equals(tagName, StringComparison.OrdinalIgnoreCase)) return false;
+            if (!DateTime.TryParse(parts[1], System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind, out var declinedAtUtc)) return false;
+            declinedAtUtc = declinedAtUtc.ToUniversalTime();
+            if (declinedAtUtc > nowUtc) return false; // clock skew — don't trust it
+            return nowUtc - declinedAtUtc < DeclineSuppressionWindow;
         }
         catch (Exception ex)
         {
@@ -1103,8 +1134,17 @@ public class UpdateChecker : IDisposable
                     // next tick retries. On success DownloadAndInstallAsync launches the
                     // updater and fires RestartRequested, so this process exits and the
                     // loop ends.
-                    if (AutoInstall && release.TagName != _autoInstallAttemptedTag
-                        && !WasUpdateDeclined(release.TagName))
+                    // Why auto-install is NOT running this tick. Every one of these used to be a
+                    // silent `false` in the guard below, so an "Update available" line with no
+                    // follow-up was indistinguishable from a healthy deferral. 18 such polls
+                    // across 51h hid a wedged auto-installer (v3.10.41).
+                    string? skipReason =
+                        !AutoInstall ? "auto-install disabled in config"
+                        : release.TagName == _autoInstallAttemptedTag ? "already attempted this session"
+                        : WasUpdateDeclined(release.TagName) ? "elevation prompt was declined recently"
+                        : null;
+
+                    if (skipReason == null)
                     {
                         bool ok = true;
                         try { ok = CanInstallNow?.Invoke() ?? true; }
@@ -1173,6 +1213,12 @@ public class UpdateChecker : IDisposable
                                 release.TagName, (DateTime.UtcNow - _deferredSinceUtc).TotalHours,
                                 MaxInstallDeferral.TotalHours);
                         }
+                    }
+                    else
+                    {
+                        Log.Information("Update {Tag} available but auto-install skipped: {Reason}. " +
+                                        "Install it from the tray menu to apply it now.",
+                            release.TagName, skipReason);
                     }
                 }
 
