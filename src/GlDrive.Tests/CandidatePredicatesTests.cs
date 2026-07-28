@@ -63,4 +63,70 @@ public class CandidatePredicatesTests
     [InlineData(2, 3, 2, 3, false)]  // both under
     public void SlotsFull(int dstActive, int dstMax, int srcActive, int srcMax, bool expected)
         => Assert.Equal(expected, CandidatePredicates.SlotsFull(dstActive, dstMax, srcActive, srcMax));
+
+    // ---- v3.10.42: bounded fill-only dir-confirmed override ----
+    // Regression cover for the 2026-07-27 MLB loop: superbnc was fill-only for
+    // [tv-sports] (MKD path-denied), a scan confirmed the release dir, the dir
+    // was then removed site-side, and the stale confirmation permanently
+    // overrode the dirscript gate — 278 MKD 550s in 29 minutes on one release.
+
+    [Fact]
+    public void DirscriptBlockedAfterOverride_unconfirmed_dest_stays_blocked()
+    {
+        var denied = new[] { "/incoming/tv-sports/" };
+        Assert.True(CandidatePredicates.DirscriptBlockedAfterOverride(
+            "/incoming/tv-sports/MLB.Release", denied, dirConfirmed: false, mkdDenialCount: 0));
+    }
+
+    [Fact]
+    public void DirscriptBlockedAfterOverride_confirmed_dir_opens_fill_only_dest()
+    {
+        // The feature this override exists for: another racer created the dir,
+        // so CWD succeeds and a fill-only dest can receive without any MKD.
+        var denied = new[] { "/incoming/tv-sports/" };
+        Assert.False(CandidatePredicates.DirscriptBlockedAfterOverride(
+            "/incoming/tv-sports/MLB.Release", denied, dirConfirmed: true, mkdDenialCount: 0));
+    }
+
+    [Fact]
+    public void DirscriptBlockedAfterOverride_undenied_path_never_blocked()
+    {
+        Assert.False(CandidatePredicates.DirscriptBlockedAfterOverride(
+            "/incoming/mp3/Some.Release", new[] { "/incoming/tv-sports/" },
+            dirConfirmed: false, mkdDenialCount: 99));
+    }
+
+    [Fact]
+    public void DirscriptBlockedAfterOverride_stops_trusting_confirmation_after_repeated_mkd_denials()
+    {
+        // The loop-breaker: the dir-confirmed override is evidence, not a
+        // permanent exemption. Once the dest has actually denied MKD on this
+        // path enough times, the confirmation is stale — block regardless.
+        var denied = new[] { "/incoming/tv-sports/" };
+        const string path = "/incoming/tv-sports/MLB.Release";
+
+        for (var n = 0; n < CandidatePredicates.MaxMkdDenialsWithDirConfirmed; n++)
+            Assert.False(CandidatePredicates.DirscriptBlockedAfterOverride(
+                path, denied, dirConfirmed: true, mkdDenialCount: n));
+
+        Assert.True(CandidatePredicates.DirscriptBlockedAfterOverride(
+            path, denied, dirConfirmed: true,
+            mkdDenialCount: CandidatePredicates.MaxMkdDenialsWithDirConfirmed));
+    }
+
+    [Fact]
+    public void DirscriptBlockedAfterOverride_bounds_the_observed_production_loop()
+    {
+        // 278 consecutive attempts must not all be admitted.
+        var denied = new[] { "/incoming/tv-sports/" };
+        var admitted = 0;
+        for (var attempt = 0; attempt < 278; attempt++)
+        {
+            if (!CandidatePredicates.DirscriptBlockedAfterOverride(
+                    "/incoming/tv-sports/MLB.Release", denied,
+                    dirConfirmed: true, mkdDenialCount: admitted))
+                admitted++;
+        }
+        Assert.Equal(CandidatePredicates.MaxMkdDenialsWithDirConfirmed, admitted);
+    }
 }

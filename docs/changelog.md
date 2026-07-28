@@ -39,6 +39,20 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   any active spread job (a queued/scanning job loses nothing on restart, so those windows
   are now installable). Plus visible escalation: a still-stuck hold logs ERR + raises a tray
   notification at 6h, before the forced install interrupts a transfer.
+- **v3.10.42** — a stale "release dir confirmed" scan result no longer re-admits a dest that
+  cannot create the dir, forever. `_destDirConfirmed` exists so a *fill-only* site (denied
+  MKD but able to receive into a dir another racer created) isn't locked out — but it was
+  add-only and never revoked, so it overrode the MKD-denial gate permanently. On 2026-07-27
+  superbnc was confirmed for one MLB release at 07:35 (scan saw 34 files), the dir was
+  removed site-side by 07:37 (every later scan: 0 files), and the race then re-attempted
+  `MKD /incoming/tv-sports/MLB…` — denied `550 Not allowed to make directories here` — **278
+  times in 29 minutes**, 98% of that day's FXP transfer failures on a single release. The
+  fast-skip handler logged "dropped for this release" but recorded nothing, so nothing
+  actually dropped. The dir-confirmed override is now bounded by the dest's own denials on
+  that path (`MaxMkdDenialsWithDirConfirmed = 3`): the genuine fill-only case still costs
+  zero denials and is unaffected, while a stale confirmation is abandoned after 3 and logged
+  once. Same family as the v3.10.33/.41 loops — a decision that isn't recorded is no decision
+  — inverted: a *confirmation* that is never invalidated is a permanent exemption.
 - **v3.10.41** — a declined UAC elevation prompt no longer disables auto-install forever.
   v3.10.33 made the decline persistent to kill a restart nag loop, but persistent meant
   *permanent* for that release tag, and the skip logged nothing — so one dismissed prompt

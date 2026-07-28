@@ -68,6 +68,13 @@ public class SpreadJob : IDisposable
     // _ownershipLock.
     private readonly HashSet<string> _destDirConfirmed = new(StringComparer.Ordinal);
 
+    // Permanent MKD denials this job, per (dest, denied base path). Bounds the
+    // _destDirConfirmed override above: a confirmation is evidence the dir existed
+    // at scan time, not a standing exemption from the denial gate. Without this
+    // counter a stale confirmation re-admitted the same dest forever (2026-07-27:
+    // 278 MKD 550s on one release in 29 minutes). Guarded by _ownershipLock.
+    private readonly Dictionary<(string DstId, string BasePath), int> _destMkdDenials = new();
+
     // GlDrive's OWN successful (non-dupe) deliveries per dest. Compared against
     // the scan-derived owned count in cleanup: owned > delivered means files we
     // did NOT send are present (other racers / dupe-skips), i.e. the dir is part
@@ -1907,9 +1914,16 @@ public class SpreadJob : IDisposable
                         // created it): then CWD succeeds without any MKD and a
                         // fill-only dest can receive (SYN accepted 51 files
                         // into a pre-existing dir while denying every MKD).
+                        // ...and that confirmation is BOUNDED by the dest's own MKD
+                        // denials on this path — a dir confirmed by an earlier scan can
+                        // be gone by the time we transfer (nuke/cleanup), and an add-only
+                        // confirmation then re-admits the dest forever. See
+                        // CandidatePredicates.MaxMkdDenialsWithDirConfirmed.
                         if (_destDirscriptDenied.TryGetValue(dstId, out var deniedSet)
-                            && CandidatePredicates.DirscriptBlocked(dstBasePath, deniedSet)
-                            && !_destDirConfirmed.Contains(dstId))
+                            && CandidatePredicates.DirscriptBlockedAfterOverride(
+                                dstBasePath, deniedSet,
+                                _destDirConfirmed.Contains(dstId),
+                                _destMkdDenials.GetValueOrDefault((dstId, dstBasePath))))
                         { skippedBackoff++; continue; }
 
                         // SFV-first: block non-SFV files until SFV is delivered to this dest
@@ -3117,6 +3131,18 @@ public class SpreadJob : IDisposable
                 _destDirscriptDenied[dstId] = set;
             }
             set.Add(basePath);
+
+            // Count it. FindBestTransfer's dir-confirmed override consults this so a
+            // dest that keeps denying MKD can't be re-admitted indefinitely by a
+            // stale scan confirmation.
+            var key = (dstId, basePath);
+            var denials = _destMkdDenials.GetValueOrDefault(key) + 1;
+            _destMkdDenials[key] = denials;
+            if (denials == CandidatePredicates.MaxMkdDenialsWithDirConfirmed
+                && _destDirConfirmed.Contains(dstId))
+                Log.Information("Spread: {Server} denied MKD {Path} {Count}x despite a confirmed release dir " +
+                    "— treating the confirmation as stale and blocking this dest for the rest of the race",
+                    _serverConfigs.TryGetValue(dstId, out var cd) ? cd.Name : dstId, basePath, denials);
         }
     }
 
