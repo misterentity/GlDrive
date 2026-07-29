@@ -1564,33 +1564,46 @@ public class SpreadJob : IDisposable
     {
         if (depth > 3) return; // Max recursion depth
 
-        // Borrow timeout — don't wait forever if pool is exhausted. 20s gives
-        // the main pool enough time to free a slot under heavy race load
-        // without making scan cycles feel sluggish. If the borrow still times
-        // out, ScanSites will retry on the spread pool.
-        using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        borrowCts.CancelAfter(TimeSpan.FromSeconds(20));
-        await using var conn = await pool.Borrow(borrowCts.Token);
-
+        // Borrow ONLY for the duration of this directory's LIST, then release
+        // before recursing. Holding the connection across the recursive call is
+        // hold-and-wait: a depth-N scan would pin N+1 connections at once, but
+        // the account login gate (LoginCap − LoginHeadroom) leaves the main pool
+        // only ~2 usable logins. Any release with a subdirectory therefore
+        // deadlocked the scan against itself — the parent could not release
+        // until the child borrowed, and the child could not borrow because the
+        // parents held every slot. That burned the full 20s timeout on EVERY
+        // cycle (2176 fallbacks/day) and then re-ran the whole scan on the FXP
+        // spread pool, stealing transfer slots. Scoping the borrow to the LIST
+        // caps concurrent connections per scan at exactly 1.
         FtpListItem[] items;
-        try
         {
-            if (pool.UseCpsv)
-                items = await CpsvDataHelper.ListDirectory(conn.Client, currentPath, pool.ControlHost, ct);
-            else
-                items = await conn.Client.GetListing(currentPath, FtpListOption.AllFiles, ct);
+            using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            borrowCts.CancelAfter(TimeSpan.FromSeconds(20));
+            await using var conn = await pool.Borrow(borrowCts.Token);
+
+            try
+            {
+                if (pool.UseCpsv)
+                    items = await CpsvDataHelper.ListDirectory(conn.Client, currentPath, pool.ControlHost, ct);
+                else
+                    items = await conn.Client.GetListing(currentPath, FtpListOption.AllFiles, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                // Cancellation mid-read poisons the GnuTLS stream — discard this connection
+                conn.Poisoned = true;
+                throw;
+            }
+            catch (IOException)
+            {
+                conn.Poisoned = true;
+                throw;
+            }
         }
-        catch (OperationCanceledException)
-        {
-            // Cancellation mid-read poisons the GnuTLS stream — discard this connection
-            conn.Poisoned = true;
-            throw;
-        }
-        catch (IOException)
-        {
-            conn.Poisoned = true;
-            throw;
-        }
+
+        // Subdirectories are collected here and walked after the loop, so the
+        // connection above is already back in the pool before any child borrows.
+        List<string>? subdirs = null;
 
         foreach (var item in items)
         {
@@ -1617,8 +1630,9 @@ public class SpreadJob : IDisposable
                 // never become a transferable entry.
                 if (IsZipscriptArtifact(item.Name, item.Size)) continue;
 
-                // Recurse into subdirectories (Sample/, Subs/, CD1/, etc.)
-                await ScanDirectoryRecursive(pool, basePath, item.FullName, files, signals, depth + 1, ct);
+                // Defer recursion (Sample/, Subs/, CD1/, etc.) until the borrow
+                // above has been returned — see the hold-and-wait note.
+                (subdirs ??= new List<string>()).Add(item.FullName);
             }
             else if (item.Type == FtpObjectType.File)
             {
@@ -1657,6 +1671,18 @@ public class SpreadJob : IDisposable
                     Size = item.Size
                 });
             }
+        }
+
+        if (subdirs == null) return;
+
+        // Sequential on purpose: parallel children would re-create the very
+        // contention this restructure removes.
+        foreach (var subdir in subdirs)
+        {
+            // A nuke marker found in an earlier subtree aborts the rest, matching
+            // the mid-loop early-return the interleaved walk used to do.
+            if (_isNuked) return;
+            await ScanDirectoryRecursive(pool, basePath, subdir, files, signals, depth + 1, ct);
         }
     }
 

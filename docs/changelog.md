@@ -53,6 +53,22 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   zero denials and is unaffected, while a stale confirmation is abandoned after 3 and logged
   once. Same family as the v3.10.33/.41 loops — a decision that isn't recorded is no decision
   — inverted: a *confirmation* that is never invalidated is a permanent exemption.
+- **v3.10.43** — the spread scanner deadlocked against its own connection pool on every
+  cycle. `ScanDirectoryRecursive` held its borrowed connection across the recursive call, so
+  walking a release of depth N pinned N+1 connections at once — but the account login gate
+  (`LoginCap − LoginHeadroom`) leaves the main pool only ~2 usable logins. Any release with a
+  subdirectory therefore could not converge: the parent could not release until the child
+  borrowed, and the child could not borrow because the parents held every slot. Hold-and-wait,
+  so it failed *deterministically*, not intermittently — the tell was that the site with files
+  to walk (superbnc, 16 files) timed out at ~21s on **every** scan while an empty dest (SYN,
+  0 files, nothing to recurse into) returned instantly. Each occurrence burned the full 20s
+  borrow timeout, then re-ran the entire scan on the FXP *spread* pool, stealing transfer
+  slots from live races: **2176 pool-exhausted fallbacks, 73 total scan failures, and a
+  matching crop of `FXP borrow timeout … pool exhausted` in one day — with zero ERR lines**.
+  The borrow is now scoped to the LIST alone and subdirectories are walked after it is
+  returned, capping concurrent connections per scan at exactly 1 for any depth. **Meta-lesson:
+  a bug can run at 100% duty cycle and still show up only as WRN volume — the severity of a
+  log line reflects what the author expected, not what is actually broken.**
 - **v3.10.41** — a declined UAC elevation prompt no longer disables auto-install forever.
   v3.10.33 made the decline persistent to kill a restart nag loop, but persistent meant
   *permanent* for that release tag, and the skip logged nothing — so one dismissed prompt
