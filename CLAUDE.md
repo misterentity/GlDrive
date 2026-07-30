@@ -89,6 +89,7 @@ This is the most complex part of the codebase. glftpd behind a BNC requires CPSV
 - **BNC rate limiting**: rapid reconnects trigger a ~2 hour cooldown on the BNC side.
 - **BNC ghost connections**: `!username` login kills stale sessions. `FtpClientFactory.KillGhosts()` does this automatically when pool can't create new connections.
 - **glftpd -MISSING placeholders**: when zipscript validates an SFV and a declared file is absent, it drops a 0-byte `-MISSING-<name>` stub. These are the INVERSE signal — never count them as owned files in the spread scanner. `SpreadJob.IsMissingPlaceholder()` filters them.
+- **glftpd hidden per-site metadata**: any entry with a **leading dot** (`.imdb`, `.imdbinfoname`, `.message`) is site-local state regenerated per site — never race it. `SpreadJob.IsZipscriptArtifact` filters on the leading dot (v3.10.44); scene naming is dot-*separated* but always puts a basename before the first dot, so a leading dot is an unambiguous discriminator. **Diagnostic: when BOTH endpoints reject a file — source `RETR 550 No such file or directory` and dest `STOR 553 path-filter denied permission (Filename deny)` — it is metadata, not content.** Do not extend this filter by appending the specific name you just observed; that mistake is what left the dot family uncovered for a month.
 - **WPF DataGrid + POCO**: `SectionMapping` and similar POCOs don't fire `INotifyPropertyChanged`. Mutating their properties from code won't refresh the grid — call `SomeGrid.Items.Refresh()` after bulk mutations.
 
 ## OneDrive + git hazard
