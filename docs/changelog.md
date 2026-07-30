@@ -53,6 +53,23 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   zero denials and is unaffected, while a stale confirmation is abandoned after 3 and logged
   once. Same family as the v3.10.33/.41 loops — a decision that isn't recorded is no decision
   — inverted: a *confirmation* that is never invalidated is a permanent exemption.
+- **v3.10.44** — the spread engine kept trying to race glftpd's *hidden* per-site metadata.
+  `IsZipscriptArtifact` filtered the imdb sidecars it had happened to observe by suffix
+  (`.imdb.html`, `.imdb.nfo`) but missed the dot-prefixed family entirely, so `.imdbinfoname`
+  and `.imdb` were admitted into `_fileInfos` as real release content — **86 doomed transfer
+  attempts in one day**. Both endpoints had already proved these are site-local state that is
+  regenerated per site and must never move: the source answers `RETR 550 No such file or
+  directory` (it never had the file), and the destination answers `STOR 553 .imdb: path-filter
+  denied permission. (Filename deny)` (it actively refuses it). Beyond the wasted slots, each
+  phantom entry inflates the expected file total, holding a race short of 100%. The filter now
+  keys on a **leading** dot rather than an enumerated name list — scene naming is dot-separated
+  but always puts a basename before the first dot, so a leading dot only ever means a hidden
+  site file. Also demoted the `main pool exhausted … falling back to spread pool` line from
+  WRN to INF: on a busy destination the main pool is *legitimately* saturated, the fallback
+  recovers in ~13ms and loses nothing, yet it emitted ~1700 warnings/day — the noise that let
+  v3.10.42 and v3.10.43 hide behind a clean 0-ERR record. The real failure (both pools
+  unavailable) stays at WRN. **Meta-lesson: a filter written as a list of the cases you have
+  seen will keep missing the ones you haven't — find the property that defines the class.**
 - **v3.10.43** — the spread scanner deadlocked against its own connection pool on every
   cycle. `ScanDirectoryRecursive` held its borrowed connection across the recursive call, so
   walking a release of depth N pinned N+1 connections at once — but the account login gate

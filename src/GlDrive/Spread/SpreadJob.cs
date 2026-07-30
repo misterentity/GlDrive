@@ -1425,7 +1425,14 @@ public class SpreadJob : IDisposable
                     // try the spread pool as a fallback. The fresh buffer must be
                     // cleared because a partial recursive scan may have appended
                     // items before hitting the timeout.
-                    Log.Warning("Spread scan: main pool exhausted for {Server}, falling back to spread pool",
+                    // INF, not WRN, and deliberately so: on a busy destination the main
+                    // pool is legitimately saturated (the shared account login gate is
+                    // spent on in-flight FXP), the fallback below recovers in ~13ms, and
+                    // nothing is lost. Logging it at WRN produced ~1700 warnings/day of
+                    // pure noise, which is what let the v3.10.42 and v3.10.43 bugs hide
+                    // in WRN volume for days behind a clean 0-ERR/0-FTL record. The
+                    // genuine failure — BOTH pools unavailable — stays at Warning below.
+                    Log.Information("Spread scan: main pool exhausted for {Server}, falling back to spread pool",
                         serverName);
                     files.Clear();
                     lastError = ex;
@@ -1528,6 +1535,8 @@ public class SpreadJob : IDisposable
     ///                                                        glftpd actually emits)
     ///   - "[###::::] - 27% Complete - [site]"              (race progress bar)
     ///   - "[ NUKED ] ...", "[ Incomplete ] ..."            (bracketed status stubs)
+    ///   - "foo.imdb.html" / "foo.imdb.nfo"                 (imdb sidecars)
+    ///   - ".imdb", ".imdbinfoname", ".message", ...        (hidden site-local state)
     ///   - any 0-byte file starting with "-" or "["         (belt-and-suspenders)
     /// </summary>
     internal static bool IsZipscriptArtifact(string name, long size)
@@ -1545,6 +1554,18 @@ public class SpreadJob : IDisposable
         // (observed 2026-06-26: Ryan.Hamilton .imdb.html FXP'd SYN->superbnc, 553).
         if (name.EndsWith(".imdb.html", StringComparison.OrdinalIgnoreCase)) return true;
         if (name.EndsWith(".imdb.nfo", StringComparison.OrdinalIgnoreCase)) return true;
+
+        // ...and the Unix-hidden form of the same thing. The two suffix rules above
+        // enumerated the sidecar names we happened to have SEEN, which missed the
+        // dot-prefixed family entirely (".imdb", ".imdbinfoname", ".imdbinfo*",
+        // ".message", ...). Both endpoints prove these are site-local state and must
+        // never be raced (observed 2026-07-29, 86 attempts/day):
+        //   source: RETR 550 "No such file or directory."   — source never had it
+        //   dest:   STOR 553 ".imdb: path-filter denied permission. (Filename deny)"
+        // A LEADING dot is the discriminator, not a dot anywhere: scene naming is
+        // dot-separated ("Show.S01E01.1080p...mkv") but a basename always precedes
+        // the first dot, so a leading dot only ever means a hidden site file.
+        if (name.StartsWith('.')) return true;
 
         // Race progress / completion-state indicators. glftpd's zipscript writes
         // 0-byte marker files (or dirs) named with bracketed status text and a
