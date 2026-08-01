@@ -86,6 +86,15 @@ public class SpreadJob : IDisposable
     // moved (a section-blacklist regression zero-dispatched every race for hours
     // on 2026-06-10 with no log trace at INF level).
     private volatile string? _lastSkipSummary;
+    // Destination-rule evaluations in the most recent FindBestTransfer pass. 0 means
+    // every candidate died at a source-side check (pool cooldown / credit denial), so
+    // that pass says NOTHING about whether the destinations are viable. The fail-fast
+    // must not convert such a pass into a terminal "all destinations denied" verdict:
+    // a pool cooldown is a 20s self-clearing backoff, not a property of the dest.
+    // (2026-07-31: races died with "All destinations denied — mkdir filter" while the
+    // attached skip summary read backoff/dirscript=0 cooldown=11 — the contradiction
+    // that made this misdiagnosis visible.)
+    private volatile int _lastPassDestsEvaluated = 1;
     private DateTime _lastSkipLogAt;
 
     // Dests admitted as fill-only (MKD denied; can only receive into a dir some
@@ -854,7 +863,14 @@ public class SpreadJob : IDisposable
                     // finish without waiting on it; when every destination is
                     // denied, however, that same rule previously reported the race
                     // as "complete — 1 pending" before this fail-fast was reached.
+                    // _lastPassDestsEvaluated > 0: only trust this verdict if the last
+                    // scheduling pass actually reached the destination rules. When every
+                    // candidate was dropped source-side (pool in its 20s login-cap
+                    // backoff), the pass never looked at a destination — failing the race
+                    // on it turns a transient, self-clearing condition into a permanent
+                    // loss and reports a cause ("mkdir filter") nothing measured.
                     if (activeCount == 0 && _sourceScanSucceeded
+                        && _lastPassDestsEvaluated > 0
                         && NoViableDestinations(sitePaths, sourceServers))
                     {
                         var s = _lastSkipSummary is { } sm ? $" ({sm})" : "";
@@ -1858,6 +1874,11 @@ public class SpreadJob : IDisposable
         var skippedFailures = 0;
         var skippedBackoff = 0;
         var skippedCooldown = 0;
+        // How many (file, src, dst) triples actually reached the destination rules
+        // this pass. Zero means every candidate was dropped at a SOURCE-side check
+        // (credit-denied / pool cooldown), so the pass examined no destination and
+        // proves nothing about them — see _lastPassDestsEvaluated.
+        var destsEvaluated = 0;
         Dictionary<string, DateTime> retrySnapshot;
         lock (_ownershipLock) retrySnapshot = new Dictionary<string, DateTime>(_destRetryAt);
         var now = DateTime.UtcNow;
@@ -1937,6 +1958,7 @@ public class SpreadJob : IDisposable
                     foreach (var (dstId, dstBasePath) in sitePaths)
                     {
                         if (srcId == dstId) continue;
+                        destsEvaluated++;
                         if (owners.Contains(dstId)) { skippedOwned++; continue; }
                         if (_inFlightFiles.Contains((fileName, dstId))) { skippedOwned++; continue; }
 
@@ -2046,6 +2068,8 @@ public class SpreadJob : IDisposable
                 }
             }
         }
+
+        _lastPassDestsEvaluated = destsEvaluated;
 
         if (bestFile == null || bestSrc == null || bestDst == null)
         {
@@ -2772,10 +2796,23 @@ public class SpreadJob : IDisposable
     /// doomed dest (observed: SYN mkdir-denies every TV release → 9 false partials/day
     /// while zephyr got 100%). Caller must already hold _ownershipLock.
     /// </summary>
+    /// <remarks>
+    /// MUST use the same predicate FindBestTransfer uses to skip the dest
+    /// (<see cref="CandidatePredicates.DirscriptBlockedAfterOverride"/>). It previously
+    /// applied the UNBOUNDED rule (blocked &amp;&amp; !dirConfirmed) while the scheduler
+    /// applied v3.10.42's BOUNDED one, so a dir-confirmed dest that had blown
+    /// MaxMkdDenialsWithDirConfirmed was skipped forever by FindBestTransfer yet still
+    /// counted "live and pending" by NoViableDestinations / AllDestinationsTerminal.
+    /// Such a race can neither dispatch nor terminate — it idles to the timeout while
+    /// re-scanning a dest that will never be picked. Two gates deciding the same
+    /// question with different rules is the defect class; keep them on one predicate.
+    /// </remarks>
     private bool IsDestDirscriptDeniedNoLock(string dstId, string basePath)
         => _destDirscriptDenied.TryGetValue(dstId, out var deniedSet)
-           && CandidatePredicates.DirscriptBlocked(basePath, deniedSet)
-           && !_destDirConfirmed.Contains(dstId);
+           && CandidatePredicates.DirscriptBlockedAfterOverride(
+               basePath, deniedSet,
+               _destDirConfirmed.Contains(dstId),
+               _destMkdDenials.GetValueOrDefault((dstId, basePath)));
 
     /// <summary>
     /// Recompute every non-download-only destination's completion state from the
