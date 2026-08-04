@@ -237,3 +237,140 @@ public class RaceSummarizeTests
         Assert.Equal(1, s.Summarize().Finished);
     }
 }
+
+/// <summary>
+/// v3.10.47 — a section blacklist must never be written from, or survive, the site
+/// refusing a leading-dot metadata sidecar. GlDrive itself should never have offered
+/// those files; v3.10.44 stopped racing them, but one entry the bug had already
+/// written (superbnc/[tv-hd], ".imdbinfoname: path-filter denied", failureCount 46)
+/// outlived the fix and removed the release's only source from 375 races in a day.
+/// </summary>
+public class LeadingDotMetadataBlacklistTests
+{
+    private static SectionBlacklistStore NewStore() => new(
+        System.IO.Path.Combine(System.IO.Path.GetTempPath(), "gldrive-tests",
+            Guid.NewGuid().ToString("N") + "-blacklist.json"));
+
+    [Theory]
+    // The exact reason string found in the live section-blacklist.json.
+    [InlineData("STOR failed: 553 .imdbinfoname: path-filter denied permission. (Filename deny)")]
+    [InlineData("STOR failed: 553 .imdb: path-filter denied permission. (Filename deny)")]
+    [InlineData("STOR failed: 553 .message: path-filter denied permission. (Filename deny)")]
+    // Keyed on the leading dot, so a sidecar never seen before is still caught.
+    [InlineData("STOR failed: 553 .someNewSidecar: path-filter denied permission. (Filename deny)")]
+    public void Leading_dot_metadata_denials_are_recognised(string reason)
+        => Assert.True(MkdFailureClassifier.IsLeadingDotMetadataDenial(reason));
+
+    [Theory]
+    // A real content file rejected by a path filter IS a genuine section denial.
+    [InlineData("STOR failed: 553 release.r00: path-filter denied permission. (Filename deny)")]
+    [InlineData("STOR failed: 553 Error: you have no upload rights for this directory!")]
+    [InlineData("550 Error: Not allowed to make directories here.")]
+    [InlineData("Unable to read data from the transport connection")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void Non_metadata_denials_are_left_alone(string? reason)
+        => Assert.False(MkdFailureClassifier.IsLeadingDotMetadataDenial(reason));
+
+    [Fact]
+    public void Scene_names_are_dot_separated_but_never_dot_prefixed()
+    {
+        // The discriminator only works because a scene basename always precedes the
+        // first dot. Guard it explicitly so nobody "simplifies" it to Contains('.').
+        Assert.False(MkdFailureClassifier.IsLeadingDotMetadataDenial(
+            "STOR failed: 553 the.proud.family.s04e09.720p.web.h264-afo.nfo: path-filter denied permission."));
+    }
+
+    [Fact]
+    public void Metadata_denial_never_creates_a_section_blacklist_entry()
+    {
+        var s = NewStore();
+        s.RecordPermanentFailure("bb90928a", "superbnc", "tv-hd",
+            "/incoming/tv-hd/The.Proud.Family.Louder.and.Prouder.S04E09.720p.WEB.H264-AFO",
+            "STOR failed: 553 .imdbinfoname: path-filter denied permission. (Filename deny)");
+
+        Assert.False(s.IsBlacklisted("bb90928a", "tv-hd"));
+        Assert.Equal(0, s.DistinctActiveSectionCount("bb90928a"));
+    }
+
+    [Fact]
+    public void A_genuine_upload_denial_still_creates_an_entry()
+    {
+        // The guard must not swallow real denials — that would be the opposite bug.
+        var s = NewStore();
+        s.RecordPermanentFailure("bb90928a", "superbnc", "0day", "/incoming/0day/x",
+            "STOR failed: 553 Error: you have no upload rights for this directory!");
+
+        Assert.True(s.IsBlacklisted("bb90928a", "0day"));
+    }
+}
+
+/// <summary>
+/// v3.10.47 — end-to-end reproduction of the tv-hd outage. The fixture below is the
+/// verbatim entry found in the live %AppData%\GlDrive\section-blacklist.json on
+/// 2026-08-03; loading it must no longer blacklist superbnc for [tv-hd].
+/// </summary>
+public class TvHdFossilEntryScrubTests
+{
+    // Verbatim reasons from the live store. Timestamps are kept RECENT so these
+    // assertions test the scrub, not the unrelated 14-day age-out.
+    private static string LiveFossilJson()
+    {
+        var recent = DateTime.UtcNow.AddDays(-1).ToString("O");
+        return $$"""
+        [
+          {
+            "serverId": "bb90928a",
+            "serverName": "superbnc.xxxxx.tw",
+            "section": "tv-hd",
+            "path": "/incoming/tv-hd/The.Proud.Family.Louder.and.Prouder.S04E09.720p.WEB.H264-AFO",
+            "reason": "STOR failed: 553 .imdbinfoname: path-filter denied permission. (Filename deny)",
+            "firstFailedAt": "{{recent}}",
+            "lastFailedAt": "{{recent}}",
+            "failureCount": 46
+          },
+          {
+            "serverId": "bb90928a",
+            "serverName": "superbnc.xxxxx.tw",
+            "section": "0day",
+            "path": "/incoming/0day/Destiny_Powers_Fairy_Place-RAZOR",
+            "reason": "STOR failed: 553 Error: you have no upload rights for this directory!",
+            "firstFailedAt": "{{recent}}",
+            "lastFailedAt": "{{recent}}",
+            "failureCount": 3
+          }
+        ]
+        """;
+    }
+
+    private static SectionBlacklistStore LoadFrom(string json)
+    {
+        var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "gldrive-tests",
+            Guid.NewGuid().ToString("N") + "-blacklist.json");
+        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
+        System.IO.File.WriteAllText(path, json);
+        var store = new SectionBlacklistStore(path);
+        store.Load();
+        return store;
+    }
+
+    [Fact]
+    public void The_live_tv_hd_fossil_entry_is_scrubbed_on_load()
+    {
+        var store = LoadFrom(LiveFossilJson());
+
+        // This entry removed superbnc — the release's only source — from 375 of 377
+        // [tv-hd] races on 2026-08-03.
+        Assert.False(store.IsBlacklisted("bb90928a", "tv-hd"));
+    }
+
+    [Fact]
+    public void A_real_upload_denial_in_the_same_file_survives_the_scrub()
+    {
+        var store = LoadFrom(LiveFossilJson());
+
+        // superbnc genuinely has no upload rights for 0day — that entry must remain,
+        // or the scrub would be indiscriminate.
+        Assert.True(store.IsBlacklisted("bb90928a", "0day"));
+    }
+}

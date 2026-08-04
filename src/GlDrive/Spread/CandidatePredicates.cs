@@ -19,6 +19,25 @@ internal static class CandidatePredicates
     /// this many failures summed across ALL its routes.</summary>
     internal const int FileRetryCap = 7;
 
+    /// <summary>
+    /// A section blacklist records that a site refused to RECEIVE a section. It is a
+    /// DESTINATION rule and must never cost a site its SOURCE role: a site you cannot
+    /// upload to is still a perfectly good site to download FROM. Indeed superbnc is
+    /// upload-restricted by design, so it accumulates exactly these entries.
+    ///
+    /// Dropping a blacklisted site from the race participant list conflated the two
+    /// roles and silently deleted the only site holding the release. On 2026-08-03 that
+    /// cost 375 of 377 [tv-hd] races — the whole category — because a stale entry
+    /// (".imdbinfoname: path-filter denied", written by the v3.10.44 metadata bug)
+    /// removed superbnc, the source, so Phase 1 never probed it and every race reported
+    /// "Release not found on any server".
+    ///
+    /// Destination exclusion is enforced where it belongs — SpreadJob's Phase 2 dest
+    /// selection — which also handles the fill-only case and emits an actionable
+    /// message. Participant selection must not pre-empt it.
+    /// </summary>
+    internal const bool BlacklistExcludesSourceRole = false;
+
     /// <summary>True if this exact (file,src,dst) pair has failed enough to drop.</summary>
     internal static bool PairRetryCapped(int pairFailures) => pairFailures >= PairRetryCap;
 

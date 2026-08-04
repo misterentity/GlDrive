@@ -209,7 +209,23 @@ public class FxpTransfer
             ErrorMessage = ex.Message;
             abortReason = ex.Message;
             ok = false;
-            Log.Warning(ex, "FXP transfer failed: {Src} -> {Dst}", srcPath, dstPath);
+
+            // A dest that deterministically refuses MKD for this release is an EXPECTED
+            // outcome, not a fault: the caller already logged the denial and will fast-skip
+            // the dest (no poison, no backoff). Logging it here at Warning WITH a stack
+            // trace produced 902 of the 937 daily "FXP transfer failed" warnings on
+            // 2026-08-03 (SYN was 0-for-902 across 8 sections). That noise is not
+            // cosmetic: it pushed the log past its 10 MB cap and rolled mid-day, and
+            // because retention counts FILES the extra roll evicted a whole day of
+            // history — the diagnostics are destroyed exactly when something goes wrong.
+            // It also buried the ~30 genuine transport failures that DO need attention.
+            // Level only: ok/ErrorMessage/abortReason are unchanged, so the caller's
+            // classification and control flow are identical.
+            if (MkdFailureClassifier.IsExpectedReleaseScopedDenial(ex.Message))
+                Log.Debug("FXP transfer skipped (dest denied MKD): {Src} -> {Dst}: {Error}",
+                    srcPath, dstPath, ex.Message);
+            else
+                Log.Warning(ex, "FXP transfer failed: {Src} -> {Dst}", srcPath, dstPath);
         }
 
         totalSw.Stop();

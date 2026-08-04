@@ -101,6 +101,19 @@ public sealed class SectionBlacklistStore
                         scrubbed++;
                         continue;
                     }
+                    // Migration scrub (v3.10.47): entries whose only evidence is the site
+                    // refusing a leading-dot metadata sidecar (.imdbinfoname, .imdb,
+                    // .message). GlDrive itself should never have offered those files;
+                    // v3.10.44 stopped racing them, but the blacklist entries the bug had
+                    // already written outlived it — every repeat failure refreshed
+                    // LastFailedAt, so the 14-day TTL renewed itself for five weeks. One
+                    // such entry (superbnc/[tv-hd]) cost the whole tv-hd category.
+                    // The site never refused the RELEASE, only a file we shouldn't send.
+                    if (MkdFailureClassifier.IsLeadingDotMetadataDenial(e.Reason))
+                    {
+                        scrubbed++;
+                        continue;
+                    }
                     _entries[(e.ServerId, Normalize(e.Section))] = e;
                 }
                 if (scrubbed > 0)
@@ -219,6 +232,19 @@ public sealed class SectionBlacklistStore
         string path, string reason)
     {
         if (string.IsNullOrWhiteSpace(serverId) || string.IsNullOrWhiteSpace(section)) return;
+
+        // Never blacklist a whole section because the site refused a leading-dot metadata
+        // sidecar: that file is site-local state we should not have offered, so the
+        // rejection is evidence about US, not about the site's willingness to receive the
+        // section. Guarded at this single choke point rather than at each call site, so a
+        // future caller can't reintroduce the fossil entries this once produced.
+        if (MkdFailureClassifier.IsLeadingDotMetadataDenial(reason))
+        {
+            Log.Debug("Section blacklist: ignoring {Server} [{Section}] — denial is a leading-dot " +
+                "metadata sidecar we should not have raced ({Reason})", serverName, section, reason);
+            return;
+        }
+
         var key = (serverId, Normalize(section));
         bool newlyAdded;
         lock (_lock)
@@ -377,6 +403,60 @@ public static class MkdFailureClassifier
     public static bool IsReleaseScopedDirscriptDenial(string? reason)
         => !string.IsNullOrEmpty(reason)
            && reason.Contains("Denied by dirscript", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// True when a denial's only evidence is the site refusing a file whose name starts
+    /// with a dot — glftpd's per-site metadata (.imdb, .imdbinfoname, .message), which is
+    /// regenerated locally and must never be raced (v3.10.44, SpreadJob.IsZipscriptArtifact).
+    ///
+    /// Keyed on the LEADING DOT, which is the property that defines the class, not on the
+    /// suffixes observed so far. Enumerating observed names is what left the dot family
+    /// uncovered for a month and required three separate patches to the same filter;
+    /// scene names are dot-SEPARATED but always put a basename before the first dot, so a
+    /// leading dot is an unambiguous discriminator.
+    /// </summary>
+    public static bool IsLeadingDotMetadataDenial(string? reason)
+    {
+        if (string.IsNullOrEmpty(reason)) return false;
+        // Match the filename glftpd echoes back in a path-filter rejection, e.g.
+        //   "STOR failed: 553 .imdbinfoname: path-filter denied permission. (Filename deny)"
+        // Only treat it as metadata when the rejected NAME itself begins with a dot.
+        var marker = reason.IndexOf(": path-filter denied", StringComparison.OrdinalIgnoreCase);
+        if (marker < 0) return false;
+
+        var head = reason[..marker];
+        var nameStart = head.LastIndexOfAny(new[] { ' ', '/', '\t' }) + 1;
+        var name = head[nameStart..];
+        return name.Length > 1 && name[0] == '.';
+    }
+
+    /// <summary>
+    /// Heuristic: does this FXP error look like a directory-creation failure? If so
+    /// it's a destination-level problem (permission, path-filter, missing section)
+    /// rather than a per-file transfer glitch.
+    /// </summary>
+    public static bool IsMkdError(string? errorMessage)
+    {
+        if (string.IsNullOrEmpty(errorMessage)) return false;
+        return errorMessage.Contains("MKD failed", StringComparison.OrdinalIgnoreCase)
+            || errorMessage.Contains("make directories", StringComparison.OrdinalIgnoreCase)
+            || errorMessage.Contains("Permission denied", StringComparison.OrdinalIgnoreCase)
+            || errorMessage.Contains("path-filter", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// True when the dest deterministically refused to create the release directory
+    /// and the caller will fast-skip it (drop the dest for this release, no poison,
+    /// no backoff). This is an EXPECTED, already-handled outcome — not a fault.
+    ///
+    /// This is the single shared definition on purpose. SpreadJob decides whether to
+    /// fast-skip and FxpTransfer decides how loudly to log; when those two asked the
+    /// same question with two different predicates the answers drifted apart and a
+    /// race could neither dispatch nor terminate (v3.10.45). One predicate, one answer.
+    /// </summary>
+    public static bool IsExpectedReleaseScopedDenial(string? errorMessage)
+        => IsMkdError(errorMessage)
+           && (IsPermanentMkdPathDenial(errorMessage) || IsReleaseScopedDirscriptDenial(errorMessage));
 
     public static bool IsPermanentUploadDenial(string? errorMessage)
     {

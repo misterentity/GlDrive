@@ -1,3 +1,4 @@
+using System;
 using GlDrive.Spread;
 using Xunit;
 
@@ -92,5 +93,48 @@ public class SourceProbeEvidenceTests
         // The whole point: the unproven verdict must expire far sooner.
         Assert.True(inconclusive.Value.ttl < absent.Value.ttl);
         Assert.True(inconclusive.Value.ttl <= System.TimeSpan.FromMinutes(5));
+    }
+}
+
+/// <summary>
+/// v3.10.47 — a race that dies because every destination refused MKD for this release
+/// recorded no give-up decision at all: ClassifyDeadRace had no branch for its message,
+/// so the next announce or /recent poll immediately re-ran it (333 such failures on
+/// 2026-08-03). The sibling "fill-only" case one branch away already parked.
+/// </summary>
+public class MkdDeniedDeadRaceTests
+{
+    [Fact]
+    public void All_destinations_denied_is_parked_like_its_sibling()
+    {
+        var denied = SpreadManager.ClassifyDeadRace(
+            "All destinations denied this release — mkdir filter (owned=0 downloadOnly=0 " +
+            "affil=0 slots=0 failures=0 backoff/dirscript=12 cooldown=0)");
+
+        Assert.NotNull(denied);
+        Assert.Equal("mkdir-denied", denied!.Value.reason);
+        Assert.True(denied.Value.ttl > TimeSpan.Zero, "a give-up decision must actually park");
+    }
+
+    [Fact]
+    public void Mkdir_denied_park_is_not_the_hour_long_release_not_found_park()
+    {
+        // It must expire soon: the denial is release-scoped and a siteop can grant
+        // rights at any time. Parking it for the full not-found hour would be a
+        // decision far stronger than the evidence supports.
+        var denied = SpreadManager.ClassifyDeadRace("All destinations denied this release — mkdir filter");
+        var notFound = SpreadManager.ClassifyDeadRace("Release not found on any server — check release name and section paths");
+
+        Assert.NotNull(denied);
+        Assert.NotNull(notFound);
+        Assert.True(denied!.Value.ttl < notFound!.Value.ttl);
+    }
+
+    [Fact]
+    public void Unrelated_messages_still_do_not_park()
+    {
+        Assert.Null(SpreadManager.ClassifyDeadRace("some unrelated failure"));
+        Assert.Null(SpreadManager.ClassifyDeadRace(""));
+        Assert.Null(SpreadManager.ClassifyDeadRace(null));
     }
 }

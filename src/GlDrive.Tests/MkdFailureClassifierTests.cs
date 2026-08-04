@@ -78,3 +78,73 @@ public class MkdFailureClassifier_SourceMissingTests
     public void IsSourceFileMissing_ignores_non_source_missing(string? msg)
         => Assert.False(MkdFailureClassifier.IsSourceFileMissing(msg));
 }
+
+/// <summary>
+/// v3.10.47 — the dest-denied-MKD fast-skip predicate, shared by SpreadJob (which
+/// decides whether to drop the dest for this release) and FxpTransfer (which decides
+/// how loudly to log). Both MUST ask the same question: when those two gates used
+/// different predicates the answers drifted and a race could neither dispatch nor
+/// terminate (v3.10.45). Strings below are real production messages taken from
+/// gldrive-20260803.log, where SYN was 0-for-902 on MKD across 8 sections.
+/// </summary>
+public class MkdFailureClassifier_ExpectedDenialTests
+{
+    [Theory]
+    // The exact shape that produced 902 of the 937 daily "FXP transfer failed" warnings.
+    [InlineData("MKD failed for /nsw/GRADIUS_ORIGINS_Update_v1.4.0_NSW-VENOM: 550 Error: Not allowed to make directories here.")]
+    [InlineData("MKD failed for /mp3.today/VA-Deepened_Music_Vol._30-(VMCOMP1028)-WEB-2023-COS: 550 Error: Not allowed to make directories here.")]
+    [InlineData("MKD failed for /x264-hd/Pops.2021.720p.WEB.H264-SHIIIT: 550 Error: Not allowed to make directories here.")]
+    [InlineData("MKD failed: 550 MKD Denied by dirscript.")]
+    [InlineData("MKD failed: 550 You cannot create that here")]
+    public void IsExpectedReleaseScopedDenial_catches_dest_mkd_refusals(string msg)
+        => Assert.True(MkdFailureClassifier.IsExpectedReleaseScopedDenial(msg));
+
+    [Theory]
+    // Genuine faults that MUST stay at Warning — quieting these would hide real breakage.
+    [InlineData("Unable to read data from the transport connection: An existing connection was forcibly closed by the remote host..")]
+    [InlineData("Unable to write data to the transport connection: An existing connection was forcibly closed by the remote host..")]
+    [InlineData("STOR failed: 425 Can't build data connection (timeout).")]
+    [InlineData("RETR failed: 550 /incoming/tv-sports/x.nfo: No such file or directory.")]
+    [InlineData("RETR failed: 425 Can't build data connection: Connection refused.")]
+    [InlineData("LIST failed: 425 Can't build data connection (timeout).")]
+    // An upload denial is a DIFFERENT class: it drives a persistent (dst,section)
+    // blacklist, so it must not be swallowed as an expected per-release skip.
+    [InlineData("STOR failed: 553 .imdb: path-filter denied permission. (Filename deny)")]
+    [InlineData("STOR failed: 553 Error: you have no upload rights for this directory!")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void IsExpectedReleaseScopedDenial_leaves_real_faults_loud(string? msg)
+        => Assert.False(MkdFailureClassifier.IsExpectedReleaseScopedDenial(msg));
+
+    /// <summary>
+    /// Pins the shared predicate to its definition. If someone edits one of the three
+    /// component predicates, this fails rather than letting the fast-skip gate and the
+    /// logging gate silently disagree again.
+    /// </summary>
+    [Theory]
+    [InlineData("MKD failed: 550 Error: Not allowed to make directories here.")]
+    [InlineData("MKD failed: 550 MKD Denied by dirscript.")]
+    [InlineData("STOR failed: 553 path-filter denied permission. (Filename deny)")]
+    [InlineData("MKD failed: 550 Permission denied")]
+    [InlineData("Unable to read data from the transport connection")]
+    [InlineData("RETR failed: 550 Insufficient credits")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void IsExpectedReleaseScopedDenial_equals_its_component_predicates(string? msg)
+    {
+        var expected = MkdFailureClassifier.IsMkdError(msg)
+                       && (MkdFailureClassifier.IsPermanentMkdPathDenial(msg)
+                           || MkdFailureClassifier.IsReleaseScopedDirscriptDenial(msg));
+        Assert.Equal(expected, MkdFailureClassifier.IsExpectedReleaseScopedDenial(msg));
+    }
+
+    [Theory]
+    [InlineData("MKD failed for /nsw/X: 550 Error: Not allowed to make directories here.", true)]
+    [InlineData("STOR failed: 553 path-filter denied permission. (Filename deny)", true)]
+    [InlineData("MKD failed: 550 Permission denied", true)]
+    [InlineData("Unable to read data from the transport connection", false)]
+    [InlineData("RETR failed: 550 No such file or directory", false)]
+    [InlineData(null, false)]
+    public void IsMkdError_identifies_directory_creation_failures(string? msg, bool expected)
+        => Assert.Equal(expected, MkdFailureClassifier.IsMkdError(msg));
+}

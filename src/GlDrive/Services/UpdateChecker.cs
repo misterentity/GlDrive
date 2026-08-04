@@ -92,6 +92,11 @@ public class UpdateChecker : IDisposable
     // deferred-then-eligible release isn't downloaded twice concurrently.
     private string? _autoInstallAttemptedTag;
 
+    // Tag whose session latch we already handed back to the persisted 24h decline marker.
+    // Bounds the handback to once per version per process so a marker that later becomes
+    // unreadable can cost at most one further elevation prompt, never one per poll.
+    private string? _declineLatchReleasedTag;
+
     // When the current release first got deferred by CanInstallNow, and for which tag.
     // CanInstallNow samples "is a race running?" at one instant every CheckInterval. On a
     // continuously-racing setup that sample is essentially never idle, so the courtesy gate
@@ -655,10 +660,25 @@ public class UpdateChecker : IDisposable
                             "for this version. Install it from the tray menu when ready.",
                     tagName ?? "(unknown)");
                 if (tagName != null) RecordDeclinedUpdate(tagName);
+
+                // Drop the in-flight marker: no elevated updater ever ran, so nothing was
+                // renamed to .old and nothing was copied. Left behind, the NEXT startup's
+                // ReconcileUpdateAttempt saw "attempted 3.10.46, running 3.10.45" and
+                // counted a failed INSTALL that never happened. Three of those trip
+                // IsUpdateBlocked, which kills auto-install AND the tray menu this very
+                // warning tells the user to use — with no expiry.
+                //
+                // ONLY on the declined branch. The generic-failure branch below has no
+                // other persisted brake, and there .update-attempt -> .update-failures is
+                // what stops a genuinely broken launch from re-downloading ~150 MB on
+                // every poll. A decline is already governed by the 24h .update-declined
+                // marker written just above, so removing this one leaves a brake in place.
+                try { File.Delete(UpdateStatePath(".update-attempt")); } catch { }
             }
             else
             {
                 Log.Error(ex, "Failed to launch updater");
+                // .update-attempt deliberately survives here — see above.
             }
 
             try { File.Delete(appDataUpdating); } catch { }
@@ -1202,6 +1222,32 @@ public class UpdateChecker : IDisposable
                                 // Allow a retry on the next tick if it failed.
                                 _autoInstallAttemptedTag = null;
                                 Log.Warning(ex, "Auto-install of {Tag} failed — will retry", release.TagName);
+                            }
+
+                            // A declined elevation prompt is swallowed inside LaunchUpdater
+                            // (it returns normally), so the catch above never runs and this
+                            // session latch would suppress the version FOREVER — outliving
+                            // the 24h persisted marker that v3.10.41 added precisely to make
+                            // a decline expire. The latch is checked BEFORE WasUpdateDeclined,
+                            // so leaving it set makes that expiry unreachable. Hand control
+                            // back to the persisted marker, which is the intended suppressor.
+                            //
+                            // Two deliberate guards against turning a wedge into a nag loop:
+                            //  - only release when the marker is actually READABLE and says
+                            //    declined. WasUpdateDeclined fails OPEN by design, so if the
+                            //    marker layer is broken we keep the latch and the old
+                            //    (over-suppressing but quiet) behaviour.
+                            //  - only release once per tag per process, so even if the marker
+                            //    later becomes unreadable the user sees at most one further
+                            //    prompt for this version, never a prompt every poll.
+                            // Scoped to the declined case only: the other early returns
+                            // (no asset, blocked, bad signature) must keep the latch so we
+                            // don't re-download the package every poll.
+                            if (release.TagName != _declineLatchReleasedTag &&
+                                WasUpdateDeclined(release.TagName))
+                            {
+                                _declineLatchReleasedTag = release.TagName;
+                                _autoInstallAttemptedTag = null;
                             }
                         }
                         else

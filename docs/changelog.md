@@ -15,6 +15,49 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 ## v3.10 — AI self-tuning revival, extractor & auto-update reliability (2026-07)
 
 ### Fixes
+- **v3.10.47** — **the whole `[tv-hd]` category had been unraceable for five weeks**: 375 of
+  377 races on 2026-08-03 died with "Release not found on any server" while every sibling
+  section on the same pool succeeded. Nothing was wrong with the release names or the section
+  paths the message told you to check. A section blacklist is a *destination* rule, but
+  `SpreadManager` dropped a blacklisted site from the race participant list outright — and
+  Phase 1 only probes participants, so the one site actually holding the release was never
+  asked. The offending entry was itself fallout from v3.10.44: superbnc had refused an
+  `.imdbinfoname` sidecar GlDrive should never have offered, that got recorded as a permanent
+  section-wide upload denial, and while .44 removed the cause it left the entry — whose
+  14-day TTL every repeat failure refreshed, so it renewed itself for 5+ weeks
+  (`failureCount` 46). Three changes, each keyed on the property that defines the class:
+  a blacklisted site stays a race participant (destination exclusion still happens in
+  SpreadJob's Phase 2, which also handles fill-only); denials naming a **leading-dot** file
+  are never recorded and are scrubbed at load; and `IsSectionStructurallyFeasible` counts a
+  blacklisted site toward eligibility while still requiring one site able to receive.
+  Also: races that die "All destinations denied this release" are now parked like their
+  fill-only sibling instead of re-firing on every announce (333/day), and the auto-race log
+  line names *which* servers raced and which were excluded rather than a bare count — the
+  missing detail that made 431 unique failures unreadable and produced a wrong root-cause
+  note in v3.10.46.
+- **v3.10.47** — auto-update was wedged on 3.10.45 the same way v3.10.41 was supposed to have
+  fixed. The persisted 24h decline marker works, but the skip chain tests the in-memory
+  `_autoInstallAttemptedTag` latch *before* it, and a declined UAC prompt is swallowed inside
+  `LaunchUpdater` (it returns normally), so the latch is never cleared and suppresses that
+  version for the life of the process — a flag with no expiry sitting in front of the
+  expiry that was built for it. The latch is now handed back to the persisted marker, once
+  per version per process, and only when the marker is actually readable. Separately, a
+  declined prompt left `.update-attempt` on disk, so the next start counted a failed
+  *install* that never happened; three of those permanently block auto-install **and** the
+  tray menu the decline warning points you to. Cleared on the declined branch only — the
+  generic launch-failure branch keeps it, because there it is the only brake on re-downloading
+  ~150 MB every poll.
+- **v3.10.47** — log noise no longer destroys the diagnostics. A destination that
+  deterministically refuses MKD is an expected, already-classified outcome, but every one
+  logged a full 7-frame stack at Warning: 902 of the day's 937 "FXP transfer failed"
+  warnings, 1.5 MB, 14% of the file. That pushed the log past its 10 MB cap and rolled it
+  mid-day, and because retention counted *files* rather than days the extra roll evicted a
+  whole day of history — the record is destroyed exactly when something goes wrong. The
+  denial now logs one line at Debug (level only; classification and control flow are
+  unchanged), retention is expressed as a real time limit, and the file-count cap is only a
+  disk-blowout stop. The shared `IsExpectedReleaseScopedDenial` predicate is now the single
+  definition used by both the fast-skip gate and the logging gate, so they cannot drift
+  apart the way the two dest gates did in v3.10.45.
 - **v3.10.35** — revive the AI self-tuning loop, dead ~a week. OpenRouter retired the
   `openai/gpt-oss-120b:free` slug; the 404 body names its successor (`use this slug
   instead: …`), now parsed, retried, and cached for the process. Also: HTTP 402 was
