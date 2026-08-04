@@ -12,6 +12,14 @@ public static class SerilogSetup
     private static LoggingLevelSwitch? _levelSwitch;
 
     /// <summary>
+    /// How many size-triggered rolls a single retained day is allowed before the
+    /// file-count cap starts evicting. Bounds worst-case log disk at
+    /// RetainedFiles * IntradayRollAllowance * MaxFileSizeMb (default 3*8*10 = 240 MB)
+    /// while leaving normal days (1 file each) well clear of the cap.
+    /// </summary>
+    internal const int IntradayRollAllowance = 8;
+
+    /// <summary>
     /// Singleton sink installed during Configure(). Assign Recorder after TelemetryRecorder is ready.
     /// </summary>
     public static ErrorSignatureSink AgentSink { get; } = new ErrorSignatureSink();
@@ -31,7 +39,15 @@ public static class SerilogSetup
                 rollingInterval: RollingInterval.Day,
                 fileSizeLimitBytes: config.MaxFileSizeMb * 1024 * 1024,
                 rollOnFileSizeLimit: true,
-                retainedFileCountLimit: config.RetainedFiles,
+                // RetainedFiles means DAYS of history, but retainedFileCountLimit counts
+                // FILES — and rollOnFileSizeLimit adds a file every time a day exceeds the
+                // size cap. So a noisy day silently ate its neighbours' history: on
+                // 2026-08-03 one mid-day roll cut "3 days" down to ~1.5, destroying the
+                // retention exactly when an incident made it worth having.
+                // Time is now the semantic bound; the count is only a disk-blowout stop,
+                // sized to allow IntradayRollAllowance rolls per retained day.
+                retainedFileTimeLimit: TimeSpan.FromDays(config.RetainedFiles),
+                retainedFileCountLimit: config.RetainedFiles * IntradayRollAllowance,
                 outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
             .WriteTo.Sink(AgentSink)
             .CreateLogger();

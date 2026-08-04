@@ -654,22 +654,33 @@ public class SpreadManager : IDisposable
 
         var eligible = new List<string>();
         var missing = new List<string>();
+        var receivers = 0;
         foreach (var serverId in serverIds)
         {
             var serverConfig = _config.Servers.FirstOrDefault(s => s.Id == serverId);
             if (serverConfig == null) continue;
-            // MKD path denials don't make a section infeasible — the dest joins
-            // as fill-only (see TryAutoRaceInternalAsync blacklist exception).
-            if (_blacklist.IsBlacklisted(serverId, category)
-                && !MkdFailureClassifier.IsPermanentMkdPathDenial(_blacklist.Get(serverId, category)?.Reason ?? ""))
-            { missing.Add(serverConfig.Name); continue; }
-            if (SectionMapper.HasSectionFor(serverConfig.SpreadSite, category))
-                eligible.Add(serverId);
-            else
+            if (!SectionMapper.HasSectionFor(serverConfig.SpreadSite, category))
+            {
                 missing.Add(serverConfig.Name);
+                continue;
+            }
+            // A blacklisted site still counts toward eligibility: it can SOURCE the
+            // release even though it can't receive it (see
+            // CandidatePredicates.BlacklistExcludesSourceRole). Treating it as "can't
+            // host this section" suppressed whole sections outright — the same
+            // source/destination role conflation as the participant filter.
+            eligible.Add(serverId);
+            var blacklisted = _blacklist.IsBlacklisted(serverId, category)
+                && !MkdFailureClassifier.IsPermanentMkdPathDenial(
+                    _blacklist.Get(serverId, category)?.Reason ?? "");
+            if (blacklisted) missing.Add($"{serverConfig.Name} (dest-blacklisted)");
+            else receivers++;
         }
 
-        if (eligible.Count >= 2)
+        // Still a genuine necessary condition: a race needs two mapped participants AND
+        // at least one of them able to RECEIVE. Without the receiver check, a section
+        // whose every destination is blacklisted would race forever and fail late.
+        if (eligible.Count >= 2 && receivers >= 1)
         {
             detail = "";
             return true; // feasible — DON'T cache (let the real gate decide; avoids stale allow)
@@ -698,23 +709,20 @@ public class SpreadManager : IDisposable
             var effectiveSection = mapping?.RemoteSection ?? category;
             var tagRules = mapping?.TagRules ?? (IReadOnlyList<SkiplistRule>)Array.Empty<SkiplistRule>();
 
-            // Blacklist check: sites that previously failed MKD permanently for
-            // this section (550 path-filter, permission denied) are dropped here
-            // so we don't waste borrow timeouts rediscovering the same NO every
-            // race. SpreadJob also enforces this at dest selection for manually
-            // started (non-auto) races. EXCEPTION: an MKD *path* denial only
-            // means the account can't CREATE dirs — SpreadJob admits such dests
-            // as fill-only (they receive once another racer creates the dir),
-            // so they must stay in the participant list here.
+            // Blacklist check: a site that previously failed permanently for this
+            // section can't RECEIVE it. Note the denial for the log, but keep the site
+            // in the participant list — see CandidatePredicates.BlacklistExcludesSourceRole.
+            // Dropping it here also removed it as a SOURCE, and Phase 1 only probes
+            // participants, so a blacklisted site holding the release became invisible
+            // and the race died with "Release not found on any server".
+            // Destination exclusion still happens in SpreadJob's Phase 2 dest selection,
+            // which additionally distinguishes fill-only dests and prints the fix hint.
             if (_blacklist.IsBlacklisted(serverId, category))
             {
                 var entry = _blacklist.Get(serverId, category);
                 var reason = entry?.Reason ?? "permanent MKD failure";
                 if (!MkdFailureClassifier.IsPermanentMkdPathDenial(reason))
-                {
-                    denials.Add($"{serverConfig.Name}: blacklisted ({reason})");
-                    continue;
-                }
+                    denials.Add($"{serverConfig.Name}: blacklisted as a destination ({reason}) — still usable as a source");
             }
 
             if (debug)
@@ -830,8 +838,14 @@ public class SpreadManager : IDisposable
             var job = StartRace(category, releaseName, allowed, SpreadMode.Race, sourceServerId, sourcePath);
             if (job != null)
             {
-                Log.Information("Auto-race started: {Release} [{Section}] across {Count} servers",
-                    releaseName, category, allowed.Count);
+                // Name the participants and the exclusions. A bare count made 375 failed
+                // [tv-hd] races unreadable: "across 2 servers" never revealed WHICH two,
+                // nor that the source had been dropped before the race began.
+                var names = string.Join(", ", allowed.Select(id =>
+                    _config.Servers.FirstOrDefault(s => s.Id == id)?.Name ?? id));
+                var excluded = denials.Count > 0 ? $"; excluded: {string.Join("; ", denials)}" : "";
+                Log.Information("Auto-race started: {Release} [{Section}] across {Count} servers ({Names}){Excluded}{SkippedForSection}",
+                    releaseName, category, allowed.Count, names, excluded, skippedForSection);
                 var suffix = denials.Count > 0 ? $" (skipped: {string.Join(", ", denials)})" : "";
                 AutoRaceAttempted?.Invoke(category, releaseName, $"Racing on {allowed.Count} servers{suffix}");
             }
@@ -1235,6 +1249,15 @@ public class SpreadManager : IDisposable
         // doesn't re-spawn the same doomed race (190 in 7h on 2026-06-11).
         if (errorMessage.Contains("All destinations are fill-only", StringComparison.OrdinalIgnoreCase))
             return (NoActivityTtl, "fill-only");
+
+        // Same shape as fill-only one branch up, and it was simply missing: a race that
+        // died because every dest refused MKD for this release recorded no give-up
+        // decision at all, so the next announce or /recent poll re-ran it immediately
+        // (333 such failures on 2026-08-03). Keyed on (section, release) like every other
+        // dead-race entry, so it can never blacklist a section — a different release in
+        // the same section is a different key and races normally — and it self-expires.
+        if (errorMessage.Contains("All destinations denied this release", StringComparison.OrdinalIgnoreCase))
+            return (NoActivityTtl, "mkdir-denied");
 
         return null;
     }

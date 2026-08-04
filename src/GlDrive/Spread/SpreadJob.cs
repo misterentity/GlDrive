@@ -670,6 +670,34 @@ public class SpreadJob : IDisposable
                 }
             }
 
+            // A blacklisted site that ALSO holds the release short-circuits the dest
+            // check above (`sitePaths.ContainsKey` → continue), and FindBestTransfer's
+            // dest loop consults only _destDirscriptDenied — never the blacklist. So a
+            // site kept in the race for its SOURCE role could still be picked to RECEIVE
+            // files it lacks, and a genuine upload denial (STOR 553 "no upload rights")
+            // would poison the connection and refresh the entry's TTL, making it
+            // immortal. Block the dest role explicitly for exactly those sites: the same
+            // role separation this release is about, applied to the one path where being
+            // a source used to smuggle a site past its own destination ban.
+            if (_blacklist != null)
+            {
+                lock (_ownershipLock)
+                {
+                    foreach (var (serverId, _) in _serverConfigs)
+                    {
+                        if (!sitePaths.TryGetValue(serverId, out var heldPath)) continue;
+                        if (!_blacklist.IsBlacklisted(serverId, Section)) continue;
+                        var reason = _blacklist.Get(serverId, Section)?.Reason ?? "";
+                        // Fill-only (MKD path/rights) dests are handled below and MAY
+                        // still receive once a peer creates the dir — don't block those.
+                        if (MkdFailureClassifier.IsPermanentMkdPathDenial(reason)) continue;
+                        if (!_destDirscriptDenied.TryGetValue(serverId, out var set))
+                            _destDirscriptDenied[serverId] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        set.Add(heldPath);
+                    }
+                }
+            }
+
             // Pre-seed the per-job MKD-denial set for fill-only dests so the race
             // never attempts the doomed MKD; the dir-confirmed gate in
             // FindBestTransfer admits candidates once a scan sees the dir exist.
@@ -2308,9 +2336,7 @@ public class SpreadJob : IDisposable
                 // per-file retry bump. The dest was already dropped for this release in
                 // EnsureDirectoryExists, so a filter-rejected release can't hold up the race.
                 // (StopRaceOnMkdDenied governs whether the section is also blacklisted.)
-                if (IsMkdError(transfer.ErrorMessage) &&
-                    (MkdFailureClassifier.IsPermanentMkdPathDenial(transfer.ErrorMessage) ||
-                     MkdFailureClassifier.IsReleaseScopedDirscriptDenial(transfer.ErrorMessage)))
+                if (MkdFailureClassifier.IsExpectedReleaseScopedDenial(transfer.ErrorMessage))
                 {
                     Log.Information("Spread: {Dst} mkdir denied [{Section}] {File} — fast-skip, " +
                         "dropped for this release (no poison, no backoff)",
@@ -2653,13 +2679,7 @@ public class SpreadJob : IDisposable
     /// path-filter, missing section) rather than a per-file transfer glitch.
     /// </summary>
     private static bool IsMkdError(string? errorMessage)
-    {
-        if (string.IsNullOrEmpty(errorMessage)) return false;
-        return errorMessage.Contains("MKD failed", StringComparison.OrdinalIgnoreCase)
-            || errorMessage.Contains("make directories", StringComparison.OrdinalIgnoreCase)
-            || errorMessage.Contains("Permission denied", StringComparison.OrdinalIgnoreCase)
-            || errorMessage.Contains("path-filter", StringComparison.OrdinalIgnoreCase);
-    }
+        => MkdFailureClassifier.IsMkdError(errorMessage);
 
     /// <summary>
     /// Record a failure for a destination and park it on the backoff ladder.
