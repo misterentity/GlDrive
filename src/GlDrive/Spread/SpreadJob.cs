@@ -429,6 +429,13 @@ public class SpreadJob : IDisposable
                 Log.Information("Spread: known source {Server} at {Path}", srcName, _knownSourcePath);
             }
 
+            // Probe outcome accounting. A bare catch used to make "the site said no"
+            // and "we never got an answer" indistinguishable, so a borrow timeout was
+            // reported as a missing release and parked for an hour (v3.10.46).
+            var pathsAnsweredCleanly = 0;
+            var pathsErrored = 0;
+            var probedBases = new List<string>();
+
             // Probe remaining servers for the release
             foreach (var (serverId, config) in _serverConfigs)
             {
@@ -452,7 +459,10 @@ public class SpreadJob : IDisposable
                     {
                         var probePath = basePath.TrimEnd('/') + "/" + ReleaseName;
                         await using var conn = await pool.Borrow(ct);
-                        if (await conn.Client.DirectoryExists(probePath, ct))
+                        var exists = await conn.Client.DirectoryExists(probePath, ct);
+                        pathsAnsweredCleanly++;
+                        probedBases.Add($"{config.Name}:{basePath}");
+                        if (exists)
                         {
                             sitePaths[serverId] = probePath;
                             sourceServers.Add(serverId);
@@ -461,12 +471,45 @@ public class SpreadJob : IDisposable
                         }
                     }
                     catch (OperationCanceledException) { throw; }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        // Not evidence of absence — record it so the verdict below can
+                        // tell "site said no" from "we never asked", and so the reason
+                        // is visible next time instead of vanishing into a bare catch.
+                        pathsErrored++;
+                        Log.Debug(ex, "Spread: probe failed on {Server} at {Base} for {Release}",
+                            config.Name, basePath, ReleaseName);
+                    }
                 }
             }
 
             if (sourceServers.Count == 0)
             {
+                var verdict = CandidatePredicates.ClassifySourceProbe(
+                    sourceServers.Count, pathsAnsweredCleanly, pathsErrored);
+
+                if (verdict == SourceProbeVerdict.Inconclusive)
+                {
+                    // We never got an answer from anywhere. Say so, and let
+                    // SpreadManager park this on the short TTL rather than the
+                    // hour-long release-not-found one.
+                    var probed = pathsAnsweredCleanly + pathsErrored;
+                    Log.Warning("Spread: source probe inconclusive for {Release} — " +
+                        "{Errored} of {Probed} path probes failed, none answered",
+                        ReleaseName, pathsErrored, probed);
+                    SetFailed($"Source probe inconclusive — 0 of {probed} path probes " +
+                        "returned an answer (connection failures)");
+                    return;
+                }
+
+                // Absent is a real verdict, but the old message named no path, so a
+                // section whose configured dir is simply wrong (superbnc /incoming/tv-hd,
+                // 0 hits in 190 probes on 2026-08-03 while its siblings all resolved)
+                // looked identical to a release that genuinely never landed. Name the
+                // section and the bases we asked about so the config error is visible.
+                Log.Warning("Spread: {Release} [{Section}] absent from all {Count} probed " +
+                    "base path(s): {Bases}", ReleaseName, Section, probedBases.Count,
+                    string.Join(", ", probedBases));
                 SetFailed("Release not found on any server — check release name and section paths");
                 return;
             }

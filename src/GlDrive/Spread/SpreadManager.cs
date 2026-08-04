@@ -1205,9 +1205,15 @@ public class SpreadManager : IDisposable
     /// if the message isn't a known dead-end class. Reason strings double as
     /// log tags. Case-insensitive matching throughout.
     /// </summary>
-    private static (TimeSpan ttl, string reason)? ClassifyDeadRace(string? errorMessage)
+    internal static (TimeSpan ttl, string reason)? ClassifyDeadRace(string? errorMessage)
     {
         if (string.IsNullOrEmpty(errorMessage)) return null;
+
+        // Check BEFORE release-not-found: an inconclusive sweep proved nothing, so
+        // it must not inherit that verdict's hour-long park. Short TTL = re-probe
+        // on the next announce once the pool recovers.
+        if (errorMessage.Contains("Source probe inconclusive", StringComparison.OrdinalIgnoreCase))
+            return (SourceScanFailedTtl, "source-probe-inconclusive");
 
         if (errorMessage.Contains("affil-blocked", StringComparison.OrdinalIgnoreCase))
             return (AffilBlockedTtl, "affil-blocked");
