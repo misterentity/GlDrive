@@ -95,4 +95,44 @@ internal static class CandidatePredicates
     /// <summary>True if either side is at its concurrent-slot ceiling.</summary>
     internal static bool SlotsFull(int dstActive, int dstMaxUpload, int srcActive, int srcMaxDownload)
         => dstActive >= dstMaxUpload || srcActive >= srcMaxDownload;
+
+    /// <summary>
+    /// What the Phase-1 source sweep is actually entitled to conclude.
+    ///
+    /// The sweep probes every candidate section path on every server. A probe can
+    /// end three ways: the dir is there, the site says it isn't, or we never got an
+    /// answer (borrow timeout, pool cooldown, dead control channel). The first two
+    /// are evidence; the third is not. Collapsing "no answer" into "not there" is
+    /// what let one transient connection failure park a live release for an hour.
+    ///
+    /// Absence is only provable by a probe that came back. See
+    /// <see cref="SourceProbeVerdict"/>.
+    /// </summary>
+    /// <param name="serversWithRelease">Servers confirmed to hold the release.</param>
+    /// <param name="pathsAnsweredCleanly">Probes that returned a definitive yes/no.</param>
+    /// <param name="pathsErrored">Probes that threw before returning anything.</param>
+    internal static SourceProbeVerdict ClassifySourceProbe(
+        int serversWithRelease, int pathsAnsweredCleanly, int pathsErrored)
+    {
+        if (serversWithRelease > 0) return SourceProbeVerdict.Found;
+        if (pathsAnsweredCleanly > 0) return SourceProbeVerdict.Absent;
+        // Nothing came back — including the "nothing was probed at all" case
+        // (no sections configured, or no pool for any server). Either way we
+        // never asked, so we cannot say the release is missing.
+        _ = pathsErrored;
+        return SourceProbeVerdict.Inconclusive;
+    }
+}
+
+/// <summary>Outcome of the Phase-1 source-discovery sweep in <see cref="SpreadJob"/>.</summary>
+internal enum SourceProbeVerdict
+{
+    /// <summary>At least one server holds the release.</summary>
+    Found,
+
+    /// <summary>At least one probe answered, and every answer was "not here".</summary>
+    Absent,
+
+    /// <summary>No probe returned an answer. Says nothing about the release.</summary>
+    Inconclusive,
 }
