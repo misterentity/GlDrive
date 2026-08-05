@@ -2170,6 +2170,9 @@ public class SpreadJob : IDisposable
         return (bestFile, bestSrc, bestDst);
     }
 
+    private static BorrowStarvationDiagnoser.PoolState SnapshotPool(FtpConnectionPool p) =>
+        new(p.IsInCooldown, p.IsExhausted, p.TotalCreated, p.ActiveCount, p.MaxSize);
+
     private async Task ExecuteTransfer(SpreadFileInfo file, string srcId, string dstId,
         string dstBasePath, CancellationToken ct)
     {
@@ -2447,7 +2450,9 @@ public class SpreadJob : IDisposable
         }
         catch (OperationCanceledException)
         {
-            // Borrow timeout — pool exhausted, likely ghost connections on server.
+            // Borrow timeout — the pool could not hand out a connection within 30s.
+            // The reason varies (cooldown / empty / at capacity / login cap) and is
+            // read off the pool below rather than assumed.
             // Deliberately does NOT bump _failureCounts: the transfer never
             // started, so this is pool congestion, not a problem with the FILE.
             // Counting these burned the pair (4) / file (7) retry budgets during
@@ -2455,9 +2460,16 @@ public class SpreadJob : IDisposable
             // race (My.Family 2026-06-10: 25 min of borrow timeouts on 5 files
             // → 19/22 partial → wipe). Mirrors the gate-timeout handling above:
             // the file simply gets re-scored on the next pass.
-            Log.Warning("FXP borrow timeout: {File} ({Src} -> {Dst}) — pool exhausted, " +
-                "server may have ghost connections (try !username login to kill them)",
-                file.Name, _serverConfigs[srcId].Name, _serverConfigs[dstId].Name);
+            // Report the cause from the pools' own counters. The message used to
+            // assert "pool exhausted / ghost connections (try !username)" for every
+            // one of these, which contradicted the login-cap lines printed right
+            // beside it and sent 194 SYN timeouts a day chasing the wrong subsystem.
+            var srcName = _serverConfigs[srcId].Name;
+            var dstName = _serverConfigs[dstId].Name;
+            Log.Warning("FXP borrow timeout: {File} ({Src} -> {Dst}) — {Cause}",
+                file.Name, srcName, dstName,
+                BorrowStarvationDiagnoser.Describe(
+                    srcName, SnapshotPool(srcPool), dstName, SnapshotPool(dstPool)));
             // Congestion (no login permit free), NOT corruption. The borrow timed
             // out DURING Borrow, before any STOR/RETR — so the surviving peer (if
             // any) never touched its GnuTLS data channel and is pristine. Do NOT
