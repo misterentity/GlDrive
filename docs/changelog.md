@@ -15,6 +15,21 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 ## v3.10 — AI self-tuning revival, extractor & auto-update reliability (2026-07)
 
 ### Fixes
+- **v3.10.48** — the FXP borrow-timeout warning asserted one fixed cause for every timeout:
+  "pool exhausted, server may have ghost connections (try `!username` login to kill them)".
+  It fired 197 times on 2026-08-04, 194 of them `superbnc -> SYN`, and the lines printed
+  right beside it said something else entirely — `created=2, max=3`, `server entering 20s
+  login-cap backoff`, `Account login cap reached`. `created=2` of `max=3` is not an exhausted
+  pool and a login-cap stall is not a ghost session; acting on the advice kills the operator's
+  own live logins and leaves the real contention untouched. The handler's own comment already
+  said "Congestion (no login permit free), NOT corruption" one line below the message claiming
+  the opposite. The cause is now read off the pool's counters and separates the four states
+  that lead a reader somewhere different — cooldown (clears on a timer), empty pool (the only
+  case where ghost sessions are plausible, and where `!username` is still suggested), at
+  capacity (concurrency pressure, nothing broken), and login cap (another pool on the same
+  account holds the permits). Only the starved side is named, and every verdict carries the
+  numbers it was derived from. Same shape as v3.10.45(b) and v3.10.46: *a verdict asserting a
+  cause its own counters contradict.* 506 → 521 tests.
 - **v3.10.47** — **the whole `[tv-hd]` category had been unraceable for five weeks**: 375 of
   377 races on 2026-08-03 died with "Release not found on any server" while every sibling
   section on the same pool succeeded. Nothing was wrong with the release names or the section
