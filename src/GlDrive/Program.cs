@@ -122,38 +122,78 @@ public static class Program
             return 0;
         }
 
-        // Crash detected — log reason and restart GlDrive
+        // The process exited without deleting its .running marker. That is USUALLY a
+        // crash — but not always, and the watchdog has no business asserting a cause it
+        // can't see. On 2026-08-05 07:39 this logged "[FTL] ... crashed — unknown (no
+        // matching event log entry found)" 41 seconds before Kernel-Power logged "The
+        // system is entering sleep", with no 1026/1000 event anywhere. Report the
+        // evidence (unclean exit) and let the reason stand on its own.
+        var logDir = Path.Combine(appData, "logs");
+        var logFile = Path.Combine(logDir, $"gldrive-{DateTime.Now:yyyyMMdd}.log");
+
+        void AppendLog(string level, string message)
+        {
+            try
+            {
+                if (!Directory.Exists(logDir)) return;
+                File.AppendAllText(logFile,
+                    $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{level}] WATCHDOG: {message}{Environment.NewLine}");
+            }
+            catch { /* logging must never take the watchdog down */ }
+        }
+
         try
         {
             var crashReason = GetCrashReason(targetPid);
+            var identified = crashReason != UnknownCrashReason;
             File.WriteAllText(crashMarker, $"CRASH:{DateTime.UtcNow:O}");
 
-            // Append crash details to the current log file
-            var logDir = Path.Combine(appData, "logs");
-            if (Directory.Exists(logDir))
+            AppendLog(identified ? "FTL" : "WRN",
+                identified
+                    ? $"Process {targetPid} crashed — {crashReason}"
+                    : $"Process {targetPid} exited without a clean-exit marker; no crash event found in the " +
+                      "Windows event log. Cause unidentified — an OS sleep/shutdown or an external kill looks " +
+                      "the same as a crash from here. Restarting.");
+        }
+        catch (Exception ex)
+        {
+            AppendLog("WRN", $"Failed to classify exit of process {targetPid}: {ex.GetType().Name}: {ex.Message}");
+        }
+
+        // Restart is a separate try block: a failure to *classify* the exit above must
+        // never skip the restart, and a failure to restart must never be silent. The
+        // old code wrapped both in one bare catch{}, so a restart that never happened
+        // was indistinguishable from one that did.
+        try
+        {
+            var exe = Environment.ProcessPath;
+            if (string.IsNullOrEmpty(exe))
             {
-                var logFile = Path.Combine(logDir, $"gldrive-{DateTime.Now:yyyyMMdd}.log");
-                var entry = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [FTL] WATCHDOG: Process {targetPid} crashed — {crashReason}{Environment.NewLine}";
-                File.AppendAllText(logFile, entry);
+                AppendLog("ERR", "Cannot restart — Environment.ProcessPath is empty.");
+                return 0;
             }
 
-            var exe = Environment.ProcessPath;
-            if (!string.IsNullOrEmpty(exe))
+            var started = Process.Start(new ProcessStartInfo
             {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = exe,
-                    UseShellExecute = false
-                });
-            }
+                FileName = exe,
+                UseShellExecute = false
+            });
+
+            if (started == null)
+                AppendLog("ERR", $"Restart of {exe} returned no process handle — GlDrive may stay down.");
+            else
+                AppendLog("INF", $"Restarted GlDrive as PID {started.Id}.");
         }
-        catch
+        catch (Exception ex)
         {
-            // Nothing we can do
+            AppendLog("ERR", $"Restart failed — GlDrive stays down until launched manually. " +
+                             $"{ex.GetType().Name}: {ex.Message}");
         }
 
         return 0;
     }
+
+    internal const string UnknownCrashReason = "unknown (no matching event log entry found)";
 
     /// <summary>
     /// Query Windows Event Log for the crash reason of the given process.
@@ -222,7 +262,7 @@ public static class Program
             // Event log query failed — non-critical
         }
 
-        return "unknown (no matching event log entry found)";
+        return UnknownCrashReason;
     }
 
     [DllImport("kernel32.dll")]

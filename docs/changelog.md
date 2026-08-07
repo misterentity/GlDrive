@@ -15,6 +15,31 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 ## v3.10 — AI self-tuning revival, extractor & auto-update reliability (2026-07)
 
 ### Fixes
+- **v3.10.49** — a server whose mount failed at startup was never retried, so one bad
+  moment cost the whole process its FTP stack. `ServerManager.MountAll` caught the
+  failure, logged an error and moved on; `MountServer`'s own catch disposed the
+  `MountService` — and the `ConnectionMonitor` that would have reconnected lives *inside*
+  that service. On 2026-08-06 the box resumed from sleep at 09:04 and GlDrive started at
+  09:07 before the network was up: all three servers failed inside 200 ms with
+  `SocketException 10065 (unreachable host)` / `11001 (No such host is known)`, and the
+  app then did **zero FTP work for the following 10 hours** — no spread scan, no pool, no
+  remount. IRC recovered by itself over the same window (398 failures, 31 successful
+  reconnects), and that asymmetry is what localized the fault: IRC has a reconnect loop,
+  mounting had none. Failed mounts are now queued and retried on a capped exponential
+  backoff (30s → 60s → 120s → 240s → pinned at 5 min, `MountRetryPolicy`) until they
+  succeed or the server stops being eligible — the cap keeps a BNC clear of its ~2 h
+  rate-limit cooldown. The retry never gives up permanently: an unreachable network is
+  precisely the condition that resolves on its own.
+- **v3.10.49** — the watchdog asserted `[FTL] ... crashed` from the mere absence of a
+  clean-exit marker, and its restart was unobservable. On 2026-08-05 07:39:13 it logged
+  `Process 10176 crashed — unknown (no matching event log entry found)` **41 seconds
+  before** Kernel-Power logged `The system is entering sleep`, with no 1026/1000 event
+  anywhere — an OS sleep, not a crash. It now reports an unidentified exit as a `WRN`
+  naming the actual evidence, and reserves `FTL` for exits with a real event-log
+  signature. The restart also moved out of the shared bare `catch {}` into its own block
+  that logs the new PID on success and an `ERR` on failure — previously a restart that
+  never happened was indistinguishable from one that did.
+
 - **v3.10.48** — the FXP borrow-timeout warning asserted one fixed cause for every timeout:
   "pool exhausted, server may have ghost connections (try `!username` login to kill them)".
   It fired 197 times on 2026-08-04, 194 of them `superbnc -> SYN`, and the lines printed
