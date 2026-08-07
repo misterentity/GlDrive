@@ -22,6 +22,11 @@ public class ServerManager : IDisposable
     private readonly ConcurrentDictionary<string, IrcAnnounceListener> _announceListeners = new();
     private readonly ConcurrentDictionary<string, IrcPatternDetector> _patternDetectors = new();
     private readonly ConcurrentDictionary<string, RequestFiller> _requestFillers = new();
+    // Servers whose mount failed, awaiting retry. Value is the attempt count so far.
+    private readonly ConcurrentDictionary<string, int> _pendingRemounts = new();
+    private readonly CancellationTokenSource _remountCts = new();
+    private Task? _remountLoop;
+    private readonly object _remountLoopLock = new();
     private SpreadManager? _spreadManager;
 
     public SpreadManager? Spread => _spreadManager;
@@ -177,13 +182,102 @@ public class ServerManager : IDisposable
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "Failed to mount server {Name} after {Elapsed}ms", server.Name, sw.ElapsedMilliseconds);
+                Log.Error(ex, "Failed to mount server {Name} after {Elapsed}ms — queued for retry",
+                    server.Name, sw.ElapsedMilliseconds);
+                // A failed mount used to be permanent for the process lifetime: the
+                // MountService (and the ConnectionMonitor inside it that would have
+                // reconnected) is disposed by MountServer's catch. Queue it instead.
+                QueueRemount(server.Id);
             }
         });
         await Task.WhenAll(tasks);
 
         // Start IRC for all enabled servers, even those whose FTP mount failed
         await EnsureAllIrcServices();
+    }
+
+    /// <summary>
+    /// Register a server for background remount attempts and make sure the retry
+    /// loop is running. Safe to call repeatedly for the same server.
+    /// </summary>
+    private void QueueRemount(string serverId)
+    {
+        if (_remountCts.IsCancellationRequested) return;
+        _pendingRemounts.TryAdd(serverId, 0);
+
+        lock (_remountLoopLock)
+        {
+            if (_remountLoop is { IsCompleted: false }) return;
+            _remountLoop = Task.Run(() => RemountLoop(_remountCts.Token));
+        }
+    }
+
+    /// <summary>
+    /// Retries failed mounts on a capped exponential backoff until they succeed or
+    /// stop being eligible. Never gives up permanently — the conditions that cause a
+    /// startup mount failure (no network yet after resume, DNS not ready, site down)
+    /// are precisely the ones that resolve on their own.
+    /// </summary>
+    private async Task RemountLoop(CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested && !_pendingRemounts.IsEmpty)
+            {
+                // Wait for the shortest delay any pending server is due.
+                var nextDelay = _pendingRemounts.Values
+                    .Select(attempts => MountRetryPolicy.DelayFor(attempts + 1))
+                    .DefaultIfEmpty(MountRetryPolicy.InitialDelay)
+                    .Min();
+
+                await Task.Delay(nextDelay, ct);
+
+                foreach (var serverId in _pendingRemounts.Keys.ToList())
+                {
+                    if (ct.IsCancellationRequested) return;
+
+                    var cfg = _config.Servers.FirstOrDefault(s => s.Id == serverId);
+                    if (!MountRetryPolicy.ShouldRetry(
+                            alreadyMounted: _servers.ContainsKey(serverId),
+                            existsInConfig: cfg != null,
+                            enabled: cfg?.Enabled ?? false,
+                            autoMountOnStart: cfg?.Mount.AutoMountOnStart ?? false))
+                    {
+                        _pendingRemounts.TryRemove(serverId, out _);
+                        Log.Information(
+                            "Remount for {ServerId} no longer needed (mounted={Mounted}, inConfig={InConfig}) — dropped from retry queue",
+                            serverId, _servers.ContainsKey(serverId), cfg != null);
+                        continue;
+                    }
+
+                    var attempt = _pendingRemounts.TryGetValue(serverId, out var a) ? a + 1 : 1;
+                    _pendingRemounts[serverId] = attempt;
+
+                    try
+                    {
+                        Log.Information("Remount attempt {Attempt} for {Name}...", attempt, cfg!.Name);
+                        await MountServer(serverId, ct);
+                        _pendingRemounts.TryRemove(serverId, out _);
+                        Log.Information("Remount succeeded for {Name} on attempt {Attempt}", cfg.Name, attempt);
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                    {
+                        return;
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning(ex, "Remount attempt {Attempt} for {Name} failed — next try in {Delay}",
+                            attempt, cfg!.Name, MountRetryPolicy.DelayFor(attempt + 1));
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException) { /* shutting down */ }
+        catch (Exception ex)
+        {
+            // Never let the loop die silently — that would recreate the very bug this fixes.
+            Log.Error(ex, "Remount loop terminated unexpectedly; failed servers will not be retried until restart");
+        }
     }
 
     /// <summary>
@@ -459,6 +553,11 @@ public class ServerManager : IDisposable
 
     public void Dispose()
     {
+        try { _remountCts.Cancel(); } catch { }
+        try { _remountLoop?.Wait(TimeSpan.FromSeconds(5)); } catch { }
+        _remountCts.Dispose();
+        _pendingRemounts.Clear();
+
         _spreadManager?.Dispose();
         _spreadManager = null;
 
