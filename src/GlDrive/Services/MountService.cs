@@ -230,7 +230,11 @@ public class MountService : IDisposable
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Mount failed for server {ServerName}", _serverConfig.Name);
+            // Debug, not Error: every caller of Mount (ServerManager.MountAll and
+            // RemountLoop) logs this failure itself, and only the caller knows whether
+            // it's the first failure or the 226th retry. Logging a second stack here
+            // doubled the cost of every retry — see MountFailureLogPolicy.
+            Log.Debug(ex, "Mount failed for server {ServerName}", _serverConfig.Name);
             SetState(MountState.Error);
             Cleanup();
             throw;
