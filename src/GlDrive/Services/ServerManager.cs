@@ -24,6 +24,9 @@ public class ServerManager : IDisposable
     private readonly ConcurrentDictionary<string, RequestFiller> _requestFillers = new();
     // Servers whose mount failed, awaiting retry. Value is the attempt count so far.
     private readonly ConcurrentDictionary<string, int> _pendingRemounts = new();
+    // Last remount error message per server, so a CHANGED error always logs in full
+    // even deep into a failure streak — that transition is the diagnostic moment.
+    private readonly ConcurrentDictionary<string, string> _lastRemountError = new();
     private readonly CancellationTokenSource _remountCts = new();
     private Task? _remountLoop;
     private readonly object _remountLoopLock = new();
@@ -244,6 +247,7 @@ public class ServerManager : IDisposable
                             autoMountOnStart: cfg?.Mount.AutoMountOnStart ?? false))
                     {
                         _pendingRemounts.TryRemove(serverId, out _);
+                        _lastRemountError.TryRemove(serverId, out _);
                         Log.Information(
                             "Remount for {ServerId} no longer needed (mounted={Mounted}, inConfig={InConfig}) — dropped from retry queue",
                             serverId, _servers.ContainsKey(serverId), cfg != null);
@@ -258,6 +262,7 @@ public class ServerManager : IDisposable
                         Log.Information("Remount attempt {Attempt} for {Name}...", attempt, cfg!.Name);
                         await MountServer(serverId, ct);
                         _pendingRemounts.TryRemove(serverId, out _);
+                        _lastRemountError.TryRemove(serverId, out _);
                         Log.Information("Remount succeeded for {Name} on attempt {Attempt}", cfg.Name, attempt);
                     }
                     catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -266,8 +271,15 @@ public class ServerManager : IDisposable
                     }
                     catch (Exception ex)
                     {
-                        Log.Warning(ex, "Remount attempt {Attempt} for {Name} failed — next try in {Delay}",
-                            attempt, cfg!.Name, MountRetryPolicy.DelayFor(attempt + 1));
+                        var delay = MountRetryPolicy.DelayFor(attempt + 1);
+                        _lastRemountError.TryGetValue(serverId, out var previous);
+                        if (MountFailureLogPolicy.ShouldLogFullDetail(attempt, previous, ex.Message))
+                            Log.Warning(ex, "Remount attempt {Attempt} for {Name} failed — next try in {Delay}",
+                                attempt, cfg!.Name, delay);
+                        else
+                            Log.Warning("Remount attempt {Attempt} for {Name} failed ({Error}) — next try in {Delay}",
+                                attempt, cfg!.Name, ex.Message, delay);
+                        _lastRemountError[serverId] = ex.Message;
                     }
                 }
             }
@@ -557,6 +569,7 @@ public class ServerManager : IDisposable
         try { _remountLoop?.Wait(TimeSpan.FromSeconds(5)); } catch { }
         _remountCts.Dispose();
         _pendingRemounts.Clear();
+        _lastRemountError.Clear();
 
         _spreadManager?.Dispose();
         _spreadManager = null;

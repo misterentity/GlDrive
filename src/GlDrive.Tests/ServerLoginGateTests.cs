@@ -185,4 +185,105 @@ public class ServerLoginGateTests
         Assert.False(await gate.TryAcquireAsync(default, Now));         // main #2 blocked (general now 1)
         Assert.True(await gate.TryAcquireAsync(default, Now, priority: true)); // FXP still has its reserved slot
     }
+
+    // ---- v3.10.50: the reservation must hold in BOTH directions -------------
+
+    [Fact]
+    public async Task Priority_callers_cannot_consume_the_main_pools_last_login()
+    {
+        // The 2026-08-07 production shape: usable=3, fxpReserved=2. Before this fix
+        // priority callers waited on the total semaphore alone, so the spread pool
+        // could take all 3 logins and the mount could never connect — SYN retried
+        // 226 times. FXP must be capped at limit-1 so one login is always mountable.
+        var gate = new ServerLoginGate("t", limit: 3, maxLimit: 3, reserved: 2);
+
+        Assert.True(await gate.TryAcquireAsync(default, Now, priority: true));
+        Assert.True(await gate.TryAcquireAsync(default, Now, priority: true));
+
+        // Third priority acquire must be refused — that login belongs to the mount.
+        Assert.False(await gate.TryAcquireAsync(default, Now, priority: true));
+
+        // ...and the main pool can still get in, which is the whole point.
+        Assert.True(await gate.TryAcquireAsync(default, Now, priority: false));
+        Assert.Equal(3, gate.Held);
+    }
+
+    [Fact]
+    public async Task Main_pool_still_cannot_starve_FXP_the_original_v372_guarantee()
+    {
+        var gate = new ServerLoginGate("t", limit: 3, maxLimit: 3, reserved: 2);
+
+        Assert.True(await gate.TryAcquireAsync(default, Now, priority: false));
+        // Main pool is capped at limit-reserved = 1.
+        Assert.False(await gate.TryAcquireAsync(default, Now, priority: false));
+
+        // Both FXP reservations remain obtainable.
+        Assert.True(await gate.TryAcquireAsync(default, Now, priority: true));
+        Assert.True(await gate.TryAcquireAsync(default, Now, priority: true));
+    }
+
+    [Fact]
+    public async Task Priority_release_returns_the_priority_subcap_permit()
+    {
+        // Releasing with the wrong sub-cap would leak the reservation and the gate
+        // would drift shut after a few cycles.
+        var gate = new ServerLoginGate("t", limit: 3, maxLimit: 3, reserved: 2);
+        for (var cycle = 0; cycle < 5; cycle++)
+        {
+            Assert.True(await gate.TryAcquireAsync(default, Now, priority: true));
+            Assert.True(await gate.TryAcquireAsync(default, Now, priority: true));
+            gate.Release(priority: true);
+            gate.Release(priority: true);
+            Assert.Equal(0, gate.Held);
+        }
+    }
+
+    [Fact]
+    public void MainReserved_is_zero_when_there_is_only_one_login()
+    {
+        // With a single usable login there is nothing to divide; reserving it would
+        // mean FXP could never run at all.
+        Assert.Equal(0, new ServerLoginGate("t", 1, 1).MainReserved);
+        Assert.Equal(1, new ServerLoginGate("t", 2, 2, reserved: 1).MainReserved);
+    }
+
+    [Fact]
+    public async Task Single_login_gate_still_lets_priority_callers_in()
+    {
+        var gate = new ServerLoginGate("t", 1, 1);
+        Assert.True(await gate.TryAcquireAsync(default, Now, priority: true));
+        Assert.Equal(1, gate.Held);
+    }
+
+    [Fact]
+    public async Task TightenTo_one_does_not_deadlock_either_role()
+    {
+        // Pre-existing latent bug found alongside the reservation fix: the sub-cap
+        // was computed as max(0, limit-reserved), so tightening a reserved gate to 1
+        // drove BOTH sub-caps to zero and no caller of any kind could ever log in.
+        var gate = new ServerLoginGate("t", limit: 3, maxLimit: 3, reserved: 2);
+        gate.TightenTo(1);
+        Assert.Equal(1, gate.Limit);
+
+        Assert.True(await gate.TryAcquireAsync(default, Now, priority: false));
+        gate.Release();
+        Assert.True(await gate.TryAcquireAsync(default, Now, priority: true));
+        gate.Release(priority: true);
+        Assert.Equal(0, gate.Held);
+    }
+
+    [Fact]
+    public async Task TightenTo_preserves_the_total_ceiling_with_both_subcaps_active()
+    {
+        var gate = new ServerLoginGate("t", limit: 4, maxLimit: 4, reserved: 2);
+        gate.TightenTo(2);
+        Assert.Equal(2, gate.Limit);
+
+        Assert.True(await gate.TryAcquireAsync(default, Now, priority: true));
+        Assert.True(await gate.TryAcquireAsync(default, Now, priority: false));
+        // Total ceiling respected: no third login of either kind.
+        Assert.False(await gate.TryAcquireAsync(default, Now, priority: true));
+        Assert.False(await gate.TryAcquireAsync(default, Now, priority: false));
+        Assert.Equal(2, gate.Held);
+    }
 }

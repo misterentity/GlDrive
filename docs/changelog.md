@@ -15,6 +15,29 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 ## v3.10 — AI self-tuning revival, extractor & auto-update reliability (2026-07)
 
 ### Fixes
+- **v3.10.50** — the account login gate reserved logins in only ONE direction, so the
+  spread pool could take every usable login and leave a site permanently unmountable.
+  `ServerLoginGate` capped non-priority (main mount pool) callers at `limit − reserved`
+  so FXP always had a permit, but priority callers waited on the *total* semaphore with
+  no sub-cap of their own — the exact inverse of the v3.7.2 bug where the main pool
+  squatted the permits FXP needed. On 2026-08-07 SYN ran at `usable=3, fxpReserved=2`
+  with three live spread logins while its mount retried **226 times**. Priority callers
+  now hold a mirror sub-cap of `limit − 1`, so one login is always obtainable by the
+  mount. Found alongside it: `TightenTo` computed each sub-cap as `max(0, limit − reserved)`,
+  so tightening a reserved gate to 1 drove **both** sub-caps to zero and deadlocked every
+  caller — a tighten meant to protect the account instead closed it. Both sub-caps now
+  keep at least one obtainable permit.
+- **v3.10.50** — v3.10.49's forever-retry wrote two full stack traces per attempt (an ERR
+  from `MountService.Mount` and a WRN from `ServerManager.RemountLoop`). With two sites
+  down that was **7,244 of 16,084 lines — 45% of the day's log** — restating a condition
+  whose first occurrence had already said everything useful, and re-running the v3.10.47
+  failure where volume rolls the log and evicts the history needed for the *next*
+  diagnosis. `MountService` now logs its failure at Debug (every caller logs it, and only
+  the caller knows whether this is attempt 1 or 226), and `RemountLoop` throttles via
+  `MountFailureLogPolicy`: full detail on the first 3 attempts, every 12th after that
+  (one per hour at the 5-min cap), and always when the error message *changes* — that
+  transition being the genuinely diagnostic moment. ERR volume for a down site drops from
+  ~200/day to 1.
 - **v3.10.49** — a server whose mount failed at startup was never retried, so one bad
   moment cost the whole process its FTP stack. `ServerManager.MountAll` caught the
   failure, logged an error and moved on; `MountServer`'s own catch disposed the

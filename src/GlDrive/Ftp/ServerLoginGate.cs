@@ -52,13 +52,24 @@ public sealed class ServerLoginGate : IAccountLoginGate
     // always remain obtainable by a priority (FXP/spread) caller. With reserved=0,
     // _general mirrors _sem exactly and behavior is identical to the pre-reservation gate.
     private readonly SemaphoreSlim _general;
+    // _priority is the MIRROR sub-cap, and it exists because the original reservation
+    // was one-directional (v3.10.50). Priority callers used to wait on _sem alone, so
+    // the spread pool could occupy EVERY usable login and leave the main mount pool
+    // nothing — the exact inverse of the v3.7.2 bug where the main pool squatted all
+    // the permits FXP needed. On 2026-08-07 SYN sat at usable=3 with three live spread
+    // logins while its mount retried 226 times. Its ceiling is limit−MainReserved, so
+    // priority callers can never take the last login the mount needs to exist at all.
+    private readonly SemaphoreSlim _priority;
     private readonly int _maxLimit;
     private readonly int _reserved;
-    private int _limit;        // current effective TOTAL limit (shrink-only)
-    private int _generalLimit; // current non-priority sub-cap (= _limit − _reserved)
-    private int _held;         // permits acquired by callers (not counting parked ballast)
-    private int _parked;       // _sem permits permanently parked by TightenTo
-    private int _generalParked;// _general permits permanently parked by TightenTo
+    private readonly int _mainReserved;
+    private int _limit;         // current effective TOTAL limit (shrink-only)
+    private int _generalLimit;  // current non-priority sub-cap (= _limit − _reserved)
+    private int _priorityLimit; // current priority sub-cap (= _limit − _mainReserved)
+    private int _held;          // permits acquired by callers (not counting parked ballast)
+    private int _parked;        // _sem permits permanently parked by TightenTo
+    private int _generalParked; // _general permits permanently parked by TightenTo
+    private int _priorityParked;// _priority permits permanently parked by TightenTo
     private readonly object _lock = new();
     public string Key { get; }
 
@@ -69,6 +80,11 @@ public sealed class ServerLoginGate : IAccountLoginGate
         _limit = Math.Clamp(limit, 1, _maxLimit);
         // Never reserve so much that the main pool can't get a single login.
         _reserved = Math.Clamp(reserved, 0, _limit - 1);
+        // Mirror guarantee: one login is always obtainable by the main pool, so a
+        // busy spread pool can never make a site unmountable. Only meaningful once
+        // there are at least two logins to divide — at limit=1 the main pool is the
+        // only caller that matters and priority must still be able to run.
+        _mainReserved = _limit >= 2 ? 1 : 0;
         // SemaphoreSlim capacity == maxLimit; start with _limit available, the rest
         // pre-parked so the effective ceiling is _limit until TightenTo lowers it.
         _sem = new SemaphoreSlim(_limit, _maxLimit);
@@ -76,32 +92,31 @@ public sealed class ServerLoginGate : IAccountLoginGate
         _generalLimit = _limit - _reserved;
         _general = new SemaphoreSlim(_generalLimit, _maxLimit);
         _generalParked = _maxLimit - _generalLimit;
+        _priorityLimit = _limit - _mainReserved;
+        _priority = new SemaphoreSlim(_priorityLimit, _maxLimit);
+        _priorityParked = _maxLimit - _priorityLimit;
     }
 
     public int Held => Volatile.Read(ref _held);
     public int Limit { get { lock (_lock) return _limit; } }
     public int Reserved => _reserved;
+    /// <summary>Permits reserved for the main mount pool — priority callers can't take these.</summary>
+    public int MainReserved => _mainReserved;
 
     public async Task<bool> TryAcquireAsync(CancellationToken ct, TimeSpan? timeout = null, bool priority = false)
     {
         var wait = timeout ?? Timeout.InfiniteTimeSpan;
         try
         {
-            if (priority)
-            {
-                // Priority callers draw straight from the total pool — the _general
-                // sub-cap on non-priority callers guarantees a slot is here for them.
-                if (!await _sem.WaitAsync(wait, ct)) return false;
-                Interlocked.Increment(ref _held);
-                return true;
-            }
-
-            // Non-priority: must hold BOTH the sub-cap permit and a total permit.
-            if (!await _general.WaitAsync(wait, ct)) return false;
+            // Both roles hold their own sub-cap permit AND a total permit. The two
+            // sub-caps sum to the total limit, so each role is guaranteed its
+            // reservation and neither can starve the other.
+            var sub = priority ? _priority : _general;
+            if (!await sub.WaitAsync(wait, ct)) return false;
             bool gotSem;
             try { gotSem = await _sem.WaitAsync(wait, ct); }
-            catch (OperationCanceledException) { SafeRelease(_general); throw; }
-            if (!gotSem) { SafeRelease(_general); return false; }
+            catch (OperationCanceledException) { SafeRelease(sub); throw; }
+            if (!gotSem) { SafeRelease(sub); return false; }
             Interlocked.Increment(ref _held);
             return true;
         }
@@ -122,7 +137,7 @@ public sealed class ServerLoginGate : IAccountLoginGate
             return;
         }
         SafeRelease(_sem);
-        if (!priority) SafeRelease(_general);
+        SafeRelease(priority ? _priority : _general);
     }
 
     private static void SafeRelease(SemaphoreSlim sem)
@@ -140,7 +155,7 @@ public sealed class ServerLoginGate : IAccountLoginGate
     /// </summary>
     public void TightenTo(int newLimit)
     {
-        int toPark, generalToPark;
+        int toPark, generalToPark, priorityToPark;
         lock (_lock)
         {
             newLimit = Math.Clamp(newLimit, 1, _maxLimit);
@@ -149,10 +164,21 @@ public sealed class ServerLoginGate : IAccountLoginGate
             _limit = newLimit;
             _parked += toPark;
 
-            var newGeneralLimit = Math.Max(0, _limit - _reserved);
+            // Both reservations shrink with the total, but a reservation may never
+            // consume the whole limit: at limit=1 the old code computed a general
+            // sub-cap of max(0, 1−2)=0, which silently deadlocked the main pool —
+            // a tighten meant to protect the account instead closed it. Each side
+            // keeps at least one obtainable permit, so a tightened gate degrades to
+            // "both roles contend for the last login" rather than "nobody may log in".
+            var newGeneralLimit = Math.Max(1, _limit - _reserved);
             generalToPark = _generalLimit - newGeneralLimit;
             _generalLimit = newGeneralLimit;
             _generalParked += generalToPark;
+
+            var newPriorityLimit = Math.Max(1, _limit - _mainReserved);
+            priorityToPark = _priorityLimit - newPriorityLimit;
+            _priorityLimit = newPriorityLimit;
+            _priorityParked += priorityToPark;
         }
         // Park permits off-thread: WaitAsync may block if all are currently held,
         // but as connections close and release, the parking absorbs the permits and
@@ -161,8 +187,10 @@ public sealed class ServerLoginGate : IAccountLoginGate
             _ = _sem.WaitAsync();
         for (var i = 0; i < generalToPark; i++)
             _ = _general.WaitAsync();
-        Log.Information("ServerLoginGate[{Key}]: tightened to {Limit} (parked {Parked} total, reserved {Reserved} for FXP)",
-            Key, newLimit, _parked, _reserved);
+        for (var i = 0; i < priorityToPark; i++)
+            _ = _priority.WaitAsync();
+        Log.Information("ServerLoginGate[{Key}]: tightened to {Limit} (parked {Parked} total, fxpSubCap {Fxp}, mainSubCap {Main})",
+            Key, newLimit, _parked, _priorityLimit, _generalLimit);
     }
 }
 
