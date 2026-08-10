@@ -15,6 +15,15 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 ## v3.10 — AI self-tuning revival, extractor & auto-update reliability (2026-07)
 
 ### Features
+- **v3.10.53** — `NeverSource`, the mirror of `DownloadOnly`. `DownloadOnly` bars a site
+  from being a DESTINATION; there was no way to say the opposite — "seed this site, never
+  leech from it". A site can enter the source role by three independent routes, so the flag
+  is enforced in all three or it leaks in through the side door: Phase 1 discovery (the site
+  simply has the release — its path is still recorded so it can receive, it just isn't
+  counted as a source), `FindBestTransfer`'s per-file route scoring (with a `neverSource=`
+  counter in the skip summary so a stalled race says why instead of only "0 candidates"),
+  and `SpreadManager`'s mid-race alternate-source failover. Editable per site in the server
+  dialog.
 - **v3.10.52** — a loopback control API and a per-race detail expander. Starting or
   inspecting a race previously required the WPF Dashboard, and driving the tray icon
   through UI Automation is unreliable (the notification-area flyout breaks the element

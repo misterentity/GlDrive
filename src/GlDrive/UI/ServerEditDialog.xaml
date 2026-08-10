@@ -369,6 +369,7 @@
                             </StackPanel>
                         </Grid>
                         <CheckBox x:Name="SpreadDownloadOnlyBox" Content="Download only (don't upload to this site)" Margin="0,0,0,8"/>
+                        <CheckBox x:Name="SpreadNeverSourceBox" Content="Never source (don't pull files off this site)" Margin="0,0,0,8"/>
                         <TextBlock Text="Affiliations (comma-separated groups):" Margin="0,0,0,2"/>
                         <TextBox x:Name="SpreadAffilsBox" Margin="0,0,0,4"
                                  ToolTip="Groups affiliated with this site — their releases get auto-allowed (highest priority in rules engine)"

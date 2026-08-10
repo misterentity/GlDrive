@@ -465,8 +465,19 @@ public class SpreadJob : IDisposable
                         if (exists)
                         {
                             sitePaths[serverId] = probePath;
-                            sourceServers.Add(serverId);
-                            Log.Information("Spread: {Server} HAS release at {Path}", config.Name, probePath);
+                            // NeverSource sites still get their path recorded (they can
+                            // receive, and a dest needs its path) but are never counted as
+                            // a source, so nothing is ever pulled off them.
+                            if (config.SpreadSite.NeverSource)
+                            {
+                                Log.Information("Spread: {Server} HAS release at {Path} but is marked never-source " +
+                                                "— usable as a destination only", config.Name, probePath);
+                            }
+                            else
+                            {
+                                sourceServers.Add(serverId);
+                                Log.Information("Spread: {Server} HAS release at {Path}", config.Name, probePath);
+                            }
                             break;
                         }
                     }
@@ -1958,6 +1969,7 @@ public class SpreadJob : IDisposable
         int bestScore = -1;
         var candidateCount = 0;
         var skippedDownloadOnly = 0;
+        var skippedNeverSource = 0;
         var skippedAffil = 0;
         var skippedSlots = 0;
         var skippedFailures = 0;
@@ -2091,6 +2103,8 @@ public class SpreadJob : IDisposable
 
                         var dstConfig = _serverConfigs[dstId];
                         if (dstConfig.SpreadSite.DownloadOnly) { skippedDownloadOnly++; continue; }
+                        // Mirror of DownloadOnly on the source side.
+                        if (_serverConfigs[srcId].SpreadSite.NeverSource) { skippedNeverSource++; continue; }
                         if (_affilCache.GetValueOrDefault(dstId)) { skippedAffil++; continue; }
 
                         // Check slots from snapshot (no nested lock)
@@ -2164,7 +2178,7 @@ public class SpreadJob : IDisposable
         {
             if (_fileInfos.Count > 0 && candidateCount == 0)
             {
-                var summary = $"owned={skippedOwned} downloadOnly={skippedDownloadOnly} affil={skippedAffil} " +
+                var summary = $"owned={skippedOwned} downloadOnly={skippedDownloadOnly} neverSource={skippedNeverSource} affil={skippedAffil} " +
                               $"slots={skippedSlots} failures={skippedFailures} backoff/dirscript={skippedBackoff} cooldown={skippedCooldown}";
                 _lastSkipSummary = summary;
                 // Information (rate-limited), was Debug — invisible stalls hid a

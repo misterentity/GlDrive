@@ -99,6 +99,18 @@ public class SiteSpreadConfig
     public int MaxUploadSlots { get; set; } = 3;
     public int MaxDownloadSlots { get; set; } = 3;
     public bool DownloadOnly { get; set; }
+
+    /// <summary>
+    /// Never use this site as the SOURCE of a transfer — it may receive, but nothing is
+    /// ever pulled off it. The exact mirror of <see cref="DownloadOnly"/> (which bars a
+    /// site from being a DESTINATION), for sites you seed but never leech from.
+    ///
+    /// Enforced in three places, because a site can become a source by three different
+    /// routes: Phase 1 discovery (the site simply has the release), FindBestTransfer's
+    /// per-file route scoring, and the mid-race alternate-source search. Missing any one
+    /// of them would let the site back in through the side door.
+    /// </summary>
+    public bool NeverSource { get; set; }
     public List<SkiplistRule> Skiplist { get; set; } = [];
     public List<string> Affils { get; set; } = [];
 
