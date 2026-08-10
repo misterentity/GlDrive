@@ -3370,6 +3370,164 @@ public class SpreadJob : IDisposable
         }
     }
 
+    /// <summary>
+    /// Full snapshot of this race: every file, every destination, and the reason each is
+    /// or isn't moving. Backs the control API and the Spread tab's per-race expander.
+    ///
+    /// Locks are taken one at a time and copied into locals — never nested, and never held
+    /// while composing the result. Ordering matches the hot paths (_ownershipLock →
+    /// _progressLock → _failureLock) so this can't invert against them.
+    /// </summary>
+    public RaceDetail GetDetail()
+    {
+        Dictionary<string, SpreadFileInfo> fileInfos;
+        Dictionary<string, HashSet<string>> ownership;
+        Dictionary<string, SkiplistAction> fileActions;
+        Dictionary<string, DateTime> retryAt;
+        Dictionary<string, int> destFailures;
+        Dictionary<string, HashSet<string>> dirscript;
+        Dictionary<(string DstId, string BasePath), int> mkdDenials;
+        Dictionary<string, (string remoteSection, string path, string? triggerRegex)> routes;
+        Dictionary<string, DestState> destStates;
+        HashSet<string> dirsCreated, successfulDests, fillOnly, creditDenied, sourceIds;
+
+        lock (_ownershipLock)
+        {
+            fileInfos      = new(_fileInfos, StringComparer.OrdinalIgnoreCase);
+            ownership      = _fileOwnership.ToDictionary(kv => kv.Key,
+                                 kv => new HashSet<string>(kv.Value), StringComparer.OrdinalIgnoreCase);
+            fileActions    = new(_fileActions, StringComparer.OrdinalIgnoreCase);
+            retryAt        = new(_destRetryAt);
+            destFailures   = new(_destFailureCount);
+            dirscript      = _destDirscriptDenied.ToDictionary(kv => kv.Key, kv => new HashSet<string>(kv.Value));
+            mkdDenials     = new(_destMkdDenials);
+            routes         = new(_resolvedDestRoutes);
+            destStates     = new(_destStates, StringComparer.Ordinal);
+            dirsCreated    = new(_dirsCreated);
+            successfulDests= new(_serversWithSuccessfulTransfer);
+            fillOnly       = new(_fillOnlyDests, StringComparer.Ordinal);
+            creditDenied   = new(_sourceCreditDenied, StringComparer.Ordinal);
+            sourceIds      = new(_sourceServersField, StringComparer.Ordinal);
+        }
+
+        List<SiteProgress> sites;
+        List<ActiveTransferInfo> active;
+        HashSet<(string fileName, string dstId)> inFlight;
+        lock (_progressLock)
+        {
+            sites    = _siteProgress.Values.Select(s => new SiteProgress
+            {
+                ServerId = s.ServerId, ServerName = s.ServerName, FilesOwned = s.FilesOwned,
+                FilesTotal = s.FilesTotal, BytesTransferred = s.BytesTransferred,
+                ActiveTransfers = s.ActiveTransfers, SpeedBps = s.SpeedBps,
+                IsComplete = s.IsComplete, IsSource = s.IsSource
+            }).ToList();
+            active   = _activeTransfers.Values.Select(t => new ActiveTransferInfo
+            {
+                FileName = t.FileName, FileSize = t.FileSize, SourceName = t.SourceName,
+                DestName = t.DestName, BytesTransferred = t.BytesTransferred, SpeedBps = t.SpeedBps
+            }).ToList();
+            inFlight = new HashSet<(string, string)>(_inFlightFiles, new FileDstTupleComparer());
+        }
+
+        Dictionary<(string file, string src, string dst), int> failures;
+        lock (_failureLock) failures = new(_failureCounts);
+
+        string NameOf(string id) => _serverConfigs.TryGetValue(id, out var c) ? c.Name : id;
+        var participants = _serverConfigs.Keys.ToList();
+
+        var files = new List<RaceFileDetail>();
+        foreach (var (name, info) in fileInfos.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            var owners = ownership.TryGetValue(name, out var o) ? o : [];
+            var routesFailed = failures.Where(kv => string.Equals(kv.Key.file, name, StringComparison.OrdinalIgnoreCase))
+                                       .ToList();
+            var flying = inFlight.Where(t => string.Equals(t.fileName, name, StringComparison.OrdinalIgnoreCase))
+                                 .Select(t => NameOf(t.dstId)).ToList();
+            var missing = participants.Where(p => !owners.Contains(p)).Select(NameOf).ToList();
+
+            files.Add(new RaceFileDetail
+            {
+                Name         = name,
+                Size         = info.Size,
+                OwnedBy      = owners.Select(NameOf).OrderBy(n => n).ToList(),
+                MissingFrom  = missing.OrderBy(n => n).ToList(),
+                InFlightTo   = flying,
+                Failures     = routesFailed.Sum(kv => kv.Value),
+                FailedRoutes = routesFailed.Where(kv => kv.Value > 0)
+                                   .Select(kv => $"{NameOf(kv.Key.src)}->{NameOf(kv.Key.dst)} x{kv.Value}")
+                                   .OrderBy(s => s).ToList(),
+                SkiplistAction = fileActions.TryGetValue(name, out var a) ? a.ToString() : null,
+                IsSfv        = name.EndsWith(".sfv", StringComparison.OrdinalIgnoreCase),
+                IsNfo        = name.EndsWith(".nfo", StringComparison.OrdinalIgnoreCase),
+                Status       = flying.Count > 0 ? "In flight"
+                             : missing.Count == 0 ? "Done"
+                             : routesFailed.Sum(kv => kv.Value) >= CandidatePredicates.FileRetryCap ? "Retry-capped"
+                             : "Pending"
+            });
+        }
+
+        var now = DateTime.UtcNow;
+        var destDetails = new List<RaceDestDetail>();
+        foreach (var id in participants)
+        {
+            var sp = sites.FirstOrDefault(s => s.ServerId == id);
+            routes.TryGetValue(id, out var route);
+            var dropped = retryAt.TryGetValue(id, out var ra) && ra == DateTime.MaxValue;
+            destDetails.Add(new RaceDestDetail
+            {
+                ServerId = id,
+                Name = NameOf(id),
+                IsSource = sourceIds.Contains(id),
+                FilesOwned = sp?.FilesOwned ?? 0,
+                FilesTotal = sp?.FilesTotal ?? fileInfos.Count,
+                BytesTransferred = sp?.BytesTransferred ?? 0,
+                ActiveTransfers = sp?.ActiveTransfers ?? 0,
+                SpeedBps = sp?.SpeedBps ?? 0,
+                IsComplete = sp?.IsComplete ?? false,
+                RemoteSection = route.remoteSection,
+                Path = route.path,
+                TriggerRegex = route.triggerRegex,
+                DirCreated = dirsCreated.Contains(id),
+                HadSuccessfulTransfer = successfulDests.Contains(id),
+                IsFillOnly = fillOnly.Contains(id),
+                FailureCount = destFailures.GetValueOrDefault(id),
+                DroppedForRace = dropped,
+                BackoffUntil = dropped ? "dropped for this race"
+                             : ra != default && retryAt.ContainsKey(id) && ra > now
+                                 ? $"{(ra - now).TotalSeconds:F0}s"
+                                 : null,
+                DirscriptDeniedPaths = dirscript.TryGetValue(id, out var dp) ? dp.OrderBy(p => p).ToList() : [],
+                MkdDenials = mkdDenials.Where(kv => kv.Key.DstId == id).Sum(kv => kv.Value),
+                CreditDenied = creditDenied.Contains(id),
+                State = destStates.TryGetValue(id, out var ds) ? ds.ToString() : null
+            });
+        }
+
+        return new RaceDetail
+        {
+            Id = Id,
+            Release = ReleaseName,
+            Section = Section,
+            Mode = Mode.ToString(),
+            State = State.ToString(),
+            IsAutoRace = IsAutoRace,
+            IsPaused = State == SpreadJobState.Paused,
+            StartedAt = StartedAt,
+            ElapsedSeconds = (now - StartedAt).TotalSeconds,
+            Score = Score,
+            FilesTotal = fileInfos.Count,
+            FilesComplete = files.Count(f => f.Status == "Done"),
+            BytesTransferred = sites.Sum(s => s.BytesTransferred),
+            SkiplistResult = SkiplistResult,
+            LastError = LastError,
+            SourceSites = sourceIds.Select(NameOf).OrderBy(n => n).ToList(),
+            Sites = destDetails.OrderByDescending(d => d.IsSource).ThenBy(d => d.Name).ToList(),
+            Files = files,
+            ActiveTransfers = active
+        };
+    }
+
     public void Stop()
     {
         _cts.Cancel();
@@ -3489,6 +3647,82 @@ public class ActiveTransferInfo
     public long BytesTransferred { get; set; }
     public double SpeedBps { get; set; }
     public double ProgressPercent => FileSize > 0 ? BytesTransferred * 100.0 / FileSize : 0;
+}
+
+/// <summary>One file in a race, with every reason it is or isn't moving.</summary>
+public class RaceFileDetail
+{
+    public string Name { get; set; } = "";
+    public long Size { get; set; }
+    /// <summary>Site names that already hold this file.</summary>
+    public List<string> OwnedBy { get; set; } = [];
+    /// <summary>Site names still missing it (race participants minus OwnedBy).</summary>
+    public List<string> MissingFrom { get; set; } = [];
+    /// <summary>Destination names this file is being pushed to right now.</summary>
+    public List<string> InFlightTo { get; set; } = [];
+    /// <summary>Total failures across every (src,dst) route tried for this file.</summary>
+    public int Failures { get; set; }
+    /// <summary>Per-route failure breakdown, e.g. "superbnc-&gt;zephyr x3".</summary>
+    public List<string> FailedRoutes { get; set; } = [];
+    /// <summary>Unique/Similar skiplist action, when one applies.</summary>
+    public string? SkiplistAction { get; set; }
+    public bool IsSfv { get; set; }
+    public bool IsNfo { get; set; }
+    /// <summary>Done / In flight / Pending / Retry-capped.</summary>
+    public string Status { get; set; } = "";
+}
+
+/// <summary>Per-destination state — why a dest is or isn't receiving.</summary>
+public class RaceDestDetail
+{
+    public string ServerId { get; set; } = "";
+    public string Name { get; set; } = "";
+    public bool IsSource { get; set; }
+    public int FilesOwned { get; set; }
+    public int FilesTotal { get; set; }
+    public long BytesTransferred { get; set; }
+    public int ActiveTransfers { get; set; }
+    public double SpeedBps { get; set; }
+    public bool IsComplete { get; set; }
+    /// <summary>Resolved remote section key for this dest, when a mapping matched.</summary>
+    public string? RemoteSection { get; set; }
+    public string? Path { get; set; }
+    public string? TriggerRegex { get; set; }
+    public bool DirCreated { get; set; }
+    public bool HadSuccessfulTransfer { get; set; }
+    public bool IsFillOnly { get; set; }
+    public int FailureCount { get; set; }
+    /// <summary>Backoff expiry; "dropped for this race" when the ladder is exhausted.</summary>
+    public string? BackoffUntil { get; set; }
+    public bool DroppedForRace { get; set; }
+    public List<string> DirscriptDeniedPaths { get; set; } = [];
+    public int MkdDenials { get; set; }
+    public bool CreditDenied { get; set; }
+    public string? State { get; set; }
+}
+
+/// <summary>Everything known about one race — backs both the API and the UI expander.</summary>
+public class RaceDetail
+{
+    public string Id { get; set; } = "";
+    public string Release { get; set; } = "";
+    public string Section { get; set; } = "";
+    public string Mode { get; set; } = "";
+    public string State { get; set; } = "";
+    public bool IsAutoRace { get; set; }
+    public bool IsPaused { get; set; }
+    public DateTime StartedAt { get; set; }
+    public double ElapsedSeconds { get; set; }
+    public int Score { get; set; }
+    public int FilesTotal { get; set; }
+    public int FilesComplete { get; set; }
+    public long BytesTransferred { get; set; }
+    public string SkiplistResult { get; set; } = "";
+    public string? LastError { get; set; }
+    public List<string> SourceSites { get; set; } = [];
+    public List<RaceDestDetail> Sites { get; set; } = [];
+    public List<RaceFileDetail> Files { get; set; } = [];
+    public List<ActiveTransferInfo> ActiveTransfers { get; set; } = [];
 }
 
 /// <summary>Case-insensitive comparer for (fileName, dstId) tuples.</summary>
