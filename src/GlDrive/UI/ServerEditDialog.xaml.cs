@@ -157,6 +157,7 @@ public partial class ServerEditDialog : Window
             SpreadMaxUpBox.Text = existing.SpreadSite.MaxUploadSlots.ToString();
             SpreadMaxDownBox.Text = existing.SpreadSite.MaxDownloadSlots.ToString();
             SpreadDownloadOnlyBox.IsChecked = existing.SpreadSite.DownloadOnly;
+            SpreadNeverSourceBox.IsChecked = existing.SpreadSite.NeverSource;
             SpreadAffilsBox.Text = string.Join(", ", existing.SpreadSite.Affils);
 
             // IRC announce rules
@@ -450,6 +451,7 @@ public partial class ServerEditDialog : Window
         _serverConfig.SpreadSite.MaxUploadSlots = int.TryParse(SpreadMaxUpBox.Text, out var mu) ? Math.Clamp(mu, 1, 10) : 3;
         _serverConfig.SpreadSite.MaxDownloadSlots = int.TryParse(SpreadMaxDownBox.Text, out var md2) ? Math.Clamp(md2, 1, 10) : 3;
         _serverConfig.SpreadSite.DownloadOnly = SpreadDownloadOnlyBox.IsChecked == true;
+        _serverConfig.SpreadSite.NeverSource = SpreadNeverSourceBox.IsChecked == true;
         _serverConfig.SpreadSite.Affils = (SpreadAffilsBox.Text ?? "")
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(s => s.Length > 0).ToList();

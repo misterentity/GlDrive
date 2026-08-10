@@ -1046,6 +1046,10 @@ public class SpreadManager : IDisposable
         foreach (var r in found.OrderByDescending(r => r.Files?.Count ?? 0))
         {
             if (!serverConfigs.TryGetValue(r.ServerId, out var sc)) continue;
+            // A never-source site can hold the release and still must not be leeched from —
+            // this is the third door into the source role, after Phase 1 discovery and
+            // FindBestTransfer's route scoring.
+            if (sc.SpreadSite.NeverSource) continue;
             if (_blacklist.IsBlacklisted(r.ServerId, r.Category)) continue;
             var action = _skiplist.Evaluate(release, true, false, r.ServerId, r.Category,
                 sc.SpreadSite.Skiplist, _config.Spread.GlobalSkiplist);
