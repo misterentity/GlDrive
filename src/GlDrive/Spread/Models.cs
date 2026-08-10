@@ -120,6 +120,37 @@ public class SpreadJobVm : INotifyPropertyChanged
         set { _sparklinePoints = value; OnPropertyChanged(); }
     }
 
+    // ---- per-race expander (v3.10.52) ----
+    // Detail is only snapshotted while the card is expanded: GetDetail() copies four
+    // dictionaries under three locks, and doing that every 2s for every card would put
+    // real contention on the transfer hot path for data nobody is looking at.
+    private bool _isExpanded;
+    public bool IsExpanded
+    {
+        get => _isExpanded;
+        set { if (_isExpanded == value) return; _isExpanded = value; OnPropertyChanged(); }
+    }
+
+    private string _detailSummary = "";
+    public string DetailSummary
+    {
+        get => _detailSummary;
+        set { if (_detailSummary == value) return; _detailSummary = value; OnPropertyChanged(); }
+    }
+
+    private string _detailRoutes = "";
+    public string DetailRoutes
+    {
+        get => _detailRoutes;
+        set { if (_detailRoutes == value) return; _detailRoutes = value; OnPropertyChanged(); }
+    }
+
+    /// <summary>Every file in the race with its owners, in-flight dests and failed routes.</summary>
+    public System.Collections.ObjectModel.ObservableCollection<RaceFileDetail> DetailFiles { get; } = new();
+
+    /// <summary>Per-site state: progress, resolved path, backoff, dirscript denials.</summary>
+    public System.Collections.ObjectModel.ObservableCollection<RaceDestDetail> DetailSites { get; } = new();
+
     public SpreadJobVm()
     {
         for (int i = 0; i < 60; i++)

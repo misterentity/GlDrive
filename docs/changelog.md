@@ -14,6 +14,23 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 
 ## v3.10 — AI self-tuning revival, extractor & auto-update reliability (2026-07)
 
+### Features
+- **v3.10.52** — a loopback control API and a per-race detail expander. Starting or
+  inspecting a race previously required the WPF Dashboard, and driving the tray icon
+  through UI Automation is unreliable (the notification-area flyout breaks the element
+  tree between calls), so there was no scriptable way to re-run a race that had failed.
+  `ControlApi` binds **only** `http://127.0.0.1:{port}/`, requires
+  `Authorization: Bearer <token>` compared in fixed time, additionally refuses any request
+  whose remote endpoint is not loopback, and is **off by default** with the token minted on
+  first enable and never logged. Endpoints: `GET /status`, `GET /sections`, `GET /races`,
+  `GET /races/{id}` (full detail), `GET /history?limit=N`, `POST /races {section,release}`,
+  `POST /races/{id}/stop`. The same `SpreadJob.GetDetail()` snapshot backs a new expander on
+  each card in the Spread tab: every file with its owners, who's still missing it, what's in
+  flight and to where, per-route failure counts, plus per-site resolved path, backoff state,
+  MKD/dirscript denials and credit denials. The snapshot copies several dictionaries under
+  the job's locks, so it is taken **only while a card is expanded** rather than every tick
+  for every card.
+
 ### Fixes
 - **v3.10.51** — the directory scan raided the FXP pool and starved every transfer it was
   scanning for. `ScanSites` falls back to the dedicated spread pool when the main pool's

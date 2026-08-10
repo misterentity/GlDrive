@@ -452,6 +452,78 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
             SpreadJobState.Completed => "DONE",
             _ => job.IsPred ? "PRE" : (job.IsAutoRace ? "AUTO RACE" : "MANUAL")
         };
+
+        if (vm.IsExpanded) ApplyDetailToVm(vm, job);
+    }
+
+    /// <summary>
+    /// Fills the expander's file/site grids from a live <see cref="SpreadJob.GetDetail"/>
+    /// snapshot. Only called while the card is expanded — the snapshot copies several
+    /// dictionaries under the job's locks, and doing that every 2s per card would contend
+    /// with the transfer hot path for data nobody has open.
+    /// </summary>
+    private static void ApplyDetailToVm(SpreadJobVm vm, SpreadJob job)
+    {
+        RaceDetail d;
+        try { d = job.GetDetail(); }
+        catch (Exception ex) { Log.Debug(ex, "Race detail snapshot failed for {Id}", job.Id); return; }
+
+        static string Bytes(long b) => b switch
+        {
+            >= 1L << 30 => $"{b / (double)(1L << 30):F2} GB",
+            >= 1L << 20 => $"{b / (double)(1L << 20):F1} MB",
+            >= 1L << 10 => $"{b / (double)(1L << 10):F0} KB",
+            _ => $"{b} B"
+        };
+
+        var done = d.Files.Count(f => f.Status == "Done");
+        var flying = d.Files.Count(f => f.Status == "In flight");
+        var capped = d.Files.Count(f => f.Status == "Retry-capped");
+        var failedRoutes = d.Files.Sum(f => f.Failures);
+        var speed = d.Sites.Sum(s => s.SpeedBps);
+
+        vm.DetailSummary =
+            $"{d.Mode} · {d.State}{(d.IsAutoRace ? " · auto" : " · manual")} · started {d.StartedAt.ToLocalTime():HH:mm:ss} " +
+            $"({d.ElapsedSeconds:F0}s ago)\n" +
+            $"files: {d.FilesTotal} total · {done} done · {flying} in flight · {capped} retry-capped · " +
+            $"{failedRoutes} route failures\n" +
+            $"moved: {Bytes(d.BytesTransferred)} · {Bytes((long)speed)}/s · score {d.Score:N0} · skiplist: {d.SkiplistResult}" +
+            (string.IsNullOrWhiteSpace(d.LastError) ? "" : $"\nlast error: {d.LastError}");
+
+        vm.DetailRoutes = d.Sites.Count == 0 ? "" : string.Join("\n", d.Sites.Select(s =>
+        {
+            var role = s.IsSource ? "SRC" : "DST";
+            var path = string.IsNullOrWhiteSpace(s.Path) ? "(fuzzy)" : s.Path;
+            var flags = new List<string>();
+            if (s.DroppedForRace) flags.Add("DROPPED for race");
+            else if (!string.IsNullOrWhiteSpace(s.BackoffUntil)) flags.Add($"backoff {s.BackoffUntil}");
+            if (s.FailureCount > 0) flags.Add($"{s.FailureCount} failures");
+            if (s.MkdDenials > 0) flags.Add($"{s.MkdDenials} MKD denials");
+            if (s.DirscriptDeniedPaths.Count > 0) flags.Add($"dirscript denied: {string.Join(", ", s.DirscriptDeniedPaths)}");
+            if (s.CreditDenied) flags.Add("credit denied");
+            if (s.IsFillOnly) flags.Add("fill-only");
+            if (s.DirCreated) flags.Add("dir created");
+            if (s.HadSuccessfulTransfer) flags.Add("transferred ok");
+            if (!string.IsNullOrWhiteSpace(s.State)) flags.Add(s.State!);
+            return $"[{role}] {s.Name} → {path}  {s.FilesOwned}/{s.FilesTotal} · " +
+                   $"{Bytes(s.BytesTransferred)} · {s.ActiveTransfers} active" +
+                   (flags.Count > 0 ? "  ⚑ " + string.Join(" · ", flags) : "");
+        }));
+
+        SyncList(vm.DetailFiles, d.Files);
+        SyncList(vm.DetailSites, d.Sites);
+    }
+
+    /// <summary>Replace-in-place so the DataGrid keeps its scroll position between ticks.</summary>
+    private static void SyncList<T>(System.Collections.ObjectModel.ObservableCollection<T> target, List<T> source)
+    {
+        if (target.Count == source.Count)
+        {
+            for (int i = 0; i < source.Count; i++) target[i] = source[i];
+            return;
+        }
+        target.Clear();
+        foreach (var item in source) target.Add(item);
     }
 
     // Freeze the card for a just-completed job with its FINAL score/state and flag it Finished so

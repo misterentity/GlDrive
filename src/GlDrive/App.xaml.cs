@@ -19,6 +19,7 @@ public partial class App
     private TrayViewModel? _trayViewModel;
     private H.NotifyIcon.TaskbarIcon? _taskbarIcon;
     private GlDrive.Services.HeartbeatMonitor? _heartbeat;
+    private GlDrive.Services.ControlApi? _controlApi;
 
     public static GlDrive.AiAgent.TelemetryRecorder? TelemetryRecorder { get; private set; }
     public static GlDrive.AiAgent.HealthRollup? HealthRollup { get; private set; }
@@ -338,6 +339,17 @@ public partial class App
             Path.Combine(ConfigManager.AppDataPath, "ai-data"),
             config.Agent.NukePollIntervalHours);
 
+        // Loopback control API — lets scripts start/inspect races without driving the WPF
+        // UI (tray automation is unreliable). Off unless explicitly enabled in config.
+        if (config.ControlApi.Enabled)
+        {
+            if (ControlApi.EnsureToken(config)) ConfigManager.Save(config); // first-run token
+            _controlApi = new ControlApi(config,
+                () => _serverManager?.Spread,
+                () => _serverManager?.Spread?.GetConnectedServerIds() ?? []);
+            _controlApi.Start();
+        }
+
         // Init tray
         _trayViewModel = new TrayViewModel(_serverManager, config, notificationStore);
         _taskbarIcon = new H.NotifyIcon.TaskbarIcon();
@@ -566,6 +578,8 @@ public partial class App
         TelemetryRetention = null;
         TelemetryRecorder?.Dispose();
         TelemetryRecorder = null;
+        _controlApi?.Dispose();
+        _controlApi = null;
         _serverManager?.Dispose();
         _taskbarIcon?.Dispose();
         _guard?.Dispose();

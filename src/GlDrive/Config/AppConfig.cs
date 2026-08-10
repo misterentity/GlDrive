@@ -8,6 +8,7 @@ public class AppConfig
     public SpreadConfig Spread { get; set; } = new();
     public AgentConfig Agent { get; set; } = new();
     public PlexConfig Plex { get; set; } = new();
+    public ControlApiConfig ControlApi { get; set; } = new();
 
     public string ResolveAgentModel() => string.IsNullOrWhiteSpace(Agent.ModelId)
         ? "anthropic/claude-sonnet-4-6" : Agent.ModelId;
@@ -92,6 +93,22 @@ public class PoolConfig
     // lower cap. Raise LoginCap for accounts that genuinely allow more.
     public int LoginCap { get; set; } = 3;
     public int LoginHeadroom { get; set; } = 1;
+}
+
+/// <summary>
+/// Loopback-only HTTP control surface, so races can be triggered and inspected without
+/// driving the WPF UI (tray automation is fragile and there was no other way in).
+///
+/// Security posture, deliberately narrow: the listener binds ONLY to 127.0.0.1, every
+/// request must present the bearer token, and any request whose remote endpoint is not a
+/// loopback address is rejected regardless. Disabled by default; the token is generated on
+/// first enable and persisted, never logged.
+/// </summary>
+public class ControlApiConfig
+{
+    public bool Enabled { get; set; }
+    public int Port { get; set; } = 8756;
+    public string Token { get; set; } = "";
 }
 
 public class LoggingConfig
