@@ -15,6 +15,23 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 ## v3.10 — AI self-tuning revival, extractor & auto-update reliability (2026-07)
 
 ### Fixes
+- **v3.10.51** — the directory scan raided the FXP pool and starved every transfer it was
+  scanning for. `ScanSites` falls back to the dedicated spread pool when the main pool's
+  borrow times out — but that fallback was unconditional, and a scan re-runs every ~2s
+  while an FXP borrow waits up to 30s, so on a login-capped account the scan won the
+  permit race every single time. zephyr (`loginCap` 4 = main pool 1 + spread pool 3, zero
+  headroom) spent 2026-08-09 emitting **1,393 "main pool exhausted … falling back to
+  spread pool", 2,779 FXP borrow timeouts and 1,464 "scan FAILED (both pools
+  unavailable)" — against ONE FXP transfer error and TWO MKD failures in the entire day.**
+  Both endpoints were healthy; the engine was starving itself. Every destination
+  eventually exhausted its `_destRetryAt` backoff ladder and was dropped for the race, so
+  releases got an empty directory created on the dest and then `SITE WIPE`d: **321 races,
+  4 delivered any files.** `CandidatePredicates.ScanMayBorrowSpreadPool` now lets a scan
+  take a spread permit only while one would remain for a transfer — scans are best-effort,
+  transfers are the point. The original recovery case (main pool genuinely dead, not
+  merely busy) still bypasses the guard. A deliberate yield logs at INF, not the WRN that
+  produced 1,464 lines/day of noise. Same fault line as v3.10.43, which fixed the scan
+  deadlocking against itself and already observed it "stealing transfer slots".
 - **v3.10.50** — the account login gate reserved logins in only ONE direction, so the
   spread pool could take every usable login and leave a site permanently unmountable.
   `ServerLoginGate` capped non-priority (main mount pool) callers at `limit − reserved`

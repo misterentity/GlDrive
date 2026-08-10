@@ -38,6 +38,31 @@ internal static class CandidatePredicates
     /// </summary>
     internal const bool BlacklistExcludesSourceRole = false;
 
+    /// <summary>
+    /// May a directory scan fall back onto the dedicated FXP (spread) pool?
+    ///
+    /// The fallback exists so a saturated main pool can't abandon a scan outright, but
+    /// it was unconditional — and a scan re-runs every ~2s while a transfer waits up to
+    /// 30s to borrow, so the scan wins the permit race every single time. On 2026-08-09
+    /// that inverted the whole engine against zephyr (loginCap 4 = main 1 + spread 3, no
+    /// headroom): 1,393 "main pool exhausted, falling back to spread pool", 2,779 FXP
+    /// borrow timeouts, 1,464 failed dest scans — against ONE FXP transfer error and TWO
+    /// MKD failures all day. Both sites were healthy; the engine was starving itself.
+    /// 321 races delivered files in 4.
+    ///
+    /// So: scans are best-effort, transfers are the point. A scan may use the spread pool
+    /// only while at least one permit would remain for an FXP borrow. Yielding is safe and
+    /// self-correcting — the scan retries next cycle, and a cycle with no transfer in
+    /// flight always has headroom, so this cannot deadlock (transfers need the SOURCE
+    /// scan's file list, which is gated the same way and runs when the pool is idle).
+    ///
+    /// The original recovery case still works: when the main pool is unusable (dead or
+    /// fully exhausted, not merely busy) the scan takes the spread pool regardless, since
+    /// otherwise it would never run at all.
+    /// </summary>
+    internal static bool ScanMayBorrowSpreadPool(int spreadActive, int spreadMaxSize, bool mainPoolUsable)
+        => !mainPoolUsable || spreadMaxSize - spreadActive >= 2;
+
     /// <summary>True if this exact (file,src,dst) pair has failed enough to drop.</summary>
     internal static bool PairRetryCapped(int pairFailures) => pairFailures >= PairRetryCap;
 
