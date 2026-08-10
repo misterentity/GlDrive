@@ -1531,18 +1531,34 @@ public class SpreadJob : IDisposable
                 }
             }
 
+            // The fallback must never take the LAST spread permit — an FXP borrow waits
+            // 30s while this scan re-runs every ~2s, so an unconditional fallback starves
+            // transfers forever. See CandidatePredicates.ScanMayBorrowSpreadPool.
+            var yieldedToTransfers = false;
             if (!scanDone && spreadPool != null)
             {
-                try
+                var mainUsable = mainPool != null && !mainPool.IsExhausted;
+                if (!CandidatePredicates.ScanMayBorrowSpreadPool(
+                        spreadPool.ActiveCount, spreadPool.MaxSize, mainUsable))
                 {
-                    Log.Information("Spread scan: listing {Server} at {Path} (using spread pool fallback)...",
-                        serverName, basePath);
-                    await ScanDirectoryRecursive(spreadPool, basePath, basePath, files, signals, 0, ct);
-                    scanDone = true;
+                    yieldedToTransfers = true;
+                    Log.Information("Spread scan: yielding {Server}'s spread pool to FXP transfers " +
+                        "(active={Active}/{Max}) — rescanning next cycle", serverName,
+                        spreadPool.ActiveCount, spreadPool.MaxSize);
                 }
-                catch (Exception ex)
+                else
                 {
-                    lastError = ex;
+                    try
+                    {
+                        Log.Information("Spread scan: listing {Server} at {Path} (using spread pool fallback)...",
+                            serverName, basePath);
+                        await ScanDirectoryRecursive(spreadPool, basePath, basePath, files, signals, 0, ct);
+                        scanDone = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        lastError = ex;
+                    }
                 }
             }
 
@@ -1551,8 +1567,10 @@ public class SpreadJob : IDisposable
                 Log.Information("Spread scan: {Server} returned {Count} files", serverName, files.Count);
                 lock (scanLock) results.Add((serverId, files, signals));
             }
-            else
+            else if (!yieldedToTransfers)
             {
+                // A deliberate yield is not a failure — logging it as one produced the
+                // 1,464 WRN/day that buried the real signal (see the predicate's notes).
                 Log.Warning(lastError, "Spread scan FAILED for {Server} at {Path} (both pools unavailable)",
                     serverName, basePath);
             }
