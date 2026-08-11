@@ -395,6 +395,30 @@ public class FtpConnectionPool : IAsyncDisposable
     public int MaxSize => _maxSize;
 
     /// <summary>
+    /// How many live connections this pool can ACTUALLY hold — <see cref="MaxSize"/>
+    /// capped by what the shared account login gate will grant a caller of this pool's
+    /// role. Anything reasoning about "is there room for one more connection?" must use
+    /// this, never MaxSize.
+    ///
+    /// v3.10.54: MaxSize was used as a proxy for the ceiling. That held while the spread
+    /// pool was configured at 3 and the account allowed 3 usable logins, then quietly
+    /// stopped holding when spreadPoolSize went to 10 against a gate granting 1. The
+    /// scan-yield guard (v3.10.51) evaluated 534 times on 2026-08-10 and yielded 0 times,
+    /// so the scan raided the single FXP login every cycle: 1,253 borrow timeouts, all
+    /// reporting the same `created=1/3, active=1`.
+    /// </summary>
+    public int EffectiveMaxSize
+    {
+        get
+        {
+            var max = _maxSize;
+            if (_loginGate == null) return max;
+            var granted = _priorityLogins ? _loginGate.PriorityLimit : _loginGate.GeneralLimit;
+            return Math.Max(1, Math.Min(max, granted));
+        }
+    }
+
+    /// <summary>
     /// Lower the pool's maximum connection count. Shrink-only — if
     /// <paramref name="newMax"/> is greater than or equal to the current
     /// max, this is a no-op. Existing connections beyond the new max
