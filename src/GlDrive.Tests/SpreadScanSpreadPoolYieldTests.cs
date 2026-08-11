@@ -60,7 +60,7 @@ public class SpreadScanSpreadPoolYieldTests
         // zephyr: spread pool size=3, two FXP transfers in flight, main pool alive but
         // saturated (size 1). The old code took the third permit here, every 2s.
         Assert.False(CandidatePredicates.ScanMayBorrowSpreadPool(
-            spreadActive: 2, spreadMaxSize: 3, mainPoolUsable: true));
+            spreadActive: 2, spreadUsableMax: 3, mainPoolUsable: true));
     }
 
     // ---- the call site actually uses it ----
@@ -105,7 +105,9 @@ public class SpreadScanSpreadPoolYieldTests
 
         // The WRN must sit behind an `else if (!yieldedToTransfers)`, otherwise a healthy
         // yield re-creates the 1,464 warnings/day that buried the real signal.
-        var guardWindow = source[Math.Max(0, warn - 400)..warn];
+        // Window widened in v3.10.54: the branch gained the contention/fault severity
+        // split and its rationale. The `else if (!yieldedToTransfers)` guard is unchanged.
+        var guardWindow = source[Math.Max(0, warn - 1000)..warn];
         Assert.Contains("!yieldedToTransfers", guardWindow);
     }
 }

@@ -36,6 +36,16 @@ public interface IAccountLoginGate
     int Limit { get; }
     /// <summary>Permits reserved for priority (FXP) callers — non-priority callers can't take these.</summary>
     int Reserved { get; }
+    /// <summary>
+    /// Ceiling on live logins a PRIORITY (FXP/spread) caller can ever hold. This — not a
+    /// pool's nominal MaxSize — is the number that bounds FXP concurrency, and callers
+    /// sizing themselves against pool capacity instead of this silently oversubscribe
+    /// (v3.10.54: the scan-yield guard compared against a pool of 10 while the gate
+    /// would only ever grant 1, so it never fired in 534 evaluations).
+    /// </summary>
+    int PriorityLimit { get; }
+    /// <summary>Ceiling on live logins a NON-priority (main mount pool) caller can ever hold.</summary>
+    int GeneralLimit { get; }
     /// <summary>Shrink-only: lower the effective limit by permanently parking permits.</summary>
     void TightenTo(int newLimit);
 }
@@ -102,6 +112,8 @@ public sealed class ServerLoginGate : IAccountLoginGate
     public int Reserved => _reserved;
     /// <summary>Permits reserved for the main mount pool — priority callers can't take these.</summary>
     public int MainReserved => _mainReserved;
+    public int PriorityLimit { get { lock (_lock) return _priorityLimit; } }
+    public int GeneralLimit { get { lock (_lock) return _generalLimit; } }
 
     public async Task<bool> TryAcquireAsync(CancellationToken ct, TimeSpan? timeout = null, bool priority = false)
     {

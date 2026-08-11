@@ -59,9 +59,18 @@ internal static class CandidatePredicates
     /// The original recovery case still works: when the main pool is unusable (dead or
     /// fully exhausted, not merely busy) the scan takes the spread pool regardless, since
     /// otherwise it would never run at all.
+    ///
+    /// <paramref name="spreadUsableMax"/> MUST be the pool's <c>EffectiveMaxSize</c> — the
+    /// count of logins the account gate will actually grant — not its nominal
+    /// <c>MaxSize</c>. v3.10.54: passing MaxSize made this guard inert. It was authored
+    /// when spreadPoolSize was 3 against 3 usable logins, where the two numbers agreed;
+    /// production later ran spreadPoolSize 10 against a gate granting 1, so
+    /// <c>10 - active >= 2</c> was true on all 534 evaluations of 2026-08-10 and the scan
+    /// yielded exactly 0 times. A capacity number that isn't the contended resource cannot
+    /// answer "is there room" (recurring pattern #1).
     /// </summary>
-    internal static bool ScanMayBorrowSpreadPool(int spreadActive, int spreadMaxSize, bool mainPoolUsable)
-        => !mainPoolUsable || spreadMaxSize - spreadActive >= 2;
+    internal static bool ScanMayBorrowSpreadPool(int spreadActive, int spreadUsableMax, bool mainPoolUsable)
+        => !mainPoolUsable || spreadUsableMax - spreadActive >= 2;
 
     /// <summary>True if this exact (file,src,dst) pair has failed enough to drop.</summary>
     internal static bool PairRetryCapped(int pairFailures) => pairFailures >= PairRetryCap;

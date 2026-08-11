@@ -1549,13 +1549,15 @@ public class SpreadJob : IDisposable
             if (!scanDone && spreadPool != null)
             {
                 var mainUsable = mainPool != null && !mainPool.IsExhausted;
+                // EffectiveMaxSize, NOT MaxSize — the account login gate, not the pool's
+                // nominal size, is what bounds FXP concurrency. See v3.10.54.
                 if (!CandidatePredicates.ScanMayBorrowSpreadPool(
-                        spreadPool.ActiveCount, spreadPool.MaxSize, mainUsable))
+                        spreadPool.ActiveCount, spreadPool.EffectiveMaxSize, mainUsable))
                 {
                     yieldedToTransfers = true;
                     Log.Information("Spread scan: yielding {Server}'s spread pool to FXP transfers " +
-                        "(active={Active}/{Max}) — rescanning next cycle", serverName,
-                        spreadPool.ActiveCount, spreadPool.MaxSize);
+                        "(active={Active}/{Usable} usable, pool max {Max}) — rescanning next cycle",
+                        serverName, spreadPool.ActiveCount, spreadPool.EffectiveMaxSize, spreadPool.MaxSize);
                 }
                 else
                 {
@@ -1582,8 +1584,17 @@ public class SpreadJob : IDisposable
             {
                 // A deliberate yield is not a failure — logging it as one produced the
                 // 1,464 WRN/day that buried the real signal (see the predicate's notes).
-                Log.Warning(lastError, "Spread scan FAILED for {Server} at {Path} (both pools unavailable)",
-                    serverName, basePath);
+                // Nor is losing the permit race: that is the same busy-account state the
+                // main-pool branch above logs at INF, it self-corrects next cycle, and at
+                // ~9 lines a piece it was 8% of the log and rolled a day of history off
+                // the 10 MB cap (v3.10.54). Real faults keep their WRN and their stack.
+                if (ScanFailureClassifier.IsContention(lastError))
+                    Log.Information("Spread scan: no login available for {Server} at {Path} " +
+                        "({Reason}) — rescanning next cycle",
+                        serverName, basePath, lastError!.GetType().Name);
+                else
+                    Log.Warning(lastError, "Spread scan FAILED for {Server} at {Path} (both pools unavailable)",
+                        serverName, basePath);
             }
         });
 
