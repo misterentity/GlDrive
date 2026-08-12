@@ -21,6 +21,13 @@ namespace GlDrive.Spread;
 ///
 /// The distinctions that matter to a reader:
 ///   - cooldown       — the server refused us recently; it clears on a timer.
+///   - gate backoff   — no account login permit was free, so the pool parked new
+///                      connections for ~20s. Local contention, nothing remote.
+///                      Invisible until v3.10.55: the pool stored this in the SAME
+///                      field as the refusal cooldown, so it printed as "server
+///                      refused a recent login" — the exact class of misattribution
+///                      this type exists to prevent. 2026-08-10/11: 1 real refusal
+///                      vs 1,009 gate backoffs, all reported as refusals.
 ///   - empty pool     — every connection really was discarded. THIS is the case
 ///                      where ghost sessions are a plausible cause.
 ///   - at capacity    — the pool holds its max and they are all busy; this is
@@ -36,7 +43,8 @@ public static class BorrowStarvationDiagnoser
         bool IsExhausted,
         int Created,
         int Active,
-        int MaxSize);
+        int MaxSize,
+        bool IsInLoginGateBackoff = false);
 
     /// <summary>
     /// One-line cause for a single pool. Never speculates beyond the counters.
@@ -45,6 +53,15 @@ public static class BorrowStarvationDiagnoser
     {
         if (s.IsInCooldown)
             return $"in cooldown (server refused a recent login; created={s.Created}/{s.MaxSize})";
+
+        // The pool parks new connections for this reason too, but nothing was
+        // refused by anyone remote — a pool on this account is holding the
+        // permits. Reporting it as a server refusal sent the reader to the BNC
+        // for 357 of 359 borrow timeouts on 2026-08-11.
+        if (s.IsInLoginGateBackoff)
+            return $"account login-gate backoff — no login permit was free, so new " +
+                   $"connections are parked ~20s (created={s.Created}/{s.MaxSize}, active={s.Active}); " +
+                   "local contention on this account — nothing was refused remotely";
 
         if (s.IsExhausted || (s.Created <= 0 && s.Active <= 0))
             return $"pool empty — every connection was discarded (created=0/{s.MaxSize}); " +
@@ -86,5 +103,5 @@ public static class BorrowStarvationDiagnoser
 
     /// <summary>A pool that could not hand out a connection on demand.</summary>
     public static bool IsStarved(PoolState s) =>
-        s.IsInCooldown || s.IsExhausted || s.Created <= 0 || s.Active >= s.Created;
+        s.IsInCooldown || s.IsInLoginGateBackoff || s.IsExhausted || s.Created <= 0 || s.Active >= s.Created;
 }

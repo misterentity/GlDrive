@@ -695,7 +695,7 @@ public class MediaStreamServer : IDisposable
 
                 ssl.Close();
                 tcp.Close();
-                await client.GetReply(ct);
+                await CpsvDataHelper.CompleteDataSequence(client, ct);
             }
             finally { ssl.Dispose(); }
         }
