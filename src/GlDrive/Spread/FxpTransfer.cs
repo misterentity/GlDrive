@@ -541,12 +541,20 @@ public class FxpTransfer
                 try
                 {
                     await src.Execute("ABOR", ct);
-                    await src.GetReply(ct);
+                    // Clears the mark OpenDataTcp set: the aborted RETR's reply has
+                    // now been consumed, so src is back in sync and reusable. If ABOR
+                    // throws, the mark deliberately stays set and the pool discards.
+                    await CpsvDataHelper.CompleteDataSequence(src, ct);
                 }
                 catch (Exception abortEx)
                 {
                     Log.Debug(abortEx, "ABOR after dupe-detect failed (non-fatal)");
                 }
+
+                // dst's STOR was rejected outright, so its data sequence never began
+                // and FluentFTP already consumed the rejection reply — nothing is
+                // outstanding on that control channel.
+                CpsvDataHelper.EndDataSequence(dst);
                 pasvSw.Stop();
                 SetState(TransferState.Complete);
                 Log.Information("FXP dupe-skip (Relay): {Path} already on dest — {Msg}",
@@ -607,8 +615,13 @@ public class FxpTransfer
             // re-races only if it's genuinely short.
             try
             {
-                var srcComplete = await src.GetReply(ct);
-                var dstComplete = await dst.GetReply(ct);
+                // CompleteDataSequence, not a raw GetReply: OpenDataTcp marked both
+                // control channels as owing a reply, and only reading it clears the
+                // mark. A raw GetReply here would leave BOTH connections flagged
+                // after every SUCCESSFUL relay and the pool would discard them on
+                // return — the v3.10.14 shape (~2,871 needless quarantines/day).
+                var srcComplete = await CpsvDataHelper.CompleteDataSequence(src, ct);
+                var dstComplete = await CpsvDataHelper.CompleteDataSequence(dst, ct);
                 Log.Debug("Relay complete: src={SrcCode}, dst={DstCode}", srcComplete.Code, dstComplete.Code);
             }
             catch (Exception replyEx) when (totalRelayed > 0)
