@@ -105,7 +105,7 @@ public class SpreadManager : IDisposable
                     Created: pool.TotalCreated,
                     Quarantined: pool.QuarantineSize,
                     ObservedBncCap: pool.ObservedLoginCap,
-                    InCooldown: pool.IsInCooldown));
+                    InCooldown: pool.IsThrottled));
             }
         }
         return list;
@@ -492,7 +492,7 @@ public class SpreadManager : IDisposable
             // BNC cooldown — every reinit attempt just re-hits the gate timeout and
             // feeds the quarantine churn. The cooldown auto-clears (login-cap 20s,
             // refusal 90s) or on the next successful connect; the next race retries.
-            if (pool.IsInCooldown)
+            if (pool.IsThrottled)
             {
                 Log.Information("Spread pool exhausted for {Server} but in cooldown — skipping reinit until it clears", serverName);
                 continue;

@@ -41,6 +41,15 @@ public class FtpConnectionPool : IAsyncDisposable
     // every cycle (the v3.8.9 churn that pinned the quarantine teardown queue), short
     // enough to resume racing promptly. RecordConnect clears it on the next success.
     private static readonly TimeSpan LoginGateCooldown = TimeSpan.FromSeconds(20);
+    // ...and it gets its OWN deadline field. It used to share _refusedUntilTicks
+    // with the BNC refusal above, which made IsInCooldown answer "the server
+    // refused us" for what is purely a LOCAL permit shortage. Every borrow-timeout
+    // message then named the wrong subsystem: on 2026-08-10/11 the two causes ran
+    // 1 real refusal against 1,009 gate backoffs, and 357 of 359 borrow timeouts
+    // in one day reported "server refused a recent login" for a stall the remote
+    // side had no part in. Same defect v3.10.48 fixed in the message, reintroduced
+    // through the state it reads. Two causes, two fields.
+    private long _gateBackoffUntilTicks;
 
     // Health counters — flushed hourly by HealthRollup
     public double AvgConnectMs { get; private set; }
@@ -77,8 +86,26 @@ public class FtpConnectionPool : IAsyncDisposable
     private int _quarantineLive;
     public int QuarantineSize => Volatile.Read(ref _quarantineLive);
 
-    /// <summary>PRD O2 — true while a BNC cooldown is active (no new connections).</summary>
+    /// <summary>
+    /// PRD O2 — true while a BNC cooldown is active (no new connections), i.e. the
+    /// SERVER refused us. Does NOT cover the local login-gate backoff: see
+    /// <see cref="IsInLoginGateBackoff"/>. Use <see cref="IsThrottled"/> when the
+    /// question is "may I open a connection right now?" rather than "why not?".
+    /// </summary>
     public bool IsInCooldown => Interlocked.Read(ref _refusedUntilTicks) > DateTime.UtcNow.Ticks;
+
+    /// <summary>
+    /// True while new-connection creation is parked because the shared account
+    /// login gate had no permit. Local contention, nothing to do with the server.
+    /// </summary>
+    public bool IsInLoginGateBackoff => Interlocked.Read(ref _gateBackoffUntilTicks) > DateTime.UtcNow.Ticks;
+
+    /// <summary>
+    /// True while the pool will not open a new connection, for either reason.
+    /// This is the predicate for scheduling decisions; the two flags above exist
+    /// so the DIAGNOSIS can still name which one applies.
+    /// </summary>
+    public bool IsThrottled => IsInCooldown || IsInLoginGateBackoff;
 
     /// <summary>PRD O2 — last observed BNC login cap (parsed from "restricted to N simultaneous logins"), or null.</summary>
     public int? ObservedLoginCap { get; private set; }
@@ -98,6 +125,7 @@ public class FtpConnectionPool : IAsyncDisposable
         // single ghost-kill and clear any BNC cooldown.
         Interlocked.Exchange(ref _ghostKilledSinceSuccess, 0);
         Interlocked.Exchange(ref _refusedUntilTicks, 0);
+        Interlocked.Exchange(ref _gateBackoffUntilTicks, 0);
         lock (_connectMsSamples)
         {
             if (_connectMsSamples.Count < MaxHealthSamples) _connectMsSamples.Add(ms);
@@ -528,14 +556,21 @@ public class FtpConnectionPool : IAsyncDisposable
         // connection — it'll just be refused and deepen the cooldown. Fall
         // through to wait on the channel (an in-flight transfer may return a
         // usable connection) or fail fast if the pool is truly empty.
+        // Both parked states suppress new connections identically; only the
+        // reason differs, and the reason is what the operator reads.
         var refusedUntil = Interlocked.Read(ref _refusedUntilTicks);
-        if (refusedUntil > 0 && DateTime.UtcNow.Ticks < refusedUntil)
+        var gateUntil = Interlocked.Read(ref _gateBackoffUntilTicks);
+        var parkedUntil = Math.Max(refusedUntil, gateUntil);
+        if (parkedUntil > 0 && DateTime.UtcNow.Ticks < parkedUntil)
         {
+            var reason = DateTime.UtcNow.Ticks < refusedUntil
+                ? "Server in BNC cooldown"
+                : "Account login-gate backoff (no permit)";
             if (_created <= 0)
             {
                 IncrementExhaust();
                 throw new InvalidOperationException(
-                    "Server in BNC cooldown — not attempting new connection");
+                    $"{reason} — not attempting new connection");
             }
             client = await _pool.Reader.ReadAsync(ct);
             if (await CheckPooledForBorrow(client, ct) == BorrowCheck.Usable)
@@ -545,7 +580,7 @@ public class FtpConnectionPool : IAsyncDisposable
             }
             IncrementDisconnect();
             throw new InvalidOperationException(
-                "Server in BNC cooldown — pooled connection was dead");
+                $"{reason} — pooled connection was dead");
         }
 
         // Pool empty — create new if under limit
@@ -583,7 +618,7 @@ public class FtpConnectionPool : IAsyncDisposable
                 }
                 else if (gateCapped)
                 {
-                    Interlocked.Exchange(ref _refusedUntilTicks, DateTime.UtcNow.Add(LoginGateCooldown).Ticks);
+                    Interlocked.Exchange(ref _gateBackoffUntilTicks, DateTime.UtcNow.Add(LoginGateCooldown).Ticks);
                     Log.Information("Pool: server entering {Sec}s login-cap backoff (no permit available) — pausing new connections",
                         (int)LoginGateCooldown.TotalSeconds);
                 }
@@ -1090,7 +1125,12 @@ public class PooledConnection : IAsyncDisposable
         var client = Interlocked.Exchange(ref _client, null);
         if (client != null)
         {
-            if (Poisoned)
+            // A CPSV data sequence that did not reach its completion reply leaves
+            // an unread reply on the control channel; the next command on this
+            // connection would read that stale reply instead of its own. Discard
+            // regardless of who borrowed it — the invariant belongs to the
+            // connection, not to any one call site.
+            if (Poisoned || CpsvDataHelper.HasPendingDataSequence(client))
                 _pool.Discard(client);
             else
                 _pool.Return(client);

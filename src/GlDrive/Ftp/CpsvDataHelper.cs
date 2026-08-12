@@ -26,6 +26,68 @@ public static class CpsvDataHelper
     internal static string SanitizeFtpPath(string path)
         => path.Replace("\r", "").Replace("\n", "").Replace("\0", "");
 
+    // ---------------------------------------------------------------------
+    // Control-channel desync tracking.
+    //
+    // Every CPSV op is a MULTI-REPLY sequence on the control channel:
+    //   CPSV -> 227 ... ; LIST/RETR/STOR -> 150 ; <data transfer> ; -> 226
+    // If the sequence aborts anywhere between OpenDataTcp and that final 226,
+    // the control channel is left holding an unread reply. The next command on
+    // that connection then reads the STALE one — which is exactly how
+    // "Failed to parse CPSV response: Type set to A." happens: CPSV read back
+    // TYPE A's leftover 200.
+    //
+    // FtpOperations already poisoned its own borrowed connection on failure,
+    // but that guard was attached to ONE call site rather than to the thing it
+    // protects. Every other caller (NewReleaseMonitor, SpreadJob, SpreadManager,
+    // FtpSearchService, StreamingDownloader, MediaStreamServer) returned the
+    // desynced connection to the pool clean, so the next borrower inherited it
+    // (observed 2026-08-11: three consecutive NewReleaseMonitor polls, 60s apart,
+    // all failing on the same stale reply).
+    //
+    // So the flag lives on the CLIENT, keyed on the property that defines the
+    // hazard — "this control channel owes us a reply" — set when the sequence
+    // starts and cleared only when it provably completes. Any other exit path
+    // leaves it set and PooledConnection.DisposeAsync discards the connection.
+    // ConditionalWeakTable so a client that is never returned is not retained.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<AsyncFtpClient, object> PendingSequences = new();
+    private static readonly object PendingMarker = new();
+
+    /// <summary>
+    /// Marks this control channel as owing a reply. Called when a CPSV data
+    /// sequence begins; until <see cref="CompleteDataSequence"/> clears it, the
+    /// connection must not be reused by anyone else.
+    /// </summary>
+    internal static void BeginDataSequence(AsyncFtpClient client)
+        => PendingSequences.AddOrUpdate(client, PendingMarker);
+
+    /// <summary>
+    /// Reads the transfer-completion reply and clears the desync flag. Only a
+    /// successful read clears it — if GetReply throws, the channel really is
+    /// still out of sync and the connection stays marked.
+    /// </summary>
+    internal static async Task<FtpReply> CompleteDataSequence(AsyncFtpClient client, CancellationToken ct)
+    {
+        var reply = await client.GetReply(ct);
+        EndDataSequence(client);
+        return reply;
+    }
+
+    /// <summary>
+    /// Clears the desync flag. Separate from <see cref="CompleteDataSequence"/> only
+    /// so the mark/clear invariant is reachable without a live control channel.
+    /// </summary>
+    internal static void EndDataSequence(AsyncFtpClient client)
+        => PendingSequences.Remove(client);
+
+    /// <summary>
+    /// True when a CPSV data sequence on this client did not run to completion,
+    /// leaving an unread reply on the control channel. Such a connection is
+    /// unusable and must be discarded rather than returned to the pool.
+    /// </summary>
+    public static bool HasPendingDataSequence(AsyncFtpClient client)
+        => PendingSequences.TryGetValue(client, out _);
+
     private static readonly Regex PasvRegex = new(@"\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)\)", RegexOptions.Compiled);
     private static readonly Regex UnixListRegex = new(@"^([dlcbps-])[rwxsStT-]{9}\s+\d+\s+\S+\s+\S+\s+(\d+)\s+(\w{3}\s+\d+\s+[\d:]+)\s+(.+)$", RegexOptions.Compiled);
 
@@ -61,6 +123,12 @@ public static class CpsvDataHelper
     internal static async Task<TcpClient> OpenDataTcp(
         AsyncFtpClient client, CancellationToken ct)
     {
+        // From here until the completion reply is read, this control channel owes
+        // us replies. Mark before CPSV is even sent: if CPSV itself reads a stale
+        // reply (the desync signature), the connection is already unusable and
+        // must not go back to the pool for the next caller to inherit.
+        BeginDataSequence(client);
+
         var cpsvReply = await client.Execute("CPSV", ct);
         if (!cpsvReply.Success)
             throw new IOException($"CPSV failed: {cpsvReply.Code} {cpsvReply.Message}");
@@ -150,6 +218,7 @@ public static class CpsvDataHelper
     {
         Log.Debug("CPSV LIST {Path}", remotePath);
 
+        BeginDataSequence(client);
         var typeReply = await client.Execute("TYPE A", ct);
         if (typeReply.Code != "200")
             throw new IOException($"TYPE A failed: {typeReply.Code} {typeReply.Message}");
@@ -174,7 +243,7 @@ public static class CpsvDataHelper
                 ssl.Close();
                 tcp.Close();
 
-                var completeReply = await client.GetReply(ct);
+                var completeReply = await CompleteDataSequence(client, ct);
                 Log.Debug("LIST complete: {Code} {Message}", completeReply.Code, completeReply.Message);
 
                 return ParseUnixListing(listing, remotePath);
@@ -195,6 +264,7 @@ public static class CpsvDataHelper
     {
         Log.Debug("CPSV RETR {Path}", remotePath);
 
+        BeginDataSequence(client);
         await client.Execute("TYPE I", ct);
 
         var tcp = await OpenDataTcp(client, ct);
@@ -215,7 +285,7 @@ public static class CpsvDataHelper
                 ssl.Close();
                 tcp.Close();
 
-                var completeReply = await client.GetReply(ct);
+                var completeReply = await CompleteDataSequence(client, ct);
                 Log.Debug("RETR complete: {Code} {Message}", completeReply.Code, completeReply.Message);
 
                 // Always copy to exactly Length bytes — TryGetBuffer's underlying array can be over-allocated.
@@ -242,6 +312,7 @@ public static class CpsvDataHelper
     {
         Log.Debug("CPSV RETR (stream) {Path}", remotePath);
 
+        BeginDataSequence(client);
         await client.Execute("TYPE I", ct);
 
         var tcp = await OpenDataTcp(client, ct);
@@ -269,7 +340,7 @@ public static class CpsvDataHelper
                 ssl.Close();
                 tcp.Close();
 
-                var completeReply = await client.GetReply(ct);
+                var completeReply = await CompleteDataSequence(client, ct);
                 Log.Debug("RETR complete: {Code} {Message}", completeReply.Code, completeReply.Message);
             }
             finally
@@ -288,6 +359,7 @@ public static class CpsvDataHelper
     {
         Log.Debug("CPSV STOR {Path} ({Bytes} bytes)", remotePath, data.Length);
 
+        BeginDataSequence(client);
         await client.Execute("TYPE I", ct);
 
         var tcp = await OpenDataTcp(client, ct);
@@ -308,7 +380,7 @@ public static class CpsvDataHelper
                 ssl.Close();
                 tcp.Close();
 
-                var completeReply = await client.GetReply(ct);
+                var completeReply = await CompleteDataSequence(client, ct);
                 Log.Debug("STOR complete: {Code} {Message}", completeReply.Code, completeReply.Message);
             }
             finally
@@ -334,6 +406,7 @@ public static class CpsvDataHelper
         }
 
         // Stream directly to SSL — avoids double-buffering for large files
+        BeginDataSequence(client);
         await client.Execute("TYPE I", ct);
         var tcp = await OpenDataTcp(client, ct);
         try
@@ -349,7 +422,7 @@ public static class CpsvDataHelper
                 await stream.CopyToAsync(ssl, ct);
                 ssl.Close();
                 tcp.Close();
-                var completeReply = await client.GetReply(ct);
+                var completeReply = await CompleteDataSequence(client, ct);
                 Log.Debug("STOR stream complete: {Code} {Message}", completeReply.Code, completeReply.Message);
             }
             finally

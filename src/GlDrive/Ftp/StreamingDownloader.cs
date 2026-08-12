@@ -23,7 +23,7 @@ public class StreamingDownloader
 
     /// <summary>True when the download pool is in a BNC cooldown — callers should
     /// defer rather than borrow (which would just throw).</summary>
-    public bool IsPoolInCooldown => _pool.IsInCooldown;
+    public bool IsPoolInCooldown => _pool.IsThrottled;
 
     public async Task DownloadToFile(
         string remotePath, string localPath, long resumeOffset,
@@ -117,7 +117,7 @@ public class StreamingDownloader
 
                 ssl.Close();
                 tcp.Close();
-                var completeReply = await client.GetReply(ct);
+                var completeReply = await CpsvDataHelper.CompleteDataSequence(client, ct);
                 Log.Debug("RETR complete: {Code} {Message}", completeReply.Code, completeReply.Message);
             }
             finally { ssl.Dispose(); }

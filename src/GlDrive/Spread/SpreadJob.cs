@@ -2064,7 +2064,7 @@ public class SpreadJob : IDisposable
                     // Source's pool is in a BNC cooldown — new connections are
                     // parked, so a Borrow would just throw. Skip every candidate
                     // pulling from it until the cooldown clears.
-                    if (poolsSnap.TryGetValue(srcId, out var srcPoolCd) && srcPoolCd.IsInCooldown)
+                    if (poolsSnap.TryGetValue(srcId, out var srcPoolCd) && srcPoolCd.IsThrottled)
                     { skippedCooldown++; continue; }
 
                     foreach (var (dstId, dstBasePath) in sitePaths)
@@ -2076,7 +2076,7 @@ public class SpreadJob : IDisposable
 
                         // Dest's pool is in a BNC cooldown — can't open a data/
                         // control connection to receive. Skip until it clears.
-                        if (poolsSnap.TryGetValue(dstId, out var dstPoolCd) && dstPoolCd.IsInCooldown)
+                        if (poolsSnap.TryGetValue(dstId, out var dstPoolCd) && dstPoolCd.IsThrottled)
                         { skippedCooldown++; continue; }
 
                         // Per-destination backoff. The dest recently failed and
@@ -2214,7 +2214,7 @@ public class SpreadJob : IDisposable
     }
 
     private static BorrowStarvationDiagnoser.PoolState SnapshotPool(FtpConnectionPool p) =>
-        new(p.IsInCooldown, p.IsExhausted, p.TotalCreated, p.ActiveCount, p.MaxSize);
+        new(p.IsInCooldown, p.IsExhausted, p.TotalCreated, p.ActiveCount, p.MaxSize, p.IsInLoginGateBackoff);
 
     private async Task ExecuteTransfer(SpreadFileInfo file, string srcId, string dstId,
         string dstBasePath, CancellationToken ct)
@@ -2888,7 +2888,7 @@ public class SpreadJob : IDisposable
     {
         var pools = _pools;
         foreach (var pool in pools.Values)
-            if (pool.IsInCooldown) return true;
+            if (pool.IsThrottled) return true;
         return false;
     }
 
