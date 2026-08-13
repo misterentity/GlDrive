@@ -139,8 +139,8 @@ public sealed class AgentViewModel : INotifyPropertyChanged
             App.TelemetryRecorder?.Record(TelemetryStream.Overrides, new ConfigOverrideEvent
             {
                 JsonPointer = row.Target,
-                BeforeValue = row.After?.ToString(),
-                AfterValue = row.Before?.ToString(),
+                BeforeValue = ConfigSecretPointers.MaskValue(row.Target, row.After?.ToString()),
+                AfterValue = ConfigSecretPointers.MaskValue(row.Target, row.Before?.ToString()),
                 AiAuditRef = row.RunId
             });
         }

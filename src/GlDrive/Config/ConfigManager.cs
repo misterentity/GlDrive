@@ -106,13 +106,12 @@ public class ConfigManager
                     {
                         // Never write a credential's value to the telemetry stream — the
                         // digest still proves the field changed. See ConfigSecretPointers.
-                        var secret = AiAgent.ConfigSecretPointers.IsSecret(ptr);
                         recorder.Record(AiAgent.TelemetryStream.Overrides,
                             new AiAgent.ConfigOverrideEvent
                             {
                                 JsonPointer = ptr,
-                                BeforeValue = secret ? AiAgent.ConfigSecretPointers.Mask(b) : b,
-                                AfterValue  = secret ? AiAgent.ConfigSecretPointers.Mask(a) : a
+                                BeforeValue = AiAgent.ConfigSecretPointers.MaskValue(ptr, b),
+                                AfterValue  = AiAgent.ConfigSecretPointers.MaskValue(ptr, a)
                             });
                     }
                 }
