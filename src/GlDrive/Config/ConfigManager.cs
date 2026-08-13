@@ -103,13 +103,18 @@ public class ConfigManager
                 if (recorder != null && beforeNode != null && afterNode != null)
                 {
                     foreach (var (ptr, b, a) in AiAgent.ConfigDiff.Diff(beforeNode, afterNode))
+                    {
+                        // Never write a credential's value to the telemetry stream — the
+                        // digest still proves the field changed. See ConfigSecretPointers.
+                        var secret = AiAgent.ConfigSecretPointers.IsSecret(ptr);
                         recorder.Record(AiAgent.TelemetryStream.Overrides,
                             new AiAgent.ConfigOverrideEvent
                             {
                                 JsonPointer = ptr,
-                                BeforeValue = b,
-                                AfterValue  = a
+                                BeforeValue = secret ? AiAgent.ConfigSecretPointers.Mask(b) : b,
+                                AfterValue  = secret ? AiAgent.ConfigSecretPointers.Mask(a) : a
                             });
+                    }
                 }
             }
             catch (Exception ex) { Log.Debug(ex, "ConfigOverride emit failed"); }
