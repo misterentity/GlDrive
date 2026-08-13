@@ -498,7 +498,14 @@ public class SpreadManager : IDisposable
                 continue;
             }
 
-            Log.Warning("Spread pool exhausted for {Server} — reinitializing", serverName);
+            // INF, not WRN: spread pools deliberately have no keepalive (unlike the main
+            // pools), so they go idle-dead between races and this fires on essentially
+            // every race — 281 times on 2026-08-12 alone. It is the designed recovery
+            // path, not a fault. Logging it at WRN made routine operation look degraded
+            // and pushed the 10 MB rolling cap; gldrive-20260810.log rolled at 23:41 and
+            // cost half a day of forensic history, which is the same harm noted in
+            // v3.10.47 and v3.10.54.
+            Log.Information("Spread pool exhausted for {Server} — reinitializing", serverName);
             try
             {
                 // Match the configured spread pool size — with chain mode

@@ -37,6 +37,11 @@ public partial class ExtractorWindow : Window
     private bool _watchEnabled;
     private readonly HashSet<string> _watchProcessed = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _watchAbandoned = new(StringComparer.OrdinalIgnoreCase);
+
+    // Durable twin of _watchAbandoned for verdicts a restart cannot change. The
+    // in-memory set is still the fast path; this one keeps a provably-unextractable
+    // volume set from being replayed on every launch (see ExtractAbandonStore).
+    private readonly ExtractAbandonStore _abandonStore = new();
     private readonly Dictionary<string, int> _watchRetryCounts = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _watchLock = new();
 
@@ -66,6 +71,7 @@ public partial class ExtractorWindow : Window
         Archives.CollectionChanged += (_, _) => UpdateDropHint();
         UpdateDropHint();
         LoadSettings();
+        _abandonStore.Load();
         _initialized = true; // Enable Settings_Changed → SaveSettings from here on
     }
 
@@ -437,6 +443,10 @@ public partial class ExtractorWindow : Window
                         await ExtractArchiveAsync(item, outputDir, password, overwriteIdx, ct);
                         item.Status = "Done";
                         item.Progress = 100;
+
+                        // A success retires any durable verdict for this path, so a set
+                        // that was repaired and extracted never carries a stale record.
+                        _abandonStore.Forget(item.FilePath);
 
                         if (deleteAfter && !await Task.Run(() => DeleteSourceFiles(item.FilePath), ct))
                             item.ErrorMessage = "Extracted, but source cleanup was incomplete";
@@ -1267,6 +1277,21 @@ public partial class ExtractorWindow : Window
         lock (_watchLock)
         {
             if (_watchAbandoned.Contains(path)) return;
+        }
+
+        // Durable check, outside the in-memory set: this is what stops a restart from
+        // replaying an extraction that was already proven impossible for this exact
+        // volume set. ShouldSkip revives the path itself once the set changes.
+        var (fpCount, fpBytes) = ComputeVolumeSetFingerprint(path);
+        if (_abandonStore.ShouldSkip(path, fpCount, fpBytes))
+        {
+            Log.Debug("Extractor: skipping {Path} — unchanged volume set already ruled unextractable", path);
+            lock (_watchLock) _watchProcessed.Add(path);
+            return;
+        }
+
+        lock (_watchLock)
+        {
             if (!_watchProcessed.Add(path)) return;
         }
 
@@ -1528,7 +1553,7 @@ public partial class ExtractorWindow : Window
         if (failure != null &&
             ExtractFailureClassifier.Classify(failure) == ExtractFailureKind.Permanent)
         {
-            AbandonWatchedPath(path, $"unrecoverable ({failure.Message})");
+            AbandonWatchedPath(path, $"unrecoverable ({failure.Message})", durable: true);
             return;
         }
 
@@ -1554,8 +1579,17 @@ public partial class ExtractorWindow : Window
     /// counting), so the next watcher event or recovery scan restarted the full retry
     /// cycle — observed looping indefinitely against the same two archives on 2026-07-21.
     /// </summary>
-    private void AbandonWatchedPath(string path, string reason)
+    private void AbandonWatchedPath(string path, string reason, bool durable = false)
     {
+        // Only a classifier verdict of Permanent earns a durable record. Retry
+        // exhaustion ("no progress after 5 retries") can be a slow copy or a flaky
+        // disk, and persisting that would freeze a recoverable path across restarts.
+        if (durable)
+        {
+            var (volumeCount, totalBytes) = ComputeVolumeSetFingerprint(path);
+            _abandonStore.Record(path, volumeCount, totalBytes, reason);
+        }
+
         bool firstTime;
         lock (_watchLock)
         {
@@ -1565,8 +1599,36 @@ public partial class ExtractorWindow : Window
         }
 
         if (firstTime)
-            Log.Warning("Extractor: abandoning watched archive {Path} — {Reason}. " +
-                        "It will be retried after the folder changes or the app restarts.", path, reason);
+            Log.Warning("Extractor: abandoning watched archive {Path} — {Reason}. {Revival}", path, reason,
+                durable
+                    ? "It will be retried when the volume set changes (a new or resized part arrives)."
+                    : "It will be retried after the folder changes or the app restarts.");
+    }
+
+    /// <summary>
+    /// Identify a volume set by what a retry could actually change: how many parts are
+    /// present and how many bytes they hold. A missing part arriving, or a truncated one
+    /// being replaced, moves this — which is exactly when a permanent verdict should lapse.
+    /// Falls back to the single file when this isn't an old-style multi-volume set.
+    /// </summary>
+    private static (int VolumeCount, long TotalBytes) ComputeVolumeSetFingerprint(string path)
+    {
+        try
+        {
+            var volumes = TryDiscoverRarVolumes(path);
+            if (volumes != null && volumes.Count > 0)
+                return (volumes.Count, volumes.Sum(v => v.Length));
+
+            var fi = new FileInfo(path);
+            return fi.Exists ? (1, fi.Length) : (0, 0);
+        }
+        catch (Exception ex)
+        {
+            // A fingerprint we cannot read must not become a permanent skip: return a
+            // sentinel that can never match a recorded entry, so the path stays live.
+            Log.Debug(ex, "Extractor: could not fingerprint volume set for {Path}", path);
+            return (-1, -1);
+        }
     }
 
     private async Task RetryWatchedFileAsync(string path, int attempt)
