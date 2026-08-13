@@ -1,9 +1,10 @@
-using System.IO;
 using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using GlDrive.Config;
+using GlDrive.Services.Control;
+using GlDrive.Services.Control.Endpoints;
 using GlDrive.Spread;
 using Serilog;
 
@@ -24,6 +25,7 @@ namespace GlDrive.Services;
 ///   * disabled by default; the token is generated on first enable and never logged.
 ///
 /// Endpoints
+///   GET  /                       — route index
 ///   GET  /status                 — version, servers, connection state, active race count
 ///   GET  /sections               — section keys usable as the `section` field of POST /race
 ///   GET  /races                  — active races (summary)
@@ -37,6 +39,8 @@ public sealed class ControlApi : IDisposable
     private readonly AppConfig _config;
     private readonly Func<SpreadManager?> _getSpread;
     private readonly Func<IReadOnlyList<string>> _getConnectedServerIds;
+    private readonly RouteTable _routes = new();
+    private readonly StatusEndpoints _statusEndpoints;
     private HttpListener? _listener;
     private CancellationTokenSource? _cts;
     private Task? _loop;
@@ -54,6 +58,12 @@ public sealed class ControlApi : IDisposable
         _config = config;
         _getSpread = getSpread;
         _getConnectedServerIds = getConnectedServerIds;
+
+        // Endpoints receive only what they need. See ControlApiBoundaryTests for why they
+        // must never take ServerManager/AppConfig-reaching handles once readers land.
+        _statusEndpoints = new StatusEndpoints(_config, _getSpread, _getConnectedServerIds, _routes);
+        _statusEndpoints.Register(_routes);
+        new SpreadEndpoints(_config, _getSpread).Register(_routes);
     }
 
     /// <summary>Generates and persists a token the first time the API is switched on.</summary>
@@ -135,36 +145,24 @@ public sealed class ControlApi : IDisposable
             if (path.Length == 0) path = "/";
             var method = ctx.Request.HttpMethod.ToUpperInvariant();
 
-            switch (method, path)
+            // Routing dispatch: this used to be a hand-written `switch (method, path)` plus
+            // two StartsWith prefix scans that sliced /races/{id} and /races/{id}/stop out
+            // by string arithmetic. It is now RouteTable.TryMatch, with {id} bound by the
+            // router. Both the loopback and token gates above still run first — the switch
+            // (now the router) only ever sees an already-authenticated, already-loopback request.
+            if (_routes.TryMatch(method, path, out var handler, out var parameters))
             {
-                case ("GET", "/status"):   await Respond(ctx, 200, Status()); return;
-                case ("GET", "/sections"): await Respond(ctx, 200, Sections()); return;
-                case ("GET", "/races"):    await Respond(ctx, 200, Races()); return;
-                case ("POST", "/races"):   await StartRace(ctx); return;
-                case ("GET", "/history"):  await Respond(ctx, 200, HistoryList(ctx)); return;
-            }
-
-            if (method == "GET" && path.StartsWith("/races/", StringComparison.Ordinal))
-            {
-                var id = path["/races/".Length..];
-                var job = _getSpread()?.ActiveJobs.FirstOrDefault(j => j.Id == id);
-                if (job == null) { await Respond(ctx, 404, new { error = "no such active race", id }); return; }
-                await Respond(ctx, 200, job.GetDetail());
+                await handler!(ControlRequest.FromContext(ctx, path, parameters));
                 return;
             }
 
-            if (method == "POST" && path.StartsWith("/races/", StringComparison.Ordinal)
-                && path.EndsWith("/stop", StringComparison.Ordinal))
+            if (_routes.MethodNotAllowed(path))
             {
-                var id = path["/races/".Length..^"/stop".Length];
-                var spread = _getSpread();
-                if (spread == null) { await Respond(ctx, 503, new { error = "spread engine unavailable" }); return; }
-                spread.StopJob(id);
-                await Respond(ctx, 200, new { stopped = id });
+                await Respond(ctx, 405, new { error = "method not allowed", code = "method_not_allowed", path });
                 return;
             }
 
-            await Respond(ctx, 404, new { error = "not found", path });
+            await Respond(ctx, 404, new { error = "not found", code = "not_found", path });
         }
         catch (Exception ex)
         {
@@ -173,133 +171,13 @@ public sealed class ControlApi : IDisposable
         }
     }
 
-    private object Status()
-    {
-        var spread = _getSpread();
-        var connected = _getConnectedServerIds().ToHashSet(StringComparer.Ordinal);
-        return new
-        {
-            version = typeof(ControlApi).Assembly.GetName().Version?.ToString(),
-            activeRaces = spread?.ActiveJobs.Count ?? 0,
-            maxConcurrentRaces = _config.Spread.MaxConcurrentRaces,
-            servers = _config.Servers.Select(s => new
-            {
-                id = s.Id,
-                name = s.Name,
-                connected = connected.Contains(s.Id),
-                loginCap = s.Pool.LoginCap,
-                loginHeadroom = s.Pool.LoginHeadroom,
-                uploadSlots = s.SpreadSite.MaxUploadSlots,
-                downloadSlots = s.SpreadSite.MaxDownloadSlots,
-                sections = s.SpreadSite.Sections.Count
-            })
-        };
-    }
-
-    private object Sections()
-    {
-        var keys = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var s in _config.Servers)
-            foreach (var k in s.SpreadSite.Sections.Keys) keys.Add(k);
-        // Section KEYS only. The values of SpreadSite.Sections are the real remote paths on
-        // each site (/incoming/x265, request dirs, staff-only trees); the documented purpose
-        // of this endpoint is to tell a caller what it may put in POST /races {"section"},
-        // and that needs the keys alone. Returning the map handed out each site's directory
-        // layout to anything holding the token.
-        return new
-        {
-            sections = keys,
-            perServer = _config.Servers.ToDictionary(
-                s => s.Name,
-                s => (IEnumerable<string>)s.SpreadSite.Sections.Keys
-                    .OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToList())
-        };
-    }
-
-    private object Races()
-    {
-        var spread = _getSpread();
-        if (spread == null) return new { races = Array.Empty<object>() };
-        return new
-        {
-            races = spread.ActiveJobs.Select(j => new
-            {
-                id = j.Id,
-                release = j.ReleaseName,
-                section = j.Section,
-                state = j.State.ToString(),
-                score = j.Score,
-                startedAt = j.StartedAt,
-                isAutoRace = j.IsAutoRace,
-                sites = j.Sites.Values.Select(s => new { s.ServerName, s.FilesOwned, s.FilesTotal, s.IsSource })
-            })
-        };
-    }
-
-    private object HistoryList(HttpListenerContext ctx)
-    {
-        var limitRaw = ctx.Request.QueryString["limit"];
-        var limit = int.TryParse(limitRaw, out var n) ? Math.Clamp(n, 1, 500) : 25;
-        var spread = _getSpread();
-        if (spread == null) return new { history = Array.Empty<object>() };
-        return new { history = spread.History.Items.Take(limit) };
-    }
-
-    private async Task StartRace(HttpListenerContext ctx)
-    {
-        using var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8);
-        var body = await reader.ReadToEndAsync();
-
-        string? section, release;
-        try
-        {
-            var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "{}" : body);
-            section = doc.RootElement.TryGetProperty("section", out var s) ? s.GetString() : null;
-            release = doc.RootElement.TryGetProperty("release", out var r) ? r.GetString() : null;
-        }
-        catch (JsonException ex)
-        {
-            await Respond(ctx, 400, new { error = "invalid JSON body", detail = ex.Message });
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(section) || string.IsNullOrWhiteSpace(release))
-        {
-            await Respond(ctx, 400, new { error = "both 'section' and 'release' are required" });
-            return;
-        }
-
-        var spread = _getSpread();
-        if (spread == null) { await Respond(ctx, 503, new { error = "spread engine unavailable" }); return; }
-
-        // Same participant rule the Dashboard uses: every connected server that has sections.
-        var connected = spread.GetConnectedServerIds().ToHashSet(StringComparer.Ordinal);
-        var serverIds = _config.Servers
-            .Where(s => s.Enabled && connected.Contains(s.Id) && s.SpreadSite.Sections.Count > 0)
-            .Select(s => s.Id).ToList();
-
-        if (serverIds.Count < 2)
-        {
-            await Respond(ctx, 409, new
-            {
-                error = "need 2+ connected servers with sections configured",
-                connected = _config.Servers.Where(s => connected.Contains(s.Id)).Select(s => s.Name)
-            });
-            return;
-        }
-
-        try
-        {
-            var job = spread.StartRace(section!, release!, serverIds, SpreadMode.Race);
-            if (job == null) { await Respond(ctx, 409, new { error = "race not started (queued or rejected)" }); return; }
-            Log.Information("Control API started race {Id}: [{Section}] {Release}", job.Id, section, release);
-            await Respond(ctx, 202, new { id = job.Id, release = job.ReleaseName, section = job.Section });
-        }
-        catch (Exception ex)
-        {
-            await Respond(ctx, 500, new { error = ex.Message });
-        }
-    }
+    /// <summary>
+    /// Kept so ControlApiSecurityTests' reflection lookup (GetMethod("Sections",
+    /// NonPublic|Instance) on ControlApi) still finds a target now that the handler body
+    /// lives in StatusEndpoints. Delegates to the same projection — see
+    /// StatusEndpoints.Sections() for the actual keys-only logic.
+    /// </summary>
+    private object Sections() => _statusEndpoints.Sections();
 
     private static bool FixedTimeEquals(string a, string b)
     {
