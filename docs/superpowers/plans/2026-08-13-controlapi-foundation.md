@@ -254,7 +254,7 @@ than a list of known pointers, so a config field added later is covered."
 Pattern matching with `{param}` capture. Pure logic, no HTTP — testable on its own.
 
 **Files:**
-- Create: `src/GlDrive/Services/ControlApi/RouteTable.cs`
+- Create: `src/GlDrive/Services/Control/RouteTable.cs`
 - Test: `src/GlDrive.Tests/RouteTableTests.cs`
 
 **Interfaces:**
@@ -272,7 +272,7 @@ Create `src/GlDrive.Tests/RouteTableTests.cs`:
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using GlDrive.Services.ControlApi;
+using GlDrive.Services.Control;
 using Xunit;
 
 namespace GlDrive.Tests;
@@ -392,7 +392,7 @@ Expected: FAIL — `RouteTable` and `ControlRequest` do not exist.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Create `src/GlDrive/Services/ControlApi/RouteTable.cs`:
+Create `src/GlDrive/Services/Control/RouteTable.cs`:
 
 ```csharp
 using System;
@@ -400,7 +400,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 
-namespace GlDrive.Services.ControlApi;
+namespace GlDrive.Services.Control;
 
 /// <summary>
 /// Maps (method, path pattern) to a handler. Patterns use {name} for a captured segment:
@@ -507,7 +507,7 @@ Expected: PASS — 10 tests. (Requires `ControlRequest` from Task 3 to compile; 
 
 ```bash
 git status --short | grep -v "^??"
-git add src/GlDrive/Services/ControlApi/RouteTable.cs src/GlDrive.Tests/RouteTableTests.cs
+git add src/GlDrive/Services/Control/RouteTable.cs src/GlDrive.Tests/RouteTableTests.cs
 git commit -m "Add RouteTable for the control API
 
 Maps (method, pattern) to handlers with {param} segment capture. Literal
@@ -523,7 +523,7 @@ The per-request context handed to every handler. Wraps `HttpListenerContext` so 
 never touch it directly, and centralises the JSON response and error envelope.
 
 **Files:**
-- Create: `src/GlDrive/Services/ControlApi/ControlRequest.cs`
+- Create: `src/GlDrive/Services/Control/ControlRequest.cs`
 - Test: `src/GlDrive.Tests/ControlRequestTests.cs`
 
 **Interfaces:**
@@ -545,7 +545,7 @@ by the endpoint tests in Plan 2.
 ```csharp
 using System.Collections.Generic;
 using System.Collections.Specialized;
-using GlDrive.Services.ControlApi;
+using GlDrive.Services.Control;
 using Xunit;
 
 namespace GlDrive.Tests;
@@ -602,7 +602,7 @@ Expected: FAIL — `ControlRequest` does not exist.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Create `src/GlDrive/Services/ControlApi/ControlRequest.cs`:
+Create `src/GlDrive/Services/Control/ControlRequest.cs`:
 
 ```csharp
 using System;
@@ -615,7 +615,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 
-namespace GlDrive.Services.ControlApi;
+namespace GlDrive.Services.Control;
 
 /// <summary>
 /// One control-API request. Endpoints receive this and never see HttpListenerContext, so
@@ -694,7 +694,7 @@ Expected: PASS — 5 tests.
 
 ```bash
 git status --short | grep -v "^??"
-git add src/GlDrive/Services/ControlApi/ControlRequest.cs src/GlDrive.Tests/ControlRequestTests.cs
+git add src/GlDrive/Services/Control/ControlRequest.cs src/GlDrive.Tests/ControlRequestTests.cs
 git commit -m "Add ControlRequest as the control API's per-request context
 
 Endpoints get parameters, query helpers, body reading and a single response
@@ -709,9 +709,9 @@ Pure refactor. Behaviour must not change, and `ControlApiSecurityTests.cs` must 
 untouched — that is the proof the audited security path is intact.
 
 **Files:**
-- Create: `src/GlDrive/Services/ControlApi/IControlEndpoint.cs`
-- Create: `src/GlDrive/Services/ControlApi/Endpoints/StatusEndpoints.cs`
-- Create: `src/GlDrive/Services/ControlApi/Endpoints/SpreadEndpoints.cs`
+- Create: `src/GlDrive/Services/Control/IControlEndpoint.cs`
+- Create: `src/GlDrive/Services/Control/Endpoints/StatusEndpoints.cs`
+- Create: `src/GlDrive/Services/Control/Endpoints/SpreadEndpoints.cs`
 - Modify: `src/GlDrive/Services/ControlApi.cs` — replace the `switch` with router dispatch
 - Test: `src/GlDrive.Tests/ControlApiSecurityTests.cs` — **must not be modified**
 
@@ -721,10 +721,10 @@ untouched — that is the proof the audited security path is intact.
 
 - [ ] **Step 1: Create the endpoint interface**
 
-Create `src/GlDrive/Services/ControlApi/IControlEndpoint.cs`:
+Create `src/GlDrive/Services/Control/IControlEndpoint.cs`:
 
 ```csharp
-namespace GlDrive.Services.ControlApi;
+namespace GlDrive.Services.Control;
 
 /// <summary>
 /// A group of related routes. Implementations receive their dependencies as constructor
@@ -742,7 +742,7 @@ public interface IControlEndpoint
 
 - [ ] **Step 2: Move the status and sections handlers**
 
-Create `src/GlDrive/Services/ControlApi/Endpoints/StatusEndpoints.cs`. Move the bodies of
+Create `src/GlDrive/Services/Control/Endpoints/StatusEndpoints.cs`. Move the bodies of
 `Status()` and `Sections()` from `ControlApi.cs` verbatim — including the `/sections`
 keys-only projection added in v3.10.58:
 
@@ -753,7 +753,7 @@ using System.Linq;
 using GlDrive.Config;
 using GlDrive.Spread;
 
-namespace GlDrive.Services.ControlApi.Endpoints;
+namespace GlDrive.Services.Control.Endpoints;
 
 public sealed class StatusEndpoints : IControlEndpoint
 {
@@ -828,7 +828,7 @@ public sealed class StatusEndpoints : IControlEndpoint
 
 - [ ] **Step 3: Move the race handlers**
 
-Create `src/GlDrive/Services/ControlApi/Endpoints/SpreadEndpoints.cs`, moving `Races()`,
+Create `src/GlDrive/Services/Control/Endpoints/SpreadEndpoints.cs`, moving `Races()`,
 `HistoryList()`, `StartRace()` and the two path-prefix handlers. The `{id}` segments that
 were parsed by hand with `path["/races/".Length..]` now come from the router:
 
@@ -842,7 +842,7 @@ using GlDrive.Config;
 using GlDrive.Spread;
 using Serilog;
 
-namespace GlDrive.Services.ControlApi.Endpoints;
+namespace GlDrive.Services.Control.Endpoints;
 
 public sealed class SpreadEndpoints : IControlEndpoint
 {
@@ -977,7 +977,7 @@ public sealed class SpreadEndpoints : IControlEndpoint
 
 In `src/GlDrive/Services/ControlApi.cs`:
 
-1. Add `using GlDrive.Services.ControlApi;` and `using GlDrive.Services.ControlApi.Endpoints;`
+1. Add `using GlDrive.Services.Control;` and `using GlDrive.Services.Control.Endpoints;`
 2. Add a field `private readonly RouteTable _routes = new();`
 3. At the end of the constructor, register the endpoints:
 
@@ -1031,9 +1031,9 @@ Expected: 0 errors, 10 pre-existing warnings; 691 tests pass.
 ```bash
 git status --short | grep -v "^??"
 git add src/GlDrive/Services/ControlApi.cs \
-        src/GlDrive/Services/ControlApi/IControlEndpoint.cs \
-        src/GlDrive/Services/ControlApi/Endpoints/StatusEndpoints.cs \
-        src/GlDrive/Services/ControlApi/Endpoints/SpreadEndpoints.cs
+        src/GlDrive/Services/Control/IControlEndpoint.cs \
+        src/GlDrive/Services/Control/Endpoints/StatusEndpoints.cs \
+        src/GlDrive/Services/Control/Endpoints/SpreadEndpoints.cs
 git commit -m "Move control API handlers onto the router
 
 Pure refactor: ControlApi keeps listener lifecycle, the loopback check, the
@@ -1069,7 +1069,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
-using GlDrive.Services.ControlApi;
+using GlDrive.Services.Control;
 using Xunit;
 
 namespace GlDrive.Tests;
