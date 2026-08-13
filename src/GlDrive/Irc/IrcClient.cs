@@ -104,7 +104,9 @@ public class IrcClient : IDisposable
                 // the FiSH decrypt path, unwound the read loop, and forced a full reconnect.
                 try
                 {
-                    Log.Verbose("[IRC <] {Line}", line);
+                    // Inbound needs redaction too: the server echoes the channel key back
+                    // in MODE and in 324 RPL_CHANNELMODEIS.
+                    Log.Verbose("[IRC <] {Line}", IrcLineRedactor.Redact(line));
                     var msg = IrcMessage.Parse(line);
 
                     // Auto-reply to server PING immediately (works even before/without a handler
@@ -172,8 +174,9 @@ public class IrcClient : IDisposable
         try
         {
             line = line.Replace("\r", "").Replace("\n", "");
-            var logLine = line.StartsWith("PASS ", StringComparison.OrdinalIgnoreCase) ? "PASS [REDACTED]" : line;
-            Log.Verbose("[IRC >] {Line}", logLine);
+            // Redact credential parameters (channel keys, services passwords) — NOT just
+            // PASS, which is what this used to check. See IrcLineRedactor.
+            Log.Verbose("[IRC >] {Line}", IrcLineRedactor.Redact(line));
             await _writer.WriteLineAsync(line);
         }
         catch (Exception ex)

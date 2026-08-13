@@ -201,10 +201,18 @@ public sealed class ControlApi : IDisposable
         var keys = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var s in _config.Servers)
             foreach (var k in s.SpreadSite.Sections.Keys) keys.Add(k);
+        // Section KEYS only. The values of SpreadSite.Sections are the real remote paths on
+        // each site (/incoming/x265, request dirs, staff-only trees); the documented purpose
+        // of this endpoint is to tell a caller what it may put in POST /races {"section"},
+        // and that needs the keys alone. Returning the map handed out each site's directory
+        // layout to anything holding the token.
         return new
         {
             sections = keys,
-            perServer = _config.Servers.ToDictionary(s => s.Name, s => s.SpreadSite.Sections)
+            perServer = _config.Servers.ToDictionary(
+                s => s.Name,
+                s => (IEnumerable<string>)s.SpreadSite.Sections.Keys
+                    .OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToList())
         };
     }
 

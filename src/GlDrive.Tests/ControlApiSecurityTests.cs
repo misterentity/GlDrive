@@ -102,4 +102,38 @@ public class ControlApiSecurityTests
             Assert.DoesNotContain("token}", line);
         }
     }
+
+    /// <summary>
+    /// GET /sections exists to tell a caller what it may pass as POST /races {"section"}.
+    /// It used to return `perServer` as the whole SpreadSite.Sections MAP, handing out every
+    /// site's real remote directory layout to anything holding the token. Keys in, paths out.
+    /// </summary>
+    [Fact]
+    public void Sections_returns_keys_only_and_never_the_remote_paths()
+    {
+        const string secretPath = "/site/staff-only/incoming/x265";
+
+        var config = new AppConfig();
+        var server = new ServerConfig { Id = "srv1", Name = "zephyr" };
+        server.SpreadSite.Sections["x265"] = secretPath;
+        server.SpreadSite.Sections["mp3"] = "/private/mp3-dump";
+        config.Servers.Add(server);
+
+        var api = new GlDrive.Services.ControlApi(config, () => null, () => System.Array.Empty<string>());
+        var method = typeof(GlDrive.Services.ControlApi)
+            .GetMethod("Sections", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        Assert.NotNull(method);
+
+        var json = System.Text.Json.JsonSerializer.Serialize(method!.Invoke(api, null));
+
+        // The keys are the whole point of the endpoint and must survive.
+        Assert.Contains("x265", json, StringComparison.Ordinal);
+        Assert.Contains("mp3", json, StringComparison.Ordinal);
+        Assert.Contains("zephyr", json, StringComparison.Ordinal);
+
+        // The paths are site layout and must not.
+        Assert.DoesNotContain(secretPath, json, StringComparison.Ordinal);
+        Assert.DoesNotContain("staff-only", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("/private/mp3-dump", json, StringComparison.Ordinal);
+    }
 }
