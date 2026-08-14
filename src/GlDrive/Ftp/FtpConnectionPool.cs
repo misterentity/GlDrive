@@ -60,12 +60,17 @@ public class FtpConnectionPool : IAsyncDisposable
     public int GhostKillsSinceFlush { get; private set; }
     public int Errors5xxSinceFlush { get; private set; }   // TODO: wire IncrementError5xx when 5xx signal is plumbed
     public int ReinitCountSinceFlush { get; private set; }
+    // Borrows where the caller's own deadline expired before a new connection came
+    // up — ConnectFailureClassifier.CallerAbandoned. Not exhaustion, not a server
+    // finding; counted separately so an inert classifier (0 fires) is visible as a
+    // zero instead of indistinguishable from "never evaluated" (the v3.10.54 lesson).
+    public int AbandonedBorrowsSinceFlush { get; private set; }
 
     private const int MaxHealthSamples = 1000;
     private readonly List<double> _connectMsSamples = new();
     private readonly List<double> _tlsMsSamples = new();   // reserved for future TLS timing
 
-    private int _disconnects, _exhaustCount, _ghostKills, _errors5xx, _reinitCount;
+    private int _disconnects, _exhaustCount, _ghostKills, _errors5xx, _reinitCount, _abandonedBorrows;
 
     // Poisoned-connection quarantine. After mid-transfer SSL errors ("forcibly
     // closed by the remote host"), or any teardown of a connection whose native
@@ -143,6 +148,7 @@ public class FtpConnectionPool : IAsyncDisposable
     internal void IncrementGhostKill() => Interlocked.Increment(ref _ghostKills);
     internal void IncrementError5xx() => Interlocked.Increment(ref _errors5xx);
     internal void IncrementReinit() => Interlocked.Increment(ref _reinitCount);
+    internal void IncrementAbandonedBorrow() => Interlocked.Increment(ref _abandonedBorrows);
 
     /// <summary>
     /// Called by HealthRollup only. Snapshots + zeros all health counters. Calling this
@@ -166,6 +172,7 @@ public class FtpConnectionPool : IAsyncDisposable
         GhostKillsSinceFlush = Interlocked.Exchange(ref _ghostKills, 0);
         Errors5xxSinceFlush = Interlocked.Exchange(ref _errors5xx, 0);
         ReinitCountSinceFlush = Interlocked.Exchange(ref _reinitCount, 0);
+        AbandonedBorrowsSinceFlush = Interlocked.Exchange(ref _abandonedBorrows, 0);
     }
 
     private static double Percentile(List<double> samples, double p)
@@ -596,11 +603,31 @@ public class FtpConnectionPool : IAsyncDisposable
             }
             catch (Exception ex)
             {
+                // What did this failure actually tell us? A caller whose own borrow
+                // deadline expired told us nothing — see ConnectFailureClassifier for
+                // the three mitigations that were being spent on non-findings.
+                var verdict = ConnectFailureClassifier.Classify(
+                    ex,
+                    callerCancelled: ct.IsCancellationRequested,
+                    bncStatedLoginLimit: HasLoginLimitError(ex),
+                    ghostKillAlreadySpent: Interlocked.CompareExchange(ref _ghostKilledSinceSuccess, 1, 1) == 1);
+
+                if (!ConnectFailureClassifier.IsRealFinding(verdict))
+                {
+                    // Back the _created bookkeeping out symmetrically and let the
+                    // caller's cancellation reach the caller. Deliberately NOT:
+                    // arming a cooldown, spending the ghost kill, counting an
+                    // exhaustion, or logging a stack.
+                    Interlocked.Decrement(ref _created);
+                    IncrementAbandonedBorrow();
+                    Log.Debug("Pool: borrow abandoned by caller deadline (created={Created}, max={Max})",
+                        _created, _maxSize);
+                    throw;
+                }
+
                 // BNC cooldown detection: TCP-level refusal, or a 530 that
                 // persists after we already used our one ghost-kill this episode.
-                var refused = ex.Message?.Contains("actively refused", StringComparison.OrdinalIgnoreCase) == true
-                    || ex.Message?.Contains("target machine actively refused", StringComparison.OrdinalIgnoreCase) == true
-                    || (HasLoginLimitError(ex) && Interlocked.CompareExchange(ref _ghostKilledSinceSuccess, 1, 1) == 1);
+                var refused = verdict == ConnectFailureClassifier.ConnectFailure.ServerRefused;
                 // A login-GATE timeout ("Account login cap reached — no login permit
                 // available", thrown by AcquireAndConnect) is the dominant storm failure
                 // and had NO cooldown before v3.9.0 — so Borrow re-attempted a doomed 30s
@@ -608,8 +635,7 @@ public class FtpConnectionPool : IAsyncDisposable
                 // SHORT backoff so subsequent Borrows fall through to wait-on-channel /
                 // fail-fast instead of re-spinning the gate. (Mutually exclusive with the
                 // 90s refusal cooldown above; refusal wins.)
-                var gateCapped = !refused && ex is InvalidOperationException
-                    && ex.Message?.Contains("login cap reached", StringComparison.OrdinalIgnoreCase) == true;
+                var gateCapped = verdict == ConnectFailureClassifier.ConnectFailure.AccountLoginCapped;
                 if (refused)
                 {
                     Interlocked.Exchange(ref _refusedUntilTicks, DateTime.UtcNow.Add(CooldownWindow).Ticks);
@@ -679,6 +705,10 @@ public class FtpConnectionPool : IAsyncDisposable
                             IncrementGhostKill();
                             Log.Information("Pool: ghost kill (once per episode) triggered by login-limit from BNC");
                         }
+                        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                        {
+                            throw; // caller's deadline, not a ghost-kill failure
+                        }
                         catch (Exception ghostEx)
                         {
                             Log.Debug(ghostEx, "Pool: forced ghost kill (login-limit) failed");
@@ -711,15 +741,28 @@ public class FtpConnectionPool : IAsyncDisposable
                                 Interlocked.Increment(ref _active);
                                 return new PooledConnection(client, this);
                             }
-                            catch
+                            catch (Exception retryEx)
                             {
                                 Interlocked.Decrement(ref _created);
+                                // Same rule as the first attempt: if the caller's
+                                // deadline expired mid-retry, that is not this
+                                // pool's exhaustion to report.
+                                if (retryEx is OperationCanceledException && ct.IsCancellationRequested)
+                                    throw;
                             }
                         }
                         else
                         {
                             Interlocked.Decrement(ref _created);
                         }
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                    {
+                        // Must come before the catch-all: the retry above rethrows a
+                        // caller abandonment through here, and KillGhosts itself throws
+                        // this when handed an already-cancelled token. Swallowing either
+                        // drops the borrow into the "Pool exhausted" report below.
+                        throw;
                     }
                     catch (Exception ghostEx)
                     {
@@ -733,6 +776,12 @@ public class FtpConnectionPool : IAsyncDisposable
         {
             Interlocked.Decrement(ref _created);
         }
+
+        // A cancelled caller token means we never finished looking. Whatever _created
+        // says, "all connections discarded and new connections failed" is a claim we
+        // did not establish — and it was the reported cause of 669 of 703 exhaustion
+        // throws on 2026-08-13. Report the abandonment instead.
+        ct.ThrowIfCancellationRequested();
 
         // If no connections exist at all (all discarded), don't wait — nothing will be returned
         if (_created <= 0)
