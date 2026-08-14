@@ -40,7 +40,55 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   the job's locks, so it is taken **only while a card is expanded** rather than every tick
   for every card.
 
+### Security
+- **v3.10.60** — a caller could erase the log. `POST /races` had no length validation, so a
+  2,000,000-character `section` was accepted (`202`), started a real race, and was written
+  to `gldrive-{date}.log` as a single 2,000,172-byte line. The log rolls at 10 MB keeping 3
+  files, so about five such calls erase every trace of what the app was doing — the same
+  evidence-destruction that already cost this project a day of history twice (v3.10.47,
+  v3.10.54), except with a caller holding the pen. `section` and `release` are now bounded
+  (128 / 512 chars) *before* they reach either the race engine or the logger, and the
+  ordering is pinned by test. Request bodies are capped at 64 KB and refused with `413`
+  rather than parsed truncated and blamed on the caller's JSON — `ReadBodyAsync` used an
+  unbounded `ReadToEndAsync`, and a 20 MB body took the app from 238 MB to 585 MB resident.
+  Found by driving the live API against the running app, not by reading code.
+- **v3.10.58** — the IRC trace redacted exactly one command. `IrcClient` special-cased
+  `PASS`, so `JOIN #chan <key>` wrote the FiSH channel key — the key deliberately kept
+  DPAPI-encrypted in `fish-keys-{serverId}.json` — as cleartext into the log, and the
+  inbound trace had no redaction at all while the server echoes the key back in `MODE` and
+  `324 RPL_CHANNELMODEIS`. Enabling Verbose to diagnose an IRC fault would have dumped every
+  channel key and services password to disk. `IrcLineRedactor` now keys on *which parameter
+  of a command is a credential* rather than a list of commands observed to leak — the same
+  enumeration-vs-defining-property mistake that left the zipscript sidecar filter broken for
+  a month (v3.10.44). Separately, `GET /sections` returned `perServer` as the whole
+  `SpreadSite.Sections` map, handing every site's real remote directory layout to anything
+  holding the token; it returns keys only, which is all the endpoint's stated purpose needs.
+  Both found by mapping subsystem surfaces for a feature, not from any symptom.
+
 ### Fixes
+- **v3.10.61** — three give-up paths that never expired, all the same shape: a decision made
+  once and never revisited, on a resource that was still perfectly healthy. **IRC
+  invite-only joins:** `#ent` is `+i`, so GlDrive can only enter when the site's announce bot
+  sends an `INVITE`. On 2026-08-12 that bot was absent; GlDrive retried three times over
+  ~30 s, gave up, and then sat *out* of the channel for 8 h 21 m on a live connection until a
+  human invited it by hand — `AutoJoinChannelsAsync` runs only on connect, so "gave up" meant
+  gave up for the lifetime of the connection. There is now a standing retry backing off
+  5/15/30 minutes and staying there, and it re-issues `SITE INVITE` rather than only
+  re-sending `JOIN`, which can never succeed on a `+i` channel by itself. **Invisible
+  diagnostics:** every outcome of the invite path went only to the in-app system tab, so
+  grepping the log for `SITE INVITE` returned zero hits whether or not it had run and absence
+  proved nothing; it now logs. **Silent PM loss:** `SendMessage` bare-returned on a
+  disconnected client, so the message was never sent, never echoed locally (the `AddMessage`
+  calls sit below that guard) and never logged — a PM simply evaporated. It now returns
+  `false` and says so. **Update suppression:** a granted UAC prompt now clears
+  `.update-declined`; the auto-install prompt fires around 05:00 when nobody is at the
+  machine, gets declined, and the 24 h suppression then also blocked every *later* release,
+  so a successful manual tray install still left the next version needing another manual one.
+- **v3.10.60** — `POST /races/{id}/stop` answered `200 {"stopped": id}` for a race that never
+  existed, because `StopJob` is fire-and-forget with no existence check, while
+  `GET /races/{id}` correctly `404`'d the same id. The two endpoints disagreed about reality
+  and a script could not tell a real stop from a no-op. Stop now verifies the race exists and
+  reports an unknown id the same way the read endpoint does.
 - **v3.10.59** — the control API's error responses were inconsistent: the loopback/token
   gate rejections and the router's 404/405 stayed close to a `{error, code, path}` shape
   while every endpoint handler already used the richer `{error, code, detail, path}`
