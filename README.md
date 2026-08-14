@@ -2,7 +2,7 @@
 
 **Mount glftpd FTPS servers as native Windows drive letters.** A single tray app for the full site-user workflow — browse in Explorer, auto-download from a wishlist, race releases between sites via FXP, chat on FiSH-encrypted IRC, stream media, watch the PreDB.
 
-Built on .NET 10, WPF, WinFsp, FluentFTP, and GnuTLS. Windows 11, x64. Current version: **2.4.1**.
+Built on .NET 10, WPF, WinFsp, FluentFTP, and GnuTLS. Windows 11, x64. Current version: **3.10.61**.
 
 > **For contributors:** the full architecture reference lives in [docs/](docs/). See [docs/project-overview-pdr.md](docs/project-overview-pdr.md) for the design rationale and [docs/system-architecture.md](docs/system-architecture.md) for Mermaid diagrams and protocol walkthroughs.
 
@@ -84,6 +84,20 @@ glftpd sites have several quirks that off-the-shelf FTP clients handle badly. Ea
 - **Per-server modes** — Auto, SITE SEARCH (server-side), Cached Index (background crawler), Live Crawl
 - Borrows connections with 15 s timeout so search doesn't starve downloads
 
+### Control API (optional, off by default)
+- **Loopback-only HTTP surface** on `127.0.0.1:8756` for scripting the app without driving the tray UI
+- Bearer token minted on first enable, compared in fixed time; every request re-checks the caller is loopback
+- `GET /` route index, `/status`, `/sections`, `/races`, `/races/{id}`, `/history`; `POST /races`, `/races/{id}/stop`
+- Enable via `controlApi.enabled` in `appsettings.json` — requires a restart. For remote access, tunnel it (WireGuard / Tailscale / SSH) rather than binding the LAN
+
+### Self-tuning agent
+- Records per-stream JSONL telemetry (races, nukes, announces, section activity, downloads) under `ai-data/`
+- A daily run digests it and proposes config changes through an LLM; **every** mutation is gated by a frozen-path check, a confidence threshold, per-category budgets, and a validator that owns the actual write
+- Dry-run mode by default, full before/after audit trail with undo
+
+### Plex
+- Connection probing and invite management from the dashboard
+
 ### UI & system
 - **Dark / Light** themes, runtime-swappable via `DynamicResource`, system-theme detection
 - System tray with dynamic per-server menu and state-colored glyph
@@ -144,9 +158,15 @@ git clone https://github.com/misterentity/GlDrive.git
 cd GlDrive
 dotnet build src/GlDrive/GlDrive.csproj
 dotnet run   --project src/GlDrive/GlDrive.csproj
+dotnet test  src/GlDrive.Tests/GlDrive.Tests.csproj   # 740 tests
 ```
 
 The `.sln` file has no project references — always target the `.csproj` directly.
+
+`src/GlDrive.Tests` covers the pure logic: crypto round-trips against known-answer vectors,
+login-gate accounting, spread scoring, zipscript artifact filtering, failure classification,
+log redaction, and control-API routing and bounds. The WinFsp, WPF and live-FTP layers still
+need manual runtime verification — build and exercise the app.
 
 ### Build the installer yourself
 
@@ -209,8 +229,11 @@ Everything per-user lives under `%AppData%\GlDrive\`. Full schema with defaults:
 | Trusted certs | `trusted_certs.json` (TOFU, user-only ACL) |
 | FiSH keys (per server) | `fish-keys-{serverId}.json` (DPAPI-encrypted) |
 | Extractor settings | `extractor-settings.json` |
-| Logs | `logs/gldrive-{date}.log` (daily rolling) |
-| Passwords / API keys | Windows Credential Manager |
+| IRC PM history (per server) | `pm-history-{serverId}.json` (DPAPI-encrypted; channel chat stays plaintext in `irc-logs/`) |
+| Agent telemetry & audit | `ai-data/` (JSONL streams, config-change audit trail) |
+| Update state | `.update-declined`, `.update-deferred` (both time-boxed; a granted UAC prompt clears the decline) |
+| Logs | `logs/gldrive-{date}.log` (daily rolling, 10 MB cap) |
+| Passwords / API keys / control-API token | Windows Credential Manager (the control-API token lives in `appsettings.json`, which is ACL-restricted) |
 
 ## Architecture
 
@@ -232,6 +255,9 @@ Program.cs (watchdog + update applier)
        │                     SpreadJob, FxpTransfer, SpreadScorer, SpeedTracker (persistent),
        │                     SkiplistEvaluator, SectionBlacklistStore, RaceHistoryStore)
        ├─ WishlistStore, NotificationStore (global), UpdateChecker
+       ├─ AgentRunner (daily) → LogDigester → AgentClient → Validators/* → ChangeApplier
+       ├─ ControlApi (opt-in, loopback) → RouteTable → Endpoints/*
+       ├─ PlexService
        └─ TrayIcon + DashboardWindow + ExtractorWindow + ThemeManager
 ```
 
@@ -255,7 +281,8 @@ Resume for `RETR` sends explicit `REST <offset>` before the retry. Before every 
 | Concern | Measure |
 |---|---|
 | Credentials | Windows Credential Manager (DPAPI); never in config files or logs |
-| Log redaction | FTP `PASS` command + IRC server password redacted by adapters |
+| Log redaction | FTP `PASS`; IRC redaction keys on *which parameter of a command is a credential* — covers `PASS`, `OPER`, `JOIN` channel keys, services logins, and `MODE`/`324` key echoes, inbound and outbound |
+| Config telemetry | Credential-valued config changes record a SHA-256 digest, never the value |
 | FiSH keys | Stored DPAPI-encrypted per server in `fish-keys-{serverId}.json` |
 | Cert pinning | TOFU SHA-256 in `trusted_certs.json`, user-only ACL, rotation prompt required |
 | FTP command injection | `CpsvDataHelper.SanitizeFtpPath` strips CR/LF/NUL before every wire path |
@@ -265,8 +292,10 @@ Resume for `RETR` sends explicit `REST <offset>` before the retry. Before every 
 | Updates | SHA-256 mandatory against `checksums.sha256`; Authenticode issuer match when signed |
 | Crash recovery | Watchdog subprocess + Windows Restart Manager; reason pulled from Event Log |
 | Path traversal | Archive extraction validates entry paths (Zip Slip); updater validates install path contains `GlDrive` |
-| Telemetry | None; update checks go directly to `api.github.com` |
-| Inbound network | None. The TLS-server role during CPSV is outbound-only to the glftpd backend |
+| Telemetry | None leaves the machine; update checks go directly to `api.github.com` |
+| Inbound network | **Off by default.** The optional control API binds `127.0.0.1` only, never a wildcard, and re-checks the remote address is loopback on every request even with a valid token. The TLS-server role during CPSV is outbound-only to the glftpd backend |
+| Control API auth | Bearer token, generated on first enable and compared in fixed time; the listener refuses to start if enabled without one |
+| Control API input | Request bodies capped at 64 KB; `section`/`release` length-bounded before they reach the race engine or the log |
 
 ## Troubleshooting
 
