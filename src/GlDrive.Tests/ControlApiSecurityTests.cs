@@ -78,7 +78,7 @@ public class ControlApiSecurityTests
         // otherwise an endpoint could be reached unauthenticated.
         var loopbackGate = src.IndexOf("IPAddress.IsLoopback", StringComparison.Ordinal);
         var tokenGate    = src.IndexOf("FixedTimeEquals(presented", StringComparison.Ordinal);
-        var routing      = src.IndexOf("switch (method, path)", StringComparison.Ordinal);
+        var routing      = src.IndexOf("_routes.TryMatch(", StringComparison.Ordinal);
         Assert.True(loopbackGate > 0 && tokenGate > loopbackGate,
             "loopback check must come before the token check");
         Assert.True(routing > tokenGate, "routing must come after both gates");
