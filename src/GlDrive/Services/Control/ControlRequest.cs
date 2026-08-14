@@ -60,11 +60,42 @@ public sealed class ControlRequest
     public int QueryInt(string name, int fallback, int min, int max)
         => int.TryParse(_query[name], out var n) ? Math.Clamp(n, min, max) : fallback;
 
-    public async Task<string> ReadBodyAsync()
+    /// <summary>
+    /// Largest request body any endpoint here has a use for. The biggest real payload is a
+    /// race start, which is two short strings — 64 KB is three orders of magnitude of slack.
+    /// </summary>
+    internal const int MaxBodyBytes = 64 * 1024;
+
+    /// <summary>
+    /// Reads the request body, refusing anything over <see cref="MaxBodyBytes"/>.
+    ///
+    /// This used to be an unbounded <c>ReadToEndAsync</c>: a 20 MB body took the app from
+    /// 238 MB to 585 MB resident, because the bytes are buffered and then materialised again
+    /// as a UTF-16 string. Loopback-only binding limits who can do that, but a buggy script
+    /// is as good as a hostile one, and nothing here ever needs a large body.
+    ///
+    /// Returns null when the body is too large — the caller answers 413 rather than trying
+    /// to parse a truncated document, which would produce a misleading "invalid JSON".
+    /// </summary>
+    public async Task<string?> ReadBodyAsync()
     {
         if (_ctx == null) return "";
-        using var reader = new StreamReader(_ctx.Request.InputStream, Encoding.UTF8);
-        return await reader.ReadToEndAsync();
+
+        // Trust the declared length when it is present and already over the cap: refuse
+        // without reading. When absent or lying, the read below is still bounded.
+        if (_ctx.Request.ContentLength64 > MaxBodyBytes) return null;
+
+        var buffer = new byte[MaxBodyBytes + 1];
+        var total = 0;
+        while (total < buffer.Length)
+        {
+            var read = await _ctx.Request.InputStream.ReadAsync(buffer.AsMemory(total, buffer.Length - total));
+            if (read == 0) break;
+            total += read;
+        }
+
+        if (total > MaxBodyBytes) return null;
+        return Encoding.UTF8.GetString(buffer, 0, total);
     }
 
     public async Task RespondAsync(int status, object payload)

@@ -11,6 +11,12 @@ namespace GlDrive.Services.Control.Endpoints;
 
 public sealed class SpreadEndpoints : IControlEndpoint
 {
+    /// <summary>Longest accepted `section`. A section key is a short word; this is slack.</summary>
+    internal const int MaxSectionLength = 128;
+
+    /// <summary>Longest accepted `release`. Scene names run ~100 chars; this is slack.</summary>
+    internal const int MaxReleaseLength = 512;
+
     private readonly AppConfig _config;
     private readonly Func<SpreadManager?> _getSpread;
 
@@ -73,6 +79,14 @@ public sealed class SpreadEndpoints : IControlEndpoint
             return r.ErrorAsync(503, "unavailable", "spread engine unavailable");
 
         var id = r.Param("id")!;
+
+        // Confirm the race exists before claiming to have stopped it. StopJob is
+        // fire-and-forget, so this used to answer 200 {"stopped": id} for an id that never
+        // existed — while GET /races/{id} correctly 404'd the same id. A caller could not
+        // tell a real stop from a no-op, and the two endpoints disagreed about reality.
+        if (spread.ActiveJobs.All(j => j.Id != id))
+            return r.ErrorAsync(404, "not_found", "no such active race", id);
+
         spread.StopJob(id);
         return r.RespondAsync(200, new { stopped = id });
     }
@@ -80,6 +94,12 @@ public sealed class SpreadEndpoints : IControlEndpoint
     private async Task StartRace(ControlRequest r)
     {
         var body = await r.ReadBodyAsync();
+        if (body == null)
+        {
+            await r.ErrorAsync(413, "payload_too_large",
+                $"request body exceeds {ControlRequest.MaxBodyBytes} bytes");
+            return;
+        }
 
         string? section, release;
         try
@@ -97,6 +117,26 @@ public sealed class SpreadEndpoints : IControlEndpoint
         if (string.IsNullOrWhiteSpace(section) || string.IsNullOrWhiteSpace(release))
         {
             await r.ErrorAsync(400, "bad_request", "both 'section' and 'release' are required");
+            return;
+        }
+
+        // Bound both fields BEFORE they reach the race engine or the log. A 2 MB section name
+        // was accepted here and written to gldrive-{date}.log as one 2,000,172-byte line; the
+        // log rolls at 10 MB keeping 3 files, so a handful of such calls erases every trace of
+        // what the app was doing. Losing diagnostic history to log volume has already happened
+        // twice in this project (v3.10.47, v3.10.54) — this is the same failure with a caller
+        // holding the pen. A scene release name is ~100 chars and a section key is a short
+        // word, so these limits are generous.
+        if (section!.Length > MaxSectionLength)
+        {
+            await r.ErrorAsync(400, "bad_request",
+                $"'section' exceeds {MaxSectionLength} characters", $"got {section.Length}");
+            return;
+        }
+        if (release!.Length > MaxReleaseLength)
+        {
+            await r.ErrorAsync(400, "bad_request",
+                $"'release' exceeds {MaxReleaseLength} characters", $"got {release.Length}");
             return;
         }
 
