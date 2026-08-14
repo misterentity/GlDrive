@@ -64,7 +64,14 @@ public sealed class RouteTable
         return false;
     }
 
-    /// <summary>True when the path matches a registered route under some other verb.</summary>
+    /// <summary>
+    /// True when the path matches a registered route under ANY verb — including the one just
+    /// tried, since this method takes no method parameter and cannot tell. It is only a valid
+    /// 405-vs-404 signal because the caller (ControlApi.Handle) always calls TryMatch first: a
+    /// true TryMatch result means the verb DID match, so control never reaches this method for
+    /// that request. A caller that skips TryMatch must not read a true result here as "wrong
+    /// verb" — it may be the exact verb that was never tried.
+    /// </summary>
     public bool MethodNotAllowed(string path)
     {
         var pathSegments = Split(path);
