@@ -74,13 +74,40 @@ public class RouteTableTests
         Assert.False(t.MethodNotAllowed("/nonexistent"));
     }
 
+    /// <summary>
+    /// The dispatch this router replaced was case-sensitive on the path (C# tuple-switch
+    /// equality, StringComparison.Ordinal StartsWith) but folded the HTTP method via
+    /// ToUpperInvariant. The router must match that split exactly, or a caller who typed
+    /// "GET /STATUS" would reach a route that never used to exist — see
+    /// A_case_variant_of_a_mutating_route_does_not_match for the concrete regression this
+    /// pins.
+    /// </summary>
     [Fact]
-    public void Matching_is_case_insensitive_on_method_and_literal_segments()
+    public void Method_is_case_insensitive_but_the_path_is_not()
     {
         var t = new RouteTable();
-        t.Map("GET", "/Status", Noop);
+        t.Map("GET", "/status", Noop);
 
-        Assert.True(t.TryMatch("get", "/status", out _, out _));
+        Assert.True(t.TryMatch("get", "/status", out _, out _));    // method folds
+        Assert.False(t.TryMatch("GET", "/STATUS", out _, out _));   // path does not
+        Assert.False(t.TryMatch("GET", "/Status", out _, out _));
+    }
+
+    /// <summary>
+    /// Regression test: RouteTable.TryBind originally compared literal segments with
+    /// OrdinalIgnoreCase, so "POST /RACES" reached SpreadEndpoints.StartRace and could start
+    /// a real FXP transfer, even though the switch-based dispatch it replaced returned 404
+    /// for anything but an exact-case "/races". Auth (loopback + token) was never affected —
+    /// this was a surface-equivalence break, not an auth bypass.
+    /// </summary>
+    [Fact]
+    public void A_case_variant_of_a_mutating_route_does_not_match()
+    {
+        var t = new RouteTable();
+        t.Map("POST", "/races", Noop);
+
+        Assert.False(t.TryMatch("POST", "/RACES", out _, out _));
+        Assert.False(t.MethodNotAllowed("/RACES"));
     }
 
     [Fact]
