@@ -41,7 +41,8 @@ public sealed class HealthRollup : IDisposable
                     PoolExhaustCount = pool.ExhaustCountSinceFlush,
                     GhostKills = pool.GhostKillsSinceFlush,
                     Errors5xx = pool.Errors5xxSinceFlush,
-                    ReinitCount = pool.ReinitCountSinceFlush
+                    ReinitCount = pool.ReinitCountSinceFlush,
+                    AbandonedBorrows = pool.AbandonedBorrowsSinceFlush
                 });
             }
             _windowStart = now;

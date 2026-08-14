@@ -81,6 +81,7 @@ public record SiteHealthEvent : TelemetryEnvelope
     [JsonPropertyName("ghostKills")]       public int GhostKills { get; init; }
     [JsonPropertyName("errors5xx")]        public int Errors5xx { get; init; }
     [JsonPropertyName("reinitCount")]      public int ReinitCount { get; init; }
+    [JsonPropertyName("abandonedBorrows")] public int AbandonedBorrows { get; init; }
 }
 
 public record AnnounceNoMatchEvent : TelemetryEnvelope
