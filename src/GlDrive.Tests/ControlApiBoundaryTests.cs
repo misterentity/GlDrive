@@ -1,5 +1,4 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -61,11 +60,11 @@ public class ControlApiBoundaryTests
 
         foreach (var type in EndpointTypes)
         {
-            foreach (var f in type.GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public))
-                if (Holds(f.FieldType, ForbiddenTypeNames))
-                    violations.Add($"{type.Name}.{f.Name} : {f.FieldType.Name}");
+            foreach (var (name, fieldType) in DeclaredFields(type))
+                if (Holds(fieldType, ForbiddenTypeNames))
+                    violations.Add($"{type.Name}.{name} : {fieldType.Name}");
 
-            foreach (var ctor in type.GetConstructors())
+            foreach (var ctor in type.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
                 foreach (var p in ctor.GetParameters())
                     if (Holds(p.ParameterType, ForbiddenTypeNames))
                         violations.Add($"{type.Name}.ctor({p.Name} : {p.ParameterType.Name})");
@@ -79,14 +78,31 @@ public class ControlApiBoundaryTests
     [Fact]
     public void The_interim_exemption_list_does_not_grow()
     {
+        // Same member surface as No_endpoint_holds_a_manager_or_pool_or_keystore: a Tier-2
+        // type acquired through a field, a non-public constructor, or an object initializer
+        // must join this ratchet exactly as a public constructor parameter would.
         var holders = EndpointTypes
-            .Where(t => t.GetConstructors().Any(c => c.GetParameters()
-                        .Any(p => Holds(p.ParameterType, InterimTypeNames))))
+            .Where(t => DeclaredFields(t).Any(m => Holds(m.Type, InterimTypeNames))
+                        || t.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                            .Any(c => c.GetParameters().Any(p => Holds(p.ParameterType, InterimTypeNames))))
             .Select(t => t.Name)
             .OrderBy(n => n)
             .ToArray();
 
         Assert.Equal(KnownInterimHolders.OrderBy(n => n).ToArray(), holders);
+    }
+
+    /// <summary>
+    /// Fields declared anywhere in the type's hierarchy up to (excluding) System.Object.
+    /// Type.GetFields(NonPublic) alone only returns members declared on the type itself, so a
+    /// private field on a future abstract base class would otherwise be invisible here.
+    /// </summary>
+    private static IEnumerable<(string Name, Type Type)> DeclaredFields(Type type)
+    {
+        for (var t = type; t != null && t != typeof(object); t = t.BaseType)
+            foreach (var f in t.GetFields(BindingFlags.Instance | BindingFlags.Public
+                                           | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+                yield return (f.Name, f.FieldType);
     }
 
     /// <summary>
