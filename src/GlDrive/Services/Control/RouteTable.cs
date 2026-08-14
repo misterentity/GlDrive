@@ -26,6 +26,10 @@ public sealed class RouteTable
     public void Map(string method, string pattern, Func<ControlRequest, Task> handler)
     {
         var normalisedMethod = method.ToUpperInvariant();
+        // OrdinalIgnoreCase here on purpose — this is a registration-time typo guard (did
+        // someone Map "/Status" and "/status" by accident?), not request matching. Compare
+        // against TryBind below, which matches an incoming request's path and must stay
+        // case-sensitive to preserve the pre-router dispatch semantics.
         if (_routes.Any(r => r.Method == normalisedMethod
                              && string.Equals(r.Pattern, pattern, StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException($"Duplicate route: {normalisedMethod} {pattern}");
@@ -80,7 +84,11 @@ public sealed class RouteTable
                 bound[pattern[i][1..^1]] = actual[i];
                 continue;
             }
-            if (!string.Equals(pattern[i], actual[i], StringComparison.OrdinalIgnoreCase))
+            // Ordinal, not OrdinalIgnoreCase: the switch/StartsWith dispatch this router
+            // replaced was case-sensitive (C# tuple-switch equality, StringComparison.Ordinal
+            // StartsWith), so e.g. "POST /RACES" used to 404. Folding case here would
+            // silently widen the reachable surface of a mutating endpoint.
+            if (!string.Equals(pattern[i], actual[i], StringComparison.Ordinal))
                 return false;
         }
         return true;
