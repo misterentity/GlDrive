@@ -16,7 +16,13 @@ namespace GlDrive.Services.Control;
 /// </summary>
 public sealed class ControlRequest
 {
-    private static readonly JsonSerializerOptions Json = new()
+    /// <summary>
+    /// The one definition of the control API's JSON shape — camelCase, nulls omitted,
+    /// indented. Shared with ControlApi.cs (which needs it for the loopback/token gate
+    /// responses and the top-level catch-all, both ahead of routing and so outside any
+    /// ControlRequest) rather than duplicated, so the wire format can't drift between them.
+    /// </summary>
+    internal static readonly JsonSerializerOptions Json = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,

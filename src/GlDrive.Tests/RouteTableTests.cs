@@ -21,6 +21,22 @@ public class RouteTableTests
         Assert.Empty(ps);
     }
 
+    /// <summary>
+    /// The zero-segment path. GET / is a shipped route (StatusEndpoints registers it as the
+    /// index) but was only ever traced by hand before this test existed.
+    /// </summary>
+    [Fact]
+    public void Matches_the_root_path()
+    {
+        var t = new RouteTable();
+        t.Map("GET", "/", Noop);
+
+        Assert.True(t.TryMatch("GET", "/", out var handler, out var ps));
+        Assert.NotNull(handler);
+        Assert.Empty(ps);
+        Assert.False(t.TryMatch("GET", "/status", out _, out _));
+    }
+
     [Fact]
     public void Captures_a_parameter_segment()
     {

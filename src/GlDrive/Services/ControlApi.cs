@@ -1,7 +1,6 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using GlDrive.Config;
 using GlDrive.Services.Control;
 using GlDrive.Services.Control.Endpoints;
@@ -45,13 +44,6 @@ public sealed class ControlApi : IDisposable
     private CancellationTokenSource? _cts;
     private Task? _loop;
 
-    private static readonly JsonSerializerOptions Json = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-        WriteIndented = true
-    };
-
     public ControlApi(AppConfig config, Func<SpreadManager?> getSpread,
         Func<IReadOnlyList<string>> getConnectedServerIds)
     {
@@ -61,7 +53,7 @@ public sealed class ControlApi : IDisposable
 
         // Endpoints receive only what they need. See ControlApiBoundaryTests for why they
         // must never take ServerManager/AppConfig-reaching handles once readers land.
-        _statusEndpoints = new StatusEndpoints(_config, _getSpread, _getConnectedServerIds, _routes);
+        _statusEndpoints = new StatusEndpoints(_config, _getSpread, _getConnectedServerIds);
         _statusEndpoints.Register(_routes);
         new SpreadEndpoints(_config, _getSpread).Register(_routes);
     }
@@ -167,7 +159,21 @@ public sealed class ControlApi : IDisposable
         catch (Exception ex)
         {
             Log.Debug(ex, "Control API request failed");
-            try { await Respond(ctx, 500, new { error = ex.Message }); } catch { }
+            // Same four-field envelope every handler error uses (see ControlRequest.ErrorAsync)
+            // — recomputed from ctx directly rather than the `path` local, which may not have
+            // been assigned yet if the exception happened before routing.
+            var failedPath = ctx.Request.Url?.AbsolutePath ?? "/";
+            try
+            {
+                await Respond(ctx, 500, new
+                {
+                    error = "internal server error",
+                    code = "internal_error",
+                    detail = ex.Message,
+                    path = failedPath
+                });
+            }
+            catch { }
         }
     }
 
@@ -188,7 +194,7 @@ public sealed class ControlApi : IDisposable
 
     private static async Task Respond(HttpListenerContext ctx, int status, object payload)
     {
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(payload, Json);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(payload, ControlRequest.Json);
         ctx.Response.StatusCode = status;
         ctx.Response.ContentType = "application/json";
         ctx.Response.ContentLength64 = bytes.Length;

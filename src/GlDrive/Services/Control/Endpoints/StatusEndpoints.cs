@@ -11,19 +11,26 @@ public sealed class StatusEndpoints : IControlEndpoint
     private readonly AppConfig _config;
     private readonly Func<SpreadManager?> _getSpread;
     private readonly Func<IReadOnlyList<string>> _getConnectedServerIds;
-    private readonly RouteTable _routes;
+
+    // Captured from Register's parameter, not the constructor — a separate constructor
+    // parameter let the table Index() lists diverge from the one actually serving requests
+    // if a caller ever passed different instances to each. Capturing it here makes that
+    // structurally impossible: Index() can only run as a handler this same Register call
+    // mapped, so _routes is always the table it is describing. Non-null by the time any
+    // handler fires, since it is assigned before routes.Map registers the first one.
+    private RouteTable? _routes;
 
     public StatusEndpoints(AppConfig config, Func<SpreadManager?> getSpread,
-        Func<IReadOnlyList<string>> getConnectedServerIds, RouteTable routes)
+        Func<IReadOnlyList<string>> getConnectedServerIds)
     {
         _config = config;
         _getSpread = getSpread;
         _getConnectedServerIds = getConnectedServerIds;
-        _routes = routes;
     }
 
     public void Register(RouteTable routes)
     {
+        _routes = routes;
         routes.Map("GET", "/", r => r.RespondAsync(200, Index()));
         routes.Map("GET", "/status", r => r.RespondAsync(200, Status()));
         routes.Map("GET", "/sections", r => r.RespondAsync(200, Sections()));
@@ -32,7 +39,7 @@ public sealed class StatusEndpoints : IControlEndpoint
     private object Index() => new
     {
         version = typeof(ControlApi).Assembly.GetName().Version?.ToString(),
-        routes = _routes.Routes.Select(r => $"{r.Method} {r.Pattern}").OrderBy(s => s)
+        routes = _routes!.Routes.Select(r => $"{r.Method} {r.Pattern}").OrderBy(s => s)
     };
 
     private object Status()

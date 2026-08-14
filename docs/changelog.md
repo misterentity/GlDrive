@@ -41,6 +41,19 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   for every card.
 
 ### Fixes
+- **v3.10.59** — the control API's error responses were inconsistent: the loopback/token
+  gate rejections and the router's 404/405 stayed close to a `{error, code, path}` shape
+  while every endpoint handler already used the richer `{error, code, detail, path}`
+  envelope from `ControlRequest.ErrorAsync`, and the unhandled-exception catch-all in
+  `ControlApi.Handle` emitted only `{error}` — no `code`, no `path`, nothing to correlate a
+  500 against the request that caused it. The catch-all now uses the same four-field
+  envelope as everything else. Two fields that used to be their own top-level property
+  folded into `detail` in the process: the 404's `id` (which race wasn't found) and the
+  409's `connected` server list, now a comma-joined string rather than an array. The API
+  has never been enabled on any machine, so nothing consumes today's shape — this is the
+  last release where changing it is free. Also de-duplicated the `JsonSerializerOptions`
+  block that had drifted into a byte-for-byte copy in both `ControlApi.cs` and
+  `ControlRequest.cs`; there is now exactly one definition (`ControlRequest.Json`).
 - **v3.10.51** — the directory scan raided the FXP pool and starved every transfer it was
   scanning for. `ScanSites` falls back to the dedicated spread pool when the main pool's
   borrow times out — but that fallback was unconditional, and a scan re-runs every ~2s

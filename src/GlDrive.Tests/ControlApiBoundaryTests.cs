@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using GlDrive.Services;
 using GlDrive.Services.Control;
 using Xunit;
 
@@ -53,6 +54,50 @@ public class ControlApiBoundaryTests
     public void There_is_at_least_one_endpoint_so_this_test_cannot_pass_vacuously()
         => Assert.NotEmpty(EndpointTypes);
 
+    /// <summary>
+    /// Local fixture proving DeclaredFields walks static fields, not just instance ones — a
+    /// static-held Tier-1 type would otherwise be invisible to both
+    /// No_endpoint_holds_a_manager_or_pool_or_keystore and The_interim_exemption_list_does_not_grow.
+    /// It never implements IControlEndpoint from the GlDrive assembly, so it can't leak into
+    /// EndpointTypes — this test drives DeclaredFields/Holds directly instead.
+    /// </summary>
+    private sealed class StaticFieldFixture
+    {
+#pragma warning disable CS0414 // never read by design — the scan inspects the declared field type, not its value
+        private static readonly ServerManager? _cachedServerManager = null;
+#pragma warning restore CS0414
+    }
+
+    [Fact]
+    public void DeclaredFields_walks_static_fields_too()
+    {
+        var caught = DeclaredFields(typeof(StaticFieldFixture))
+            .Where(f => Holds(f.Type, ForbiddenTypeNames))
+            .Select(f => f.Name)
+            .ToArray();
+
+        Assert.Contains("_cachedServerManager", caught);
+    }
+
+    /// <summary>
+    /// ForbiddenTypeNames/InterimTypeNames match by Type.Name, a bare string. Renaming
+    /// ServerManager in production would silently drop it from both lists with a green suite —
+    /// this fails loudly instead, naming the stale entry. Namespace moves are fine on purpose
+    /// (Type.Name doesn't see them); only a rename is the hole.
+    /// </summary>
+    [Fact]
+    public void Every_forbidden_and_interim_type_name_still_resolves_to_a_real_type()
+    {
+        var assembly = typeof(IControlEndpoint).Assembly;
+        var knownNames = assembly.GetTypes().Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
+
+        foreach (var name in ForbiddenTypeNames.Concat(InterimTypeNames))
+            Assert.True(knownNames.Contains(name),
+                $"'{name}' no longer resolves to a type in {assembly.GetName().Name} — " +
+                "it was likely renamed, which silently drops it from the boundary scan. " +
+                "Update ForbiddenTypeNames/InterimTypeNames to the new name.");
+    }
+
     [Fact]
     public void No_endpoint_holds_a_manager_or_pool_or_keystore()
     {
@@ -95,12 +140,16 @@ public class ControlApiBoundaryTests
     /// <summary>
     /// Fields declared anywhere in the type's hierarchy up to (excluding) System.Object.
     /// Type.GetFields(NonPublic) alone only returns members declared on the type itself, so a
-    /// private field on a future abstract base class would otherwise be invisible here.
+    /// private field on a future abstract base class would otherwise be invisible here. Static
+    /// is included alongside Instance — a `private static readonly AppConfig _cfg` is exactly
+    /// as reachable as an instance field, and without it a static cache would escape both the
+    /// Tier-1 forbidden check and the Tier-2 ratchet. See
+    /// DeclaredFields_walks_static_fields_too for the canary.
     /// </summary>
     private static IEnumerable<(string Name, Type Type)> DeclaredFields(Type type)
     {
         for (var t = type; t != null && t != typeof(object); t = t.BaseType)
-            foreach (var f in t.GetFields(BindingFlags.Instance | BindingFlags.Public
+            foreach (var f in t.GetFields(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public
                                            | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
                 yield return (f.Name, f.FieldType);
     }
