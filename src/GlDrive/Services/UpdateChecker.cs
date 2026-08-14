@@ -545,6 +545,22 @@ public class UpdateChecker : IDisposable
         RecordDeclinedUpdateAt(UpdateStatePath(".update-declined"), tagName, DateTime.UtcNow);
 
     /// <summary>
+    /// Forget a previous decline. Called once an elevated updater has actually been launched:
+    /// the user granting elevation is the event the marker was waiting for.
+    /// </summary>
+    private static void ClearDeclinedUpdate() =>
+        ClearDeclinedUpdateAt(UpdateStatePath(".update-declined"));
+
+    internal static void ClearDeclinedUpdateAt(string markerPath)
+    {
+        try
+        {
+            if (File.Exists(markerPath)) File.Delete(markerPath);
+        }
+        catch (Exception ex) { Log.Debug(ex, "Could not clear declined-update marker"); }
+    }
+
+    /// <summary>
     /// Record a decline as "not now", timestamped. One line: tag TAB ISO-8601 UTC — same shape
     /// as the deferral marker.
     /// </summary>
@@ -647,6 +663,14 @@ public class UpdateChecker : IDisposable
             psi.ArgumentList.Add(packageDir);
             psi.ArgumentList.Add(installDir);
             Process.Start(psi);
+
+            // Elevation was GRANTED — the reason the decline marker exists no longer holds.
+            // Leaving it meant a successful manual tray install still left auto-install
+            // suppressed for the rest of the 24h window, so the next release also had to be
+            // installed by hand. Observed twice on 2026-08-14: the auto-install prompt fires
+            // around 05:00 when nobody is at the machine, gets declined, and every later
+            // version inherits the suppression until the window lapses.
+            ClearDeclinedUpdate();
         }
         catch (Exception ex)
         {

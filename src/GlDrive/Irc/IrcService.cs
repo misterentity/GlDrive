@@ -475,11 +475,39 @@ public class IrcService : IDisposable
             }
             else
             {
-                _pendingInviteJoins.Remove(channel);
-                AddSystemMessage("*", $"Gave up joining {channel} after {retries + 1} attempts — try /join {channel} manually");
+                // Do NOT give up permanently. The burst above spans ~30 seconds; the reason a
+                // join is refused is usually that the SITE's announce bot is not in the channel
+                // to send the INVITE, and that can stay true for hours. On 2026-08-12 zephyr
+                // exhausted this burst at 08:00, then sat OUT of #ent for 8h21m on a perfectly
+                // healthy connection until a human invited it by hand — because nothing ever
+                // re-attempted. AutoJoinChannelsAsync runs only on connect, so a give-up here
+                // is a give-up for the life of the connection.
+                //
+                // Fall back to a slow standing retry instead. It re-runs SITE INVITE, so a bot
+                // that comes back at 16:56 is picked up within minutes rather than never.
+                _pendingInviteJoins[channel] = retries + 1;
+                var slowDelay = SlowInviteRetryDelay(retries + 1);
+                Log.Warning("IRC {Server}: cannot join {Channel} (invite-only) after {Attempts} attempts — " +
+                    "retrying every {Delay} until invited",
+                    _serverConfig.Name, channel, retries + 1, slowDelay);
+                AddSystemMessage("*", $"Cannot join {channel} yet (invite-only) — retrying every {slowDelay.TotalMinutes:0} min");
+                _ = RetryJoinAfterDelay(channel, (int)slowDelay.TotalSeconds);
             }
         }
     }
+
+    /// <summary>
+    /// Backoff for the standing invite-only retry, once the fast 5/10/15s burst is spent.
+    /// Climbs to 30 minutes and stays there — a channel we are not invited to costs nothing
+    /// to re-ask for occasionally, and giving up entirely is what stranded zephyr for 8h21m.
+    /// </summary>
+    private static TimeSpan SlowInviteRetryDelay(int attempts) =>
+        attempts switch
+        {
+            <= 4 => TimeSpan.FromMinutes(5),
+            <= 6 => TimeSpan.FromMinutes(15),
+            _ => TimeSpan.FromMinutes(30)
+        };
 
     private async Task RetryJoinAfterDelay(string channel, int delaySec)
     {
@@ -489,6 +517,12 @@ public class IrcService : IDisposable
             if (_client == null || !_client.IsConnected) return;
             if (_channels.ContainsKey(channel)) return; // Already joined
 
+            // Re-run SITE INVITE before re-joining. The fast burst only re-sent JOIN, which
+            // can never succeed on a +i channel by itself — the invite is the thing that was
+            // missing, and the site bot may have come back since the last attempt.
+            if (_pendingInviteJoins.GetValueOrDefault(channel, 0) > 3)
+                await RequestSiteInviteAsync();
+
             var configured = _serverConfig.Irc.Channels
                 .FirstOrDefault(c => c.Name.Equals(channel, StringComparison.OrdinalIgnoreCase));
             await JoinConfiguredChannelAsync(configured ?? new IrcChannelConfig { Name = channel, AutoJoin = true });
@@ -496,6 +530,40 @@ public class IrcService : IDisposable
         catch (Exception ex)
         {
             Log.Debug(ex, "Retry join failed for {Channel}", channel);
+        }
+    }
+
+    /// <summary>
+    /// Asks the FTP server to invite us to its IRC channels (glftpd `SITE INVITE`). Extracted
+    /// from AutoJoinChannelsAsync so the standing retry can re-issue it — the invite, not the
+    /// JOIN, is what an invite-only channel is actually waiting for.
+    /// </summary>
+    private async Task RequestSiteInviteAsync()
+    {
+        var inviteNick = _serverConfig.Irc.InviteNick;
+        if (string.IsNullOrEmpty(inviteNick) || SiteInviteFunc == null) return;
+
+        using var inviteCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        try
+        {
+            AddSystemMessage("*", $"Running SITE INVITE {inviteNick}...");
+            var reply = await SiteInviteFunc(inviteNick, inviteCts.Token);
+            // Logged, not just shown in the UI tab: when this path fails silently the only
+            // symptom is a server that looks connected and receives nothing.
+            Log.Information("IRC {Server}: SITE INVITE {Nick} -> {Reply}",
+                _serverConfig.Name, inviteNick, reply ?? "(no reply)");
+            AddSystemMessage("*", reply ?? "SITE INVITE completed (no reply)");
+            await Task.Delay(2000);
+        }
+        catch (OperationCanceledException) when (inviteCts.IsCancellationRequested)
+        {
+            AddSystemMessage("*", "SITE INVITE timed out after 30s — continuing with channel joins");
+            Log.Warning("SITE INVITE timed out for {Server}", _serverConfig.Name);
+        }
+        catch (Exception ex)
+        {
+            AddSystemMessage("*", $"SITE INVITE failed: {ex.Message}");
+            Log.Warning(ex, "IRC {Server}: SITE INVITE {Nick} failed", _serverConfig.Name, inviteNick);
         }
     }
 
@@ -1000,34 +1068,10 @@ public class IrcService : IDisposable
         {
             if (_client == null) return;
 
-            // Run SITE INVITE before joining channels
-            var inviteNick = _serverConfig.Irc.InviteNick;
-            if (!string.IsNullOrEmpty(inviteNick) && SiteInviteFunc != null)
-            {
-                // Bound the call: a hung FTP pool must not block the entire IRC auto-join loop.
-                // 30 seconds covers realistic glftpd → IRC propagation while catching stalls.
-                using var inviteCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                try
-                {
-                    AddSystemMessage("*", $"Running SITE INVITE {inviteNick}...");
-                    var reply = await SiteInviteFunc(inviteNick, inviteCts.Token);
-                    AddSystemMessage("*", reply ?? "SITE INVITE completed (no reply)");
-
-                    // Wait a moment for the IRC server to process the invite
-                    // glftpd SITE INVITE is async — the IRC INVITE arrives shortly after
-                    await Task.Delay(2000);
-                }
-                catch (OperationCanceledException) when (inviteCts.IsCancellationRequested)
-                {
-                    AddSystemMessage("*", "SITE INVITE timed out after 30s — continuing with channel joins");
-                    Log.Warning("SITE INVITE timed out for {Server}", _serverConfig.Name);
-                }
-                catch (Exception ex)
-                {
-                    AddSystemMessage("*", $"SITE INVITE failed: {ex.Message}");
-                    // Still try to join channels — some may not need invite
-                }
-            }
+            // Run SITE INVITE before joining channels. Bounded at 30s inside — a hung FTP
+            // pool must not block the whole auto-join loop. Shared with the standing
+            // invite-only retry so there is one implementation of "ask to be invited".
+            await RequestSiteInviteAsync();
 
             // Small delay between JOINs to avoid flood protection
             foreach (var ch in _serverConfig.Irc.Channels)
@@ -1082,9 +1126,23 @@ public class IrcService : IDisposable
 
     // Public send methods
 
-    public async Task SendMessage(string target, string text)
+    /// <summary>
+    /// Sends a message, returning false when the client is not connected.
+    ///
+    /// This used to be a bare `return` on a dead client: the message was never sent, never
+    /// echoed locally (the AddMessage calls are below this guard), and never logged — so a
+    /// PM typed into the UI simply evaporated with no error anywhere. The caller now learns
+    /// that nothing was sent and can say so.
+    /// </summary>
+    public async Task<bool> SendMessage(string target, string text)
     {
-        if (_client == null || !_client.IsConnected) return;
+        if (_client == null || !_client.IsConnected)
+        {
+            Log.Warning("IRC {Server}: cannot send to {Target} — not connected (state {State})",
+                _serverConfig.Name, target, State);
+            AddSystemMessage("*", $"Not connected — message to {target} was NOT sent");
+            return false;
+        }
 
         // Encrypt if FiSH key exists
         if (_serverConfig.Irc.FishEnabled)
@@ -1095,12 +1153,13 @@ public class IrcService : IDisposable
                 var encrypted = FishCipher.Encrypt(text, keyEntry.Key, keyEntry.Mode);
                 await _client.PrivmsgAsync(target, encrypted);
                 AddMessage(target, new IrcMessageItem { Nick = _currentNick, Text = text, WasEncrypted = true });
-                return;
+                return true;
             }
         }
 
         await _client.PrivmsgAsync(target, text);
         AddMessage(target, new IrcMessageItem { Nick = _currentNick, Text = text });
+        return true;
     }
 
     public async Task SendAction(string target, string text)
