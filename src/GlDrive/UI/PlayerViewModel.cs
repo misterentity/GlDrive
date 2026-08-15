@@ -65,6 +65,8 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     public ObservableCollection<TmdbSeasonSummary> Seasons { get; } = new();
     public ObservableCollection<TmdbEpisode> Episodes { get; } = new();
     public ObservableCollection<TorrentResultVm> TorrentResults { get; } = new();
+    public ObservableCollection<TorrentDownloadVm> TorrentDownloads { get; } = new();
+    public bool HasTorrentDownloads => TorrentDownloads.Count > 0;
     public ObservableCollection<TrackInfo> AudioTracks { get; } = new();
     public ObservableCollection<TrackInfo> SubtitleTracks { get; } = new();
     public ObservableCollection<RendererItemVm> Renderers { get; } = new();
@@ -272,6 +274,8 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     public ICommand ClearSearchCommand { get; }
     public ICommand SearchTorrentCommand { get; }
     public ICommand PlayTorrentCommand { get; }
+    public ICommand DownloadTorrentCommand { get; }
+    public ICommand CancelTorrentDownloadCommand { get; }
     public ICommand CastToDeviceCommand { get; }
     public ICommand StopCastingCommand { get; }
 
@@ -284,7 +288,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     {
         _serverManager = serverManager;
         _config = config;
-        _torrentSearch = new TorrentSearchService();
+        _torrentSearch = new TorrentSearchService(config.Torrent.SearchProxyUrl);
 
         SearchAndPlayCommand = new RelayCommand(async () => await SearchAndPlay());
         PlayResultCommand = new RelayCommand(async () => await PlaySelectedResult());
@@ -312,6 +316,8 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         ClearSearchCommand = new RelayCommand(() => { SearchResults.Clear(); OnPropertyChanged(nameof(HasSearchResults)); });
         SearchTorrentCommand = new RelayCommand(async () => await SearchTorrent());
         PlayTorrentCommand = new RelayCommand(async () => await PlaySelectedTorrent());
+        DownloadTorrentCommand = new RelayCommand(async () => await DownloadSelectedTorrent());
+        CancelTorrentDownloadCommand = new RelayCommand<TorrentDownloadVm>(CancelTorrentDownload);
         CastToDeviceCommand = new RelayCommand<RendererItemVm>(CastToDevice);
         StopCastingCommand = new RelayCommand(StopCasting);
     }
@@ -426,7 +432,8 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
             Log.Information("MediaStreamServer started on port {Port}", _streamServer.Port);
 
             _resumeStore = new PlayerResumeStore(_streamServer.LibraryPath);
-            _torrentStream = new TorrentStreamService(_streamServer.LibraryPath);
+            _torrentStream = new TorrentStreamService(
+                _streamServer.LibraryPath, _config.Torrent.VpnAdapterName);
 
             StartRendererDiscovery();
 
@@ -840,6 +847,104 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
         {
             Log.Warning(ex, "Torrent search failed for \"{Query}\"", query);
         }
+    }
+
+    /// <summary>
+    /// Download the selected torrent to a folder of the user's choosing and keep it there.
+    ///
+    /// Runs alongside streaming and other downloads — <see cref="TorrentStreamService"/> keeps
+    /// downloads in their own dictionary rather than the single manager streaming uses, so
+    /// starting playback does not cancel a download in progress.
+    /// </summary>
+    private async Task DownloadSelectedTorrent()
+    {
+        if (_selectedTorrentResult == null || _torrentSearch == null) return;
+        if (_torrentStream == null)
+        {
+            PlayerStatus = "Torrent engine not initialized";
+            return;
+        }
+
+        var result = _selectedTorrentResult;
+
+        var dlg = new Microsoft.Win32.OpenFolderDialog
+        {
+            Title = $"Save \"{result.Title}\" to…",
+        };
+        if (!string.IsNullOrWhiteSpace(_config.Torrent.LastDownloadFolder) &&
+            Directory.Exists(_config.Torrent.LastDownloadFolder))
+            dlg.InitialDirectory = _config.Torrent.LastDownloadFolder;
+
+        if (dlg.ShowDialog() != true) return;
+        var saveDir = dlg.FolderName;
+
+        try
+        {
+            var magnet = await _torrentSearch.GetMagnetLinkAsync(result.DetailUrl);
+            if (magnet == null)
+            {
+                PlayerStatus = "Could not get magnet link";
+                return;
+            }
+
+            var item = new TorrentDownloadVm { Name = result.Title, Status = "Starting…" };
+            TorrentDownloads.Add(item);
+            OnPropertyChanged(nameof(HasTorrentDownloads));
+
+            // Remember the folder so the next dialog opens where the last one did.
+            _config.Torrent.LastDownloadFolder = saveDir;
+
+            var hash = await _torrentStream.StartDownloadAsync(magnet, saveDir,
+                onProgress: p => Application.Current?.Dispatcher.Invoke(() =>
+                {
+                    item.Hash = p.Hash;
+                    item.Name = p.Name;
+                    item.Percent = p.Percent;
+                    item.Status = p.State;
+                    item.SpeedDisplay = FormatRate(p.DownloadRateBytes);
+                    item.PeersDisplay = $"{p.Seeds}S/{p.Leeches}L";
+
+                    if (p.State == "Complete")
+                    {
+                        item.Status = "Done";
+                        item.SpeedDisplay = "";
+                    }
+                }));
+
+            if (hash == null)
+            {
+                item.Status = "Failed";
+                PlayerStatus = "Invalid magnet link";
+                return;
+            }
+
+            item.Hash = hash;
+            PlayerStatus = $"Downloading to {saveDir}";
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Torrent download failed to start");
+            PlayerStatus = $"Download error: {ex.Message}";
+        }
+    }
+
+    private void CancelTorrentDownload(TorrentDownloadVm? item)
+    {
+        if (item == null || _torrentStream == null) return;
+
+        if (!string.IsNullOrEmpty(item.Hash))
+            _ = _torrentStream.CancelDownloadAsync(item.Hash);
+
+        TorrentDownloads.Remove(item);
+        OnPropertyChanged(nameof(HasTorrentDownloads));
+    }
+
+    private static string FormatRate(long bytesPerSecond)
+    {
+        if (bytesPerSecond <= 0) return "";
+        if (bytesPerSecond >= 1 << 20) return $"{bytesPerSecond / (double)(1 << 20):F1} MB/s";
+        if (bytesPerSecond >= 1 << 10) return $"{bytesPerSecond / (double)(1 << 10):F0} KB/s";
+        return $"{bytesPerSecond} B/s";
     }
 
     private async Task PlaySelectedTorrent()
@@ -1495,6 +1600,59 @@ public class LibraryItemVm
     public string FileName { get; set; } = "";
     public string SizeText { get; set; } = "";
     public string ResumePercent { get; set; } = "";
+}
+
+/// <summary>
+/// One in-flight "download and keep" torrent. Implements INotifyPropertyChanged because the
+/// progress callback mutates it once a second on a live-bound grid — a plain POCO would need
+/// Items.Refresh() on every tick, the trap SectionMapping already documents in CLAUDE.md.
+/// </summary>
+public class TorrentDownloadVm : INotifyPropertyChanged
+{
+    private string _name = "";
+    private string _status = "";
+    private double _percent;
+    private string _speedDisplay = "";
+    private string _peersDisplay = "";
+
+    public string Hash { get; set; } = "";
+
+    public string Name
+    {
+        get => _name;
+        set { _name = value; OnPropertyChanged(); }
+    }
+
+    public string Status
+    {
+        get => _status;
+        set { _status = value; OnPropertyChanged(); }
+    }
+
+    public double Percent
+    {
+        get => _percent;
+        set { _percent = value; OnPropertyChanged(); OnPropertyChanged(nameof(PercentDisplay)); }
+    }
+
+    public string PercentDisplay => $"{_percent:F1}%";
+
+    public string SpeedDisplay
+    {
+        get => _speedDisplay;
+        set { _speedDisplay = value; OnPropertyChanged(); }
+    }
+
+    public string PeersDisplay
+    {
+        get => _peersDisplay;
+        set { _peersDisplay = value; OnPropertyChanged(); }
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    private void OnPropertyChanged([CallerMemberName] string? name = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
 
 public class TorrentResultVm

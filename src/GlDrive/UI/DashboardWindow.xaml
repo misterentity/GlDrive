@@ -1515,9 +1515,46 @@
                                                 <DataGridTextColumn Header="Size" Binding="{Binding Size}" Width="65"/>
                                             </DataGrid.Columns>
                                         </DataGrid>
-                                        <Button Content="&#x25B6; Play Torrent" Command="{Binding PlayTorrentCommand}"
-                                                Padding="14,5" Margin="0,6,0,0" HorizontalAlignment="Left"
-                                                Style="{StaticResource PrimaryButton}" FontSize="11"/>
+                                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                            <Button Content="&#x25B6; Play Torrent" Command="{Binding PlayTorrentCommand}"
+                                                    Padding="14,5" HorizontalAlignment="Left"
+                                                    Style="{StaticResource PrimaryButton}" FontSize="11"/>
+                                            <Button Content="&#x2B07; Download to folder&#x2026;"
+                                                    Command="{Binding DownloadTorrentCommand}"
+                                                    Padding="14,5" Margin="8,0,0,0" HorizontalAlignment="Left"
+                                                    FontSize="11"
+                                                    ToolTip="Download this torrent and keep the files. Stops once complete."/>
+                                        </StackPanel>
+
+                                        <!-- Active torrent downloads -->
+                                        <StackPanel Margin="0,10,0,0"
+                                                    Visibility="{Binding HasTorrentDownloads, Converter={StaticResource BoolToVisibility}}">
+                                            <TextBlock Text="Downloading" FontWeight="SemiBold" FontSize="11"
+                                                       Foreground="{DynamicResource ForegroundBrush}" Margin="0,0,0,4"/>
+                                            <DataGrid ItemsSource="{Binding TorrentDownloads}"
+                                                      AutoGenerateColumns="False" IsReadOnly="True"
+                                                      SelectionMode="Single" GridLinesVisibility="Horizontal"
+                                                      HeadersVisibility="Column" CanUserAddRows="False"
+                                                      MaxHeight="120">
+                                                <DataGrid.Columns>
+                                                    <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*"/>
+                                                    <DataGridTextColumn Header="%" Binding="{Binding PercentDisplay}" Width="55"/>
+                                                    <DataGridTextColumn Header="Speed" Binding="{Binding SpeedDisplay}" Width="70"/>
+                                                    <DataGridTextColumn Header="Peers" Binding="{Binding PeersDisplay}" Width="60"/>
+                                                    <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="75"/>
+                                                    <DataGridTemplateColumn Header="" Width="60">
+                                                        <DataGridTemplateColumn.CellTemplate>
+                                                            <DataTemplate>
+                                                                <Button Content="Cancel" FontSize="10" Padding="6,2"
+                                                                        Command="{Binding DataContext.CancelTorrentDownloadCommand,
+                                                                                  RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                                        CommandParameter="{Binding}"/>
+                                                            </DataTemplate>
+                                                        </DataGridTemplateColumn.CellTemplate>
+                                                    </DataGridTemplateColumn>
+                                                </DataGrid.Columns>
+                                            </DataGrid>
+                                        </StackPanel>
                                     </StackPanel>
                                 </Border>
 
