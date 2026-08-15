@@ -12,7 +12,12 @@ public class TorrentStreamService : IDisposable
 {
     private readonly string _downloadPath;
     private readonly ClientEngine _engine;
+    private readonly TorrentContentPolicy _policy;
+
+    /// <summary>Blocked file paths per torrent, so their artifacts can be swept on stop.</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, List<string>> _blockedArtifacts = new();
     private TorrentManager? _activeManager;
+    private string? _activeStreamHash;
     private IHttpStream? _activeHttpStream;
     private bool _disposed;
 
@@ -26,8 +31,13 @@ public class TorrentStreamService : IDisposable
     /// `Factories` API, which does not exist in 3.0.2, and 3.0.2 is the newest STABLE release
     /// (3.0.3 and 3.9.0 are alpha). Treat this as reducing exposure, not eliminating it.
     /// </param>
-    public TorrentStreamService(string downloadPath, string? vpnAdapterName = null)
+    public TorrentStreamService(
+        string downloadPath,
+        string? vpnAdapterName = null,
+        TorrentContentPolicy? contentPolicy = null)
     {
+        _policy = contentPolicy ?? new TorrentContentPolicy(blockExecutables: true);
+
         _downloadPath = downloadPath;
         Directory.CreateDirectory(_downloadPath);
 
@@ -70,6 +80,172 @@ public class TorrentStreamService : IDisposable
         _engine = new ClientEngine(settings);
     }
 
+    /// <summary>Outcome of screening a magnet's contents before anything is added to the engine.</summary>
+    public sealed record ScreeningResult(
+        Torrent? Torrent,
+        IReadOnlyList<TorrentFileDecision> Decisions,
+        string? Error)
+    {
+        public IEnumerable<TorrentFileDecision> Blocked => Decisions.Where(d => d.IsBlocked);
+        public bool HasEscapes => Decisions.Any(d => d.Verdict == TorrentFileVerdict.EscapesSaveDirectory);
+        public bool Ok => Torrent != null && Error == null;
+    }
+
+    /// <summary>
+    /// Fetch a magnet's metadata WITHOUT adding it to the engine, then judge every file it
+    /// declares. Returns before anything exists on disk.
+    ///
+    /// The out-of-band fetch is the whole point, and it is not stylistic. Inside
+    /// MetadataMode.HandleLtMetadataMessage MonoTorrent runs, in this order:
+    ///     Manager.SetMetadata(torrent);      // file list populated
+    ///     Manager.StartAsync();              // -> StartingMode -> CreateEmptyFiles -> DownloadMode
+    ///     Manager.RaiseMetadataReceived(..); // only NOW does a consumer learn the file list
+    /// So by the time HasMetadata flips, or a MetadataReceived handler runs, the manager has
+    /// already been started and pieces are requestable. There is no earlier public hook, and
+    /// PauseAsync does not help — it races the StartingMode transition. Any design that keeps
+    /// AddAsync(magnet, ...) has a window that cannot be closed. ClientEngine.DownloadMetadataAsync
+    /// registers a throwaway manager with an EMPTY save path and stops before that StartAsync,
+    /// so nothing is ever written.
+    ///
+    /// This also means the pre-existing DoNotDownload loop on the streaming path was always
+    /// running too late.
+    /// </summary>
+    private async Task<ScreeningResult> ScreenMagnetAsync(
+        MagnetLink magnet,
+        string saveDir,
+        TimeSpan metadataTimeout,
+        Action<string>? onStatus,
+        CancellationToken ct)
+    {
+        // DownloadMetadataAsync never completes on its own — its only exit is the token — so a
+        // deadline is mandatory, not defensive.
+        using var metaCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        metaCts.CancelAfter(metadataTimeout);
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var reporter = ReportMetadataWaitAsync(sw, metadataTimeout, onStatus, metaCts.Token);
+
+        ReadOnlyMemory<byte> raw;
+        try
+        {
+            raw = await _engine.DownloadMetadataAsync(magnet, metaCts.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            Log.Warning("Torrent: no metadata after {Elapsed:F0}s — try a result with more seeders",
+                sw.Elapsed.TotalSeconds);
+            return new ScreeningResult(null, [], "Timed out waiting for torrent metadata");
+        }
+        catch (OperationCanceledException)
+        {
+            return new ScreeningResult(null, [], "Cancelled");
+        }
+        finally
+        {
+            await reporter;
+        }
+
+        if (raw.IsEmpty || !Torrent.TryLoad(raw.Span, out var torrent))
+            return new ScreeningResult(null, [], "Torrent metadata was unreadable");
+
+        var root = Path.GetFullPath(saveDir);
+        var decisions = _policy.EvaluateAll(torrent.Files.Select(f => f.Path), root).ToList();
+
+        foreach (var d in decisions.Where(d => d.IsBlocked))
+            Log.Warning("Torrent content blocked ({Verdict}): {Name} — {Detail}",
+                d.Verdict, TorrentContentPolicy.DisplayName(d.TorrentPath), d.Detail);
+
+        Log.Information("Torrent screened in {Elapsed:F0}s — {Name}, {Files} files, {Blocked} blocked",
+            sw.Elapsed.TotalSeconds, torrent.Name, decisions.Count, decisions.Count(d => d.IsBlocked));
+
+        return new ScreeningResult(torrent, decisions, null);
+    }
+
+    /// <summary>
+    /// Keep the caller informed while the out-of-band fetch runs.
+    ///
+    /// The throwaway probe manager is registered isPublic:false, so it never appears in
+    /// _engine.Torrents and the per-torrent "3S/1L, 12 available" counts the old inline loop
+    /// showed are genuinely gone. That instrumentation was added deliberately in v3.10.66/.67
+    /// because 0% was indistinguishable from a hang, so rather than pretend, report elapsed
+    /// time against the deadline plus engine-wide connection activity.
+    /// </summary>
+    private async Task ReportMetadataWaitAsync(
+        System.Diagnostics.Stopwatch sw,
+        TimeSpan budget,
+        Action<string>? onStatus,
+        CancellationToken ct)
+    {
+        if (onStatus == null) return;
+
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(1000, ct);
+                onStatus($"Fetching metadata… {sw.Elapsed.TotalSeconds:F0}s of {budget.TotalSeconds:F0}s " +
+                         $"({_engine.ConnectionManager.OpenConnections} peer connections)");
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    /// <summary>
+    /// Mark every blocked file DoNotDownload while the manager is still stopped, and remember
+    /// them so their artifacts can be swept when it stops.
+    /// </summary>
+    private async Task ApplyBlocksAsync(
+        TorrentManager manager, string hash, IReadOnlyList<TorrentFileDecision> decisions)
+    {
+        var blockedPaths = new List<string>();
+
+        // manager.Files is Torrent.Files.Select(...) in declaration order, so index mapping is safe.
+        for (var i = 0; i < manager.Files.Count && i < decisions.Count; i++)
+        {
+            if (!decisions[i].IsBlocked) continue;
+
+            await manager.SetFilePriorityAsync(manager.Files[i], Priority.DoNotDownload);
+            blockedPaths.Add(manager.Files[i].FullPath);
+            blockedPaths.Add(manager.Files[i].DownloadIncompleteFullPath);
+        }
+
+        if (blockedPaths.Count > 0) _blockedArtifacts[hash] = blockedPaths;
+    }
+
+    /// <summary>
+    /// Delete anything a blocked file left behind, after the manager has stopped and closed
+    /// its handles.
+    ///
+    /// This is needed because DoNotDownload does not mean "nothing is written". Two reasons:
+    /// StartingMode.CreateEmptyFiles creates every zero-length entry with no priority check;
+    /// and more importantly DiskManager.WriteAsync has no priority awareness at all, so a
+    /// skipped file receives whatever bytes it shares with a kept neighbour's first or last
+    /// piece — landing COMPLETE when it is smaller than one piece and sits between two kept
+    /// files. With 1-16 MiB pieces a small executable can arrive whole. Sweeping afterwards is
+    /// the mitigation; the bytes still existed on disk while the transfer ran, and a crash
+    /// before this runs leaves them.
+    /// </summary>
+    private void SweepBlockedArtifacts(string hash)
+    {
+        if (!_blockedArtifacts.TryRemove(hash, out var paths)) return;
+
+        foreach (var path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                    Log.Information("Torrent: removed blocked artifact {Path}", path);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Torrent: could not remove blocked artifact {Path}", path);
+            }
+        }
+    }
+
     /// <summary>
     /// Starts streaming a torrent from a magnet link. Uses MonoTorrent's built-in HTTP streaming.
     /// Returns an HTTP URL that VLC can play directly.
@@ -101,44 +277,38 @@ public class TorrentStreamService : IDisposable
         onProgress?.Invoke("Connecting to DHT and peers...", 0);
         Log.Information("Starting torrent stream");
 
-        var manager = await _engine.AddStreamingAsync(magnet, saveDir);
+        // Screen BEFORE the engine ever sees this torrent. Playing is a download too — the
+        // whole torrent's pieces pass through the same disk writer — so the gate applies here
+        // exactly as it does to download-and-keep.
+        var screening = await ScreenMagnetAsync(
+            magnet, saveDir, TimeSpan.FromSeconds(120), s => onProgress?.Invoke(s, 0), ct);
+
+        if (!screening.Ok)
+        {
+            onProgress?.Invoke(screening.Error ?? "Could not read torrent", 0);
+            return null;
+        }
+
+        // A path escaping the save directory is refused outright on both paths — it is a
+        // malicious torrent, not an inconvenient one, and there is no legitimate version of it.
+        if (screening.HasEscapes)
+        {
+            Log.Warning("Torrent REFUSED for streaming — declares files outside the save folder");
+            onProgress?.Invoke("Refused: torrent declares files outside the save folder", 0);
+            return null;
+        }
+
+        var torrent = screening.Torrent!;
+        var hash = torrent.InfoHashes.V1OrV2.ToHex();
+
+        var manager = await _engine.AddStreamingAsync(torrent, saveDir);
         _activeManager = manager;
 
         try
         {
-            await manager.StartAsync();
-            onProgress?.Invoke("Connecting to peers...", 0);
-
-            // Wait for metadata with progress updates
-            var metadataTimeout = TimeSpan.FromSeconds(120);
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            while (!manager.HasMetadata)
-            {
-                ct.ThrowIfCancellationRequested();
-                if (sw.Elapsed > metadataTimeout)
-                {
-                    var peers = manager.Peers.Seeds + manager.Peers.Leechs;
-                    Log.Warning("Torrent metadata timeout after {Elapsed}s — {Peers} peers, {Available} available",
-                        sw.Elapsed.TotalSeconds, peers, manager.Peers.Available);
-                    onProgress?.Invoke("Timeout waiting for metadata — try a torrent with more seeds", 0);
-                    return null;
-                }
-                await Task.Delay(500, ct);
-                var p = manager.Peers;
-                onProgress?.Invoke(
-                    $"Fetching metadata... ({p.Seeds}S/{p.Leechs}L, {p.Available} available)",
-                    0);
-
-                // Log every 10 seconds
-                if ((int)sw.Elapsed.TotalSeconds % 10 == 0 && sw.Elapsed.TotalSeconds > 1)
-                    Log.Information("Metadata wait: {Elapsed}s, Seeds={Seeds}, Leechs={Leechs}, Available={Available}",
-                        (int)sw.Elapsed.TotalSeconds, p.Seeds, p.Leechs, p.Available);
-            }
-
-            Log.Information("Torrent metadata received in {Elapsed}s — {Files} files",
-                sw.Elapsed.TotalSeconds, manager.Files.Count);
-
-            // Find the largest video file
+            // Find the largest video file. Note this is a stream TARGET selector, not a
+            // safety control — it happens to ignore executables, which is not the same thing
+            // as refusing them, and everything else is handled by the policy above.
             var videoFile = FindVideoFile(manager);
             if (videoFile == null)
             {
@@ -150,12 +320,21 @@ public class TorrentStreamService : IDisposable
 
             Log.Information("Torrent video: {Name} ({Size:F1} MB)", videoFile.Path, videoFile.Length / (1024.0 * 1024));
 
-            // Set priority: DoNotDownload for non-video files
+            // Priorities are set while the manager is still stopped — the reason the metadata
+            // fetch was moved out of band. Streaming already skips everything but the chosen
+            // video; recording the policy-blocked entries as well is what arms the artifact
+            // sweep in StopAsync.
+            await ApplyBlocksAsync(manager, hash, screening.Decisions);
+
             foreach (var file in manager.Files)
             {
                 if (file != videoFile)
                     await manager.SetFilePriorityAsync(file, Priority.DoNotDownload);
             }
+
+            _activeStreamHash = hash;
+
+            await manager.StartAsync();
 
             onProgress?.Invoke($"Buffering: {Path.GetFileName(videoFile.Path)}...", 0);
 
@@ -249,11 +428,20 @@ public class TorrentStreamService : IDisposable
     /// Returns the info hash, or null if the magnet was unusable. Progress is reported until
     /// the download finishes, is cancelled, or the service is disposed.
     /// </summary>
+    /// <param name="allowBlockedContent">
+    /// When false (the default) a torrent containing executable files is refused outright and
+    /// nothing is added to the engine. When true — only ever set from an explicit user choice
+    /// in the confirmation dialog — the torrent proceeds with those files marked
+    /// DoNotDownload and swept afterwards. Refusing is the default because the failure modes
+    /// are asymmetric: a wrong block costs one extra click, a wrong allow puts an executable
+    /// in a folder the user is about to browse.
+    /// </param>
     public async Task<string?> StartDownloadAsync(
         string magnetLink,
         string saveDir,
         Action<DownloadProgress>? onProgress = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool allowBlockedContent = false)
     {
         MagnetLink magnet;
         try
@@ -275,11 +463,56 @@ public class TorrentStreamService : IDisposable
 
         Directory.CreateDirectory(saveDir);
 
-        var manager = await _engine.AddAsync(magnet, saveDir);
+        // Screen before adding: nothing is written, and nothing is even registered with the
+        // engine, until the contents are known and judged.
+        var screening = await ScreenMagnetAsync(magnet, saveDir, MetadataTimeout,
+            s => onProgress?.Invoke(new DownloadProgress(hash, "", 0, 0, 0, 0, s)), ct);
+
+        if (!screening.Ok)
+        {
+            onProgress?.Invoke(new DownloadProgress(hash, "", 0, 0, 0, 0,
+                screening.Error ?? "Unreadable"));
+            return null;
+        }
+
+        if (screening.HasEscapes)
+        {
+            Log.Warning("Torrent REFUSED — declares files outside the save folder ({Hash})", hash);
+            onProgress?.Invoke(new DownloadProgress(hash, screening.Torrent!.Name, 0, 0, 0, 0,
+                "Refused: unsafe paths"));
+            return null;
+        }
+
+        var blocked = screening.Blocked.ToList();
+        if (blocked.Count > 0 && !allowBlockedContent)
+        {
+            var names = string.Join(", ", blocked.Take(5)
+                .Select(b => TorrentContentPolicy.DisplayName(b.TorrentPath)));
+
+            Log.Warning("Torrent REFUSED — {Count} executable file(s): {Names} ({Hash})",
+                blocked.Count, names, hash);
+
+            onProgress?.Invoke(new DownloadProgress(hash, screening.Torrent!.Name, 0, 0, 0, 0,
+                $"Blocked: {blocked.Count} executable file(s) — {names}"));
+
+            return null;
+        }
+
+        var torrent = screening.Torrent!;
+        var manager = await _engine.AddAsync(torrent, saveDir);
         if (!_downloads.TryAdd(hash, manager))
         {
             await _engine.RemoveAsync(manager);
             return hash;
+        }
+
+        // Set while the manager is still stopped. Skipping the blocked entries rather than
+        // refusing the torrent is only reachable when the caller explicitly opted in.
+        if (blocked.Count > 0)
+        {
+            await ApplyBlocksAsync(manager, hash, screening.Decisions);
+            Log.Information("Torrent download: skipping {Count} blocked file(s) at the user's request ({Hash})",
+                blocked.Count, hash);
         }
 
         Log.Information("Torrent download starting → {SaveDir} ({Hash})", saveDir, hash);
@@ -363,8 +596,12 @@ public class TorrentStreamService : IDisposable
                 }
 
                 // ── Transfer phase ────────────────────────────────────────────────────
+                // PartialProgress, not Progress: Progress is Bitfield.PercentComplete over the
+                // WHOLE torrent, so it can never reach 100% once any file is skipped and the
+                // UI would sit just short of done forever. PartialProgress is selector-aware
+                // and falls back to Progress when nothing is filtered.
                 onProgress?.Invoke(new DownloadProgress(
-                    hash, name, manager.Progress, manager.Monitor.DownloadRate,
+                    hash, name, manager.PartialProgress, manager.Monitor.DownloadRate,
                     p.Seeds, p.Leechs, manager.State.ToString()));
 
                 if (sw.Elapsed - lastLog >= ProgressLogInterval)
@@ -372,7 +609,7 @@ public class TorrentStreamService : IDisposable
                     lastLog = sw.Elapsed;
                     Log.Information(
                         "Torrent download: {Percent:F1}% at {Rate} — {Seeds}S/{Leechs}L, state={State} ({Name})",
-                        manager.Progress, FormatBytes(manager.Monitor.DownloadRate) + "/s",
+                        manager.PartialProgress, FormatBytes(manager.Monitor.DownloadRate) + "/s",
                         p.Seeds, p.Leechs, manager.State, name);
                 }
 
@@ -417,6 +654,8 @@ public class TorrentStreamService : IDisposable
 
         try
         {
+            // Stop first: it closes the file handles via DiskManager.CloseFilesAsync, so the
+            // sweep below is not fighting an open writer.
             await manager.StopAsync();
             await _engine.RemoveAsync(manager);
         }
@@ -424,6 +663,8 @@ public class TorrentStreamService : IDisposable
         {
             Log.Debug(ex, "Error stopping torrent download {Hash}", hash);
         }
+
+        SweepBlockedArtifacts(hash);
     }
 
     /// <summary>
@@ -450,6 +691,12 @@ public class TorrentStreamService : IDisposable
                 Log.Debug(ex, "Error stopping torrent");
             }
             _activeManager = null;
+        }
+
+        if (_activeStreamHash != null)
+        {
+            SweepBlockedArtifacts(_activeStreamHash);
+            _activeStreamHash = null;
         }
     }
 

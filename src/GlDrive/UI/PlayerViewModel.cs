@@ -433,7 +433,9 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
             _resumeStore = new PlayerResumeStore(_streamServer.LibraryPath);
             _torrentStream = new TorrentStreamService(
-                _streamServer.LibraryPath, _config.Torrent.VpnAdapterName);
+                _streamServer.LibraryPath,
+                _config.Torrent.VpnAdapterName,
+                new TorrentContentPolicy(_config.Torrent));
 
             StartRendererDiscovery();
 
@@ -895,7 +897,78 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
             // Remember the folder so the next dialog opens where the last one did.
             _config.Torrent.LastDownloadFolder = saveDir;
 
-            var hash = await _torrentStream.StartDownloadAsync(magnet, saveDir,
+            var hash = await StartDownloadWithScreeningAsync(magnet, saveDir, item);
+
+            if (hash == null)
+            {
+                if (item.Status is not ("Blocked" or "Cancelled")) item.Status = "Failed";
+                return;
+            }
+
+            item.Hash = hash;
+            PlayerStatus = $"Downloading to {saveDir}";
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Torrent download failed to start");
+            PlayerStatus = $"Download error: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Start a download, and if the torrent carries executable files put the decision to the
+    /// user rather than silently doing either thing.
+    ///
+    /// Refusing is the default because the failure modes are asymmetric: a wrong block costs
+    /// one extra click, a wrong allow drops an executable into a folder that is about to be
+    /// browsed in Explorer. The "skip them" option exists because a software torrent whose
+    /// setup.exe is the point is a real case, not a hypothetical.
+    /// </summary>
+    private async Task<string?> StartDownloadWithScreeningAsync(
+        string magnet, string saveDir, TorrentDownloadVm item)
+    {
+        var hash = await RunDownloadAsync(magnet, saveDir, item, allowBlocked: false);
+        if (hash != null || item.Status is not "Blocked") return hash;
+
+        // A containment violation is never overridable — that is a malicious torrent, not an
+        // inconvenient one.
+        if (item.BlockReason.StartsWith("Refused", StringComparison.Ordinal))
+        {
+            MessageBox.Show(
+                "This torrent declares file paths outside the folder you chose, which is how a " +
+                "malicious torrent writes to places you did not pick. It has been refused.",
+                "Torrent refused", MessageBoxButton.OK, MessageBoxImage.Error);
+            PlayerStatus = "Refused: torrent declares unsafe paths";
+            return null;
+        }
+
+        var choice = MessageBox.Show(
+            $"{item.BlockReason}\n\n" +
+            "Executable files are blocked by default — GlDrive does not run them, but they would " +
+            "sit in the save folder where they could be opened by mistake.\n\n" +
+            "Yes — download the rest, skipping the executables\n" +
+            "No — cancel this download\n\n" +
+            "Note: BitTorrent transfers whole pieces, so a skipped file can still receive bytes " +
+            "it shares with a kept file. Those leftovers are deleted when the download stops.",
+            "Torrent contains executable files",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No);
+
+        if (choice != MessageBoxResult.Yes)
+        {
+            item.Status = "Cancelled";
+            PlayerStatus = "Download cancelled — torrent contained executable files";
+            return null;
+        }
+
+        return await RunDownloadAsync(magnet, saveDir, item, allowBlocked: true);
+    }
+
+    private async Task<string?> RunDownloadAsync(
+        string magnet, string saveDir, TorrentDownloadVm item, bool allowBlocked)
+    {
+        return await _torrentStream!.StartDownloadAsync(magnet, saveDir,
                 onProgress: p => Application.Current?.Dispatcher.Invoke(() =>
                 {
                     item.Hash = p.Hash;
@@ -910,23 +983,16 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
                         item.Status = "Done";
                         item.SpeedDisplay = "";
                     }
-                }));
-
-            if (hash == null)
-            {
-                item.Status = "Failed";
-                PlayerStatus = "Invalid magnet link";
-                return;
-            }
-
-            item.Hash = hash;
-            PlayerStatus = $"Downloading to {saveDir}";
-        }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "Torrent download failed to start");
-            PlayerStatus = $"Download error: {ex.Message}";
-        }
+                    else if (p.State.StartsWith("Blocked", StringComparison.Ordinal) ||
+                             p.State.StartsWith("Refused", StringComparison.Ordinal))
+                    {
+                        // Carry the reason through for the dialog, but keep Status a stable
+                        // token the caller can branch on.
+                        item.BlockReason = p.State;
+                        item.Status = "Blocked";
+                    }
+                }),
+                allowBlockedContent: allowBlocked);
     }
 
     private void CancelTorrentDownload(TorrentDownloadVm? item)
@@ -1617,6 +1683,9 @@ public class TorrentDownloadVm : INotifyPropertyChanged
     private string _peersDisplay = "";
 
     public string Hash { get; set; } = "";
+
+    /// <summary>Full "Blocked: 2 executable file(s) — setup.exe" text, for the dialog.</summary>
+    public string BlockReason { get; set; } = "";
 
     public string Name
     {

@@ -607,6 +607,15 @@ public partial class ExtractorWindow : Window
                     continue;
                 }
 
+                // Archives are allowed through the torrent content gate — they must be, it is
+                // how releases ship — so this is where their contents actually become files.
+                // The watch folders are the same folders torrents save to.
+                if (ExecutableExtensions.IsExecutable(entry.Key))
+                {
+                    Log.Warning("Skipping executable archive entry: {Key}", entry.Key);
+                    continue;
+                }
+
                 // Overwrite handling
                 if (File.Exists(fullPath))
                 {
@@ -969,6 +978,15 @@ public partial class ExtractorWindow : Window
             var fullPath = Path.GetFullPath(Path.Combine(safeDirPath, key));
             if (!fullPath.StartsWith(safeDirPath, StringComparison.OrdinalIgnoreCase))
                 continue;
+
+            // Second independent extraction loop (zip/7z/tar). Guarding only the first one
+            // would be the same "invariant enforced at one call site" mistake this codebase
+            // has already shipped three times.
+            if (ExecutableExtensions.IsExecutable(key))
+            {
+                Log.Warning("Skipping executable archive entry: {Key}", key);
+                continue;
+            }
 
             if (File.Exists(fullPath))
             {

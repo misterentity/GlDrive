@@ -38,6 +38,35 @@ public class TorrentConfig
 
     /// <summary>Last folder chosen in the download picker, used to seed the next dialog.</summary>
     public string LastDownloadFolder { get; set; } = "";
+
+    /// <summary>
+    /// Refuse to write executable file types out of torrents, on both the download and the
+    /// play path. Default true.
+    ///
+    /// This is hygiene, not security: GlDrive never runs downloaded content, and the realistic
+    /// risk is double-clicking something in the save folder that looked like the film. Set
+    /// false only if you routinely torrent software.
+    ///
+    /// LIMITATIONS, stated in full because they are not obvious. It cannot see inside archives.
+    /// BitTorrent transfers whole pieces, so a skipped file still receives the bytes it shares
+    /// with a kept neighbour's first or last piece — and lands COMPLETE if it is smaller than
+    /// one piece and sits between two kept files. A zero-length entry is created on disk
+    /// regardless of priority. Blocked artifacts are deleted when the download stops, but not
+    /// if the process is killed first.
+    /// </summary>
+    public bool BlockExecutables { get; set; } = true;
+
+    /// <summary>
+    /// Extensions to block in addition to the built-in set. Leading dot optional,
+    /// e.g. ["jar", ".reg", ".docm"].
+    /// </summary>
+    public string[] ExtraBlockedExtensions { get; set; } = [];
+
+    /// <summary>
+    /// Extensions to REMOVE from the built-in set, e.g. [".msi"] if you torrent software.
+    /// A blunt escape hatch; prefer the per-download override offered in the Player tab.
+    /// </summary>
+    public string[] AllowedExtensionOverrides { get; set; } = [];
 }
 
 public class ServerConfig
