@@ -90,6 +90,9 @@ public sealed class ExtractAbandonGateCoverageTests
         var directCalls = Regex.Matches(code, @"_abandonStore\s*\.\s*ShouldSkip").Count;
 
         Assert.True(directCalls == 1,
+            // Note this assertion PASSED throughout v3.10.63 while the bug was live. One
+            // helper is necessary but nowhere near sufficient — see
+            // AutoExtractItem_itself_consults_the_gate for the assertion that has teeth.
             $"Expected exactly one _abandonStore.ShouldSkip call (inside SkipIfAbandoned); found {directCalls}. " +
             "Route the check through SkipIfAbandoned so every path into extraction shares it.");
 
@@ -97,9 +100,51 @@ public sealed class ExtractAbandonGateCoverageTests
     }
 
     /// <summary>
-    /// The startup/recovery scan is the route that regressed. Pin it explicitly: it must
-    /// call the gate, and must do so before the expensive IsAlreadyExtracted probe, which
-    /// opens the archive to compare entries.
+    /// THE test. v3.10.63 asserted that the two known routes called the gate — and that
+    /// assertion passed while the replay continued in production, because a THIRD route
+    /// (the initial watch-folder scan) also reaches AutoExtractItem. Enumerating call sites
+    /// is precisely how the defect survived two fixes.
+    ///
+    /// So: the gate must sit on the operation every route funnels through. AutoExtractItem
+    /// is that chokepoint, and it must consult the store before doing any work.
+    /// </summary>
+    [Fact]
+    public void AutoExtractItem_itself_consults_the_gate()
+    {
+        var body = MethodBody(ExtractorCode(), "AutoExtractItem");
+
+        var gateIndex = body.IndexOf("SkipIfAbandoned", System.StringComparison.Ordinal);
+        var workIndex = body.IndexOf("_extractionGate", System.StringComparison.Ordinal);
+
+        Assert.True(gateIndex >= 0,
+            "AutoExtractItem must call SkipIfAbandoned. Guarding its callers is not enough — " +
+            "v3.10.63 guarded two of the three and the replay continued.");
+        Assert.True(workIndex < 0 || gateIndex < workIndex,
+            "SkipIfAbandoned must run before AutoExtractItem starts doing work.");
+    }
+
+    /// <summary>
+    /// Every route that reaches AutoExtractItem is therefore gated by construction. This
+    /// pins the count so a future refactor that inlines the extraction past the chokepoint
+    /// has to come back here and think about it.
+    /// </summary>
+    [Fact]
+    public void AllRoutes_reach_extraction_only_through_the_gated_chokepoint()
+    {
+        var code = ExtractorCode();
+
+        var callSites = Regex.Matches(code, @"AutoExtractItem\s*\(").Count
+                        - Regex.Matches(code, @"(?:private|internal|public|protected)[^\n(]*AutoExtractItem\s*\(").Count;
+
+        Assert.True(callSites >= 3,
+            $"Expected the three known routes into AutoExtractItem; found {callSites}. " +
+            "If a route was removed, confirm the remaining ones still pass SkipIfAbandoned.");
+    }
+
+    /// <summary>
+    /// The startup/recovery scan short-circuits early too, before the expensive
+    /// IsAlreadyExtracted probe which opens the archive to compare entries. This is an
+    /// optimisation on top of the chokepoint, not the guarantee itself.
     /// </summary>
     [Fact]
     public void StartupRecoveryScan_consults_the_gate_before_extracting()
