@@ -95,6 +95,17 @@ public static partial class ArchiveExtractor
                         continue;
                     }
 
+                    // The torrent content gate allows archives — it has to, because that is how
+                    // scene releases ship — and cannot see inside them. This is where the inside
+                    // becomes files on disk, and the watch folders (E:\movies, D:\x265) are the
+                    // same folders torrents are saved to. Without this check,
+                    // Movie.2024.rar -> Sample/setup.exe walks straight past the torrent policy.
+                    if (ExecutableExtensions.IsExecutable(entry.Key))
+                    {
+                        Log.Warning("Skipping executable archive entry: {Key}", entry.Key);
+                        continue;
+                    }
+
                     // Commit only complete entries so cancellation or corruption never
                     // leaves a truncated file at the final destination.
                     Log.Debug("Extracting entry: {Key} ({Size} bytes)", entry.Key, entry.Size);
