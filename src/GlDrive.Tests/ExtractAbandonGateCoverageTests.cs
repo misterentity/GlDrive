@@ -173,6 +173,44 @@ public sealed class ExtractAbandonGateCoverageTests
         Assert.Contains("SkipIfAbandoned", MethodBody(ExtractorCode(), "HandleWatchedFileAsync"));
 
     /// <summary>
+    /// The transient give-up record must stay fingerprint-keyed. It was a bare add-only
+    /// HashSet until v3.10.65, which made every mid-copy abandonment permanent for the process
+    /// lifetime — the reason releases landing from outside GlDrive extracted only sometimes.
+    /// A HashSet here again is that defect returning.
+    /// </summary>
+    [Fact]
+    public void TransientAbandonRecord_is_fingerprint_keyed_not_a_bare_set()
+    {
+        var code = ExtractorCode();
+
+        Assert.DoesNotContain("HashSet<string> _watchAbandoned", code);
+        Assert.Contains("TransientAbandonLedger _watchAbandoned", code);
+
+        // And the watcher route must consult it with a freshly-computed fingerprint, not a
+        // bare membership test.
+        var body = MethodBody(code, "HandleWatchedFileAsync");
+        Assert.Contains("_watchAbandoned.Evaluate", body);
+        Assert.Contains("ComputeVolumeSetFingerprint", body);
+    }
+
+    /// <summary>
+    /// Fingerprint revival is inert without something to ask it: only Created and Renamed are
+    /// subscribed, so a single large archive written in place raises exactly one event, at
+    /// zero bytes. The sweep is what re-examines it. Removing the sweep silently restores the
+    /// old behaviour for precisely the case this was reported for.
+    /// </summary>
+    [Fact]
+    public void AbandonedPaths_are_swept_so_revival_has_a_trigger()
+    {
+        var code = ExtractorCode();
+
+        Assert.Contains("SweepAbandonedAsync", code);
+        var body = MethodBody(code, "SweepAbandonedAsync");
+        Assert.Contains("AbandonedPaths", body);
+        Assert.Contains("HandleWatchedFileAsync", body);
+    }
+
+    /// <summary>
     /// The set-wide readiness gate must stay on the watcher route. Reverting it to the
     /// first-volume-only WaitForFileReady call is the v3.10.62 defect returning.
     /// </summary>

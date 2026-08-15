@@ -36,7 +36,12 @@ public partial class ExtractorWindow : Window
     private readonly List<string> _watchFolders = new();
     private bool _watchEnabled;
     private readonly HashSet<string> _watchProcessed = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<string> _watchAbandoned = new(StringComparer.OrdinalIgnoreCase);
+
+    // Fingerprint-keyed, NOT a bare HashSet. It was one until 2026-08-15, add-only and
+    // consulted ahead of every other check, so a release abandoned mid-copy was dead for the
+    // process lifetime — see TransientAbandonLedger for why that hit externally-landed
+    // releases in particular.
+    private readonly TransientAbandonLedger _watchAbandoned = new();
 
     // Durable twin of _watchAbandoned for verdicts a restart cannot change. The
     // in-memory set is still the fast path; this one keeps a provably-unextractable
@@ -44,6 +49,14 @@ public partial class ExtractorWindow : Window
     private readonly ExtractAbandonStore _abandonStore = new();
     private readonly Dictionary<string, int> _watchRetryCounts = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _watchLock = new();
+
+    /// <summary>
+    /// How often abandoned paths are re-fingerprinted. Long enough that a multi-GB copy has
+    /// moved measurably between sweeps, short enough that a release landing from outside
+    /// GlDrive extracts without the user waiting on a restart.
+    /// </summary>
+    private static readonly TimeSpan AbandonSweepInterval = TimeSpan.FromMinutes(5);
+    private int _abandonSweepStarted;
 
     private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -1089,6 +1102,7 @@ public partial class ExtractorWindow : Window
             {
                 WatchToggle.Content = "ON";
                 WatchToggle.IsChecked = true;
+                StartAbandonSweep();
                 var recursive = ChkRecursive.IsChecked == true;
                 var foldersToScan = _watchFolders.ToList();
                 foreach (var folder in foldersToScan)
@@ -1211,6 +1225,7 @@ public partial class ExtractorWindow : Window
             _watchEnabled = true;
             WatchToggle.Content = "ON";
             WatchToggle.IsChecked = true;
+            StartAbandonSweep();
 
             // Scan existing archives in watch folders
             foreach (var folder in _watchFolders)
@@ -1274,9 +1289,28 @@ public partial class ExtractorWindow : Window
         var path = ResolveFirstVolumePath(eventPath);
         if (path == null || path.Contains(".gldrive-staging-", StringComparison.OrdinalIgnoreCase)) return;
 
-        lock (_watchLock)
+        // A give-up that outlives the condition it describes is a permanent exemption. This
+        // asks the ledger with the CURRENT fingerprint, so a copy that was still arriving when
+        // we ran out of retries revives itself the moment it grows, and a stalled one stays put.
+        var (liveVolumes, liveBytes) = ComputeVolumeSetFingerprint(path);
+        switch (_watchAbandoned.Evaluate(path, liveVolumes, liveBytes))
         {
-            if (_watchAbandoned.Contains(path)) return;
+            case TransientAbandonLedger.AbandonState.StillAbandoned:
+                return;
+
+            case TransientAbandonLedger.AbandonState.Revived:
+                // Only on an actual revival may we clear this bookkeeping. Doing it on every
+                // event would defeat the duplicate-event gate below and let an archive that is
+                // mid-extraction be queued twice.
+                lock (_watchLock)
+                {
+                    _watchProcessed.Remove(path);
+                    _watchRetryCounts.Remove(path);
+                }
+                Log.Information(
+                    "Extractor: retrying previously abandoned archive — volume set changed ({Count} parts, {Bytes} bytes): {Path}",
+                    liveVolumes, liveBytes, path);
+                break;
         }
 
         // Durable check, outside the in-memory set: this is what stops a restart from
@@ -1737,10 +1771,13 @@ public partial class ExtractorWindow : Window
             _abandonStore.Record(path, volumeCount, totalBytes, reason);
         }
 
+        var (volumes, bytes) = ComputeVolumeSetFingerprint(path);
+
         bool firstTime;
         lock (_watchLock)
         {
-            firstTime = _watchAbandoned.Add(path);
+            firstTime = !_watchAbandoned.IsAbandoned(path, volumes, bytes);
+            _watchAbandoned.Abandon(path, volumes, bytes);
             _watchProcessed.Add(path);
             _watchRetryCounts.Remove(path);
         }
@@ -1776,6 +1813,68 @@ public partial class ExtractorWindow : Window
             Log.Debug(ex, "Extractor: could not fingerprint volume set for {Path}", path);
             return (-1, -1);
         }
+    }
+
+    /// <summary>
+    /// Start the sweep once per window lifetime. Watch toggling and watcher recovery both
+    /// reach this, so it is guarded rather than trusted to be called once.
+    /// </summary>
+    private void StartAbandonSweep()
+    {
+        if (Interlocked.Exchange(ref _abandonSweepStarted, 1) == 0)
+            _ = SweepAbandonedAsync();
+    }
+
+    /// <summary>
+    /// Re-examine abandoned paths on a timer.
+    ///
+    /// Fingerprint-based revival needs something to ask it. For a multi-volume set arriving,
+    /// each new part raises a Created event — but a single large archive being written IN
+    /// PLACE (the usual shape when a release is copied in from outside GlDrive) raises Created
+    /// exactly once, at zero bytes. Only <c>Created</c> and <c>Renamed</c> are subscribed, so
+    /// nothing further ever fires and the release would sit abandoned until the next restart
+    /// even though the ledger would happily revive it.
+    ///
+    /// A sweep is used rather than subscribing <c>Changed</c> because Changed fires
+    /// continuously throughout a multi-GB copy and each evaluation costs a directory
+    /// enumeration. This costs one fingerprint per abandoned path per interval — bounded by
+    /// the number of failures, not by library size — and it doubles as a safety net for
+    /// watcher events dropped on a full 64 KB buffer or a network share.
+    /// </summary>
+    private async Task SweepAbandonedAsync()
+    {
+        try
+        {
+            while (!_lifetimeCts.IsCancellationRequested)
+            {
+                await Task.Delay(AbandonSweepInterval, _lifetimeCts.Token);
+                if (!_watchEnabled) continue;
+
+                foreach (var path in _watchAbandoned.AbandonedPaths())
+                {
+                    if (_lifetimeCts.IsCancellationRequested) return;
+
+                    var (volumes, bytes) = ComputeVolumeSetFingerprint(path);
+                    if (_watchAbandoned.Evaluate(path, volumes, bytes)
+                        != TransientAbandonLedger.AbandonState.Revived)
+                        continue;
+
+                    lock (_watchLock)
+                    {
+                        _watchProcessed.Remove(path);
+                        _watchRetryCounts.Remove(path);
+                    }
+
+                    Log.Information(
+                        "Extractor: sweep found abandoned archive changed ({Count} parts, {Bytes} bytes) — retrying {Path}",
+                        volumes, bytes, path);
+
+                    await HandleWatchedFileAsync(path);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested) { }
+        catch (Exception ex) { Log.Warning(ex, "Extractor: abandoned-path sweep failed"); }
     }
 
     private async Task RetryWatchedFileAsync(string path, int attempt)
