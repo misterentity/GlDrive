@@ -824,7 +824,8 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
                     DetailUrl = r.DetailUrl,
                     Seeds = r.Seeds,
                     Leeches = r.Leeches,
-                    Size = r.Size
+                    Size = r.Size,
+                    Uploader = r.Uploader
                 });
             }
 
@@ -1662,6 +1663,8 @@ public class TorrentResultVm
     public int Seeds { get; set; }
     public int Leeches { get; set; }
     public string Size { get; set; } = "";
+    /// <summary>Which indexer/tracker this came from — Knaben reports the federated origin.</summary>
+    public string Uploader { get; set; } = "";
     public string SeedsDisplay => Seeds > 0 ? Seeds.ToString() : "-";
     public string LeechesDisplay => Leeches > 0 ? Leeches.ToString() : "-";
 }

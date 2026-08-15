@@ -1513,6 +1513,7 @@
                                                     </DataGridTextColumn.ElementStyle>
                                                 </DataGridTextColumn>
                                                 <DataGridTextColumn Header="Size" Binding="{Binding Size}" Width="65"/>
+                                                <DataGridTextColumn Header="Source" Binding="{Binding Uploader}" Width="90"/>
                                             </DataGrid.Columns>
                                         </DataGrid>
                                         <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
