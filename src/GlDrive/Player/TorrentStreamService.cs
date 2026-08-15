@@ -289,6 +289,22 @@ public class TorrentStreamService : IDisposable
         return hash;
     }
 
+    /// <summary>
+    /// How long to wait for magnet metadata before giving up. A magnet carries only an info
+    /// hash: until metadata arrives from a peer there is no file list, nothing is written to
+    /// disk, and progress is legitimately 0%. On a thinly-seeded torrent that phase can last
+    /// minutes, which is indistinguishable from a hang without instrumentation.
+    ///
+    /// The streaming path has always had this timeout at 120s. The download path shipped in
+    /// v3.10.66 without it — a download against a 2-seeder torrent sat at 0% with NOTHING in
+    /// the log between "starting" and "complete", so there was no way to tell slow from stuck.
+    /// Longer than streaming's because a background download can afford to be patient.
+    /// </summary>
+    private static readonly TimeSpan MetadataTimeout = TimeSpan.FromMinutes(5);
+
+    /// <summary>How often the monitor writes a progress line to the log.</summary>
+    private static readonly TimeSpan ProgressLogInterval = TimeSpan.FromSeconds(30);
+
     private async Task MonitorDownloadAsync(
         string hash,
         TorrentManager manager,
@@ -296,6 +312,10 @@ public class TorrentStreamService : IDisposable
         Action<DownloadProgress>? onProgress,
         CancellationToken ct)
     {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var lastLog = TimeSpan.Zero;
+        var metadataLogged = false;
+
         try
         {
             while (!ct.IsCancellationRequested && !_disposed)
@@ -305,15 +325,63 @@ public class TorrentStreamService : IDisposable
                 var name = manager.Torrent?.Name ?? manager.InfoHashes.V1OrV2.ToHex();
                 var p = manager.Peers;
 
+                // ── Metadata phase ────────────────────────────────────────────────────
+                if (!manager.HasMetadata)
+                {
+                    if (sw.Elapsed > MetadataTimeout)
+                    {
+                        Log.Warning(
+                            "Torrent download: no metadata after {Elapsed:F0}s — {Seeds}S/{Leechs}L, " +
+                            "{Available} available. Giving up on {Hash}. Pick a result with more seeders.",
+                            sw.Elapsed.TotalSeconds, p.Seeds, p.Leechs, p.Available, hash);
+
+                        onProgress?.Invoke(new DownloadProgress(
+                            hash, name, 0, 0, p.Seeds, p.Leechs, "No metadata"));
+                        break;
+                    }
+
+                    onProgress?.Invoke(new DownloadProgress(
+                        hash, name, 0, 0, p.Seeds, p.Leechs,
+                        $"Metadata {p.Seeds}S/{p.Leechs}L"));
+
+                    if (sw.Elapsed - lastLog >= ProgressLogInterval)
+                    {
+                        lastLog = sw.Elapsed;
+                        Log.Information(
+                            "Torrent download: awaiting metadata {Elapsed:F0}s — {Seeds}S/{Leechs}L, {Available} available ({Hash})",
+                            sw.Elapsed.TotalSeconds, p.Seeds, p.Leechs, p.Available, hash);
+                    }
+
+                    continue;
+                }
+
+                if (!metadataLogged)
+                {
+                    metadataLogged = true;
+                    Log.Information("Torrent download: metadata received after {Elapsed:F0}s — {Name} ({Size})",
+                        sw.Elapsed.TotalSeconds, name, FormatBytes(manager.Torrent?.Size ?? 0));
+                }
+
+                // ── Transfer phase ────────────────────────────────────────────────────
                 onProgress?.Invoke(new DownloadProgress(
                     hash, name, manager.Progress, manager.Monitor.DownloadRate,
                     p.Seeds, p.Leechs, manager.State.ToString()));
+
+                if (sw.Elapsed - lastLog >= ProgressLogInterval)
+                {
+                    lastLog = sw.Elapsed;
+                    Log.Information(
+                        "Torrent download: {Percent:F1}% at {Rate} — {Seeds}S/{Leechs}L, state={State} ({Name})",
+                        manager.Progress, FormatBytes(manager.Monitor.DownloadRate) + "/s",
+                        p.Seeds, p.Leechs, manager.State, name);
+                }
 
                 // "Download and keep": the moment the data is on disk we stop. Seeding is not
                 // started, so nothing holds upload bandwidth or a connection afterwards.
                 if (manager.Complete || manager.State == TorrentState.Seeding)
                 {
-                    Log.Information("Torrent download complete → {SaveDir} ({Name})", saveDir, name);
+                    Log.Information("Torrent download complete after {Elapsed:F0}s → {SaveDir} ({Name})",
+                        sw.Elapsed.TotalSeconds, saveDir, name);
                     onProgress?.Invoke(new DownloadProgress(
                         hash, name, 100, 0, p.Seeds, p.Leechs, "Complete"));
                     break;
@@ -329,6 +397,15 @@ public class TorrentStreamService : IDisposable
         {
             await RemoveDownloadAsync(hash);
         }
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes <= 0) return "0 B";
+        if (bytes >= 1L << 30) return $"{bytes / (double)(1L << 30):F1} GB";
+        if (bytes >= 1L << 20) return $"{bytes / (double)(1L << 20):F1} MB";
+        if (bytes >= 1L << 10) return $"{bytes / (double)(1L << 10):F0} KB";
+        return $"{bytes} B";
     }
 
     /// <summary>Cancel a running download. Files already written are left on disk.</summary>
