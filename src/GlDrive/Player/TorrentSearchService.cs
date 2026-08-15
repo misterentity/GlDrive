@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Serilog;
 
@@ -53,6 +54,12 @@ public class TorrentSearchService : IDisposable
     private const string EztvApi = "https://eztvx.to/api/get-torrents";
     private const string NyaaRss = "https://nyaa.si/";
 
+    // yts.mx does not resolve from some networks (including this one) and yts.rs returns 500;
+    // the .lt mirror answers. Movies only, but quality-labelled and generally well seeded.
+    private const string YtsApi = "https://yts.lt/api/v2/list_movies.json";
+
+    private const string LimeTorrentsRss = "https://www.limetorrents.lol/searchrss/";
+
     /// <summary>
     /// Optional proxy for search traffic only. Public indexers are blocked at DNS or SNI level
     /// on some networks — this machine cannot reach apibay.org or resolve yts.mx — and a proxy
@@ -96,6 +103,8 @@ public class TorrentSearchService : IDisposable
             ("csv",    SearchTorrentsCsv(query, ct)),
             ("eztv",   SearchEztv(query, ct)),
             ("nyaa",   SearchNyaa(query, ct)),
+            ("yts",    SearchYts(query, ct)),
+            ("lime",   SearchLimeTorrents(query, ct)),
         };
 
         await Task.WhenAll(sources.Select(s => s.Task));
@@ -353,6 +362,104 @@ public class TorrentSearchService : IDisposable
             return results;
         });
 
+    // ── YTS (movies) ──
+
+    private Task<List<TorrentSearchResult>> SearchYts(string query, CancellationToken ct) =>
+        RunSource("yts", async () =>
+        {
+            var url = $"{YtsApi}?query_term={Uri.EscapeDataString(query)}&limit=20&sort_by=seeds";
+            using var response = await _http.GetAsync(url, ct);
+            response.EnsureSuccessStatusCode();
+
+            var json = await response.Content.ReadAsStringAsync(ct);
+            var data = JsonSerializer.Deserialize<YtsResponse>(json, JsonOptions);
+
+            var results = new List<TorrentSearchResult>();
+            if (data?.Data?.Movies == null) return results;
+
+            foreach (var movie in data.Data.Movies)
+            {
+                if (movie.Torrents == null) continue;
+
+                foreach (var t in movie.Torrents)
+                {
+                    if (string.IsNullOrEmpty(t.Hash)) continue;
+
+                    // Deliberately NOT filtered on seeds > 0 like the other sources: the
+                    // list_movies endpoint reports 0 for every torrent on this mirror even
+                    // though the swarms are alive. Dropping them would mean YTS never
+                    // contributed a single result. They sort last by seed count anyway.
+                    var title = $"{movie.TitleLong} [{t.Quality}]";
+                    results.Add(new TorrentSearchResult(
+                        WebUtility.HtmlDecode(title),
+                        BuildMagnetLink(t.Hash, title),
+                        t.Seeds,
+                        t.Peers,
+                        string.IsNullOrEmpty(t.Size) ? FormatBytes(t.SizeBytes) : t.Size,
+                        "YTS"));
+                }
+            }
+
+            return results;
+        });
+
+    // ── LimeTorrents (general, RSS) ──
+
+    // The feed is Cloudflare-wrapped: a <script> block is appended AFTER </rss>, and titles
+    // carry unescaped ampersands. Both make a strict XML parse throw, so items are extracted
+    // with regex instead — deliberate, not laziness. XDocument.Parse fails on this feed.
+    private static readonly Regex LimeItemRegex = new(
+        @"<item>(?<body>.*?)</item>", RegexOptions.Compiled | RegexOptions.Singleline);
+    private static readonly Regex LimeTitleRegex = new(
+        @"<title>(?<v>.*?)</title>", RegexOptions.Compiled | RegexOptions.Singleline);
+    private static readonly Regex LimeSizeRegex = new(
+        @"<size>(?<v>\d+)</size>", RegexOptions.Compiled);
+    private static readonly Regex LimeSeedsRegex = new(
+        @"Seeds:\s*(?<s>\d+)\s*,\s*Leechers\s*(?<l>\d+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // The info hash is only available as the itorrents.net filename in the enclosure URL.
+    private static readonly Regex LimeHashRegex = new(
+        @"itorrents\.net/torrent/(?<h>[A-Fa-f0-9]{40})", RegexOptions.Compiled);
+
+    private Task<List<TorrentSearchResult>> SearchLimeTorrents(string query, CancellationToken ct) =>
+        RunSource("lime", async () =>
+        {
+            var url = $"{LimeTorrentsRss}{Uri.EscapeDataString(query)}/";
+            using var response = await _http.GetAsync(url, ct);
+            response.EnsureSuccessStatusCode();
+
+            var body = await response.Content.ReadAsStringAsync(ct);
+
+            var results = new List<TorrentSearchResult>();
+            foreach (Match item in LimeItemRegex.Matches(body))
+            {
+                var chunk = item.Groups["body"].Value;
+
+                var hash = LimeHashRegex.Match(chunk);
+                if (!hash.Success) continue;
+
+                var title = LimeTitleRegex.Match(chunk).Groups["v"].Value.Trim();
+                if (string.IsNullOrEmpty(title)) continue;
+
+                var seedsMatch = LimeSeedsRegex.Match(chunk);
+                int.TryParse(seedsMatch.Groups["s"].Value, out var seeds);
+                int.TryParse(seedsMatch.Groups["l"].Value, out var leeches);
+                if (seeds <= 0) continue;
+
+                long.TryParse(LimeSizeRegex.Match(chunk).Groups["v"].Value, out var size);
+
+                title = WebUtility.HtmlDecode(title);
+                results.Add(new TorrentSearchResult(
+                    title,
+                    BuildMagnetLink(hash.Groups["h"].Value, title),
+                    seeds,
+                    leeches,
+                    FormatBytes(size),
+                    "LimeTorrents"));
+            }
+
+            return results;
+        });
+
     /// <summary>
     /// Returns the magnet link. With API backends, the magnet is stored directly in DetailUrl.
     /// </summary>
@@ -460,5 +567,31 @@ public class TorrentSearchService : IDisposable
         [JsonPropertyName("seeds")] public int Seeds { get; set; }
         [JsonPropertyName("peers")] public int Peers { get; set; }
         [JsonPropertyName("size_bytes")] public string SizeBytes { get; set; } = "0";
+    }
+
+    private class YtsResponse
+    {
+        [JsonPropertyName("data")] public YtsData? Data { get; set; }
+    }
+
+    private class YtsData
+    {
+        [JsonPropertyName("movies")] public List<YtsMovie>? Movies { get; set; }
+    }
+
+    private class YtsMovie
+    {
+        [JsonPropertyName("title_long")] public string TitleLong { get; set; } = "";
+        [JsonPropertyName("torrents")] public List<YtsTorrent>? Torrents { get; set; }
+    }
+
+    private class YtsTorrent
+    {
+        [JsonPropertyName("hash")] public string Hash { get; set; } = "";
+        [JsonPropertyName("quality")] public string Quality { get; set; } = "";
+        [JsonPropertyName("size")] public string Size { get; set; } = "";
+        [JsonPropertyName("size_bytes")] public long SizeBytes { get; set; }
+        [JsonPropertyName("seeds")] public int Seeds { get; set; }
+        [JsonPropertyName("peers")] public int Peers { get; set; }
     }
 }
