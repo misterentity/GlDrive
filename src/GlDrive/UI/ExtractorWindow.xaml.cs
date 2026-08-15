@@ -1299,7 +1299,7 @@ public partial class ExtractorWindow : Window
 
         try
         {
-            if (!await WaitForFileReady(path, _lifetimeCts.Token))
+            if (!await WaitForVolumeSetReady(path, _lifetimeCts.Token))
             {
                 Log.Warning("Extractor: archive was not ready before timeout — {Path}", path);
                 ScheduleWatchRetry(path);
@@ -1477,6 +1477,100 @@ public partial class ExtractorWindow : Window
         }
 
         if (!Dispatcher.HasShutdownStarted) await Dispatcher.InvokeAsync(UpdateStatus);
+    }
+
+    /// <summary>
+    /// Wait until an ENTIRE multi-volume set has finished arriving, not just the volume that
+    /// triggered the watcher. SharpCompress opens every part via SourceStream.LoadAllParts(),
+    /// so gating on the first volume alone let extraction start against a set whose remaining
+    /// parts were still downloading — see <see cref="VolumeSetReadiness"/> for the three log
+    /// clusters that produced, including two that were misreported as unrecoverable corruption.
+    ///
+    /// The first volume keeps its own settle check; the set-wide loop then shares the remaining
+    /// budget, so a single-file archive costs exactly what it did before.
+    /// </summary>
+    private static async Task<bool> WaitForVolumeSetReady(string path, CancellationToken ct, int maxWaitMs = 300_000)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        if (!await WaitForFileReady(path, ct, maxWaitMs)) return false;
+
+        // Not an old-style multi-volume set: WaitForFileReady already covered it in full.
+        if (TryDiscoverRarVolumes(path) is not { Count: > 1 }) return true;
+
+        var previous = SampleVolumeSet(path);
+
+        while (sw.ElapsedMilliseconds < maxWaitMs)
+        {
+            await Task.Delay(2000, ct);
+
+            var current = SampleVolumeSet(path);
+
+            if (VolumeSetReadiness.IsReady(previous, current))
+                return true;
+
+            if (VolumeSetReadiness.IsStillArriving(previous, current))
+                Log.Debug("Extractor: volume set still arriving — {Path} ({Count} parts, {Bytes} bytes, {Locked} locked)",
+                    path, current.Count, current.TotalBytes, current.LockedCount);
+
+            previous = current;
+        }
+
+        Log.Warning("Extractor: volume set did not settle within {Budget}ms — {Path}", maxWaitMs, path);
+        return false;
+    }
+
+    /// <summary>
+    /// Observe a volume set: how many parts exist, how many bytes they hold, and how many are
+    /// still write-locked. A part that cannot be opened for exclusive read is being written;
+    /// that is the signal the old first-volume-only gate had no way to see.
+    /// </summary>
+    private static VolumeSetReadiness.Snapshot SampleVolumeSet(string firstVolumePath)
+    {
+        try
+        {
+            var volumes = TryDiscoverRarVolumes(firstVolumePath);
+            if (volumes == null || volumes.Count == 0)
+                return new VolumeSetReadiness.Snapshot(0, 0, 0);
+
+            long totalBytes = 0;
+            var locked = 0;
+
+            foreach (var volume in volumes)
+            {
+                try
+                {
+                    volume.Refresh();
+                    if (!volume.Exists)
+                    {
+                        locked++;
+                        continue;
+                    }
+
+                    totalBytes += volume.Length;
+
+                    using var fs = new FileStream(volume.FullName, FileMode.Open,
+                        FileAccess.Read, FileShare.Read);
+                }
+                catch (IOException)
+                {
+                    locked++;
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    locked++;
+                }
+            }
+
+            return new VolumeSetReadiness.Snapshot(volumes.Count, totalBytes, locked);
+        }
+        catch (Exception ex)
+        {
+            // A set we cannot observe must not be reported as settled — return the
+            // never-ready sentinel so the caller keeps waiting rather than extracting blind.
+            Log.Debug(ex, "Extractor: could not sample volume set for {Path}", firstVolumePath);
+            return new VolumeSetReadiness.Snapshot(0, 0, 0);
+        }
     }
 
     /// <summary>

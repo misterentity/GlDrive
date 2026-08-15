@@ -38,11 +38,20 @@ public static class ExtractFailureClassifier
         "no files to extract",
 
         // SharpCompress wording for "the archive body is shorter than its own header says",
-        // i.e. truncated or missing payload. Safe to call permanent because the watch path
-        // only reaches extraction through WaitForFileReady, which requires the size to stop
-        // changing AND an exclusive open — so a still-copying file cannot produce this.
-        // Observed 2026-07-21..22 on hackers.1995...-GAZER: "expected 16924333715 found
-        // 1994329334", retried 5x per app restart, re-reading ~2 GB each time, for two days.
+        // i.e. truncated or missing payload.
+        //
+        // This entry's original justification was WRONG and the error it caused is worth
+        // stating plainly. It read: "safe to call permanent because the watch path only
+        // reaches extraction through WaitForFileReady, which requires the size to stop
+        // changing AND an exclusive open — so a still-copying file cannot produce this."
+        // WaitForFileReady only ever gated the FIRST volume; SharpCompress opens the whole
+        // set. A set 2 GB into a 16.9 GB download produced exactly this message and was
+        // durably recorded as unrecoverable (hackers.1995...-GAZER, 2026-08-14:
+        // "expected 16924333715 found 1994329334").
+        //
+        // The premise is true NOW, because the watch path gates the whole volume set via
+        // WaitForVolumeSetReady — see VolumeSetReadiness. It is only sound for as long as
+        // that stays true: a still-arriving set must never reach extraction.
         "unpacked file size does not match header",
     };
 
