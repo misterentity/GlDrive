@@ -16,7 +16,17 @@ public class TorrentStreamService : IDisposable
     private IHttpStream? _activeHttpStream;
     private bool _disposed;
 
-    public TorrentStreamService(string downloadPath)
+    /// <param name="vpnAdapterName">
+    /// Name (or description fragment) of a VPN tunnel adapter to bind torrent sockets to, e.g.
+    /// "ProtonVPN". Null or empty binds to all interfaces, i.e. the ordinary connection.
+    ///
+    /// PARTIAL BY CONSTRUCTION — see <see cref="VpnBinding"/>. This binds the incoming listener
+    /// and the DHT socket, which is everything MonoTorrent 3.0.2 exposes. Outgoing peer
+    /// connections cannot be bound: that needs a custom ISocketConnector injected through the
+    /// `Factories` API, which does not exist in 3.0.2, and 3.0.2 is the newest STABLE release
+    /// (3.0.3 and 3.9.0 are alpha). Treat this as reducing exposure, not eliminating it.
+    /// </param>
+    public TorrentStreamService(string downloadPath, string? vpnAdapterName = null)
     {
         _downloadPath = downloadPath;
         Directory.CreateDirectory(_downloadPath);
@@ -28,8 +38,12 @@ public class TorrentStreamService : IDisposable
         var dhtPort = FindFreePort();
         var listenPort = FindFreePort();
 
-        Log.Information("TorrentStreamService: HTTP={HttpPort}, DHT={DhtPort}, Listen={ListenPort}",
-            httpPort, dhtPort, listenPort);
+        // Resolved fresh on every construction: the tunnel's address changes on reconnect or
+        // server switch, so a remembered one is a silent misbind waiting to happen.
+        var bindAddress = VpnBinding.ResolveBindAddress(vpnAdapterName);
+
+        Log.Information("TorrentStreamService: HTTP={HttpPort}, DHT={DhtPort}, Listen={ListenPort}, Bind={Bind}",
+            httpPort, dhtPort, listenPort, bindAddress);
 
         var settings = new EngineSettingsBuilder
         {
@@ -37,16 +51,19 @@ public class TorrentStreamService : IDisposable
             MaximumConnections = 100,
             MaximumHalfOpenConnections = 16,
             MaximumUploadRate = 100 * 1024, // 100 KB/s upload
-            AllowLocalPeerDiscovery = true,
+            // Local peer discovery broadcasts on the LAN and is meaningless over a tunnel;
+            // leaving it on while bound to a VPN would announce us on the local network.
+            AllowLocalPeerDiscovery = Equals(bindAddress, IPAddress.Any),
             AllowPortForwarding = false,
             AutoSaveLoadDhtCache = true,
             AutoSaveLoadFastResume = true,
             AutoSaveLoadMagnetLinkMetadata = true,
-            DhtEndPoint = new IPEndPoint(IPAddress.Any, dhtPort),
+            DhtEndPoint = new IPEndPoint(bindAddress, dhtPort),
             ListenEndPoints = new Dictionary<string, IPEndPoint>
             {
-                { "ipv4", new IPEndPoint(IPAddress.Any, listenPort) }
+                { "ipv4", new IPEndPoint(bindAddress, listenPort) }
             },
+            // Stays on loopback: this is the local HTTP endpoint VLC plays from, not peer traffic.
             HttpStreamingPrefix = $"http://127.0.0.1:{httpPort}/",
         }.ToSettings();
 
@@ -205,6 +222,137 @@ public class TorrentStreamService : IDisposable
             .FirstOrDefault();
     }
 
+    // ── Download and keep ──────────────────────────────────────────────────────────
+    //
+    // Deliberately separate from the streaming path above. Streaming owns exactly one
+    // _activeManager and StartStreamingAsync calls StopAsync() first, so folding downloads
+    // into it would mean starting a download killed your stream and vice versa. Downloads
+    // live in their own dictionary: several can run at once, and StopAsync() (which the
+    // player calls whenever playback changes) leaves them alone.
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, TorrentManager> _downloads = new();
+
+    /// <summary>Progress snapshot for one background download.</summary>
+    public record DownloadProgress(
+        string Hash,
+        string Name,
+        double Percent,
+        long DownloadRateBytes,
+        int Seeds,
+        int Leeches,
+        string State);
+
+    /// <summary>
+    /// Download a torrent to <paramref name="saveDir"/> and stop when it completes, leaving the
+    /// files in place. Runs alongside streaming and other downloads.
+    ///
+    /// Returns the info hash, or null if the magnet was unusable. Progress is reported until
+    /// the download finishes, is cancelled, or the service is disposed.
+    /// </summary>
+    public async Task<string?> StartDownloadAsync(
+        string magnetLink,
+        string saveDir,
+        Action<DownloadProgress>? onProgress = null,
+        CancellationToken ct = default)
+    {
+        MagnetLink magnet;
+        try
+        {
+            magnet = MagnetLink.Parse(magnetLink);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Torrent download: invalid magnet link");
+            return null;
+        }
+
+        var hash = magnet.InfoHashes.V1OrV2.ToHex();
+        if (_downloads.ContainsKey(hash))
+        {
+            Log.Information("Torrent download already running for {Hash}", hash);
+            return hash;
+        }
+
+        Directory.CreateDirectory(saveDir);
+
+        var manager = await _engine.AddAsync(magnet, saveDir);
+        if (!_downloads.TryAdd(hash, manager))
+        {
+            await _engine.RemoveAsync(manager);
+            return hash;
+        }
+
+        Log.Information("Torrent download starting → {SaveDir} ({Hash})", saveDir, hash);
+        await manager.StartAsync();
+
+        _ = MonitorDownloadAsync(hash, manager, saveDir, onProgress, ct);
+        return hash;
+    }
+
+    private async Task MonitorDownloadAsync(
+        string hash,
+        TorrentManager manager,
+        string saveDir,
+        Action<DownloadProgress>? onProgress,
+        CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested && !_disposed)
+            {
+                await Task.Delay(1000, ct);
+
+                var name = manager.Torrent?.Name ?? manager.InfoHashes.V1OrV2.ToHex();
+                var p = manager.Peers;
+
+                onProgress?.Invoke(new DownloadProgress(
+                    hash, name, manager.Progress, manager.Monitor.DownloadRate,
+                    p.Seeds, p.Leechs, manager.State.ToString()));
+
+                // "Download and keep": the moment the data is on disk we stop. Seeding is not
+                // started, so nothing holds upload bandwidth or a connection afterwards.
+                if (manager.Complete || manager.State == TorrentState.Seeding)
+                {
+                    Log.Information("Torrent download complete → {SaveDir} ({Name})", saveDir, name);
+                    onProgress?.Invoke(new DownloadProgress(
+                        hash, name, 100, 0, p.Seeds, p.Leechs, "Complete"));
+                    break;
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Torrent download monitor failed for {Hash}", hash);
+        }
+        finally
+        {
+            await RemoveDownloadAsync(hash);
+        }
+    }
+
+    /// <summary>Cancel a running download. Files already written are left on disk.</summary>
+    public Task CancelDownloadAsync(string hash) => RemoveDownloadAsync(hash);
+
+    private async Task RemoveDownloadAsync(string hash)
+    {
+        if (!_downloads.TryRemove(hash, out var manager)) return;
+
+        try
+        {
+            await manager.StopAsync();
+            await _engine.RemoveAsync(manager);
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Error stopping torrent download {Hash}", hash);
+        }
+    }
+
+    /// <summary>
+    /// Stops the STREAM only. Downloads are untouched by design — the player calls this on
+    /// every playback change, and it must not take background downloads down with it.
+    /// </summary>
     public async Task StopAsync()
     {
         if (_activeHttpStream != null)

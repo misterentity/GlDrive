@@ -1,7 +1,9 @@
 using System.Net;
 using System.Net.Http;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Xml.Linq;
 using Serilog;
 
 namespace GlDrive.Player;
@@ -14,36 +16,71 @@ public record TorrentSearchResult(
     string Size,
     string Uploader);
 
+/// <summary>
+/// Multi-source torrent metadata search.
+///
+/// Source list overhauled 2026-08-15 after probing every configured endpoint live:
+///   * apibay.org  — DNS resolves and TCP 443 connects, but TLS returns zero bytes and times
+///                   out. That is SNI-level filtering on the local network, not a dead site,
+///                   so it stays in the list (it works elsewhere) behind the retry policy.
+///   * SolidTorrents — solidtorrents.to, .net and bitsearch.to ALL redirect to one
+///                   bitsearch.eu backend returning HTTP 500. The three-host "fallback list"
+///                   was one backend wearing three names and provided zero redundancy, which
+///                   is why all three died together. Removed.
+///   * Knaben      — added, and the most valuable of the set: a meta-indexer federating The
+///                   Pirate Bay, RuTracker, Nyaa and others, returning a ready-made magnetUrl.
+///                   It restores TPB coverage WITHOUT touching the SNI-blocked apibay host.
+///   * EZTV, Nyaa  — added; both verified returning live data. Narrow (TV and anime) but
+///                   reliable, and they cover what Knaben's ranking sometimes buries.
+///
+/// Availability is owned by <see cref="SourceAvailabilityPolicy"/>. It used to be a per-source
+/// one-shot latch that disabled a backend for the whole process lifetime after one failed
+/// probe — see that class for the full root cause.
+/// </summary>
 public class TorrentSearchService : IDisposable
 {
     private readonly HttpClient _http;
+    private readonly SourceAvailabilityPolicy _availability = new();
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
     };
 
-    // apibay state
-    private static readonly string[] ApiBayHosts = ["https://apibay.org"];
-    private string _apibayHost = "";
-    private bool _apibayChecked;
+    private const string KnabenApi = "https://api.knaben.org/v1";
+    private const string ApiBayApi = "https://apibay.org/q.php";
+    private const string TorrentsCsvApi = "https://torrents-csv.com/service/search";
+    private const string EztvApi = "https://eztvx.to/api/get-torrents";
+    private const string NyaaRss = "https://nyaa.si/";
 
-    // SolidTorrents state (domain migrates frequently)
-    private static readonly string[] SolidTorrentsHosts = [
-        "https://solidtorrents.to/api/v1/search",
-        "https://solidtorrents.net/api/v1/search",
-        "https://bitsearch.to/api/v1/search"
-    ];
-    private string _solidHost = "";
-    private bool _solidChecked;
-
-    public TorrentSearchService()
+    /// <summary>
+    /// Optional proxy for search traffic only. Public indexers are blocked at DNS or SNI level
+    /// on some networks — this machine cannot reach apibay.org or resolve yts.mx — and a proxy
+    /// is the only thing that routes around SNI filtering (DNS-over-HTTPS would not: the block
+    /// is on the TLS ClientHello, not the lookup). Null means direct.
+    /// </summary>
+    public TorrentSearchService(string? proxyUrl = null)
     {
         var handler = new HttpClientHandler
         {
             AllowAutoRedirect = true,
             AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate | DecompressionMethods.Brotli
         };
+
+        if (!string.IsNullOrWhiteSpace(proxyUrl))
+        {
+            try
+            {
+                handler.Proxy = new WebProxy(proxyUrl);
+                handler.UseProxy = true;
+                Log.Information("TorrentSearchService: routing search traffic via proxy {Proxy}", proxyUrl);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "TorrentSearchService: invalid proxy {Proxy} — searching direct", proxyUrl);
+            }
+        }
+
         _http = new HttpClient(handler);
         _http.DefaultRequestHeaders.Add("User-Agent",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36");
@@ -52,25 +89,30 @@ public class TorrentSearchService : IDisposable
 
     public async Task<List<TorrentSearchResult>> SearchAsync(string query, CancellationToken ct = default)
     {
-        // Search all sources in parallel, merge and deduplicate
-        var apibayTask = SearchApiBay(query, ct);
-        var solidTask = SearchSolidTorrents(query, ct);
-        var csvTask = SearchTorrentsCsv(query, ct);
+        var sources = new (string Name, Task<List<TorrentSearchResult>> Task)[]
+        {
+            ("knaben", SearchKnaben(query, ct)),
+            ("apibay", SearchApiBay(query, ct)),
+            ("csv",    SearchTorrentsCsv(query, ct)),
+            ("eztv",   SearchEztv(query, ct)),
+            ("nyaa",   SearchNyaa(query, ct)),
+        };
 
-        await Task.WhenAll(apibayTask, solidTask, csvTask);
+        await Task.WhenAll(sources.Select(s => s.Task));
 
         var combined = new List<TorrentSearchResult>();
-        combined.AddRange(apibayTask.Result);
-        combined.AddRange(solidTask.Result);
-        combined.AddRange(csvTask.Result);
+        foreach (var s in sources) combined.AddRange(s.Task.Result);
 
         if (combined.Count == 0)
         {
-            Log.Debug("No torrent results from any source for \"{Query}\"", query);
+            // Every source contributing zero is worth a warning, not a debug line: it is the
+            // shape of "search is broken" that went unnoticed for weeks because two dead
+            // backends failed silently and the survivor returned a handful of results.
+            Log.Warning("Torrent search for \"{Query}\": NO results from any source ({States})",
+                query, string.Join(", ", _availability.Snapshot().Select(kv => $"{kv.Key}={kv.Value}")));
             return combined;
         }
 
-        // Deduplicate by info_hash (embedded in the magnet link)
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var deduped = new List<TorrentSearchResult>();
         foreach (var r in combined.OrderByDescending(r => r.Seeds))
@@ -80,57 +122,114 @@ public class TorrentSearchService : IDisposable
             deduped.Add(r);
         }
 
-        var results = deduped.Take(30).ToList();
-        Log.Information("Torrent search for \"{Query}\": {Count} results ({ApiBay} apibay + {Solid} solid + {Csv} csv, {Dupes} dupes removed)",
-            query, results.Count, apibayTask.Result.Count, solidTask.Result.Count, csvTask.Result.Count,
+        var results = deduped.Take(50).ToList();
+        Log.Information("Torrent search for \"{Query}\": {Count} results ({Breakdown}, {Dupes} dupes removed)",
+            query, results.Count,
+            string.Join(" + ", sources.Select(s => $"{s.Task.Result.Count} {s.Name}")),
             combined.Count - deduped.Count);
 
         return results;
     }
 
-    // ── apibay.org (TPB API) ──
-
-    private async Task<List<TorrentSearchResult>> SearchApiBay(string query, CancellationToken ct)
+    /// <summary>
+    /// Run a source only if the policy says it is worth trying, and report the outcome back so
+    /// a failure serves a cooldown instead of a life sentence.
+    /// </summary>
+    private async Task<List<TorrentSearchResult>> RunSource(
+        string name,
+        Func<Task<List<TorrentSearchResult>>> search)
     {
-        var results = new List<TorrentSearchResult>();
+        var now = DateTime.UtcNow;
+        if (!_availability.IsUsable(name, now) && !_availability.ShouldProbe(name, now))
+            return [];
+
         try
         {
-            if (!_apibayChecked)
+            var results = await search();
+            _availability.MarkAvailable(name, DateTime.UtcNow);
+            return results;
+        }
+        catch (TaskCanceledException)
+        {
+            // The caller's cancellation, or our own 15s timeout. Neither is evidence about the
+            // source, so it keeps its standing — the same distinction ConnectFailureClassifier
+            // draws for FTP borrows.
+            return [];
+        }
+        catch (Exception ex)
+        {
+            _availability.MarkUnavailable(name, DateTime.UtcNow);
+            Log.Warning(ex, "Torrent source {Source} failed — sitting out {Cooldown}",
+                name, SourceAvailabilityPolicy.RetryAfter);
+            return [];
+        }
+    }
+
+    // ── Knaben (meta-indexer: TPB, RuTracker, Nyaa, …) ──
+
+    private Task<List<TorrentSearchResult>> SearchKnaben(string query, CancellationToken ct) =>
+        RunSource("knaben", async () =>
+        {
+            var payload = JsonSerializer.Serialize(new
             {
-                _apibayChecked = true;
-                foreach (var host in ApiBayHosts)
-                {
-                    try
-                    {
-                        var probe = await _http.GetAsync($"{host}/q.php?q=test&cat=0", ct);
-                        if (probe.IsSuccessStatusCode)
-                        {
-                            _apibayHost = host;
-                            Log.Information("apibay available: {Host}", host);
-                            break;
-                        }
-                    }
-                    catch (Exception ex) { Log.Debug(ex, "apibay probe failed for {Host}", host); }
-                }
+                search_field = "title",
+                query,
+                order_by = "seeders",
+                order_direction = "desc",
+                from = 0,
+                size = 50,
+                hide_unsafe = true,
+                hide_xxx = true,
+            });
+
+            using var content = new StringContent(payload, Encoding.UTF8, "application/json");
+            using var response = await _http.PostAsync(KnabenApi, content, ct);
+            response.EnsureSuccessStatusCode();
+
+            var json = await response.Content.ReadAsStringAsync(ct);
+            var data = JsonSerializer.Deserialize<KnabenResponse>(json, JsonOptions);
+
+            var results = new List<TorrentSearchResult>();
+            if (data?.Hits == null) return results;
+
+            foreach (var hit in data.Hits.Where(h => h.Seeders > 0))
+            {
+                // magnetUrl is supplied ready-made; fall back to building one from the hash
+                // for the occasional hit that carries only metadata.
+                var magnet = !string.IsNullOrEmpty(hit.MagnetUrl)
+                    ? hit.MagnetUrl
+                    : !string.IsNullOrEmpty(hit.Hash)
+                        ? BuildMagnetLink(hit.Hash, hit.Title)
+                        : null;
+                if (magnet == null) continue;
+
+                results.Add(new TorrentSearchResult(
+                    WebUtility.HtmlDecode(hit.Title),
+                    magnet,
+                    hit.Seeders,
+                    hit.Peers,
+                    FormatBytes(hit.Bytes),
+                    hit.Tracker ?? ""));
             }
 
-            if (string.IsNullOrEmpty(_apibayHost)) return results;
+            return results;
+        });
 
-            var url = $"{_apibayHost}/q.php?q={Uri.EscapeDataString(query)}&cat=0";
+    // ── apibay.org (TPB API) ──
+
+    private Task<List<TorrentSearchResult>> SearchApiBay(string query, CancellationToken ct) =>
+        RunSource("apibay", async () =>
+        {
+            var url = $"{ApiBayApi}?q={Uri.EscapeDataString(query)}&cat=0";
             using var response = await _http.GetAsync(url, ct);
-            if (!response.IsSuccessStatusCode)
-            {
-                if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.ServiceUnavailable)
-                {
-                    _apibayHost = "";
-                    _apibayChecked = false;
-                }
-                return results;
-            }
+            response.EnsureSuccessStatusCode();
 
             var json = await response.Content.ReadAsStringAsync(ct);
             var items = JsonSerializer.Deserialize<List<ApiBayResult>>(json, JsonOptions);
+
+            var results = new List<TorrentSearchResult>();
             if (items == null || items.Count == 0) return results;
+            // apibay signals "no matches" with a single dummy row rather than an empty array.
             if (items.Count == 1 && items[0].Id == "0") return results;
 
             foreach (var item in items.Where(i => i.Seeders > 0).OrderByDescending(i => i.Seeders).Take(30))
@@ -143,110 +242,26 @@ public class TorrentSearchService : IDisposable
                     FormatBytes(long.TryParse(item.Size, out var b) ? b : 0),
                     item.Username));
             }
-        }
-        catch (TaskCanceledException) { }
-        catch (Exception ex) { Log.Warning(ex, "apibay search failed"); }
-        return results;
-    }
 
-    // ── SolidTorrents ──
-
-    private async Task<List<TorrentSearchResult>> SearchSolidTorrents(string query, CancellationToken ct)
-    {
-        var results = new List<TorrentSearchResult>();
-        try
-        {
-            if (!_solidChecked)
-            {
-                _solidChecked = true;
-                foreach (var host in SolidTorrentsHosts)
-                {
-                    try
-                    {
-                        var probe = await _http.GetAsync($"{host}?q=test&sort=seeders", ct);
-                        if (probe.IsSuccessStatusCode)
-                        {
-                            _solidHost = host;
-                            Log.Information("SolidTorrents available: {Host}", host);
-                            break;
-                        }
-                    }
-                    catch (Exception ex) { Log.Debug(ex, "SolidTorrents probe failed for {Host}", host); }
-                }
-            }
-
-            if (string.IsNullOrEmpty(_solidHost)) return results;
-
-            var url = $"{_solidHost}?q={Uri.EscapeDataString(query)}&category=video&sort=seeders";
-            using var response = await _http.GetAsync(url, ct);
-            if (!response.IsSuccessStatusCode)
-            {
-                if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.ServiceUnavailable)
-                {
-                    _solidHost = "";
-                    _solidChecked = false;
-                }
-                return results;
-            }
-
-            var json = await response.Content.ReadAsStringAsync(ct);
-            var data = JsonSerializer.Deserialize<SolidResponse>(json, JsonOptions);
-            if (data?.Results == null || data.Results.Count == 0) return results;
-
-            foreach (var item in data.Results.Where(i => i.Seeders > 0).Take(30))
-            {
-                results.Add(new TorrentSearchResult(
-                    WebUtility.HtmlDecode(item.Title),
-                    BuildMagnetLink(item.InfoHash, item.Title),
-                    item.Seeders,
-                    item.Leechers,
-                    FormatBytes(item.Size),
-                    ""));
-            }
-        }
-        catch (TaskCanceledException) { }
-        catch (Exception ex) { Log.Warning(ex, "SolidTorrents search failed"); }
-        return results;
-    }
+            return results;
+        });
 
     // ── Torrents-CSV (open source DHT aggregator) ──
 
-    private const string TorrentsCsvApi = "https://torrents-csv.com/service/search";
-    private bool _csvChecked;
-    private bool _csvAvailable;
-
-    private async Task<List<TorrentSearchResult>> SearchTorrentsCsv(string query, CancellationToken ct)
-    {
-        var results = new List<TorrentSearchResult>();
-        try
+    private Task<List<TorrentSearchResult>> SearchTorrentsCsv(string query, CancellationToken ct) =>
+        RunSource("csv", async () =>
         {
-            if (!_csvChecked)
-            {
-                _csvChecked = true;
-                try
-                {
-                    var probe = await _http.GetAsync($"{TorrentsCsvApi}?q=test&size=1", ct);
-                    _csvAvailable = probe.IsSuccessStatusCode;
-                    if (_csvAvailable) Log.Information("Torrents-CSV API available");
-                }
-                catch (Exception ex)
-                {
-                    Log.Debug(ex, "Torrents-CSV probe failed");
-                    _csvAvailable = false;
-                }
-            }
-
-            if (!_csvAvailable) return results;
-
             var url = $"{TorrentsCsvApi}?q={Uri.EscapeDataString(query)}&size=30";
             using var response = await _http.GetAsync(url, ct);
-            if (!response.IsSuccessStatusCode) return results;
+            response.EnsureSuccessStatusCode();
 
             var json = await response.Content.ReadAsStringAsync(ct);
             var data = JsonSerializer.Deserialize<CsvResponse>(json, JsonOptions);
-            if (data?.Torrents == null || data.Torrents.Count == 0) return results;
 
-            foreach (var item in data.Torrents.Where(i => i.Seeders > 0).OrderByDescending(i => i.Seeders).Take(30))
+            var results = new List<TorrentSearchResult>();
+            if (data?.Torrents == null) return results;
+
+            foreach (var item in data.Torrents.Where(i => i.Seeders > 0).OrderByDescending(i => i.Seeders))
             {
                 results.Add(new TorrentSearchResult(
                     item.Name,
@@ -256,11 +271,87 @@ public class TorrentSearchService : IDisposable
                     FormatBytes(item.SizeBytes),
                     ""));
             }
-        }
-        catch (TaskCanceledException) { }
-        catch (Exception ex) { Log.Warning(ex, "Torrents-CSV search failed"); }
-        return results;
-    }
+
+            return results;
+        });
+
+    // ── EZTV (TV) ──
+
+    private Task<List<TorrentSearchResult>> SearchEztv(string query, CancellationToken ct) =>
+        RunSource("eztv", async () =>
+        {
+            var url = $"{EztvApi}?limit=100";
+            using var response = await _http.GetAsync(url, ct);
+            response.EnsureSuccessStatusCode();
+
+            var json = await response.Content.ReadAsStringAsync(ct);
+            var data = JsonSerializer.Deserialize<EztvResponse>(json, JsonOptions);
+
+            var results = new List<TorrentSearchResult>();
+            if (data?.Torrents == null) return results;
+
+            // EZTV's endpoint filters by imdb_id, not free text, so match client-side on the
+            // recent-releases feed. Cheap, and it surfaces new episodes the meta-indexers lag on.
+            var terms = query.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            foreach (var item in data.Torrents.Where(t => t.Seeds > 0))
+            {
+                var title = item.Title ?? "";
+                if (!terms.All(t => title.Contains(t, StringComparison.OrdinalIgnoreCase))) continue;
+
+                var magnet = !string.IsNullOrEmpty(item.MagnetUrl)
+                    ? item.MagnetUrl
+                    : !string.IsNullOrEmpty(item.Hash)
+                        ? BuildMagnetLink(item.Hash, title)
+                        : null;
+                if (magnet == null) continue;
+
+                results.Add(new TorrentSearchResult(
+                    WebUtility.HtmlDecode(title),
+                    magnet,
+                    item.Seeds,
+                    item.Peers,
+                    FormatBytes(long.TryParse(item.SizeBytes, out var b) ? b : 0),
+                    "EZTV"));
+            }
+
+            return results;
+        });
+
+    // ── Nyaa (anime, RSS) ──
+
+    private Task<List<TorrentSearchResult>> SearchNyaa(string query, CancellationToken ct) =>
+        RunSource("nyaa", async () =>
+        {
+            var url = $"{NyaaRss}?page=rss&q={Uri.EscapeDataString(query)}&s=seeders&o=desc";
+            using var response = await _http.GetAsync(url, ct);
+            response.EnsureSuccessStatusCode();
+
+            var xml = await response.Content.ReadAsStringAsync(ct);
+            var doc = XDocument.Parse(xml);
+            XNamespace ns = "https://nyaa.si/xmlns/nyaa";
+
+            var results = new List<TorrentSearchResult>();
+            foreach (var item in doc.Descendants("item").Take(30))
+            {
+                var hash = item.Element(ns + "infoHash")?.Value;
+                var title = item.Element("title")?.Value ?? "";
+                if (string.IsNullOrEmpty(hash) || string.IsNullOrEmpty(title)) continue;
+
+                int.TryParse(item.Element(ns + "seeders")?.Value, out var seeds);
+                int.TryParse(item.Element(ns + "leechers")?.Value, out var leeches);
+                if (seeds <= 0) continue;
+
+                results.Add(new TorrentSearchResult(
+                    WebUtility.HtmlDecode(title),
+                    BuildMagnetLink(hash, title),
+                    seeds,
+                    leeches,
+                    item.Element(ns + "size")?.Value ?? "",
+                    "Nyaa"));
+            }
+
+            return results;
+        });
 
     /// <summary>
     /// Returns the magnet link. With API backends, the magnet is stored directly in DetailUrl.
@@ -311,55 +402,33 @@ public class TorrentSearchService : IDisposable
 
     // ── DTOs ──
 
+    private class KnabenResponse
+    {
+        [JsonPropertyName("hits")]
+        public List<KnabenHit> Hits { get; set; } = [];
+    }
+
+    private class KnabenHit
+    {
+        [JsonPropertyName("title")] public string Title { get; set; } = "";
+        [JsonPropertyName("hash")] public string Hash { get; set; } = "";
+        [JsonPropertyName("magnetUrl")] public string? MagnetUrl { get; set; }
+        [JsonPropertyName("seeders")] public int Seeders { get; set; }
+        [JsonPropertyName("peers")] public int Peers { get; set; }
+        [JsonPropertyName("bytes")] public long Bytes { get; set; }
+        [JsonPropertyName("tracker")] public string? Tracker { get; set; }
+    }
+
     private class ApiBayResult
     {
-        [JsonPropertyName("id")]
-        public string Id { get; set; } = "";
-
-        [JsonPropertyName("name")]
-        public string Name { get; set; } = "";
-
-        [JsonPropertyName("info_hash")]
-        public string InfoHash { get; set; } = "";
-
-        [JsonPropertyName("seeders")]
-        public int Seeders { get; set; }
-
-        [JsonPropertyName("leechers")]
-        public int Leechers { get; set; }
-
-        [JsonPropertyName("size")]
-        public string Size { get; set; } = "0";
-
-        [JsonPropertyName("username")]
-        public string Username { get; set; } = "";
-
-        [JsonPropertyName("category")]
-        public string Category { get; set; } = "";
-    }
-
-    private class SolidResponse
-    {
-        [JsonPropertyName("results")]
-        public List<SolidResult> Results { get; set; } = [];
-    }
-
-    private class SolidResult
-    {
-        [JsonPropertyName("title")]
-        public string Title { get; set; } = "";
-
-        [JsonPropertyName("infohash")]
-        public string InfoHash { get; set; } = "";
-
-        [JsonPropertyName("seeders")]
-        public int Seeders { get; set; }
-
-        [JsonPropertyName("leechers")]
-        public int Leechers { get; set; }
-
-        [JsonPropertyName("size")]
-        public long Size { get; set; }
+        [JsonPropertyName("id")] public string Id { get; set; } = "";
+        [JsonPropertyName("name")] public string Name { get; set; } = "";
+        [JsonPropertyName("info_hash")] public string InfoHash { get; set; } = "";
+        [JsonPropertyName("seeders")] public int Seeders { get; set; }
+        [JsonPropertyName("leechers")] public int Leechers { get; set; }
+        [JsonPropertyName("size")] public string Size { get; set; } = "0";
+        [JsonPropertyName("username")] public string Username { get; set; } = "";
+        [JsonPropertyName("category")] public string Category { get; set; } = "";
     }
 
     private class CsvResponse
@@ -370,19 +439,26 @@ public class TorrentSearchService : IDisposable
 
     private class CsvResult
     {
-        [JsonPropertyName("infohash")]
-        public string InfoHash { get; set; } = "";
+        [JsonPropertyName("infohash")] public string InfoHash { get; set; } = "";
+        [JsonPropertyName("name")] public string Name { get; set; } = "";
+        [JsonPropertyName("size_bytes")] public long SizeBytes { get; set; }
+        [JsonPropertyName("seeders")] public int Seeders { get; set; }
+        [JsonPropertyName("leechers")] public int Leechers { get; set; }
+    }
 
-        [JsonPropertyName("name")]
-        public string Name { get; set; } = "";
+    private class EztvResponse
+    {
+        [JsonPropertyName("torrents")]
+        public List<EztvResult> Torrents { get; set; } = [];
+    }
 
-        [JsonPropertyName("size_bytes")]
-        public long SizeBytes { get; set; }
-
-        [JsonPropertyName("seeders")]
-        public int Seeders { get; set; }
-
-        [JsonPropertyName("leechers")]
-        public int Leechers { get; set; }
+    private class EztvResult
+    {
+        [JsonPropertyName("title")] public string? Title { get; set; }
+        [JsonPropertyName("hash")] public string? Hash { get; set; }
+        [JsonPropertyName("magnet_url")] public string? MagnetUrl { get; set; }
+        [JsonPropertyName("seeds")] public int Seeds { get; set; }
+        [JsonPropertyName("peers")] public int Peers { get; set; }
+        [JsonPropertyName("size_bytes")] public string SizeBytes { get; set; } = "0";
     }
 }

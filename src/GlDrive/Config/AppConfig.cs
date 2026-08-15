@@ -9,9 +9,35 @@ public class AppConfig
     public AgentConfig Agent { get; set; } = new();
     public PlexConfig Plex { get; set; } = new();
     public ControlApiConfig ControlApi { get; set; } = new();
+    public TorrentConfig Torrent { get; set; } = new();
 
     public string ResolveAgentModel() => string.IsNullOrWhiteSpace(Agent.ModelId)
         ? "anthropic/claude-sonnet-4-6" : Agent.ModelId;
+}
+
+/// <summary>Player torrent search and download settings.</summary>
+public class TorrentConfig
+{
+    /// <summary>
+    /// VPN tunnel adapter to bind torrent sockets to, e.g. "ProtonVPN". Empty = no binding,
+    /// torrent traffic uses the ordinary connection.
+    ///
+    /// Binds only the listener and DHT socket — outgoing peer connections cannot be bound on
+    /// MonoTorrent 3.0.2, the newest stable release. See VpnBinding for the full limitation.
+    /// </summary>
+    public string VpnAdapterName { get; set; } = "";
+
+    /// <summary>
+    /// Optional proxy for torrent SEARCH traffic only (e.g. "http://127.0.0.1:8080"). Some
+    /// networks block public indexers: this machine cannot reach apibay.org (TCP connects, TLS
+    /// returns nothing — SNI filtering) and cannot resolve yts.mx at all. A proxy is the only
+    /// way around SNI filtering; DNS-over-HTTPS would not help, since the block is on the TLS
+    /// handshake rather than the lookup. Empty = direct.
+    /// </summary>
+    public string SearchProxyUrl { get; set; } = "";
+
+    /// <summary>Last folder chosen in the download picker, used to seed the next dialog.</summary>
+    public string LastDownloadFolder { get; set; } = "";
 }
 
 public class ServerConfig
