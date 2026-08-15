@@ -1282,13 +1282,7 @@ public partial class ExtractorWindow : Window
         // Durable check, outside the in-memory set: this is what stops a restart from
         // replaying an extraction that was already proven impossible for this exact
         // volume set. ShouldSkip revives the path itself once the set changes.
-        var (fpCount, fpBytes) = ComputeVolumeSetFingerprint(path);
-        if (_abandonStore.ShouldSkip(path, fpCount, fpBytes))
-        {
-            Log.Debug("Extractor: skipping {Path} — unchanged volume set already ruled unextractable", path);
-            lock (_watchLock) _watchProcessed.Add(path);
-            return;
-        }
+        if (SkipIfAbandoned(path)) return;
 
         lock (_watchLock)
         {
@@ -1357,6 +1351,15 @@ public partial class ExtractorWindow : Window
                 foreach (var item in Archives.Where(a => a.Status == "Queued" &&
                              paths.Contains(a.FilePath, StringComparer.OrdinalIgnoreCase)).ToList())
                 {
+                    // The durable abandon record exists specifically to stop a restart from
+                    // replaying a hopeless extraction — and THIS is the restart path. It used
+                    // to run without asking, so every launch re-extracted the same three
+                    // archives that were already recorded unextractable on 2026-08-13
+                    // (observed again 2026-08-14 19:45, byte-identical failures). Checked
+                    // before IsAlreadyExtracted because that opens the archive to compare
+                    // entries — expensive on an 85-volume set, and futile on a broken one.
+                    if (SkipIfAbandoned(item.FilePath)) continue;
+
                     if (IsAlreadyExtracted(item))
                     {
                         item.Status = "Done";
@@ -1499,6 +1502,7 @@ public partial class ExtractorWindow : Window
         if (TryDiscoverRarVolumes(path) is not { Count: > 1 }) return true;
 
         var previous = SampleVolumeSet(path);
+        var waitedCycles = 0;
 
         while (sw.ElapsedMilliseconds < maxWaitMs)
         {
@@ -1507,11 +1511,25 @@ public partial class ExtractorWindow : Window
             var current = SampleVolumeSet(path);
 
             if (VolumeSetReadiness.IsReady(previous, current))
+            {
+                // Logged at INF, not DBG: production runs at Information, so a gate that
+                // only whispers at Debug is a gate nobody can confirm ever fired — exactly
+                // the "0 fires in 534 evaluations" blindness of the v3.10.54 yield guard.
+                // One line per archive that actually had to wait, none for sets already settled.
+                if (waitedCycles > 0)
+                    Log.Information(
+                        "Extractor: volume set settled after {Seconds}s — {Path} ({Count} parts, {Bytes} bytes)",
+                        sw.ElapsedMilliseconds / 1000, path, current.Count, current.TotalBytes);
+
                 return true;
+            }
 
             if (VolumeSetReadiness.IsStillArriving(previous, current))
+            {
+                waitedCycles++;
                 Log.Debug("Extractor: volume set still arriving — {Path} ({Count} parts, {Bytes} bytes, {Locked} locked)",
                     path, current.Count, current.TotalBytes, current.LockedCount);
+            }
 
             previous = current;
         }
@@ -1665,6 +1683,32 @@ public partial class ExtractorWindow : Window
             return;
         }
         _ = RetryWatchedFileAsync(path, attempt);
+    }
+
+    /// <summary>
+    /// The single gate every path into extraction must pass: has this exact volume set
+    /// already been ruled unextractable and not changed since?
+    ///
+    /// This is a helper rather than an inline check because it was inline, in ONE of the two
+    /// callers. <see cref="HandleWatchedFileAsync"/> asked the store;
+    /// <see cref="ScanAndAutoExtractAsync"/> — the startup/recovery scan — did not. So the
+    /// durable record introduced in v3.10.57 to survive restarts was bypassed by the restart
+    /// path itself, and every launch replayed the same hopeless work (three archives,
+    /// re-confirmed 2026-08-14 19:45 with byte-identical failures against records written
+    /// 2026-08-13T17:56Z).
+    ///
+    /// Same shape as the CPSV desync guard that lived in one caller's catch while six other
+    /// borrowers went unguarded: an invariant about a RESOURCE has to sit where every caller
+    /// reaches it. Any new route to AutoExtractItem must call this first.
+    /// </summary>
+    private bool SkipIfAbandoned(string path)
+    {
+        var (volumeCount, totalBytes) = ComputeVolumeSetFingerprint(path);
+        if (!_abandonStore.ShouldSkip(path, volumeCount, totalBytes)) return false;
+
+        Log.Information("Extractor: skipping {Path} — unchanged volume set already ruled unextractable", path);
+        lock (_watchLock) _watchProcessed.Add(path);
+        return true;
     }
 
     /// <summary>
