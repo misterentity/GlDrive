@@ -1422,6 +1422,15 @@ public partial class ExtractorWindow : Window
     private async Task AutoExtractItem(ArchiveItem item)
     {
         if (item.Status != "Queued") return;
+
+        // THE chokepoint. v3.10.63 put this check in the two routes I knew about
+        // (HandleWatchedFileAsync, ScanAndAutoExtractAsync) and shipped — and the replay
+        // continued, because a THIRD route (the initial watch-folder scan) also reaches
+        // here. Guarding call sites is how this defect survived two fixes; guarding the
+        // operation itself is what actually ends it. Every route into extraction passes
+        // through this method, so this is the only placement that cannot be bypassed.
+        if (SkipIfAbandoned(item.FilePath)) return;
+
         var gateHeld = false;
 
         var outputDir = GetOutputDir(item);
