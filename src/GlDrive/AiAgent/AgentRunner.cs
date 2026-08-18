@@ -221,11 +221,21 @@ public sealed class AgentRunner : IDisposable
                 if (_consecutiveFailedRuns == PersistentFailureThreshold
                     || (_consecutiveFailedRuns > PersistentFailureThreshold && _consecutiveFailedRuns % 20 == 0))
                 {
-                    Log.Error("AgentRunner: AI self-tuning has applied nothing for {Failures} consecutive runs (last reason: {Reason}). " +
-                              "Check the OpenRouter model slug and credit balance in Settings → Downloads.",
-                        _consecutiveFailedRuns, status);
+                    // Name the cause that actually applies. This line blamed the model slug and
+                    // the credit balance for 40+ consecutive runs while every attempt was really
+                    // being refused for an oversized prompt — both suggestions were dead ends.
+                    Log.Error("AgentRunner: AI self-tuning has applied nothing for {Failures} consecutive runs " +
+                              "(last reason: {Reason}) — {Guidance}",
+                        _consecutiveFailedRuns, status,
+                        AgentClient.DescribeFailureForOperator(outcome.ErrorMessage, outcome.ErrorBody));
                 }
-                try { File.WriteAllText(briefPath, $"# Agent run failed\n\nReason: {status}\n"); } catch { }
+                try
+                {
+                    File.WriteAllText(briefPath,
+                        $"# Agent run failed\n\nReason: {status}\n\n" +
+                        AgentClient.DescribeFailureForOperator(outcome.ErrorMessage, outcome.ErrorBody) + "\n");
+                }
+                catch { }
                 return;
             }
 

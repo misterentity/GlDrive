@@ -33,11 +33,34 @@ public sealed class TelemetryRecorder : IDisposable
         }
     }
 
+    /// <summary>
+    /// Per-event ceiling. A telemetry event is an aggregate row — ids, section keys, counters —
+    /// so 256 KB is far above anything organic while still catching pathology.
+    ///
+    /// On 2026-08-14 a race was recorded with a 2,000,000-char section. It was written as a 2 MB
+    /// single-line row, copied forward into section-activity by SectionActivityRollup, and then
+    /// serialized straight into the agent prompt: ~1.5M tokens, refused by every model, 40+
+    /// consecutive dead runs. Bounding the prompt heals the read side; this stops the write side
+    /// producing another one.
+    /// </summary>
+    internal const int MaxEventBytes = 256 * 1024;
+
+    internal static bool IsAcceptableSize(string json) => json.Length <= MaxEventBytes;
+
     public void Record<T>(TelemetryStream stream, T evt) where T : TelemetryEnvelope
     {
         try
         {
             var json = JsonSerializer.Serialize(evt, evt.GetType(), JsonOpts);
+            if (!IsAcceptableSize(json))
+            {
+                // Loud, not silent: an event this size means something upstream is broken, and a
+                // Debug line would be invisible (the Serilog sink runs at Information).
+                Log.Warning("Telemetry event dropped: {Stream} serialized to {Bytes} bytes, over the {Max}-byte cap. "
+                          + "This indicates a pathological field value upstream.",
+                    stream, json.Length, MaxEventBytes);
+                return;
+            }
             if (!_writers[stream].TryEnqueue(json))
             {
                 Interlocked.Increment(ref CollectionsMarshal_GetValueRef(_drops, stream));
