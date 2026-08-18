@@ -81,31 +81,219 @@ public sealed class AgentPrompt
         }
         """;
 
+    /// <summary>
+    /// Whole-prompt character ceiling. The smallest model in the fallback chain
+    /// (openai/gpt-oss-120b) has a 131,072-token context and we reserve
+    /// <see cref="AgentClient.MaxOutputTokens"/> of it for output, leaving ~99k for input.
+    /// JSON telemetry runs about 3.5 chars/token, so this stays inside that ceiling with room
+    /// to spare. Deliberately a CHARACTER budget: we cannot tokenize locally, and a conservative
+    /// char count is the honest approximation.
+    /// </summary>
+    public const int MaxPromptChars = 300_000;
+
+    /// <summary>
+    /// Per-string ceiling inside the serialized digest and config. Server ids, section keys and
+    /// release names are all well under this; anything longer is a defect upstream, not data.
+    /// </summary>
+    public const int MaxFieldChars = 512;
+
+    /// <summary>
+    /// Appended wherever content was cut, so the model never reasons over a silently mangled value.
+    /// Deliberately pure ASCII: System.Text.Json escapes non-ASCII by default, so a "…" here would
+    /// be written as … and the marker would not survive into the prompt verbatim.
+    /// </summary>
+    public const string TruncationMarker = "...[TRUNCATED]";
+
     public string Compose(DigestBundle digest, string memo, IEnumerable<string> frozenPaths,
                           JsonNode redactedConfig, IEnumerable<string> lastAuditSummaries)
     {
+        // Clamp per-field FIRST: one pathological telemetry row (a 2,000,000-char section, seen
+        // 2026-08-14) is what produced a 1.5M-token prompt that every model refused with HTTP 400.
+        var digestJson = ClampJsonStrings(JsonSerializer.Serialize(digest,
+            new JsonSerializerOptions { WriteIndented = false }));
+        var configJson = ClampJsonStrings(redactedConfig.ToJsonString(new JsonSerializerOptions { WriteIndented = false }));
+
         var sb = new StringBuilder();
         sb.AppendLine("=== WINDOW ===");
         sb.AppendLine($"{digest.WindowStart} -> {digest.WindowEnd}");
 
         sb.AppendLine("\n=== AGENT MEMO (carry-forward beliefs) ===");
-        sb.AppendLine(string.IsNullOrWhiteSpace(memo) ? "(empty — first run)" : memo);
+        // The memo is model-authored and fully replaced each run, so it can grow without bound.
+        sb.AppendLine(string.IsNullOrWhiteSpace(memo) ? "(empty — first run)" : Fit(memo, 16_000));
 
         sb.AppendLine("\n=== FROZEN PATHS (do NOT touch these or any descendants) ===");
-        foreach (var p in frozenPaths.Take(500)) sb.AppendLine(p);
+        foreach (var p in frozenPaths.Take(500)) sb.AppendLine(Fit(p, MaxFieldChars));
 
         sb.AppendLine("\n=== LAST 3 RUNS (audit summary) ===");
-        foreach (var s in lastAuditSummaries.Take(3)) sb.AppendLine(s);
+        foreach (var s in lastAuditSummaries.Take(3)) sb.AppendLine(Fit(s, MaxFieldChars));
+
+        const string trailer = "\nEmit STRICT JSON: { memo_update, changes[], suggestions[], brief_markdown }.";
+
+        // Whole-prompt backstop: per-field clamping alone cannot stop bulk spread across many
+        // individually-legal fields. Digest and config are the only two unbounded blobs; give the
+        // digest first call on what's left, since it is the actual evidence.
+        var overhead = sb.Length + trailer.Length + 200;
+        var remaining = Math.Max(0, MaxPromptChars - overhead);
+
+        // Config gets first call on the budget: every proposed change carries a JSON Pointer into
+        // it, and the Applier cross-checks `before` against the live value, so a trimmed config
+        // produces changes that cannot apply. The digest is evidence and can be sampled instead.
+        var configBudget = Math.Min(configJson.Length, remaining);
+        var digestBudget = Math.Max(0, remaining - configBudget);
 
         sb.AppendLine("\n=== TELEMETRY DIGEST (N-day compact) ===");
-        sb.AppendLine(JsonSerializer.Serialize(digest,
-            new JsonSerializerOptions { WriteIndented = false }));
+        sb.AppendLine(FitJson(digestJson, digestBudget));
 
         sb.AppendLine("\n=== CURRENT CONFIG (frozen paths masked as ***FROZEN***) ===");
-        sb.AppendLine(redactedConfig.ToJsonString(new JsonSerializerOptions { WriteIndented = false }));
+        sb.AppendLine(FitJson(configJson, configBudget));
 
-        sb.AppendLine("\nEmit STRICT JSON: { memo_update, changes[], suggestions[], brief_markdown }.");
+        sb.Append(trailer);
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Brings a JSON document under <paramref name="budget"/> chars by dropping ARRAY ELEMENTS,
+    /// largest array first, rather than cutting the text.
+    ///
+    /// String-truncating JSON hands the model a document it cannot parse — the telemetry then
+    /// reads as corrupt rather than as sampled, which is worse than sending less of it. Structural
+    /// trimming keeps the document well-formed at every step.
+    /// </summary>
+    private static string FitJson(string json, int budget)
+    {
+        if (json.Length <= budget) return json;
+
+        JsonNode? root;
+        try { root = JsonNode.Parse(json); }
+        catch (JsonException) { return Fit(json, budget); }
+        if (root is null) return Fit(json, budget);
+
+        var opts = new JsonSerializerOptions { WriteIndented = false };
+        for (var guard = 0; guard < 1000; guard++)
+        {
+            var s = root.ToJsonString(opts);
+            if (s.Length <= budget) return s;
+
+            // Objects as well as arrays: the digests carry most of their bulk in DICTIONARIES
+            // (KbpsByRoute, CompletionRateBySection, …), so trimming only arrays left the
+            // document over budget and fell through to a mid-JSON string cut.
+            var biggest = LargestContainer(root);
+            if (biggest is null) return Fit(s, budget);
+
+            // Halve rather than drop one at a time: a 20k-entry container would otherwise need
+            // 20k full re-serializations to converge.
+            switch (biggest)
+            {
+                case JsonArray arr when arr.Count > 0:
+                    for (var keep = arr.Count / 2; arr.Count > keep;) arr.RemoveAt(arr.Count - 1);
+                    break;
+                case JsonObject o when o.Count > 0:
+                    foreach (var k in o.Select(kv => kv.Key).Skip(o.Count / 2).ToList()) o.Remove(k);
+                    break;
+                default:
+                    return Fit(s, budget);
+            }
+
+            if (root is JsonObject ro) ro["_truncated"] = TruncationMarker;
+        }
+        return Fit(root.ToJsonString(opts), budget);
+    }
+
+    /// <summary>The array or object holding the most direct entries, anywhere in the document.</summary>
+    private static JsonNode? LargestContainer(JsonNode node)
+    {
+        JsonNode? best = null;
+        var bestCount = 0;
+        Visit(node);
+        return best;
+
+        void Visit(JsonNode n)
+        {
+            switch (n)
+            {
+                case JsonArray arr:
+                    if (arr.Count > bestCount) { best = arr; bestCount = arr.Count; }
+                    foreach (var c in arr) if (c is not null) Visit(c);
+                    break;
+                case JsonObject obj:
+                    if (obj.Count > bestCount) { best = obj; bestCount = obj.Count; }
+                    foreach (var kv in obj) if (kv.Value is not null) Visit(kv.Value);
+                    break;
+            }
+        }
+    }
+
+    /// <summary>Truncates <paramref name="s"/> to <paramref name="max"/> chars, marking the cut. Idempotent.</summary>
+    private static string Fit(string? s, int max)
+    {
+        if (string.IsNullOrEmpty(s) || s.Length <= max) return s ?? "";
+        if (max <= TruncationMarker.Length) return TruncationMarker;
+        return string.Concat(s.AsSpan(0, max - TruncationMarker.Length), TruncationMarker);
+    }
+
+    /// <summary>
+    /// Clamps every string VALUE in a JSON document to <see cref="MaxFieldChars"/>, leaving
+    /// structure and short values untouched. Returns valid JSON; idempotent.
+    /// </summary>
+    public static string ClampJsonStrings(string json)
+    {
+        JsonNode? root;
+        try { root = JsonNode.Parse(json); }
+        catch (JsonException) { return Fit(json, MaxPromptChars); }
+        if (root is null) return json;
+
+        Walk(root);
+        return root.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
+
+        static void Walk(JsonNode node)
+        {
+            switch (node)
+            {
+                case JsonObject obj:
+                    // Materialize keys first: mutating the object during enumeration would throw.
+                    var keys = obj.Select(kv => kv.Key).ToList();
+
+                    foreach (var key in keys)
+                    {
+                        var child = obj[key];
+                        if (child is JsonValue v && v.TryGetValue<string>(out var s))
+                        {
+                            if (s.Length > MaxFieldChars) obj[key] = Fit(s, MaxFieldChars);
+                        }
+                        else if (child is not null) Walk(child);
+                    }
+
+                    // KEYS as well as values. Several digests key dictionaries BY section name
+                    // (CompletionRateBySection, WinRateByServer, AbortReasonHistogram), so the
+                    // 2026-08-14 poison section arrived as a 2,000,000-char property NAME and
+                    // clamping only values left it completely untouched.
+                    foreach (var key in keys.Where(k => k.Length > MaxFieldChars))
+                    {
+                        var detached = obj[key]?.DeepClone();
+                        obj.Remove(key);
+
+                        var clamped = Fit(key, MaxFieldChars);
+                        // Two distinct long keys can clamp onto the same name; suffix until free
+                        // so no row silently swallows another.
+                        var unique = clamped;
+                        for (var n = 2; obj.ContainsKey(unique); n++) unique = $"{clamped}#{n}";
+                        obj[unique] = detached;
+                    }
+                    break;
+
+                case JsonArray arr:
+                    for (var i = 0; i < arr.Count; i++)
+                    {
+                        var child = arr[i];
+                        if (child is JsonValue v && v.TryGetValue<string>(out var s))
+                        {
+                            if (s.Length > MaxFieldChars) arr[i] = Fit(s, MaxFieldChars);
+                        }
+                        else if (child is not null) Walk(child);
+                    }
+                    break;
+            }
+        }
     }
 
     /// <summary>Walks the config and replaces values at frozen paths with "***FROZEN***".</summary>

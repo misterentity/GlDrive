@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -71,6 +71,10 @@ public sealed class AgentClient : IDisposable
         var primary = HealedModels.TryGetValue(_model, out var healedFor) ? healedFor : _model;
         var outcome = await AttemptAsync(primary, systemPrompt, userPrompt, ct);
 
+        // Every attempt in the chain, so the reported failure is the one that actually explains
+        // the run rather than whichever happened to come first.
+        var attempts = new List<AgentRunOutcome> { outcome };
+
         // A 404 body names the successor slug outright ("use this slug instead: openai/gpt-oss-120b").
         // Using it is free and keeps the configured tier; jumping straight to the paid fallback
         // burned credits we didn't have and left the loop dead for days.
@@ -82,6 +86,7 @@ public sealed class AgentClient : IDisposable
                 Log.Warning("AgentClient: {Model} is retired — OpenRouter suggests {Suggested}, retrying with it",
                     primary, suggested);
                 var healed = await AttemptAsync(suggested, systemPrompt, userPrompt, ct);
+                attempts.Add(healed);
                 if (healed.Result is not null)
                 {
                     HealedModels[_model] = suggested;
@@ -113,6 +118,7 @@ public sealed class AgentClient : IDisposable
             Log.Warning("AgentClient: model {Model} {Reason} — retrying with {Fallback}",
                 primary, reason, FallbackModel);
             var retry = await AttemptAsync(FallbackModel, systemPrompt, userPrompt, ct);
+            attempts.Add(retry);
             if (retry.Result is not null)
             {
                 Log.Information("AgentClient: fallback {Fallback} succeeded after {Primary} {Reason}",
@@ -122,7 +128,7 @@ public sealed class AgentClient : IDisposable
             Log.Warning("AgentClient: fallback {Fallback} also failed: {Err}", FallbackModel, retry.ErrorMessage);
         }
 
-        return outcome;
+        return ChooseReportedFailure([.. attempts]);
     }
 
     /// <summary>
@@ -204,6 +210,56 @@ public sealed class AgentClient : IDisposable
         : "returned malformed JSON";
 
     private static bool IsModelUnavailable(string? e) => e == "HTTP 404";
+
+    /// <summary>
+    /// Whether the request was refused because the prompt exceeded the model's context window.
+    /// The status alone is a bare "HTTP 400" — the discriminator is only in the body.
+    /// </summary>
+    internal static bool IsContextLengthExceeded(string? errorMessage, string? errorBody)
+    {
+        if (errorMessage != "HTTP 400" || string.IsNullOrEmpty(errorBody)) return false;
+        return errorBody.Contains("maximum context length", StringComparison.OrdinalIgnoreCase)
+            || errorBody.Contains("context_length_exceeded", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Picks which attempt in the primary → healed → fallback chain to report.
+    ///
+    /// Returning the FIRST outcome reported <c>HTTP 404</c> for 40+ consecutive runs while every
+    /// attempt was actually being refused for a 1.5M-token prompt, which sent the operator to
+    /// check the model slug and credit balance — both of which were fine. Prefer the failure that
+    /// actually explains the run, then the terminal attempt.
+    /// </summary>
+    internal static AgentRunOutcome ChooseReportedFailure(params AgentRunOutcome[] outcomes)
+    {
+        var success = outcomes.FirstOrDefault(o => o.Result is not null);
+        if (success is not null) return success;
+
+        var failures = outcomes.Where(o => o.Result is null).ToList();
+        if (failures.Count == 0) return outcomes[^1];
+
+        // A context overflow is the most actionable thing that can be in this chain: it names a
+        // defect on our side rather than a condition on OpenRouter's.
+        return failures.FirstOrDefault(o => IsContextLengthExceeded(o.ErrorMessage, o.ErrorBody))
+               ?? failures[^1];
+    }
+
+    /// <summary>Operator-facing guidance for a terminal failure. Must name the cause that actually applies.</summary>
+    internal static string DescribeFailureForOperator(string? errorMessage, string? errorBody)
+    {
+        if (IsContextLengthExceeded(errorMessage, errorBody))
+            return "the prompt was too large for the model's context window — the telemetry digest "
+                 + "is oversized, which usually means one pathological row entered a telemetry stream.";
+        if (IsModelUnavailable(errorMessage))
+            return "the configured model slug no longer exists on OpenRouter — set a current one in Settings → Downloads.";
+        if (IsInsufficientCredit(errorMessage))
+            return "the OpenRouter credit balance is too low for this request — top up or lower the output budget.";
+        if (IsRateLimited(errorMessage))
+            return "OpenRouter rate-limited the request (HTTP 429) — the free tier quota is likely exhausted.";
+        if (IsParseFailure(errorMessage))
+            return "the model returned malformed JSON.";
+        return $"the run failed with {errorMessage ?? "an unknown error"}.";
+    }
 
     private static bool IsParseFailure(string? e) => e == "failed-to-parse-json";
 
