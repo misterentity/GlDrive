@@ -1316,6 +1316,12 @@ public partial class ExtractorWindow : Window
             case TransientAbandonLedger.AbandonState.StillAbandoned:
                 return;
 
+            // Learned nothing this pass. Stay parked and keep the record: retrying on an
+            // unreadable fingerprint is what produced the 2026-08-18 hot loop, and the record
+            // survives so the set revives normally the moment it becomes observable again.
+            case TransientAbandonLedger.AbandonState.Unknown:
+                return;
+
             case TransientAbandonLedger.AbandonState.Revived:
                 // Only on an actual revival may we clear this bookkeeping. Doing it on every
                 // event would defeat the duplicate-event gate below and let an archive that is
@@ -1655,6 +1661,19 @@ public partial class ExtractorWindow : Window
     /// <summary>
     /// Wait until a file is no longer being written to. Checks every 2 seconds for up to 5 minutes.
     /// Essential for network drives where files appear before the transfer completes.
+    ///
+    /// "Not there yet" is NOT a failure — it is the single most common state during an arrival,
+    /// and waiting through it is the entire reason this method has a five-minute budget. Until
+    /// 2026-08-18 a missing file returned false immediately, which had two consequences:
+    ///   * the caller logged "archive was not ready before timeout" after 2.008s of a 300s
+    ///     budget. Across three days of logs that message appeared 69 times and the real
+    ///     timeout message ("Timeout waiting for file to be ready") appeared ZERO times —
+    ///     every single one was this early exit wearing the timeout's clothes;
+    ///   * six such exits burned the whole retry budget in about two minutes of what was a
+    ///     90-minute arrival, so the set was abandoned long before it could have been ready.
+    /// The trigger is structural rather than rare: for old-style .rar/.r00/.r01… sets the
+    /// first volume sorts after every continuation part, so it lands LAST. A watcher event on
+    /// any .rNN resolves to a .rar that does not exist yet.
     /// </summary>
     private static async Task<bool> WaitForFileReady(string path, CancellationToken ct, int maxWaitMs = 300_000)
     {
@@ -1668,33 +1687,26 @@ public partial class ExtractorWindow : Window
 
             try
             {
-                if (!File.Exists(path)) return false;
+                var exists = File.Exists(path);
+                var currentSize = exists ? new FileInfo(path).Length : 0;
 
-                var info = new FileInfo(path);
-                var currentSize = info.Length;
+                // The decision itself lives in FileArrivalGate, which cannot express "give up".
+                // Only the budget above ends this wait unsuccessfully, so the caller's timeout
+                // message is now true whenever it is printed.
+                if (FileArrivalGate.Observe(exists, currentSize, ref lastSize, ref stableCount)
+                    != FileArrivalGate.Decision.ConfirmWithExclusiveOpen)
+                    continue;
 
-                if (currentSize == lastSize && currentSize > 0)
+                // Size stable for 4+ seconds — confirm with an exclusive open.
+                try
                 {
-                    stableCount++;
-                    if (stableCount >= 2)
-                    {
-                        // Size stable for 4+ seconds, try opening exclusively to confirm
-                        try
-                        {
-                            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
-                            return true; // File is ready
-                        }
-                        catch (IOException)
-                        {
-                            stableCount = 0; // Still locked, keep waiting
-                        }
-                    }
+                    using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
+                    return true; // File is ready
                 }
-                else
+                catch (IOException)
                 {
-                    stableCount = 0;
+                    stableCount = 0; // Still locked, keep waiting
                 }
-                lastSize = currentSize;
             }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
@@ -1819,18 +1831,44 @@ public partial class ExtractorWindow : Window
         {
             var volumes = TryDiscoverRarVolumes(path);
             if (volumes != null && volumes.Count > 0)
-                return (volumes.Count, volumes.Sum(v => v.Length));
+            {
+                // Per-volume, guarded. This used to be volumes.Sum(v => v.Length), which threw
+                // the moment ANY part was unreadable and discarded the whole measurement — and
+                // one part is unreadable in the normal case, because TryDiscoverRarVolumes
+                // seeds the list with the caller's first-volume path unconditionally and for
+                // old-style sets over FXP the .rar arrives LAST (it sorts after every .rNN).
+                // See VolumeSetFingerprint for the 2026-08-18 incident this caused.
+                var fp = VolumeSetFingerprint.FromVolumes(volumes.Select(TryMeasure));
+                if (fp.VolumeCount > 0) return (fp.VolumeCount, fp.TotalBytes);
+            }
 
             var fi = new FileInfo(path);
             return fi.Exists ? (1, fi.Length) : (0, 0);
         }
         catch (Exception ex)
         {
-            // A fingerprint we cannot read must not become a permanent skip: return a
-            // sentinel that can never match a recorded entry, so the path stays live.
-            Log.Debug(ex, "Extractor: could not fingerprint volume set for {Path}", path);
-            return (-1, -1);
+            // A fingerprint we genuinely cannot read (the directory itself is gone) is Unknown,
+            // NOT "changed". TransientAbandonLedger has a dedicated state for it; it must never
+            // be mistaken for a set that grew.
+            Log.Warning(ex, "Extractor: could not fingerprint volume set for {Path}", path);
+            return (VolumeSetFingerprint.Unknown.VolumeCount, VolumeSetFingerprint.Unknown.TotalBytes);
         }
+    }
+
+    /// <summary>
+    /// Length of one volume, or null if it vanished or cannot be read right now. A set being
+    /// written is racy by definition — a part disappearing between enumeration and measurement
+    /// is ordinary, so it degrades the fingerprint rather than destroying it.
+    /// </summary>
+    private static long? TryMeasure(FileInfo volume)
+    {
+        try
+        {
+            volume.Refresh();
+            return volume.Exists ? volume.Length : null;
+        }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
     }
 
     /// <summary>

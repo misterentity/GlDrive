@@ -276,6 +276,10 @@ public sealed class AgentRunner : IDisposable
             _runGate.Release();
             _activeRunCts?.Dispose();
             _activeRunCts = null;
+            // Persist on EVERY exit, not just the success path. The failure count is the state
+            // that has to survive a restart (that is the whole point of persisting it), and
+            // the success path was the one place it never needed saving urgently.
+            try { SaveLastRun(); } catch (Exception ex) { Log.Debug(ex, "SaveLastRun failed"); }
             try { ScheduleNext(); } catch (Exception ex) { Log.Warning(ex, "ScheduleNext failed"); }
             // Prune ai-briefs: one .md is written per run and nothing ever deleted them
             // (4150+ files / 7MB observed). Keep the newest 60. Non-recursive GetFiles so
@@ -305,6 +309,14 @@ public sealed class AgentRunner : IDisposable
                 var node = JsonNode.Parse(File.ReadAllText(LastRunPath));
                 if (node != null && DateTime.TryParse(node["utc"]?.ToString(), out var t))
                     _lastRunUtc = t;
+                // A give-up counter that a restart zeroes is not a counter. This drives the
+                // ERR that tells the operator the loop is stuck, and that ERR fires at the
+                // 5th consecutive failure: with the count in a field alone, every restart
+                // (crash, watchdog, auto-update) bought the stuck loop five more silent runs.
+                // Observed 2026-08-17 21:14 — the log printed "consecutive failures: 0"
+                // immediately after a run that had reached 7.
+                if (node != null && int.TryParse(node["consecutiveFailures"]?.ToString(), out var f) && f >= 0)
+                    _consecutiveFailedRuns = f;
             }
         }
         catch { }
@@ -314,7 +326,11 @@ public sealed class AgentRunner : IDisposable
     {
         try
         {
-            var obj = new JsonObject { ["utc"] = _lastRunUtc.ToString("O") };
+            var obj = new JsonObject
+            {
+                ["utc"] = _lastRunUtc.ToString("O"),
+                ["consecutiveFailures"] = _consecutiveFailedRuns,
+            };
             File.WriteAllText(LastRunPath, obj.ToJsonString());
         }
         catch { }
