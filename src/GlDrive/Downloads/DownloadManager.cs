@@ -30,6 +30,15 @@ public class DownloadManager : IDisposable
     private readonly List<Task> _retryTasks = new();
     private readonly object _retryLock = new();
 
+    /// <summary>
+    /// Re-check attempts per item while its destination volume is absent. Deliberately NOT
+    /// item.RetryCount: that budget means "attempts this download gets before we call it dead",
+    /// and an unmounted drive must never exhaust it. In-memory only — a restart re-probes the
+    /// drive immediately and, if it is still absent, simply parks again from the first interval.
+    /// </summary>
+    private readonly Dictionary<string, int> _volumeWaitAttempts = new();
+    private readonly object _volumeWaitLock = new();
+
     public event Action<DownloadItem, DownloadProgress>? DownloadProgressChanged;
     public event Action<DownloadItem>? DownloadStatusChanged;
 
@@ -568,6 +577,8 @@ public class DownloadManager : IDisposable
                 }
             }
 
+            lock (_volumeWaitLock) _volumeWaitAttempts.Remove(item.Id);
+
             item.Status = DownloadStatus.Completed;
             item.CompletedAt = DateTime.UtcNow;
             _store.Update(item);
@@ -582,8 +593,41 @@ public class DownloadManager : IDisposable
             DownloadStatusChanged?.Invoke(item);
             EmitDownloadOutcome(item, "cancelled");
         }
+        catch (Exception ex) when (DownloadTargetVolume.IsVolumeAbsent(ex, item.LocalPath))
+        {
+            // The destination drive is not mounted. This is not a transient the ordinary
+            // 30/60/90s ladder can outlast, and burning that ladder marks the item Failed and
+            // loses the grab — four wishlist releases were lost this way on 2026-08-17/18.
+            // Park it instead: keep the item Queued, do NOT consume a retry, and re-check on a
+            // widening interval until the volume comes back. See DownloadTargetVolume.
+            var root = DownloadTargetVolume.MissingVolumeRoot(item.LocalPath);
+
+            int attempt;
+            lock (_volumeWaitLock)
+            {
+                _volumeWaitAttempts.TryGetValue(item.Id, out attempt);
+                attempt++;
+                _volumeWaitAttempts[item.Id] = attempt;
+            }
+            var delay = DownloadTargetVolume.RecheckDelay(attempt);
+
+            Log.Warning(
+                "Download parked: {Release} — destination drive {Root} is not mounted (target {Path}). " +
+                "Re-checking in {Delay}. No retries consumed; fix the drive or the download path in Settings.",
+                item.ReleaseName, root, item.LocalPath, delay);
+
+            item.Status = DownloadStatus.Queued;
+            item.ErrorMessage = $"Waiting for drive {root} — destination volume is not mounted";
+            _store.Update(item);
+            DownloadStatusChanged?.Invoke(item);
+            ScheduleRetry(item, (int)delay.TotalSeconds);
+        }
         catch (Exception ex)
         {
+            // A previously-parked item that got this far reached the network, so the volume
+            // question is settled — let the next absence start its backoff from the beginning.
+            lock (_volumeWaitLock) _volumeWaitAttempts.Remove(item.Id);
+
             // Auto-retry with backoff
             if (item.RetryCount < _config.MaxRetries)
             {

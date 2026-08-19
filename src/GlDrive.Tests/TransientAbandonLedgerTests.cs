@@ -86,17 +86,32 @@ public sealed class TransientAbandonLedgerTests
     }
 
     /// <summary>
-    /// An unreadable fingerprint is the (-1,-1) sentinel ComputeVolumeSetFingerprint returns.
-    /// It must never match a recorded entry, so the path stays live rather than being frozen
-    /// out by a directory we momentarily could not read.
+    /// REVISED 2026-08-18. This test used to assert that an unreadable (-1,-1) fingerprint
+    /// leaves a path live, and it passed — while the behaviour it locked in was the bug.
+    ///
+    /// "Never holds a path down" and "unpark it and restart the whole retry cycle" are not the
+    /// same requirement, and the old assertion could not tell them apart. The ledger dropped
+    /// the record and answered Revived; the next evaluation was just as unreadable, so it did
+    /// so again, and again — 70 detect → fail → abandon → revive cycles against one 83-part
+    /// UHD set in 90 minutes. It is the exact inverse defect that StalledCopy_stays_abandoned
+    /// (directly above) was written to prevent, arriving through the sentinel door.
+    ///
+    /// The corrected contract: an unreadable fingerprint is Unknown — do nothing, keep the
+    /// record. See TransientAbandonLedgerUnknownFingerprintTests for the full cover, including
+    /// the proof that parking here cannot strand a path.
     /// </summary>
     [Fact]
-    public void UnreadableFingerprint_never_holds_a_path_abandoned()
+    public void UnreadableFingerprint_parks_without_dropping_the_record()
     {
         var ledger = new TransientAbandonLedger();
         ledger.Abandon(Rar, -1, -1);
 
-        Assert.False(ledger.IsAbandoned(Rar, -1, -1));
+        Assert.Equal(TransientAbandonLedger.AbandonState.Unknown, ledger.Evaluate(Rar, -1, -1));
+        Assert.Contains(Rar, ledger.AbandonedPaths());
+
+        // ...and the moment the set becomes observable, ordinary revival takes over. That is
+        // what makes parking safe, and it is what the old assertion was reaching for.
+        Assert.Equal(TransientAbandonLedger.AbandonState.Revived, ledger.Evaluate(Rar, 12, 8_000_000_000));
     }
 
     /// <summary>

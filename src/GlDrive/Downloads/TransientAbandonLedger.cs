@@ -60,6 +60,25 @@ public sealed class TransientAbandonLedger
 
         /// <summary>Given up on, but the set has changed. The record is dropped; retry it.</summary>
         Revived,
+
+        /// <summary>
+        /// Given up on, and the set could not be observed this time. Neither answer is
+        /// available, so the caller must do nothing: stay parked WITHOUT dropping the record.
+        ///
+        /// This state exists because its absence cost a hot loop. Before 2026-08-18 an
+        /// unreadable fingerprint took the Revived branch — the comment said "an unreadable
+        /// fingerprint must never hold a path down", which is right, but dropping the record
+        /// and retrying does far more than not-hold-it-down: it restarts the entire readiness
+        /// and retry cycle, and the next evaluation is unreadable too. Observed against one
+        /// 83-part UHD set: 70 detect→fail→abandon→revive cycles in 90 minutes, 96 WRN lines,
+        /// zero progress, self-healing only once the copy finished for unrelated reasons.
+        ///
+        /// Parking here cannot strand a path, which is the failure this class was written to
+        /// end. <see cref="Abandon"/> records whatever fingerprint it was given — including
+        /// Unknown — so the moment the set becomes observable again the recorded value differs
+        /// from the live one and the ordinary Revived branch fires.
+        /// </summary>
+        Unknown,
     }
 
     /// <summary>
@@ -75,14 +94,11 @@ public sealed class TransientAbandonLedger
         {
             if (!_entries.TryGetValue(path, out var recorded)) return AbandonState.NotAbandoned;
 
-            // The (-1,-1) sentinel from ComputeVolumeSetFingerprint means "could not read the
-            // set". An unreadable fingerprint must never hold a path down, or a momentary I/O
-            // blip becomes a permanent exemption — the exact failure this class exists to end.
-            if (volumeCount < 0 || totalBytes < 0)
-            {
-                _entries.Remove(path);
-                return AbandonState.Revived;
-            }
+            // "Could not read the set" is not "the set changed". Answering Revived here (as
+            // this did until 2026-08-18) drops the record and restarts the whole retry cycle
+            // on an evaluation that learned nothing — and since the next evaluation is just as
+            // unreadable, it does so forever. See AbandonState.Unknown for the incident.
+            if (!new VolumeSetFingerprint(volumeCount, totalBytes).IsKnown) return AbandonState.Unknown;
 
             if (recorded.VolumeCount != volumeCount || recorded.TotalBytes != totalBytes)
             {
@@ -94,9 +110,15 @@ public sealed class TransientAbandonLedger
         }
     }
 
-    /// <summary>Convenience for callers that only need "should I stop here?".</summary>
+    /// <summary>
+    /// Convenience for callers that only need "should I stop here?". Unknown counts as stop:
+    /// the question is whether to proceed, and an evaluation that learned nothing is not
+    /// grounds to proceed. Keeping Unknown out of this answer let the abandon path re-log its
+    /// warning on every cycle of the 2026-08-18 loop, since it decided "first time" from it.
+    /// </summary>
     public bool IsAbandoned(string path, int volumeCount, long totalBytes) =>
-        Evaluate(path, volumeCount, totalBytes) == AbandonState.StillAbandoned;
+        Evaluate(path, volumeCount, totalBytes)
+            is AbandonState.StillAbandoned or AbandonState.Unknown;
 
     /// <summary>Drop a path — used when it extracts, or when the caller forces a retry.</summary>
     public void Forget(string path)
