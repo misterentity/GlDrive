@@ -81,6 +81,18 @@ public class IrcClient : IDisposable
         _readTask = Task.Run(() => ReadLoop(_cts.Token), _cts.Token);
     }
 
+    /// <summary>
+    /// Test seam: wire the writer to an arbitrary stream without a socket, so the send path can
+    /// be exercised against a stream that enforces SslStream's one-write-at-a-time contract.
+    /// Mirrors exactly how <see cref="ConnectAsync"/> builds the writer.
+    /// </summary>
+    internal void AttachStreamForTests(Stream stream)
+    {
+        _stream = stream;
+        _writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\r\n" };
+        IsConnected = true;
+    }
+
     // RFC 1459 is 512 bytes; IRCv3 message tags extend modestly. Nothing legitimate exceeds 16 KB.
     private const int MaxLineLength = 16 * 1024;
 
@@ -168,20 +180,43 @@ public class IrcClient : IDisposable
         throw new IOException($"IRC line exceeds {MaxLineLength} bytes — possible hostile server");
     }
 
+    /// <summary>
+    /// Serializes the send path. SslStream permits exactly ONE in-flight write and throws
+    /// NotSupportedException on a second, and StreamWriter's internal char buffer is not
+    /// thread-safe either — so an unguarded send both drops lines and can splice two commands
+    /// into one corrupt line. Every IRC command funnels through <see cref="SendRawAsync"/> from
+    /// genuinely concurrent callers: the read loop's PONG reply, the keepalive PING timer, the
+    /// invite-only JOIN retry timer, and user/wishlist PRIVMSGs.
+    ///
+    /// Same class of defect, same remedy as <c>SerializedGnuTlsStream</c> (v3.10.22): one
+    /// semaphore across every write to the shared stream.
+    /// </summary>
+    private readonly SemaphoreSlim _sendLock = new(1, 1);
+
     public async Task SendRawAsync(string line)
     {
-        if (_writer == null) return;
+        // Capture once: DisconnectAsync nulls and disposes _writer concurrently, so re-reading
+        // the field after the check could hand the write a disposed or null writer.
+        var writer = _writer;
+        if (writer == null) return;
+
+        line = line.Replace("\r", "").Replace("\n", "");
+
+        await _sendLock.WaitAsync();
         try
         {
-            line = line.Replace("\r", "").Replace("\n", "");
             // Redact credential parameters (channel keys, services passwords) — NOT just
             // PASS, which is what this used to check. See IrcLineRedactor.
             Log.Verbose("[IRC >] {Line}", IrcLineRedactor.Redact(line));
-            await _writer.WriteLineAsync(line);
+            await writer.WriteLineAsync(line);
         }
         catch (Exception ex)
         {
             Log.Warning(ex, "Failed to send IRC line");
+        }
+        finally
+        {
+            _sendLock.Release();
         }
     }
 
