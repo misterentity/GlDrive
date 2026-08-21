@@ -15,6 +15,41 @@ public sealed class AgentClientFallbackTests
     private const string Paid = "anthropic/claude-sonnet-4-6";
 
     [Fact]
+    public void Known_retired_model_is_replaced_before_the_network_call()
+    {
+        const string replacement = "openai/gpt-oss-120b";
+
+        Assert.Equal(replacement, AgentClient.ResolveKnownModelMigration(Free));
+        Assert.Equal(replacement, AgentClient.ResolveKnownModelMigration("OPENAI/GPT-OSS-120B:FREE"));
+        Assert.Equal("provider/current-model",
+            AgentClient.ResolveKnownModelMigration("provider/current-model"));
+    }
+
+    [Fact]
+    public void Provider_error_log_summary_keeps_actionable_fields_but_drops_identity_envelope()
+    {
+        const string body =
+            """{"error":{"message":"use this slug instead: openai/gpt-oss-120b","code":404},"user_id":"user_secret","request_id":"req_secret"}""";
+
+        var summary = AgentClient.SummarizeErrorBodyForLog(body);
+
+        Assert.Contains("404", summary);
+        Assert.Contains("openai/gpt-oss-120b", summary);
+        Assert.DoesNotContain("user_secret", summary);
+        Assert.DoesNotContain("req_secret", summary);
+        Assert.DoesNotContain("user_id", summary);
+    }
+
+    [Fact]
+    public void Unstructured_provider_error_is_not_echoed_to_the_log()
+    {
+        var summary = AgentClient.SummarizeErrorBodyForLog("account=user_secret; upstream exploded");
+
+        Assert.Contains("unstructured response body", summary);
+        Assert.DoesNotContain("user_secret", summary);
+    }
+
+    [Fact]
     public void Http404_TriggersFallback_ForFreeModel() =>
         Assert.True(AgentClient.ShouldFallback("HTTP 404", Free, Paid));
 

@@ -591,7 +591,12 @@ public class FtpConnectionPool : IAsyncDisposable
         }
 
         // Pool empty — create new if under limit
-        if (Interlocked.Increment(ref _created) <= _maxSize)
+        // The nominal pool size can be larger than the account gate will ever grant
+        // this pool's role (production: max=3, priority limit=1). Comparing against
+        // _maxSize here made every checkout of that one live connection launch a
+        // doomed second login, wait 30s on the gate, and arm login-cap backoff instead
+        // of simply waiting for the checked-out connection to return.
+        if (Interlocked.Increment(ref _created) <= EffectiveMaxSize)
         {
             try
             {
@@ -731,7 +736,7 @@ public class FtpConnectionPool : IAsyncDisposable
                         await _factory.KillGhosts(ct);
                         IncrementGhostKill();
                         // Retry connection after ghost kill
-                        if (Interlocked.Increment(ref _created) <= _maxSize)
+                        if (Interlocked.Increment(ref _created) <= EffectiveMaxSize)
                         {
                             try
                             {
@@ -801,7 +806,7 @@ public class FtpConnectionPool : IAsyncDisposable
         // Stale or NOOP-dead — already quarantined inside CheckPooledForBorrow
         // (decrements _created). Count the disconnect and replace.
         IncrementDisconnect();
-        if (Interlocked.Increment(ref _created) <= _maxSize)
+        if (Interlocked.Increment(ref _created) <= EffectiveMaxSize)
         {
             try
             {

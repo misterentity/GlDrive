@@ -20,6 +20,7 @@ public partial class App
     private H.NotifyIcon.TaskbarIcon? _taskbarIcon;
     private GlDrive.Services.HeartbeatMonitor? _heartbeat;
     private GlDrive.Services.ControlApi? _controlApi;
+    private bool _ownsCrashMarker;
 
     public static GlDrive.AiAgent.TelemetryRecorder? TelemetryRecorder { get; private set; }
     public static GlDrive.AiAgent.HealthRollup? HealthRollup { get; private set; }
@@ -53,6 +54,22 @@ public partial class App
             }
         }
 
+        // Screenshot mode is an isolated renderer, not a production app instance.
+        // It must run before restart registration, the shared .running crash marker,
+        // update cleanup, and log pruning. Otherwise a clean screenshot exit deletes
+        // the marker owned by an already-running production instance and silently
+        // disables that instance's watchdog recovery.
+        //
+        // ReadOnly is equally important: the renderer seeds demo data into the loaded
+        // config and constructs VMs with background persistence paths.
+        if (e.Args.Contains("--screenshots", StringComparer.OrdinalIgnoreCase))
+        {
+            ConfigManager.ReadOnly = true;
+            ScreenshotCapture.CaptureAll(ConfigManager.Load());
+            Shutdown();
+            return;
+        }
+
         // Register with Windows Application Restart Manager — if the process crashes
         // (including native GnuTLS crashes), Windows will automatically restart it.
         // This is the only reliable way to survive native crashes that bypass all
@@ -74,24 +91,17 @@ public partial class App
             }
             catch { Log.Warning("GlDrive: detected unclean shutdown"); }
         }
-        try { File.WriteAllText(crashMarker, DateTime.UtcNow.ToString("O")); } catch { }
+        try
+        {
+            File.WriteAllText(crashMarker, DateTime.UtcNow.ToString("O"));
+            _ownsCrashMarker = true;
+        }
+        catch { }
 
         // Clean up .old files and stale update marker from a previous update
         UpdateChecker.CleanupOldUpdateFiles();
         Irc.IrcLogStore.PruneOld();
         try { File.Delete(Path.Combine(ConfigManager.AppDataPath, ".updating")); } catch { }
-
-        // Screenshot mode — capture all UI windows to PNGs and exit.
-        // ReadOnly guard: this path loads the real config then seeds demo data into
-        // it (and constructs VMs that may persist on a background path). It must never
-        // write back, or it clobbers the user's real servers with demo placeholders.
-        if (e.Args.Contains("--screenshots", StringComparer.OrdinalIgnoreCase))
-        {
-            ConfigManager.ReadOnly = true;
-            ScreenshotCapture.CaptureAll(ConfigManager.Load());
-            Shutdown();
-            return;
-        }
 
         // Global exception handlers to prevent silent crashes.
         //
@@ -584,8 +594,13 @@ public partial class App
         _taskbarIcon?.Dispose();
         _guard?.Dispose();
 
-        // Remove crash marker — clean exit
-        try { File.Delete(Path.Combine(ConfigManager.AppDataPath, ".running")); } catch { }
+        // Remove only the crash marker this instance created. Utility instances such as
+        // --screenshots still run OnExit, but must never delete the marker owned by the
+        // concurrently running production process.
+        if (_ownsCrashMarker)
+        {
+            try { File.Delete(Path.Combine(ConfigManager.AppDataPath, ".running")); } catch { }
+        }
 
         Log.CloseAndFlush();
         base.OnExit(e);
