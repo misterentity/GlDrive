@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -43,10 +43,11 @@ public class TorrentSearchService : IDisposable
     private readonly HttpClient _http;
     private readonly SourceAvailabilityPolicy _availability = new();
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true
-    };
+    /// <summary>
+    /// See <see cref="IndexerJson"/>: these endpoints quote their numbers, and typing a field
+    /// as int without saying so benched apibay entirely for ten minutes at a time.
+    /// </summary>
+    private static JsonSerializerOptions JsonOptions => IndexerJson.Options;
 
     private const string KnabenApi = "https://api.knaben.org/v1";
     private const string ApiBayApi = "https://apibay.org/q.php";
@@ -526,7 +527,7 @@ public class TorrentSearchService : IDisposable
         [JsonPropertyName("tracker")] public string? Tracker { get; set; }
     }
 
-    private class ApiBayResult
+    internal class ApiBayResult
     {
         [JsonPropertyName("id")] public string Id { get; set; } = "";
         [JsonPropertyName("name")] public string Name { get; set; } = "";

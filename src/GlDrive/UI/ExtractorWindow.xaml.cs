@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
@@ -1556,8 +1556,12 @@ public partial class ExtractorWindow : Window
     /// parts were still downloading — see <see cref="VolumeSetReadiness"/> for the three log
     /// clusters that produced, including two that were misreported as unrecoverable corruption.
     ///
-    /// The first volume keeps its own settle check; the set-wide loop then shares the remaining
-    /// budget, so a single-file archive costs exactly what it did before.
+    /// The first volume keeps its own settle check, bounded by <paramref name="maxWaitMs"/>.
+    /// The set-wide loop that follows is NOT bounded by duration — see
+    /// <see cref="VolumeSetArrivalBudget"/>: it ends only when the set stops changing for five
+    /// minutes, or at a twelve-hour ceiling. A set that is still arriving has not stalled, no
+    /// matter how long it has been arriving, and calling it a timeout burned the bounded watch
+    /// retries that exist for real faults.
     /// </summary>
     private static async Task<bool> WaitForVolumeSetReady(string path, CancellationToken ct, int maxWaitMs = 300_000)
     {
@@ -1570,8 +1574,10 @@ public partial class ExtractorWindow : Window
 
         var previous = SampleVolumeSet(path);
         var waitedCycles = 0;
+        var lastProgressMs = sw.ElapsedMilliseconds;
+        var lastProgressLogMs = 0L;
 
-        while (sw.ElapsedMilliseconds < maxWaitMs)
+        while (true)
         {
             await Task.Delay(2000, ct);
 
@@ -1594,15 +1600,42 @@ public partial class ExtractorWindow : Window
             if (VolumeSetReadiness.IsStillArriving(previous, current))
             {
                 waitedCycles++;
-                Log.Debug("Extractor: volume set still arriving — {Path} ({Count} parts, {Bytes} bytes, {Locked} locked)",
-                    path, current.Count, current.TotalBytes, current.LockedCount);
+                lastProgressMs = sw.ElapsedMilliseconds;
+
+                // At Information, and rate-limited to one line per minute: a set that arrives
+                // for 90 minutes must leave evidence that the wait was deliberate, but a line
+                // every two seconds would be its own kind of noise.
+                if (sw.ElapsedMilliseconds - lastProgressLogMs >= 60_000)
+                {
+                    lastProgressLogMs = sw.ElapsedMilliseconds;
+                    Log.Information(
+                        "Extractor: volume set still arriving after {Seconds}s — {Path} ({Count} parts, {Bytes} bytes, {Locked} locked)",
+                        sw.ElapsedMilliseconds / 1000, path, current.Count, current.TotalBytes, current.LockedCount);
+                }
             }
 
             previous = current;
-        }
 
-        Log.Warning("Extractor: volume set did not settle within {Budget}ms — {Path}", maxWaitMs, path);
-        return false;
+            // The wait ends on INACTIVITY, not on duration. See VolumeSetArrivalBudget: bounding
+            // on total elapsed time timed out sets that were visibly still growing, and the
+            // resulting retries abandoned them with the reason "no progress after 5 retries".
+            var verdict = VolumeSetArrivalBudget.Evaluate(
+                sw.ElapsedMilliseconds - lastProgressMs, sw.ElapsedMilliseconds);
+
+            if (verdict == VolumeSetArrivalBudget.Verdict.KeepWaiting) continue;
+
+            if (verdict == VolumeSetArrivalBudget.Verdict.CeilingReached)
+                Log.Warning(
+                    "Extractor: volume set still growing after {Hours}h — giving up on {Path} ({Count} parts, {Bytes} bytes). " +
+                    "This is a ceiling, not a stall; nothing here is retryable.",
+                    VolumeSetArrivalBudget.AbsoluteCeilingMs / 3_600_000, path, current.Count, current.TotalBytes);
+            else
+                Log.Warning(
+                    "Extractor: volume set stalled — no change for {Seconds}s — {Path} ({Count} parts, {Bytes} bytes, {Locked} locked)",
+                    VolumeSetArrivalBudget.NoProgressBudgetMs / 1000, path, current.Count, current.TotalBytes, current.LockedCount);
+
+            return false;
+        }
     }
 
     /// <summary>
