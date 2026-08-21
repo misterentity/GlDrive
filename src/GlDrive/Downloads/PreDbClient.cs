@@ -1,4 +1,4 @@
-using System.Net.Http;
+﻿using System.Net.Http;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Serilog;
@@ -8,6 +8,12 @@ namespace GlDrive.Downloads;
 public class PreDbClient : IDisposable
 {
     private readonly HttpClient _http;
+
+    /// <summary>
+    /// Shared by both endpoints: they are the same host, so a 503 on one is evidence about the
+    /// other. See <see cref="PreDbBackoff"/> for the outage that made this necessary.
+    /// </summary>
+    internal PreDbBackoff Backoff { get; } = new();
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -24,34 +30,66 @@ public class PreDbClient : IDisposable
 
     public async Task<PreDbRelease[]> SearchAsync(string query, int count = 100, int page = 0, CancellationToken ct = default)
     {
+        if (Backoff.ShouldSkip(DateTimeOffset.UtcNow)) return [];
+
         try
         {
             var url = $"?q={Uri.EscapeDataString(query)}&count={count}&page={page}";
             var json = await _http.GetStringAsync(url, ct);
             var resp = JsonSerializer.Deserialize<PreDbResponse>(json, JsonOptions);
+            Backoff.RecordSuccess();
             return resp?.Data ?? [];
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // The caller cancelled us; that is not evidence about the service.
+            throw;
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "PreDB search failed for: {Query}", query);
+            LogFailure(ex, $"PreDB search failed for: {query}");
             return [];
         }
     }
 
     public async Task<PreDbRelease[]> GetLatestAsync(int count = 100, CancellationToken ct = default)
     {
+        if (Backoff.ShouldSkip(DateTimeOffset.UtcNow)) return [];
+
         try
         {
             var url = $"?count={count}";
             var json = await _http.GetStringAsync(url, ct);
             var resp = JsonSerializer.Deserialize<PreDbResponse>(json, JsonOptions);
+            Backoff.RecordSuccess();
             return resp?.Data ?? [];
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "PreDB latest fetch failed");
+            LogFailure(ex, "PreDB latest fetch failed");
             return [];
         }
+    }
+
+    /// <summary>
+    /// One line per failure, and the exception only on the first of a run. The dashboard polls
+    /// every 15 seconds; during the 2026-08-19 outage that produced 135 stack traces in a day
+    /// for a fact that had not changed since the first one.
+    /// </summary>
+    private void LogFailure(Exception ex, string what)
+    {
+        var withException = Backoff.ShouldLogWithException;
+        var delay = Backoff.RecordFailure(DateTimeOffset.UtcNow);
+
+        if (withException)
+            Log.Warning(ex, "{What} — backing off {Delay} before the next attempt", what, delay);
+        else
+            Log.Warning("{What}: {Reason} (failure {Count}) — backing off {Delay}",
+                what, ex.Message, Backoff.ConsecutiveFailures, delay);
     }
 
     public void Dispose() => _http.Dispose();
