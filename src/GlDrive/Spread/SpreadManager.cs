@@ -3,6 +3,7 @@ using System.IO;
 using GlDrive.Config;
 using GlDrive.Downloads;
 using GlDrive.Ftp;
+using GlDrive.Services;
 using Serilog;
 
 namespace GlDrive.Spread;
@@ -20,6 +21,8 @@ public class SpreadManager : IDisposable
     private readonly SectionBlacklistStore _blacklist = new();
     private readonly MetadataFilterService _metadataFilter;
     private readonly Lock _lock = new();
+    private readonly SpreadPoolRecoveryLoop _poolRecovery = new();
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _poolInitGates = new();
     private bool _disposed;
 
     // Global per-server transfer-gate (v2.4: Option A). Each FXP transfer
@@ -130,74 +133,175 @@ public class SpreadManager : IDisposable
     {
         if (_disposed) return;
 
-        // Chain mode is gone — races now run N² concurrent routes throttled by
-        // per-site slots, so a 1-connection spread pool serialises every
-        // transfer and makes the whole engine look slow. Honor the configured
-        // SpreadPoolSize (default 3) instead of the old hard-cap-at-1. Pool
-        // creation is best-effort: if the server's login cap rejects some of
-        // the N attempts, FtpConnectionPool runs with whatever it got.
-        // Pool max is capped at the per-server gate's default (3) regardless of
-        // user's SpreadPoolSize setting. Previously, SpreadPoolSize=12 vs BNC
-        // cap of 4 meant the pool's Borrow() could fire connection-creates that
-        // hit "530 restricted to N logins" even when only 3 FXP transfers were
-        // active (scans + transfers competed for slots). The gate alone wasn't
-        // enough — scan borrows and main-pool fallback share the same BNC pool.
-        // Sizing pool to gate makes Borrow() block on Channel.ReadAsync until a
-        // connection returns, instead of attempting CreateAndConnect and failing.
-        var poolSize = Math.Min(
-            Math.Max(_config.Spread.SpreadPoolSize, 1),
-            DefaultPerServerConcurrentTransfers);
-        if (poolSize <= 0) return;
-
-        // Share the account-wide login gate with the main + download pools for this
-        // server (same host:port:username key) so the spread pool's logins count
-        // against the SAME account cap — this is the linchpin that makes the cap
-        // truly account-wide instead of per-pool.
-        var loginGate = ResolveAccountLoginGate(serverId);
-        // priorityLogins: true — draw from the gate's reserved FXP permit so the main
-        // pool can't starve racing out of every login (the v3.7.2 root-cause fix).
-        var pool = new FtpConnectionPool(factory, poolSize, loginGate, priorityLogins: true);
-        // Spread pools have no ConnectionMonitor keepalive, so idle connections
-        // die and the next FXP borrow fails "No connection to the server exists"
-        // (dominant failure on 2026-05-20 v2.6.0). Enable borrow-time NOOP
-        // validation + a keepalive timer per config.
-        pool.ConfigureHealth(_config.Spread.ValidateConnectionOnBorrow, _config.Spread.SpreadKeepaliveSeconds);
-        // Wire BNC-limit auto-detect (Option B): when the pool sees a 530
-        // "restricted to N simultaneous logins", tighten BOTH the gate AND
-        // the pool's max size to N-1 (reserve one slot for ghost-kill).
-        // Tightening only the gate left the pool free to attempt N+1 borrows
-        // (scan + 3 transfers concurrent) and re-trigger the 530 storm —
-        // observed 2026-05-15 14:48 with v2.4.0 (created=3, max=12, 530).
-        pool.LoginLimitObserved += observedLimit =>
+        lock (_lock)
         {
-            try
-            {
-                var safe = Math.Max(1, observedLimit - 1);
-                GetOrCreateGate(serverId).TightenTo(safe);
-                pool.ShrinkMaxSize(safe);
-            }
-            catch (Exception ex) { Log.Debug(ex, "ServerGate auto-tune failed for {Server}", serverId); }
-        };
+            if (_spreadPools.ContainsKey(serverId)) return;
+            // Record the desired factory before the first attempt. v3.10.73 only
+            // recorded it after success, so the existing dead-pool recovery path
+            // had nothing with which to recover a pool that failed at startup.
+            _factories[serverId] = factory;
+        }
+
+        var initialized = await TryInitializePool(serverId, factory, ct, recoveryAttempt: null);
+        if (!initialized && !ct.IsCancellationRequested && IsPoolRecoveryDesired(serverId, factory))
+            SchedulePoolRecovery(serverId, factory);
+    }
+
+    private async Task<bool> TryInitializePool(
+        string serverId,
+        FtpClientFactory factory,
+        CancellationToken ct,
+        int? recoveryAttempt)
+    {
+        var initGate = _poolInitGates.GetOrAdd(serverId, _ => new SemaphoreSlim(1, 1));
+        FtpConnectionPool? pool = null;
         try
         {
-            await pool.Initialize(ct);
+            await initGate.WaitAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return false;
+        }
+
+        try
+        {
             lock (_lock)
             {
-                _spreadPools[serverId] = pool;
-                _factories[serverId] = factory;
-                _topologyVersion++; // invalidate the section-feasibility cache
+                if (_spreadPools.ContainsKey(serverId)) return true;
+                if (_disposed || !_factories.TryGetValue(serverId, out var desired) ||
+                    !ReferenceEquals(desired, factory)) return false;
+            }
+
+            // Chain mode is gone — races now run N² concurrent routes throttled by
+            // per-site slots, so a 1-connection spread pool serialises every
+            // transfer and makes the whole engine look slow. Honor the configured
+            // SpreadPoolSize (default 3) instead of the old hard-cap-at-1. Pool
+            // creation is best-effort: if the server's login cap rejects some of
+            // the N attempts, FtpConnectionPool runs with whatever it got.
+            // Pool max is capped at the per-server gate's default (3) regardless of
+            // user's SpreadPoolSize setting. Previously, SpreadPoolSize=12 vs BNC
+            // cap of 4 meant the pool's Borrow() could fire connection-creates that
+            // hit "530 restricted to N logins" even when only 3 FXP transfers were
+            // active (scans + transfers competed for slots). The gate alone wasn't
+            // enough — scan borrows and main-pool fallback share the same BNC pool.
+            // Sizing pool to gate makes Borrow() block on Channel.ReadAsync until a
+            // connection returns, instead of attempting CreateAndConnect and failing.
+            var poolSize = Math.Min(
+                Math.Max(_config.Spread.SpreadPoolSize, 1),
+                DefaultPerServerConcurrentTransfers);
+            if (poolSize <= 0) return false;
+
+            // Share the account-wide login gate with the main + download pools for this
+            // server (same host:port:username key) so the spread pool's logins count
+            // against the SAME account cap — this is the linchpin that makes the cap
+            // truly account-wide instead of per-pool.
+            var loginGate = ResolveAccountLoginGate(serverId);
+            // priorityLogins: true — draw from the gate's reserved FXP permit so the main
+            // pool can't starve racing out of every login (the v3.7.2 root-cause fix).
+            pool = new FtpConnectionPool(factory, poolSize, loginGate, priorityLogins: true);
+            // Spread pools have no ConnectionMonitor keepalive, so idle connections
+            // die and the next FXP borrow fails "No connection to the server exists"
+            // (dominant failure on 2026-05-20 v2.6.0). Enable borrow-time NOOP
+            // validation + a keepalive timer per config.
+            pool.ConfigureHealth(_config.Spread.ValidateConnectionOnBorrow, _config.Spread.SpreadKeepaliveSeconds);
+            // Wire BNC-limit auto-detect (Option B): when the pool sees a 530
+            // "restricted to N simultaneous logins", tighten BOTH the gate AND
+            // the pool's max size to N-1 (reserve one slot for ghost-kill).
+            // Tightening only the gate left the pool free to attempt N+1 borrows
+            // (scan + 3 transfers concurrent) and re-trigger the 530 storm —
+            // observed 2026-05-15 14:48 with v2.4.0 (created=3, max=12, 530).
+            pool.LoginLimitObserved += observedLimit =>
+            {
+                try
+                {
+                    var safe = Math.Max(1, observedLimit - 1);
+                    GetOrCreateGate(serverId).TightenTo(safe);
+                    pool.ShrinkMaxSize(safe);
+                }
+                catch (Exception ex) { Log.Debug(ex, "ServerGate auto-tune failed for {Server}", serverId); }
+            };
+            await pool.Initialize(ct);
+            var registered = false;
+            lock (_lock)
+            {
+                // Unmount/config replacement may have happened while the FTP
+                // handshake was in flight. Never publish a stale pool.
+                if (!_disposed && !_spreadPools.ContainsKey(serverId) &&
+                    _factories.TryGetValue(serverId, out var desired) &&
+                    ReferenceEquals(desired, factory))
+                {
+                    _spreadPools[serverId] = pool;
+                    _topologyVersion++; // invalidate the section-feasibility cache
+                    registered = true;
+                }
+            }
+            if (!registered)
+            {
+                await pool.DisposeAsync();
+                lock (_lock) return _spreadPools.ContainsKey(serverId);
             }
             // Ensure the gate exists from the moment the pool comes up.
             GetOrCreateGate(serverId);
             Log.Information("Spread pool initialized for {ServerId} (size={Size}, gate={Gate})",
                 serverId, poolSize, DefaultPerServerConcurrentTransfers);
+            return true;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            await DisposeFailedPool(pool, serverId);
+            return false;
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "Failed to initialize spread pool for {ServerId} — racing DISABLED for this server " +
-                            "until restart (login-cap starvation? FXP permit is reserved as of v3.7.2)", serverId);
-            await pool.DisposeAsync();
+            if (recoveryAttempt == null)
+                Log.Warning(ex, "Failed to initialize spread pool for {ServerId}; background recovery scheduled",
+                    serverId);
+            else
+                Log.Information("Spread pool recovery attempt {Attempt} failed for {ServerId}: {ErrorType}: {Error}",
+                    recoveryAttempt, serverId, ex.GetType().Name, ex.Message);
+            await DisposeFailedPool(pool, serverId);
+            return false;
         }
+        finally
+        {
+            initGate.Release();
+        }
+    }
+
+    private static async Task DisposeFailedPool(FtpConnectionPool? pool, string serverId)
+    {
+        if (pool == null) return;
+        try { await pool.DisposeAsync(); }
+        catch (Exception ex) { Log.Debug(ex, "Failed spread pool cleanup for {ServerId}", serverId); }
+    }
+
+    private bool IsPoolRecoveryDesired(string serverId, FtpClientFactory factory)
+    {
+        lock (_lock)
+            return !_disposed && !_spreadPools.ContainsKey(serverId) &&
+                   _factories.TryGetValue(serverId, out var desired) &&
+                   ReferenceEquals(desired, factory);
+    }
+
+    private void SchedulePoolRecovery(string serverId, FtpClientFactory factory)
+    {
+        if (!_poolRecovery.Schedule(serverId, async (attempt, ct) =>
+            {
+                if (!IsPoolRecoveryDesired(serverId, factory)) return true;
+
+                var initialized = await TryInitializePool(serverId, factory, ct, attempt);
+                if (initialized)
+                {
+                    Log.Information("Spread pool recovered for {ServerId} on background attempt {Attempt}",
+                        serverId, attempt);
+                    return true;
+                }
+                return !IsPoolRecoveryDesired(serverId, factory);
+            })) return;
+
+        Log.Information("Spread pool recovery queued for {ServerId}; first retry in {Delay}",
+            serverId, MountRetryPolicy.DelayFor(1));
     }
 
     public async Task DisposePool(string serverId)
@@ -209,6 +313,10 @@ public class SpreadManager : IDisposable
             _factories.Remove(serverId);
             _topologyVersion++; // invalidate the section-feasibility cache
         }
+
+        // Removing the desired factory above prevents an in-flight attempt from
+        // registering after unmount; cancellation then drains its retry task.
+        await _poolRecovery.CancelAsync(serverId);
 
         if (pool != null)
             await pool.DisposeAsync();
@@ -1135,6 +1243,7 @@ public class SpreadManager : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        _poolRecovery.Dispose();
 
         // Flush speed history before tearing down — debounced saves may have
         // skipped recent transfers, and the whole point of persistence is

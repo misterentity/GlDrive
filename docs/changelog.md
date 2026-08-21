@@ -66,6 +66,15 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   Both found by mapping subsystem surfaces for a feature, not from any symptom.
 
 ### Fixes
+- **v3.10.74** — a transient spread-pool handshake failure no longer disables FXP racing
+  for that server until the application restarts. Production v3.10.73 showed the main FTP
+  mount recovering on its second attempt while the independently initialized spread pool
+  timed out once and was then permanently absent from `/status` and auto-race eligibility.
+  Failed initializations now retain their factory and enter a single-flight background
+  recovery loop using the existing 30-second exponential backoff capped at 5 minutes.
+  Recovery is serialized against concurrent initialization, stale attempts cannot publish
+  after unmount or configuration replacement, and unmount/shutdown cancels and drains the
+  retry. Repeated failures log compact summaries instead of duplicate stack traces.
 - **v3.10.61** — three give-up paths that never expired, all the same shape: a decision made
   once and never revisited, on a resource that was still perfectly healthy. **IRC
   invite-only joins:** `#ent` is `+i`, so GlDrive can only enter when the site's announce bot
