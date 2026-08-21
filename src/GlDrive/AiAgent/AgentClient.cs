@@ -51,6 +51,16 @@ public sealed class AgentClient : IDisposable
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> HealedModels =
         new(StringComparer.OrdinalIgnoreCase);
 
+    // Known provider migrations are applied before the first network call. OpenRouter's
+    // retired-model 404 is still parsed dynamically below for future migrations, but a
+    // model we have already observed to be permanently dead must not fail once per app
+    // restart before healing to the same successor again.
+    private static readonly IReadOnlyDictionary<string, string> KnownModelMigrations =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["openai/gpt-oss-120b:free"] = "openai/gpt-oss-120b"
+        };
+
     public AgentClient(string apiKey, string model)
     {
         _model = model;
@@ -68,7 +78,11 @@ public sealed class AgentClient : IDisposable
     {
         // Start from the healed slug if a previous run in this process learned one *for the
         // configured model*. If the user switches models in Settings, the new one is used as-is.
-        var primary = HealedModels.TryGetValue(_model, out var healedFor) ? healedFor : _model;
+        var configured = ResolveKnownModelMigration(_model);
+        var primary = HealedModels.TryGetValue(_model, out var healedFor) ? healedFor : configured;
+        if (!configured.Equals(_model, StringComparison.OrdinalIgnoreCase))
+            Log.Information("AgentClient: using known replacement {Replacement} for retired model {Configured}",
+                configured, _model);
         var outcome = await AttemptAsync(primary, systemPrompt, userPrompt, ct);
 
         // Every attempt in the chain, so the reported failure is the one that actually explains
@@ -176,6 +190,48 @@ public sealed class AgentClient : IDisposable
             body, @"use this slug instead:\s*([A-Za-z0-9._\-]+/[A-Za-z0-9._:\-]+)",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         return m.Success ? m.Groups[1].Value.TrimEnd('.', ',', '"') : null;
+    }
+
+    internal static string ResolveKnownModelMigration(string model) =>
+        KnownModelMigrations.TryGetValue(model, out var replacement) ? replacement : model;
+
+    /// <summary>
+    /// Keep provider diagnostics useful without copying the complete response envelope
+    /// into a local log. Provider envelopes can contain account/user/request identifiers;
+    /// only the error code and message are needed for model healing and operator action.
+    /// The full body remains in-memory on <see cref="AgentRunOutcome.ErrorBody"/> for the
+    /// bounded retry logic.
+    /// </summary>
+    internal static string SummarizeErrorBodyForLog(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return "empty response body";
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            var error = root.TryGetProperty("error", out var errorEl) ? errorEl : root;
+            var message = error.ValueKind == JsonValueKind.Object &&
+                          error.TryGetProperty("message", out var messageEl)
+                ? messageEl.GetString()
+                : null;
+            var code = error.ValueKind == JsonValueKind.Object &&
+                       error.TryGetProperty("code", out var codeEl)
+                ? codeEl.ToString()
+                : null;
+            if (!string.IsNullOrWhiteSpace(message))
+            {
+                var safeMessage = message.Length > 400 ? message[..400] + "…" : message;
+                return string.IsNullOrWhiteSpace(code)
+                    ? $"message={safeMessage}"
+                    : $"code={code} message={safeMessage}";
+            }
+        }
+        catch (JsonException)
+        {
+            // Deliberately do not echo unstructured provider bodies: unlike a parsed
+            // error.message, their contents have no bounded or known-safe shape.
+        }
+        return $"unstructured response body ({Encoding.UTF8.GetByteCount(body)} bytes)";
     }
 
     /// <summary>Pulls the affordable token count out of a 402 body.</summary>
@@ -293,11 +349,11 @@ public sealed class AgentClient : IDisposable
 
             if (!resp.IsSuccessStatusCode)
             {
-                // Log the body: a bare "HTTP 404" hid a retired model slug for days because
-                // the actual reason ("No endpoints found for ...") was never recorded.
-                Log.Warning("AgentClient: {Model} returned HTTP {Status}: {Body}",
+                // Keep the actionable provider message while excluding envelope fields such
+                // as user_id/request_id from the durable application log.
+                Log.Warning("AgentClient: {Model} returned HTTP {Status}: {Summary}",
                     model, (int)resp.StatusCode,
-                    responseBody.Length > 500 ? responseBody[..500] + "…" : responseBody);
+                    SummarizeErrorBodyForLog(responseBody));
                 return new AgentRunOutcome
                 {
                     ErrorMessage = $"HTTP {(int)resp.StatusCode}",

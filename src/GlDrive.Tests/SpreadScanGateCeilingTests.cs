@@ -170,4 +170,14 @@ public class SpreadScanGateCeilingTests
         Assert.Contains("EffectiveMaxSize", args);
         Assert.DoesNotContain("spreadPool.MaxSize", args);
     }
+
+    [Fact]
+    public void Every_pool_connection_creation_branch_uses_the_gate_ceiling()
+    {
+        var source = ReadSource("src", "GlDrive", "Ftp", "FtpConnectionPool.cs");
+
+        Assert.DoesNotContain("Interlocked.Increment(ref _created) <= _maxSize", source);
+        Assert.Equal(3,
+            source.Split("Interlocked.Increment(ref _created) <= EffectiveMaxSize").Length - 1);
+    }
 }
