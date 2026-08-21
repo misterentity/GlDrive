@@ -66,6 +66,17 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   Both found by mapping subsystem surfaces for a feature, not from any symptom.
 
 ### Fixes
+- **v3.10.75** — connection creation now obeys the account login gate's effective
+  ceiling instead of the pool's larger nominal size. With the production shape
+  (`pool max=3`, `priority limit=1`), checking out the sole FXP connection used to
+  trigger a doomed second login, wait 30 seconds, and arm login-cap backoff; the pool
+  now waits for the live connection to return. The AI agent also preflights the known
+  retired `openai/gpt-oss-120b:free` slug to its working replacement, avoiding one 404
+  on every restart, and provider error logging now retains only the actionable error
+  code/message rather than durable account/request identifiers. The screenshot renderer
+  now runs without a watchdog or shared crash-marker lifecycle; previously its clean exit
+  deleted the `.running` marker belonging to the live production instance and disabled
+  crash recovery until the next normal restart.
 - **v3.10.74** — a transient spread-pool handshake failure no longer disables FXP racing
   for that server until the application restarts. Production v3.10.73 showed the main FTP
   mount recovering on its second attempt while the independently initialized spread pool

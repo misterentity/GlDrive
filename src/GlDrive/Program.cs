@@ -21,7 +21,8 @@ public static class Program
         // Normal mode — spawn watchdog then start WPF app.
         // EXCEPT during --apply-update: the elevated updater owns restart and rollback.
         // Spawning a second watchdog here would race file replacement and relaunch.
-        if (Array.IndexOf(args, "--apply-update") < 0)
+        if (Array.IndexOf(args, "--apply-update") < 0 &&
+            Array.IndexOf(args, "--screenshots") < 0)
             SpawnWatchdog();
 
         var app = new App();
