@@ -1351,10 +1351,26 @@ public partial class ExtractorWindow : Window
 
         try
         {
-            if (!await WaitForVolumeSetReady(path, _lifetimeCts.Token))
+            var readiness = await WaitForVolumeSetReady(path, _lifetimeCts.Token);
+            if (readiness != ArchiveWaitOutcome.Ready)
             {
-                Log.Warning("Extractor: archive was not ready before timeout — {Path}", path);
-                ScheduleWatchRetry(path);
+                // The two endings are not the same event and must not read the same in the log.
+                // A stall may clear on a retry; the ceiling means the set grew for twelve hours
+                // straight, and re-reading tens of GB per cycle cannot help it. ArchiveWait
+                // .DeservesRetry has drawn that distinction since v3.10.73 — until v3.10.76
+                // nothing in production branched on it, so the ceiling burned retries anyway.
+                if (ArchiveWait.DeservesRetry(readiness))
+                {
+                    Log.Warning("Extractor: archive stalled before it was ready — {Path}", path);
+                    ScheduleWatchRetry(path);
+                }
+                else
+                {
+                    Log.Warning(
+                        "Extractor: archive never stopped growing — abandoning {Path} without consuming a retry",
+                        path);
+                    AbandonWatchedPath(path, "still growing at the arrival ceiling", durable: false);
+                }
                 return;
             }
 
@@ -1556,21 +1572,27 @@ public partial class ExtractorWindow : Window
     /// parts were still downloading — see <see cref="VolumeSetReadiness"/> for the three log
     /// clusters that produced, including two that were misreported as unrecoverable corruption.
     ///
-    /// The first volume keeps its own settle check, bounded by <paramref name="maxWaitMs"/>.
-    /// The set-wide loop that follows is NOT bounded by duration — see
-    /// <see cref="VolumeSetArrivalBudget"/>: it ends only when the set stops changing for five
-    /// minutes, or at a twelve-hour ceiling. A set that is still arriving has not stalled, no
-    /// matter how long it has been arriving, and calling it a timeout burned the bounded watch
-    /// retries that exist for real faults.
+    /// NEITHER phase is bounded by duration — see <see cref="VolumeSetArrivalBudget"/>: each
+    /// ends only when the set stops changing for <paramref name="noProgressBudgetMs"/>, or at a
+    /// twelve-hour ceiling. A set that is still arriving has not stalled, no matter how long it
+    /// has been arriving, and calling it a timeout burned the bounded watch retries that exist
+    /// for real faults.
+    ///
+    /// v3.10.73 converted the set-wide loop to that rule but left the first-volume phase on
+    /// wall clock, which merely moved the false timeout one gate upstream: across 2026-08-21
+    /// the set-wide stall count was 0 while the first-volume timeout went 0 → 2, exactly paired
+    /// with the caller's "not ready before timeout". Both were false.
     /// </summary>
-    private static async Task<bool> WaitForVolumeSetReady(string path, CancellationToken ct, int maxWaitMs = 300_000)
+    private static async Task<ArchiveWaitOutcome> WaitForVolumeSetReady(
+        string path, CancellationToken ct, int noProgressBudgetMs = 300_000)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
-        if (!await WaitForFileReady(path, ct, maxWaitMs)) return false;
+        var firstVolume = await WaitForFileReady(path, ct, noProgressBudgetMs);
+        if (firstVolume != ArchiveWaitOutcome.Ready) return firstVolume;
 
         // Not an old-style multi-volume set: WaitForFileReady already covered it in full.
-        if (TryDiscoverRarVolumes(path) is not { Count: > 1 }) return true;
+        if (TryDiscoverRarVolumes(path) is not { Count: > 1 }) return ArchiveWaitOutcome.Ready;
 
         var previous = SampleVolumeSet(path);
         var waitedCycles = 0;
@@ -1594,7 +1616,7 @@ public partial class ExtractorWindow : Window
                         "Extractor: volume set settled after {Seconds}s — {Path} ({Count} parts, {Bytes} bytes)",
                         sw.ElapsedMilliseconds / 1000, path, current.Count, current.TotalBytes);
 
-                return true;
+                return ArchiveWaitOutcome.Ready;
             }
 
             if (VolumeSetReadiness.IsStillArriving(previous, current))
@@ -1620,7 +1642,7 @@ public partial class ExtractorWindow : Window
             // on total elapsed time timed out sets that were visibly still growing, and the
             // resulting retries abandoned them with the reason "no progress after 5 retries".
             var verdict = VolumeSetArrivalBudget.Evaluate(
-                sw.ElapsedMilliseconds - lastProgressMs, sw.ElapsedMilliseconds);
+                sw.ElapsedMilliseconds - lastProgressMs, sw.ElapsedMilliseconds, noProgressBudgetMs);
 
             if (verdict == VolumeSetArrivalBudget.Verdict.KeepWaiting) continue;
 
@@ -1632,9 +1654,9 @@ public partial class ExtractorWindow : Window
             else
                 Log.Warning(
                     "Extractor: volume set stalled — no change for {Seconds}s — {Path} ({Count} parts, {Bytes} bytes, {Locked} locked)",
-                    VolumeSetArrivalBudget.NoProgressBudgetMs / 1000, path, current.Count, current.TotalBytes, current.LockedCount);
+                    noProgressBudgetMs / 1000, path, current.Count, current.TotalBytes, current.LockedCount);
 
-            return false;
+            return ArchiveWait.FromVerdict(verdict);
         }
     }
 
@@ -1708,13 +1730,20 @@ public partial class ExtractorWindow : Window
     /// first volume sorts after every continuation part, so it lands LAST. A watcher event on
     /// any .rNN resolves to a .rar that does not exist yet.
     /// </summary>
-    private static async Task<bool> WaitForFileReady(string path, CancellationToken ct, int maxWaitMs = 300_000)
+    private static async Task<ArchiveWaitOutcome> WaitForFileReady(
+        string path, CancellationToken ct, int noProgressBudgetMs = 300_000)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         long lastSize = -1;
         int stableCount = 0;
 
-        while (sw.ElapsedMilliseconds < maxWaitMs)
+        // The surrounding set is the evidence this wait is bounded against. It is sampled from
+        // the first tick so that "nothing has changed" is measured from the start of the wait
+        // and a set that never moves still gives up after exactly the old budget.
+        var previousSet = SampleVolumeSet(path);
+        var lastSetProgressMs = 0L;
+
+        while (true)
         {
             await Task.Delay(2000, ct);
 
@@ -1724,29 +1753,56 @@ public partial class ExtractorWindow : Window
                 var currentSize = exists ? new FileInfo(path).Length : 0;
 
                 // The decision itself lives in FileArrivalGate, which cannot express "give up".
-                // Only the budget above ends this wait unsuccessfully, so the caller's timeout
+                // Only the budget below ends this wait unsuccessfully, so the caller's timeout
                 // message is now true whenever it is printed.
                 if (FileArrivalGate.Observe(exists, currentSize, ref lastSize, ref stableCount)
-                    != FileArrivalGate.Decision.ConfirmWithExclusiveOpen)
-                    continue;
-
-                // Size stable for 4+ seconds — confirm with an exclusive open.
-                try
+                    == FileArrivalGate.Decision.ConfirmWithExclusiveOpen)
                 {
-                    using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
-                    return true; // File is ready
-                }
-                catch (IOException)
-                {
-                    stableCount = 0; // Still locked, keep waiting
+                    // Size stable for 4+ seconds — confirm with an exclusive open.
+                    try
+                    {
+                        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
+                        return ArchiveWaitOutcome.Ready;
+                    }
+                    catch (IOException)
+                    {
+                        stableCount = 0; // Still locked, keep waiting
+                    }
                 }
             }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
-        }
 
-        Log.Warning("Timeout waiting for file to be ready: {Path}", path);
-        return false;
+            // Why this wait is bounded on the SET and not on this one file: for old-style
+            // .rar/.r00/.r01… sets the first volume sorts after every continuation part, so it
+            // lands LAST. While it is absent, this file shows no progress by construction — but
+            // the set around it is visibly growing, and a set that is still arriving has not
+            // stalled. v3.10.73 converted the set-wide loop below to that rule and left this
+            // one on wall clock, which is the whole of what remained: on 2026-08-21 both
+            // first-volume timeouts were false, and Mother.Mary.2026.2160p burned two of its
+            // five watch retries before the same set settled at 845s and extracted cleanly.
+            var currentSet = SampleVolumeSet(path);
+            if (VolumeSetReadiness.IsStillArriving(previousSet, currentSet))
+                lastSetProgressMs = sw.ElapsedMilliseconds;
+            previousSet = currentSet;
+
+            var verdict = VolumeSetArrivalBudget.Evaluate(
+                sw.ElapsedMilliseconds - lastSetProgressMs, sw.ElapsedMilliseconds, noProgressBudgetMs);
+
+            if (verdict == VolumeSetArrivalBudget.Verdict.KeepWaiting) continue;
+
+            if (verdict == VolumeSetArrivalBudget.Verdict.CeilingReached)
+                Log.Warning(
+                    "Extractor: first volume still not settled after {Hours}h — giving up on {Path}. " +
+                    "This is a ceiling, not a stall; nothing here is retryable.",
+                    VolumeSetArrivalBudget.AbsoluteCeilingMs / 3_600_000, path);
+            else
+                Log.Warning(
+                    "Timeout waiting for file to be ready: {Path} — no change to its volume set for {Seconds}s",
+                    path, noProgressBudgetMs / 1000);
+
+            return ArchiveWait.FromVerdict(verdict);
+        }
     }
 
     private static string? ResolveFirstVolumePath(string path)
