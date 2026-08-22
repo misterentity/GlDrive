@@ -65,10 +65,21 @@ public static class VolumeSetArrivalBudget
     /// The ceiling is checked first so a set that grows forever terminates rather than renewing
     /// its inactivity budget indefinitely.
     /// </summary>
-    public static Verdict Evaluate(long msSinceLastProgress, long msElapsedTotal)
+    public static Verdict Evaluate(long msSinceLastProgress, long msElapsedTotal) =>
+        Evaluate(msSinceLastProgress, msElapsedTotal, NoProgressBudgetMs);
+
+    /// <summary>
+    /// As <see cref="Evaluate(long,long)"/>, with the inactivity budget supplied by the caller.
+    ///
+    /// This exists so the FIRST-VOLUME wait can be governed by the same rule as the set-wide
+    /// one while keeping its caller-supplied budget. See the v3.10.76 note on this class: the
+    /// first-volume gate was the half of the wait that v3.10.73 did not convert, and it was
+    /// still bounded on duration.
+    /// </summary>
+    public static Verdict Evaluate(long msSinceLastProgress, long msElapsedTotal, long noProgressBudgetMs)
     {
         if (msElapsedTotal >= AbsoluteCeilingMs) return Verdict.CeilingReached;
-        if (msSinceLastProgress >= NoProgressBudgetMs) return Verdict.Stalled;
+        if (msSinceLastProgress >= noProgressBudgetMs) return Verdict.Stalled;
         return Verdict.KeepWaiting;
     }
 
