@@ -66,6 +66,13 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   Both found by mapping subsystem surfaces for a feature, not from any symptom.
 
 ### Fixes
+- **v3.10.77** — auto-race now performs the same destination-role preflight as the
+  race engine before starting a job. A download-only source paired with an affil-blocked
+  destination previously produced hundreds of guaranteed `No viable destinations`
+  failures; it is now recorded as an informational skip without consuming a race slot or
+  adding a failed history row. Windows notification-area failures are also contained at
+  the H.NotifyIcon boundary, so a transient Explorer/notification glitch can no longer
+  surface as an unhandled UI exception.
 - **v3.10.75** — connection creation now obeys the account login gate's effective
   ceiling instead of the pool's larger nominal size. With the production shape
   (`pool max=3`, `priority limit=1`), checking out the sole FXP connection used to

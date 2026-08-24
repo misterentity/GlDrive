@@ -349,9 +349,9 @@ public class SpreadJob : IDisposable
             // Pre-compute affil check once — match group name at end of release
             // (scene releases end with -GROUPNAME). Contains() caused false positives
             // where short group names like "NOMA" matched inside "Narco.Menomanites".
-            _affilCache[serverId] = config.SpreadSite.Affils.Count > 0 &&
-                config.SpreadSite.Affils.Any(g =>
-                    releaseName.EndsWith($"-{g}", StringComparison.OrdinalIgnoreCase));
+            _affilCache[serverId] = !CandidatePredicates.CanReceiveRelease(
+                releaseName, config.SpreadSite.Affils,
+                downloadOnly: false, destinationBlacklisted: false);
         }
     }
 

@@ -39,6 +39,27 @@ internal static class CandidatePredicates
     internal const bool BlacklistExcludesSourceRole = false;
 
     /// <summary>
+    /// Whether a site can ever receive this release before any FTP work begins.
+    /// Auto-race used to check rules and section mappings but not the three
+    /// destination-only exclusions that SpreadJob applies later. In the common
+    /// production shape (a download-only source plus an affil-blocked peer), that
+    /// started a job which was guaranteed to fail with "No viable destinations".
+    /// Keep the suffix match identical to SpreadJob's affil gate: a short group such
+    /// as NOMA must match "-NOMA" only, not text in the release title.
+    /// </summary>
+    internal static bool CanReceiveRelease(
+        string releaseName,
+        IEnumerable<string>? affils,
+        bool downloadOnly,
+        bool destinationBlacklisted)
+    {
+        if (downloadOnly || destinationBlacklisted) return false;
+        return affils == null || !affils.Any(group =>
+            !string.IsNullOrWhiteSpace(group) &&
+            releaseName.EndsWith($"-{group}", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
     /// May a directory scan fall back onto the dedicated FXP (spread) pool?
     ///
     /// The fallback exists so a saturated main pool can't abandon a scan outright, but

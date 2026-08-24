@@ -929,6 +929,45 @@ public class SpreadManager : IDisposable
             : "";
         allowed = sectionEligible;
 
+        // Destination-role preflight. Rules and section mapping can leave two valid
+        // participants while every one of them is impossible as a destination (for
+        // example, production has a download-only source and a peer whose affil list
+        // owns the release group). Starting that job cannot transfer a byte; it only
+        // creates a failed history row and a WRN. SpreadJob repeats these checks after
+        // source discovery because a manual race still needs the guard, but auto-race
+        // can reject the provably impossible topology before spending a race slot.
+        var receiverExclusions = new List<string>();
+        var viableReceiverCount = 0;
+        foreach (var serverId in allowed)
+        {
+            var serverConfig = _config.Servers.First(s => s.Id == serverId);
+            var blacklistReason = _blacklist.Get(serverId, category)?.Reason;
+            var destinationBlacklisted = _blacklist.IsBlacklisted(serverId, category)
+                && !MkdFailureClassifier.IsPermanentMkdPathDenial(blacklistReason);
+
+            if (CandidatePredicates.CanReceiveRelease(
+                    releaseName, serverConfig.SpreadSite.Affils,
+                    serverConfig.SpreadSite.DownloadOnly, destinationBlacklisted))
+            {
+                viableReceiverCount++;
+                continue;
+            }
+
+            var why = serverConfig.SpreadSite.DownloadOnly ? "download-only"
+                : destinationBlacklisted ? "destination-blacklisted"
+                : "affil-blocked";
+            receiverExclusions.Add($"{serverConfig.Name}: {why}");
+        }
+
+        if (viableReceiverCount == 0)
+        {
+            var reason = $"No viable destination ({string.Join(", ", receiverExclusions)})";
+            Log.Information("Auto-race skipped: {Reason} for {Release} [{Section}]",
+                reason, releaseName, category);
+            AutoRaceAttempted?.Invoke(category, releaseName, $"Skipped — {reason}");
+            return;
+        }
+
         // Need at least 2 participating servers for a race — source + dest.
         if (allowed.Count < 2)
         {
