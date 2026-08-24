@@ -13,6 +13,18 @@ namespace GlDrive.Tests;
 public class CandidatePredicatesTests
 {
     [Theory]
+    [InlineData("Show.S01E01-GROUP", "GROUP", false, false, true)]
+    [InlineData("Show.S01E01-group", "GROUP", false, false, true)]
+    [InlineData("Narco.Menomanites.S01E01-OTHER", "NOMA", false, false, false)]
+    [InlineData("Show.S01E01-OTHER", "GROUP", true, false, true)]
+    [InlineData("Show.S01E01-OTHER", "GROUP", false, true, true)]
+    [InlineData("Show.S01E01-OTHER", "GROUP", false, false, false)]
+    public void CanReceiveRelease_applies_destination_only_exclusions(
+        string release, string affil, bool downloadOnly, bool blacklisted, bool excluded)
+        => Assert.Equal(!excluded, CandidatePredicates.CanReceiveRelease(
+            release, new[] { affil }, downloadOnly, blacklisted));
+
+    [Theory]
     [InlineData(0, false)]
     [InlineData(3, false)]
     [InlineData(4, true)]   // cap boundary

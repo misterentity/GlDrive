@@ -67,8 +67,30 @@ public static class TrayIconSetup
         // Wire balloon tip notifications
         vm.ShowNotificationRequested = (title, message) =>
         {
-            taskbarIcon.ShowNotification(title, message, NotificationIcon.Info);
+            TryShowNotification(() =>
+                taskbarIcon.ShowNotification(title, message, NotificationIcon.Info));
         };
+    }
+
+    /// <summary>
+    /// Windows can reject a notification transiently while Explorer is restarting or
+    /// the notification-area icon is being recreated. A May production trace showed
+    /// H.NotifyIcon throwing InvalidOperationException here on the UI dispatcher. A
+    /// balloon tip is best-effort and must never become an unhandled UI exception.
+    /// </summary>
+    internal static bool TryShowNotification(Action show)
+    {
+        ArgumentNullException.ThrowIfNull(show);
+        try
+        {
+            show();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Tray notification could not be shown");
+            return false;
+        }
     }
 
     private static void BuildMenu(ContextMenu menu, TrayViewModel vm)
