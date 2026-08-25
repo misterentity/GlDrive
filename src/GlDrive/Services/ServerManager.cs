@@ -185,7 +185,10 @@ public class ServerManager : IDisposable
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "Failed to mount server {Name} after {Elapsed}ms — queued for retry",
+                // A queued, forever-retried mount is degraded availability, not an
+                // unhandled application error. Keep the exception at Warning so the
+                // remote/network cause remains diagnosable without producing a false ERR.
+                Log.Warning(ex, "Failed to mount server {Name} after {Elapsed}ms — queued for retry",
                     server.Name, sw.ElapsedMilliseconds);
                 // A failed mount used to be permanent for the process lifetime: the
                 // MountService (and the ConnectionMonitor inside it that would have
@@ -277,7 +280,7 @@ public class ServerManager : IDisposable
                             Log.Warning(ex, "Remount attempt {Attempt} for {Name} failed — next try in {Delay}",
                                 attempt, cfg!.Name, delay);
                         else
-                            Log.Warning("Remount attempt {Attempt} for {Name} failed ({Error}) — next try in {Delay}",
+                            Log.Information("Remount attempt {Attempt} for {Name} failed ({Error}) — next try in {Delay}",
                                 attempt, cfg!.Name, ex.Message, delay);
                         _lastRemountError[serverId] = ex.Message;
                     }

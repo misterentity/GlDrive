@@ -66,6 +66,20 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   Both found by mapping subsystem surfaces for a feature, not from any symptom.
 
 ### Fixes
+- **v3.10.79** — spread ownership now requires an exact file-size match and ignores
+  destination files while their transfer is in flight. A relay reset could leave a
+  same-named truncated file; filename-only ownership then suppressed the retry and held
+  the race for the full 10-minute completion-marker wait. Later full-size observations
+  also revoke any smaller copy provisionally seen first. Startup mount failures that are
+  queued for recovery are logged as warnings rather than false application errors, and
+  unchanged steady-state remount summaries are informational while the opening, changed,
+  and hourly failures retain warning-level stack evidence.
+- **v3.10.78** — auto-race destination preflight now uses the live spread-pool registry,
+  not configuration eligibility alone. A configured server whose FTP endpoint had been
+  unreachable for eleven days still counted as a viable receiver, so 128 impossible jobs
+  started over three days and later blamed the remaining site's affiliation filter. A
+  disconnected destination is now reported as such and skipped before consuming a race
+  slot; the check fails open during the ambiguous all-disconnected startup window.
 - **v3.10.77** — auto-race now performs the same destination-role preflight as the
   race engine before starting a job. A download-only source paired with an affil-blocked
   destination previously produced hundreds of guaranteed `No viable destinations`
