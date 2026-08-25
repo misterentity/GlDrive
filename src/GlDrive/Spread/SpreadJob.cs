@@ -349,9 +349,14 @@ public class SpreadJob : IDisposable
             // Pre-compute affil check once — match group name at end of release
             // (scene releases end with -GROUPNAME). Contains() caused false positives
             // where short group names like "NOMA" matched inside "Narco.Menomanites".
+            // destinationReachable: true — this loop iterates `pools`, which SpreadManager
+            // builds from the live spread-pool registry, so every server reaching here is
+            // connected by construction. Reachability is re-checked here only to keep the
+            // predicate's contract explicit; the filtering already happened upstream.
             _affilCache[serverId] = !CandidatePredicates.CanReceiveRelease(
                 releaseName, config.SpreadSite.Affils,
-                downloadOnly: false, destinationBlacklisted: false);
+                downloadOnly: false, destinationBlacklisted: false,
+                destinationReachable: true);
         }
     }
 

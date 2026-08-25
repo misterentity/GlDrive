@@ -46,14 +46,29 @@ internal static class CandidatePredicates
     /// started a job which was guaranteed to fail with "No viable destinations".
     /// Keep the suffix match identical to SpreadJob's affil gate: a short group such
     /// as NOMA must match "-NOMA" only, not text in the release title.
+    ///
+    /// <paramref name="destinationReachable"/> MUST be live connectivity — whether the
+    /// server currently has a spread pool — not merely whether it is configured and
+    /// enabled. v3.10.78: the first three exclusions are all CONFIG facts, so a server
+    /// that was unreachable for eleven days still counted as a viable receiver. SYN's
+    /// FTP host died 2026-08-13; SpreadManager's destination preflight kept scoring it
+    /// eligible, so <c>viableReceiverCount</c> was never 0 and the preflight fired once
+    /// in three days while 128 jobs started and failed with the exact "No viable
+    /// destinations" it exists to prevent. SpreadJob then builds its participant map
+    /// from the live pool registry, which drops SYN, leaving only the affil-blocked
+    /// peer. A preflight that asks "is there a destination?" of configuration alone has
+    /// no evidence for the answer it gives (recurring pattern #1), and a guard sized
+    /// against config eligibility rather than the contended resource — an actually
+    /// connected server — is inert once the two drift apart (recurring pattern #8).
     /// </summary>
     internal static bool CanReceiveRelease(
         string releaseName,
         IEnumerable<string>? affils,
         bool downloadOnly,
-        bool destinationBlacklisted)
+        bool destinationBlacklisted,
+        bool destinationReachable)
     {
-        if (downloadOnly || destinationBlacklisted) return false;
+        if (downloadOnly || destinationBlacklisted || !destinationReachable) return false;
         return affils == null || !affils.Any(group =>
             !string.IsNullOrWhiteSpace(group) &&
             releaseName.EndsWith($"-{group}", StringComparison.OrdinalIgnoreCase));

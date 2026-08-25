@@ -22,7 +22,42 @@ public class CandidatePredicatesTests
     public void CanReceiveRelease_applies_destination_only_exclusions(
         string release, string affil, bool downloadOnly, bool blacklisted, bool excluded)
         => Assert.Equal(!excluded, CandidatePredicates.CanReceiveRelease(
-            release, new[] { affil }, downloadOnly, blacklisted));
+            release, new[] { affil }, downloadOnly, blacklisted, destinationReachable: true));
+
+    /// <summary>
+    /// v3.10.78. An unreachable server is not a viable destination however permissive its
+    /// configuration is. SYN carried no affils and was not download-only, so all three
+    /// config-only exclusions passed it while its FTP host had been dead for eleven days;
+    /// the preflight therefore never fired and 128 provably-impossible jobs ran anyway.
+    /// </summary>
+    [Fact]
+    public void CanReceiveRelease_excludes_an_unreachable_server_with_permissive_config()
+    {
+        // Exactly SYN's shape: no affils, not download-only, not blacklisted.
+        Assert.True(CandidatePredicates.CanReceiveRelease(
+            "Show.S01E01-DOLORES", affils: null,
+            downloadOnly: false, destinationBlacklisted: false, destinationReachable: true));
+
+        Assert.False(CandidatePredicates.CanReceiveRelease(
+            "Show.S01E01-DOLORES", affils: null,
+            downloadOnly: false, destinationBlacklisted: false, destinationReachable: false));
+    }
+
+    /// <summary>
+    /// Reachability must be able to exclude on its own — if it only ever narrowed an
+    /// already-excluded server the guard would be inert, which is the failure mode
+    /// (recurring pattern #8) that let the original defect run for eleven days.
+    /// </summary>
+    [Fact]
+    public void CanReceiveRelease_reachability_is_independent_of_the_config_exclusions()
+    {
+        // Config says yes on every axis; only reachability differs.
+        var configPermissive = new[] { "OTHERGROUP" };
+        Assert.True(CandidatePredicates.CanReceiveRelease(
+            "Show.S01E01-DOLORES", configPermissive, false, false, destinationReachable: true));
+        Assert.False(CandidatePredicates.CanReceiveRelease(
+            "Show.S01E01-DOLORES", configPermissive, false, false, destinationReachable: false));
+    }
 
     [Theory]
     [InlineData(0, false)]
