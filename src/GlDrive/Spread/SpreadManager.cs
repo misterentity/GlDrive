@@ -938,16 +938,29 @@ public class SpreadManager : IDisposable
         // can reject the provably impossible topology before spending a race slot.
         var receiverExclusions = new List<string>();
         var viableReceiverCount = 0;
+        // Live connectivity, not configuration. A server with no spread pool cannot
+        // receive a byte, and SpreadJob's participant map is built from this same
+        // registry — so counting an unreachable server as a viable receiver here
+        // guarantees the job fails later with "No viable destinations" (v3.10.78).
+        var connectedIds = GetConnectedServerIds();
+        // Fail OPEN when nothing is connected yet: at startup, and in the window
+        // between an unmount and pool recovery, an empty registry is indistinguishable
+        // from "every site is down". Suppressing every auto-race on that ambiguity
+        // would trade a noisy failure for a silent one, so reachability is only
+        // allowed to EXCLUDE a server while at least one server is actually up.
+        var reachabilityKnown = connectedIds.Count > 0;
         foreach (var serverId in allowed)
         {
             var serverConfig = _config.Servers.First(s => s.Id == serverId);
             var blacklistReason = _blacklist.Get(serverId, category)?.Reason;
             var destinationBlacklisted = _blacklist.IsBlacklisted(serverId, category)
                 && !MkdFailureClassifier.IsPermanentMkdPathDenial(blacklistReason);
+            var destinationReachable = !reachabilityKnown || connectedIds.Contains(serverId);
 
             if (CandidatePredicates.CanReceiveRelease(
                     releaseName, serverConfig.SpreadSite.Affils,
-                    serverConfig.SpreadSite.DownloadOnly, destinationBlacklisted))
+                    serverConfig.SpreadSite.DownloadOnly, destinationBlacklisted,
+                    destinationReachable))
             {
                 viableReceiverCount++;
                 continue;
@@ -955,6 +968,7 @@ public class SpreadManager : IDisposable
 
             var why = serverConfig.SpreadSite.DownloadOnly ? "download-only"
                 : destinationBlacklisted ? "destination-blacklisted"
+                : !destinationReachable ? "not connected"
                 : "affil-blocked";
             receiverExclusions.Add($"{serverConfig.Name}: {why}");
         }
