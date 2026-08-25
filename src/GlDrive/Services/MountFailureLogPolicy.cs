@@ -12,9 +12,10 @@ namespace GlDrive.Services;
 /// WRN+stack rolled the log past its cap and evicted a day of history. Volume is not
 /// free: it destroys the evidence you need for the NEXT diagnosis.
 ///
-/// So: keep full detail while the failure is still news (and whenever the error
-/// CHANGES, which is the genuinely diagnostic moment), then fall back to a one-line
-/// summary. At the 5 minute cap, every-12th gives one detailed record per hour.
+/// So: keep warning-level full detail while the failure is still news (and whenever
+/// the error CHANGES, which is the genuinely diagnostic moment), then fall back to an
+/// information-level one-line summary. At the 5 minute cap, every-12th gives one
+/// warning with detailed evidence per hour.
 /// </summary>
 public static class MountFailureLogPolicy
 {

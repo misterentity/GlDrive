@@ -1,4 +1,6 @@
 using GlDrive.Services;
+using System;
+using System.IO;
 using Xunit;
 
 namespace GlDrive.Tests;
@@ -73,5 +75,36 @@ public class MountFailureLogPolicyTests
 
         Assert.Equal(3 + 226 / MountFailureLogPolicy.PeriodicInterval, full);
         Assert.True(full < 25, $"expected a large reduction, got {full} full logs in 226 attempts");
+    }
+
+    [Fact]
+    public void Recovered_startup_mount_failure_is_not_logged_as_an_application_error()
+    {
+        var source = ReadServerManagerSource();
+
+        Assert.Contains("Log.Warning(ex, \"Failed to mount server", source);
+        Assert.DoesNotContain("Log.Error(ex, \"Failed to mount server", source);
+    }
+
+    [Fact]
+    public void Repetitive_compact_remount_summary_is_information_level()
+    {
+        var source = ReadServerManagerSource();
+
+        Assert.Contains("Log.Information(\"Remount attempt {Attempt} for {Name} failed ({Error})", source);
+        Assert.DoesNotContain("Log.Warning(\"Remount attempt {Attempt} for {Name} failed ({Error})", source);
+    }
+
+    private static string ReadServerManagerSource()
+    {
+        var dir = AppContext.BaseDirectory;
+        for (var i = 0; i < 12 && dir != null; i++)
+        {
+            var candidate = Path.Combine(dir, "src", "GlDrive", "Services", "ServerManager.cs");
+            if (File.Exists(candidate)) return File.ReadAllText(candidate);
+            dir = Directory.GetParent(dir)?.FullName;
+        }
+
+        throw new InvalidOperationException("Could not locate ServerManager.cs from " + AppContext.BaseDirectory);
     }
 }

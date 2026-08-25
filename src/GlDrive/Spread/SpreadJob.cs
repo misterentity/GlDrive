@@ -40,6 +40,8 @@ public class SpreadJob : IDisposable
     // File tracking (OrdinalIgnoreCase: FTP servers may return different casing)
     private readonly Dictionary<string, HashSet<string>> _fileOwnership = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, SpreadFileInfo> _fileInfos = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<(string fileName, string serverId), long> _observedFileSizes =
+        new(new FileDstTupleComparer());
     private readonly Dictionary<string, SkiplistAction> _fileActions = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, int> _serverFileCount = new(); // per-server owned file count
     private readonly Dictionary<string, SiteProgress> _siteProgress = new();
@@ -1635,14 +1637,17 @@ public class SpreadJob : IDisposable
         // IsComplete=true just because its own tiny file set matched the
         // partial _fileInfos snapshot.
         int finalTotal;
+        Dictionary<string, int> finalOwned;
         lock (_ownershipLock)
         {
             finalTotal = _expectedFileCount > 0 ? _expectedFileCount : _fileInfos.Count;
+            finalOwned = new Dictionary<string, int>(_serverFileCount);
         }
         lock (_progressLock)
         {
             foreach (var progress in _siteProgress.Values)
             {
+                progress.FilesOwned = finalOwned.GetValueOrDefault(progress.ServerId);
                 progress.FilesTotal = finalTotal;
                 progress.IsComplete = progress.FilesOwned >= finalTotal && finalTotal > 0;
             }
@@ -1853,20 +1858,13 @@ public class SpreadJob : IDisposable
                 serverId, Section, siteRules, globalRules);
             if (action == SkiplistAction.Deny) continue;
 
-            if (!_fileOwnership.TryGetValue(file.Name, out var owners))
-            {
-                owners = new HashSet<string>();
-                _fileOwnership[file.Name] = owners;
-            }
-            if (owners.Add(serverId))
-            {
-                _serverFileCount.TryGetValue(serverId, out var cnt);
-                _serverFileCount[serverId] = cnt + 1;
-            }
+            var isNewFile = !_fileInfos.ContainsKey(file.Name);
+            FileOwnershipReconciler.Observe(
+                serverId, file, _fileOwnership, _fileInfos, _observedFileSizes,
+                _serverFileCount, _inFlightFiles.Contains((file.Name, serverId)));
 
-            if (!_fileInfos.ContainsKey(file.Name))
+            if (isNewFile && _fileInfos.ContainsKey(file.Name))
             {
-                _fileInfos[file.Name] = file;
                 if (action is SkiplistAction.Unique or SkiplistAction.Similar)
                     _fileActions[file.Name] = action;
             }
@@ -1874,7 +1872,9 @@ public class SpreadJob : IDisposable
             // Only arm for SFVs not already counted — re-arming for a parsed SFV
             // wasted a download every scan cycle. (Called under _ownershipLock.)
             if (fileName.EndsWith(".sfv", StringComparison.OrdinalIgnoreCase)
-                && !_parsedSfvs.Contains(file.Name))
+                && !_parsedSfvs.Contains(file.Name)
+                && _fileOwnership.TryGetValue(file.Name, out var observedOwners)
+                && observedOwners.Contains(serverId))
                 _pendingSfv = (serverId, file.FullPath, file.Name);
         }
 
@@ -2353,6 +2353,7 @@ public class SpreadJob : IDisposable
 
                 lock (_ownershipLock)
                 {
+                    _observedFileSizes[(file.Name, dstId)] = file.Size;
                     if (_fileOwnership.TryGetValue(file.Name, out var owners) && owners.Add(dstId))
                     {
                         _serverFileCount.TryGetValue(dstId, out var cnt);
