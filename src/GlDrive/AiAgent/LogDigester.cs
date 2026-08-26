@@ -8,13 +8,23 @@ namespace GlDrive.AiAgent;
 public sealed class LogDigester
 {
     private readonly string _aiDataRoot;
+    private int _parseSkips;
 
     public LogDigester(string aiDataRoot) { _aiDataRoot = aiDataRoot; }
+
+    /// <summary>
+    /// Telemetry rows dropped because they would not deserialize, counted across every stream read
+    /// so far. A skipped row is lost evidence, and this used to be recorded with Log.Debug against
+    /// a sink that runs at Information — so it left no trace anywhere. Build() surfaces a non-zero
+    /// count at Warning; the property exists so the loss is also assertable in tests.
+    /// </summary>
+    public int ParseSkips => _parseSkips;
 
     public DigestBundle Build(int windowDays, DateTime? nowOverride = null)
     {
         var now = nowOverride ?? DateTime.Now;
         var windowStart = now.AddDays(-windowDays).Date;
+        _parseSkips = 0;
         var bundle = new DigestBundle
         {
             WindowStart = windowStart.ToString("O"),
@@ -44,6 +54,11 @@ public sealed class LogDigester
             ["matchedAnnounces"]  = $"matched-announces-{now:yyyyMMdd}.jsonl"
         };
 
+        if (_parseSkips > 0)
+            Log.Warning("Digest dropped {Count} unparseable telemetry row(s) from {Root} over the "
+                      + "{Days}-day window — the agent is reasoning on incomplete evidence.",
+                _parseSkips, _aiDataRoot, windowDays);
+
         return bundle;
     }
 
@@ -62,7 +77,7 @@ public sealed class LogDigester
         }
     }
 
-    private static IEnumerable<T> ReadFile<T>(string path)
+    private IEnumerable<T> ReadFile<T>(string path)
     {
         if (!File.Exists(path)) yield break;
         Stream? raw = null;
@@ -80,7 +95,16 @@ public sealed class LogDigester
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 T? v;
                 try { v = JsonSerializer.Deserialize<T>(line); }
-                catch (Exception ex) { Log.Debug(ex, "digester parse skip {Path}", path); continue; }
+                catch (Exception ex)
+                {
+                    // Skip the row, not the stream — one bad line must not cost the whole file.
+                    // But count it: Build() reports a non-zero total at Warning, because a
+                    // silently-dropped row is exactly how the 2026-08-14 poison row stayed
+                    // invisible for 40+ agent runs.
+                    _parseSkips++;
+                    Log.Debug(ex, "digester parse skip {Path}", path);
+                    continue;
+                }
                 if (v != null) yield return v;
             }
         }
