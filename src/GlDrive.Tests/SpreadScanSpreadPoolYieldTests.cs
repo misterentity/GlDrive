@@ -107,7 +107,7 @@ public class SpreadScanSpreadPoolYieldTests
         // yield re-creates the 1,464 warnings/day that buried the real signal.
         // Window widened in v3.10.54: the branch gained the contention/fault severity
         // split and its rationale. The `else if (!yieldedToTransfers)` guard is unchanged.
-        var guardWindow = source[Math.Max(0, warn - 1000)..warn];
+        var guardWindow = source[Math.Max(0, warn - 1800)..warn];
         Assert.Contains("!yieldedToTransfers", guardWindow);
     }
 }

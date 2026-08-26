@@ -66,6 +66,16 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   Both found by mapping subsystem surfaces for a feature, not from any symptom.
 
 ### Fixes
+- **v3.10.81** — aggregate spread-scan logging now preserves the distinction between
+  login contention and genuine faults. Previously, an all-contention scan batch first
+  logged each deferral correctly at information level and then contradicted itself with
+  `ALL scans failed` at warning level; the next cycle normally succeeded. Duplicate
+  announces discovered after a release already exists on every candidate site are also
+  recorded as informational no-work outcomes instead of failed-race warnings. Real pool,
+  I/O, transport, and policy failures retain warning-level evidence.
+- **v3.10.80** — telemetry JSONL files are now created as UTF-8 without a BOM, so their
+  first row is valid JSON for raw-byte readers as well as `StreamReader`. The digester now
+  counts and warns about malformed rows instead of silently dropping evidence at Debug.
 - **v3.10.79** — spread ownership now requires an exact file-size match and ignores
   destination files while their transfer is in flight. A relay reset could leave a
   same-named truncated file; filename-only ownership then suppressed the retry and held

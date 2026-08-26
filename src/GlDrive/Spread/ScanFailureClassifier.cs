@@ -48,4 +48,12 @@ internal static class ScanFailureClassifier
         // A contention cause wrapped by a caller is still contention.
         return ex.InnerException != null && IsContention(ex.InnerException);
     }
+
+    /// <summary>
+    /// The batch summary must not turn a set of individually benign contention
+    /// deferrals back into a warning. Warn only when the entire batch produced no
+    /// result and at least one scan supplied evidence of a genuine fault.
+    /// </summary>
+    internal static bool ShouldWarnEmptyBatch(int successfulScans, int hardFailures)
+        => successfulScans == 0 && hardFailures > 0;
 }
