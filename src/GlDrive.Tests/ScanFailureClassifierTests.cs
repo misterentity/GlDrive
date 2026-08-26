@@ -94,6 +94,18 @@ public class ScanFailureClassifierTests
             new InvalidOperationException("wrapped", new TaskCanceledException())));
     }
 
+    [Fact]
+    public void An_empty_batch_of_only_contention_deferrals_is_not_a_warning()
+        => Assert.False(ScanFailureClassifier.ShouldWarnEmptyBatch(successfulScans: 0, hardFailures: 0));
+
+    [Fact]
+    public void An_empty_batch_with_a_genuine_failure_is_a_warning()
+        => Assert.True(ScanFailureClassifier.ShouldWarnEmptyBatch(successfulScans: 0, hardFailures: 1));
+
+    [Fact]
+    public void Any_success_suppresses_the_empty_batch_warning()
+        => Assert.False(ScanFailureClassifier.ShouldWarnEmptyBatch(successfulScans: 1, hardFailures: 3));
+
     // ---- the call site uses it ----
 
     private static string ReadSpreadJobSource()
@@ -113,6 +125,7 @@ public class ScanFailureClassifierTests
     {
         var source = ReadSpreadJobSource();
         Assert.Contains("ScanFailureClassifier.IsContention", source);
+        Assert.Contains("ScanFailureClassifier.ShouldWarnEmptyBatch", source);
 
         // The contention branch must not carry the exception object — passing it is what
         // emits the stack trace that costs 8 lines per occurrence.

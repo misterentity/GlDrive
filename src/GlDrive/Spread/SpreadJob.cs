@@ -1487,6 +1487,8 @@ public class SpreadJob : IDisposable
 
         var results = new List<(string serverId, List<SpreadFileInfo> files, ScanSignals signals)>();
         var scanLock = new Lock();
+        var hardFailureCount = 0;
+        var contentionDeferralCount = 0;
 
         var tasks = scanTargets.Select(async kvp =>
         {
@@ -1498,6 +1500,7 @@ public class SpreadJob : IDisposable
 
             if (mainPool == null && spreadPool == null)
             {
+                Interlocked.Increment(ref hardFailureCount);
                 Log.Warning("Spread scan: no pool for {Server}", serverName);
                 return;
             }
@@ -1596,12 +1599,22 @@ public class SpreadJob : IDisposable
                 // ~9 lines a piece it was 8% of the log and rolled a day of history off
                 // the 10 MB cap (v3.10.54). Real faults keep their WRN and their stack.
                 if (ScanFailureClassifier.IsContention(lastError))
+                {
+                    Interlocked.Increment(ref contentionDeferralCount);
                     Log.Information("Spread scan: no login available for {Server} at {Path} " +
                         "({Reason}) — rescanning next cycle",
                         serverName, basePath, lastError!.GetType().Name);
+                }
                 else
+                {
+                    Interlocked.Increment(ref hardFailureCount);
                     Log.Warning(lastError, "Spread scan FAILED for {Server} at {Path} (both pools unavailable)",
                         serverName, basePath);
+                }
+            }
+            else
+            {
+                Interlocked.Increment(ref contentionDeferralCount);
             }
         });
 
@@ -1627,7 +1640,15 @@ public class SpreadJob : IDisposable
             }
 
             if (results.Count == 0)
-                Log.Warning("Spread scan: ALL scans failed or returned 0 results");
+            {
+                if (ScanFailureClassifier.ShouldWarnEmptyBatch(results.Count, hardFailureCount))
+                    Log.Warning("Spread scan: all scans failed ({HardFailures} genuine failure(s), " +
+                        "{ContentionDeferrals} contention deferral(s))",
+                        hardFailureCount, contentionDeferralCount);
+                else
+                    Log.Information("Spread scan: all {Count} scan(s) deferred by login contention — " +
+                        "rescanning next cycle", contentionDeferralCount);
+            }
         }
 
         // Reconcile FilesTotal across ALL sites after the scan cycle. ProcessFiles
@@ -3607,8 +3628,19 @@ public class SpreadJob : IDisposable
         State = SpreadJobState.Failed;
         LastError = message;
         Error?.Invoke(this, message);
-        Log.Warning("Spread job failed: {Release} — {Error}", ReleaseName, message);
+        if (IsExpectedNoWorkOutcome(message))
+            Log.Information("Spread job ended without work: {Release} — {Reason}", ReleaseName, message);
+        else
+            Log.Warning("Spread job failed: {Release} — {Error}", ReleaseName, message);
     }
+
+    /// <summary>
+    /// A duplicate announce can arrive after the first race has already populated every
+    /// candidate site. Discovery is the first point where that fact is knowable; it is an
+    /// idempotent no-op, not an application or transfer failure.
+    /// </summary>
+    internal static bool IsExpectedNoWorkOutcome(string? message)
+        => message?.Contains("release already present on all", StringComparison.OrdinalIgnoreCase) == true;
 
     /// <summary>
     /// PRD O3 — map a race failure message to a coarse category for metrics/UI.
