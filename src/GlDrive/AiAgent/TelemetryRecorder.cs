@@ -45,6 +45,18 @@ public sealed class TelemetryRecorder : IDisposable
     /// </summary>
     internal const int MaxEventBytes = 256 * 1024;
 
+    /// <summary>
+    /// UTF-8 with no byte-order mark. These files are JSON Lines: every line must stand alone as
+    /// valid JSON, including the first one.
+    ///
+    /// <c>Encoding.UTF8</c> is NOT this — it is UTF8Encoding(encoderShouldEmitUTF8Identifier: true),
+    /// and File.AppendAllText writes that preamble whenever it creates the file. A new file is
+    /// created per stream per day, so passing Encoding.UTF8 here put a BOM on the first row of
+    /// every stream every day. It stayed invisible only because StreamReader strips BOMs by
+    /// default; readers over raw bytes (Utf8JsonReader, jq, python) fail on line 1.
+    /// </summary>
+    internal static readonly Encoding FileEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+
     internal static bool IsAcceptableSize(string json) => json.Length <= MaxEventBytes;
 
     public void Record<T>(TelemetryStream stream, T evt) where T : TelemetryEnvelope
@@ -123,7 +135,7 @@ public sealed class TelemetryRecorder : IDisposable
                         try
                         {
                             var path = Path.Combine(_root, FileName(DateTime.Now));
-                            await File.AppendAllTextAsync(path, line + "\n", Encoding.UTF8, _cts.Token);
+                            await File.AppendAllTextAsync(path, line + "\n", FileEncoding, _cts.Token);
                         }
                         catch (Exception ex) { Log.Debug(ex, "telemetry write fail {Stream}", _stream); }
                     }
