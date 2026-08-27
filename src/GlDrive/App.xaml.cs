@@ -374,7 +374,7 @@ public partial class App
         {
             var ageSec = (int)staleAge.TotalSeconds;
             var icon = _taskbarIcon;
-            Dispatcher.BeginInvoke(new Action(() =>
+            _ = Dispatcher.BeginInvoke(new Action(() =>
             {
                 try
                 {
@@ -402,8 +402,17 @@ public partial class App
             catch (Exception ex)
             {
                 Log.Error(ex, "Auto-mount failed after {Elapsed}ms", sw.ElapsedMilliseconds);
-                Dispatcher.BeginInvoke(() =>
-                    _trayViewModel!.ShowNotification("GlDrive", $"Mount failed: {ex.Message}"));
+                _ = Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    try
+                    {
+                        _trayViewModel?.ShowNotification("GlDrive", $"Mount failed: {ex.Message}");
+                    }
+                    catch (Exception notifyEx)
+                    {
+                        Log.Debug(notifyEx, "Auto-mount failure notification failed");
+                    }
+                }));
             }
         });
     }

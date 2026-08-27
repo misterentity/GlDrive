@@ -36,7 +36,6 @@ public class PmHistoryStore : IDisposable
     private readonly object _lock = new();
     private Dictionary<string, List<PmHistoryEntry>> _history = new(StringComparer.OrdinalIgnoreCase);
     private readonly Timer _debounceTimer;
-    private volatile bool _savePending;
     private bool _disposed;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -124,7 +123,6 @@ public class PmHistoryStore : IDisposable
         // A message appended during/after teardown: the debounce timer is gone, so
         // persist synchronously rather than dropping the entry (FlushSave is lock-safe).
         if (_disposed) { FlushSave(); return; }
-        _savePending = true;
         try { _debounceTimer.Change(SaveDebounceMs, Timeout.Infinite); }
         catch (ObjectDisposedException) { FlushSave(); }
     }
@@ -137,7 +135,6 @@ public class PmHistoryStore : IDisposable
     {
         lock (_lock)
         {
-            _savePending = false;
             try
             {
                 var json = JsonSerializer.Serialize(_history, JsonOptions);

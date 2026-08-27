@@ -66,6 +66,17 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   Both found by mapping subsystem surfaces for a feature, not from any symptom.
 
 ### Fixes
+- **v3.10.83** — release builds are warning-free and now fail on any future compiler
+  warning. Four WPF dispatcher operations explicitly declare their intentional
+  fire-and-forget lifecycle, the startup mount-failure notification contains its own tray
+  exception boundary, extraction progress no longer redundantly remarshal from an async UI
+  handler that already resumes on the dispatcher, and the PM history store no longer keeps
+  a write-only `_savePending` flag. Screenshot smoke testing also found and fixed the
+  Cyberpunk theme replacing the application's templated ComboBox style with a setters-only
+  style, which fell back to unreadable native white fields. A regression guard now requires
+  any theme-level implicit ComboBox override to carry its own template. The production-log
+  sweep confirmed that the remaining warnings are external availability/configuration
+  conditions rather than application exceptions.
 - **v3.10.81** — aggregate spread-scan logging now preserves the distinction between
   login contention and genuine faults. Previously, an all-contention scan batch first
   logged each deferral correctly at information level and then contradicted itself with

@@ -494,12 +494,11 @@ public partial class ExtractorWindow : Window
 
                 completed++;
                 var totalPct = (double)completed / toExtract.Count * 100;
-                Dispatcher.BeginInvoke(() =>
-                {
-                    TotalProgress.Value = totalPct;
-                    TotalProgressText.Text = $"{totalPct:F0}%";
-                    UpdateStatus();
-                });
+                // This async UI handler captures the WPF synchronization context, so the
+                // continuation is already on the dispatcher after extraction completes.
+                TotalProgress.Value = totalPct;
+                TotalProgressText.Text = $"{totalPct:F0}%";
+                UpdateStatus();
             }
         }
         finally
@@ -803,7 +802,7 @@ public partial class ExtractorWindow : Window
             while (!spinCts.IsCancellationRequested)
             {
                 pct = (pct + 2) % 95;
-                Dispatcher.BeginInvoke(() => item.Progress = pct);
+                _ = Dispatcher.BeginInvoke(() => item.Progress = pct);
                 try { await Task.Delay(500, spinCts.Token); } catch { break; }
             }
         }, spinCts.Token);
@@ -852,7 +851,7 @@ public partial class ExtractorWindow : Window
         }
 
         CommitStagedOutput(staging.Path, outputDir, overwriteMode, ct);
-        Dispatcher.BeginInvoke(() => item.Progress = 100);
+        _ = Dispatcher.BeginInvoke(() => item.Progress = 100);
         Log.Information("Extractor: external tool completed for {File} (exit {Code})",
             item.FileName, proc.ExitCode);
         return true;
