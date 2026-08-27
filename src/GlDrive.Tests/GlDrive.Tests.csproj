@@ -18,4 +18,10 @@
     <ProjectReference Include="..\GlDrive\GlDrive.csproj" />
   </ItemGroup>
 
+
+  <ItemGroup>
+    <!-- Production-SHAPED (synthetic) telemetry fixtures for ProductionDataSmokeTests.
+         Deliberately BOM-prefixed: that is what every pre-v3.10.81 build wrote to disk. -->
+    <None Include="TestData\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>
