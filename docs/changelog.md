@@ -76,7 +76,9 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   style, which fell back to unreadable native white fields. A regression guard now requires
   any theme-level implicit ComboBox override to carry its own template. The production-log
   sweep confirmed that the remaining warnings are external availability/configuration
-  conditions rather than application exceptions.
+  conditions rather than application exceptions. CI now uses the Node 24-based
+  `actions/checkout@v7` and `actions/setup-dotnet@v6`, eliminating the runner's Node 20
+  deprecation fallback.
 - **v3.10.81** — aggregate spread-scan logging now preserves the distinction between
   login contention and genuine faults. Previously, an all-contention scan batch first
   logged each deferral correctly at information level and then contradicted itself with
