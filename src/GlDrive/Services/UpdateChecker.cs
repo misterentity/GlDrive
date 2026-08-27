@@ -622,6 +622,119 @@ public class UpdateChecker : IDisposable
         }
     }
 
+    /// <summary>
+    /// Minimum time at the elevation prompt that indicates the Windows secure desktop timed it
+    /// out rather than a person answering it.
+    ///
+    /// ShellExecute returns ERROR_CANCELLED (1223) for BOTH "user clicked No" and "prompt expired
+    /// unanswered", so the code cannot tell them apart from the error alone — and for three
+    /// releases it called both a decline. Timing separates them cleanly: the secure-desktop
+    /// timeout is 120s by default, and the two observed failures sat at an invariant 131s and
+    /// 132s, while a person answering takes seconds. An invariant duration across occurrences is
+    /// a structural ceiling, not a human.
+    /// </summary>
+    internal static readonly TimeSpan ElevationTimeoutFloor = TimeSpan.FromSeconds(90);
+
+    /// <summary>True when a 1223 that took this long is a timeout, not a user decision.</summary>
+    internal static bool ElevationLikelyTimedOut(TimeSpan elapsed) => elapsed >= ElevationTimeoutFloor;
+
+    /// <summary>
+    /// Hands the staged package to the SYSTEM scheduled task registered by the installer, so the
+    /// install needs no interactive elevation. Returns false when the task is absent (an install
+    /// predating it, or one whose task was removed), leaving the caller to fall back to UAC.
+    /// </summary>
+    private static bool TryLaunchViaScheduledTask(string packageDir, int pid, string? tagName)
+    {
+        try
+        {
+            if (!ScheduledTaskExists(UpdateTaskHandoff.TaskName))
+            {
+                Log.Information("Update task {Task} is not registered — falling back to interactive elevation. " +
+                                "Re-run the installer to enable unattended updates.", UpdateTaskHandoff.TaskName);
+                return false;
+            }
+
+            UpdateTaskHandoff.Write(UpdateTaskHandoff.DefaultPath,
+                new UpdateTaskHandoff(pid, packageDir, tagName ?? "(unknown)", DateTime.UtcNow));
+
+            // /run takes no caller-supplied arguments: the task action is fixed at install time and
+            // points at the installed executable, so nothing here can redirect what SYSTEM runs.
+            var exit = RunSchtasks($"/run /tn \"{UpdateTaskHandoff.TaskName}\"");
+            if (exit != 0)
+            {
+                Log.Warning("Update task {Task} failed to start (exit {Exit}) — falling back to " +
+                            "interactive elevation", UpdateTaskHandoff.TaskName, exit);
+                UpdateTaskHandoff.Clear(UpdateTaskHandoff.DefaultPath);
+                return false;
+            }
+
+            Log.Information("Update {Tag} handed to the SYSTEM scheduled task — no elevation prompt needed",
+                tagName ?? "(unknown)");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Could not hand the update to the scheduled task — falling back to " +
+                            "interactive elevation");
+            UpdateTaskHandoff.Clear(UpdateTaskHandoff.DefaultPath);
+            return false;
+        }
+    }
+
+    private static bool ScheduledTaskExists(string taskName) =>
+        RunSchtasks($"/query /tn \"{taskName}\"") == 0;
+
+    private static int RunSchtasks(string arguments)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "schtasks.exe",
+            Arguments = arguments,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        using var proc = Process.Start(psi);
+        if (proc == null) return -1;
+        proc.StandardOutput.ReadToEnd();
+        proc.StandardError.ReadToEnd();
+        // Bounded: schtasks /query and /run both return promptly; /run does NOT wait for the task.
+        if (!proc.WaitForExit(30_000)) { try { proc.Kill(true); } catch { } return -1; }
+        return proc.ExitCode;
+    }
+
+    /// <summary>
+    /// Entry point for <c>--apply-update-task</c>: the SYSTEM scheduled task's action. Reads the
+    /// hand-off, then runs the same verified install path the interactive updater uses. The
+    /// install directory is this process's OWN directory — it is never taken from the hand-off,
+    /// so a forged record cannot redirect where files land.
+    /// </summary>
+    public static void ApplyUpdateFromTask()
+    {
+        var path = UpdateTaskHandoff.DefaultPath;
+        var handoff = UpdateTaskHandoff.TryRead(path, DateTime.UtcNow);
+        if (handoff is null)
+        {
+            Log.Warning("Update task ran with no valid pending hand-off at {Path} — nothing to do", path);
+            return;
+        }
+
+        var installDir = Path.GetFullPath(AppContext.BaseDirectory)
+            .TrimEnd(Path.DirectorySeparatorChar);
+        Log.Information("Update task applying {Tag} from {PackageDir} to {InstallDir}",
+            handoff.Tag, handoff.PackageDir, installDir);
+
+        try
+        {
+            ApplyUpdate(handoff.Pid, handoff.PackageDir, installDir, viaScheduledTask: true);
+        }
+        finally
+        {
+            UpdateTaskHandoff.Clear(path);
+        }
+    }
+
     private void LaunchUpdater(VerifiedUpdatePackage package, string? tagName = null)
     {
         var packageDir = Path.Combine(Path.GetTempPath(), $"gldrive-update-{Guid.NewGuid():N}");
@@ -647,6 +760,16 @@ public class UpdateChecker : IDisposable
             "GlDrive", ".update-auth");
         UpdateMarkerHmac.WriteAuthorization(appDataAuthorization, pid, packageDir, installDir);
 
+        // Prefer the SYSTEM scheduled task: no UAC prompt, so an install that comes due at 03:35
+        // no longer depends on somebody being awake to approve it.
+        if (TryLaunchViaScheduledTask(packageDir, pid, tagName))
+        {
+            ClearDeclinedUpdate();
+            RestartRequested?.Invoke();
+            return;
+        }
+
+        var elevationStarted = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             var psi = new ProcessStartInfo
@@ -680,10 +803,23 @@ public class UpdateChecker : IDisposable
             // and log this as an [ERR] (observed 3x over 2026-07-20..21).
             if (ex is System.ComponentModel.Win32Exception { NativeErrorCode: ErrorCancelled })
             {
-                Log.Warning("Update {Tag}: elevation prompt declined — skipping auto-install " +
-                            "for this version. Install it from the tray menu when ready.",
-                    tagName ?? "(unknown)");
-                if (tagName != null) RecordDeclinedUpdate(tagName);
+                // 1223 covers both "user clicked No" and "prompt expired unanswered". Only the
+                // former is a decision worth suppressing a release for 24h; treating a timeout as
+                // one re-offered the update at the SAME hour the next night and failed identically.
+                if (ElevationLikelyTimedOut(elevationStarted.Elapsed))
+                {
+                    Log.Warning("Update {Tag}: elevation prompt expired unanswered after {Sec:F0}s " +
+                                "(nobody at the machine) — NOT recording a decline; will retry. " +
+                                "Re-run the installer to enable unattended updates via the SYSTEM task.",
+                        tagName ?? "(unknown)", elevationStarted.Elapsed.TotalSeconds);
+                }
+                else
+                {
+                    Log.Warning("Update {Tag}: elevation prompt declined after {Sec:F0}s — skipping " +
+                                "auto-install for this version. Install it from the tray menu when ready.",
+                        tagName ?? "(unknown)", elevationStarted.Elapsed.TotalSeconds);
+                    if (tagName != null) RecordDeclinedUpdate(tagName);
+                }
 
                 // Drop the in-flight marker: no elevated updater ever ran, so nothing was
                 // renamed to .old and nothing was copied. Left behind, the NEXT startup's
@@ -833,7 +969,16 @@ public class UpdateChecker : IDisposable
         return Process.Start(startInfo);
     }
 
-    public static void ApplyUpdate(int pid, string extractDir, string installDir)
+    /// <param name="viaScheduledTask">
+    /// True when invoked by the SYSTEM scheduled task rather than an interactive elevation. The
+    /// caller-side temp check below compares against <c>Path.GetTempPath()</c>, which for SYSTEM
+    /// is C:\Windows\Temp and never the interactive user's temp directory — so it would reject
+    /// every legitimate package. <see cref="UpdateTaskHandoff.IsPlausiblePackageDir"/> has already
+    /// enforced the equivalent constraint (a Temp path segment, not the temp root itself, holding
+    /// the four staging files) before this is reached.
+    /// </param>
+    public static void ApplyUpdate(int pid, string extractDir, string installDir,
+        bool viaScheduledTask = false)
     {
         var logPath = Path.Combine(Path.GetTempPath(), "gldrive-update.log");
         void LogUpdate(string msg)
@@ -855,7 +1000,16 @@ public class UpdateChecker : IDisposable
                 ? tempDir
                 : tempDir + Path.DirectorySeparatorChar;
 
-            if (!fullExtract.StartsWith(tempPrefix, StringComparison.OrdinalIgnoreCase))
+            if (viaScheduledTask)
+            {
+                // SYSTEM's temp is not the user's; validate the shape instead of the prefix.
+                if (!UpdateTaskHandoff.IsPlausiblePackageDir(fullExtract))
+                {
+                    LogUpdate($"SECURITY: task-mode extractDir failed staging validation — aborting. extractDir={fullExtract}");
+                    throw new InvalidDataException("Update package directory is not a valid staging directory");
+                }
+            }
+            else if (!fullExtract.StartsWith(tempPrefix, StringComparison.OrdinalIgnoreCase))
             {
                 LogUpdate($"SECURITY: extractDir is not in temp directory — aborting. extractDir={fullExtract}");
                 throw new InvalidDataException("Update package directory is outside the system temp directory");

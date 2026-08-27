@@ -42,6 +42,16 @@ public partial class App
         // Update applicator mode — runs elevated, replaces files, relaunches, then exits.
         // Must force-kill after ApplyUpdate because its loaded files may have been
         // renamed during replacement; normal native teardown is unsafe at that point.
+        // SYSTEM scheduled-task entry point: no pid/paths on the command line, because the task
+        // action is fixed at install time and must not be steerable by whoever triggers it.
+        // Everything it needs comes from the validated hand-off file.
+        if (e.Args.Contains("--apply-update-task", StringComparer.OrdinalIgnoreCase))
+        {
+            UpdateChecker.ApplyUpdateFromTask();
+            Process.GetCurrentProcess().Kill();
+            return;
+        }
+
         var applyIdx = Array.IndexOf(e.Args, "--apply-update");
         if (applyIdx >= 0 && e.Args.Length >= applyIdx + 4)
         {
