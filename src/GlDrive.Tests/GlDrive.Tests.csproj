@@ -24,4 +24,10 @@
          Deliberately BOM-prefixed: that is what every pre-v3.10.81 build wrote to disk. -->
     <None Include="TestData\**\*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- The shipping guard in UpdateTaskScriptShipsTests needs the real script beside the test
+         assembly, mirroring how it sits beside GlDrive.exe in a published build. -->
+    <Content Include="..\GlDrive\register-update-task.ps1" CopyToOutputDirectory="PreserveNewest" Link="register-update-task.ps1" />
+  </ItemGroup>
 </Project>

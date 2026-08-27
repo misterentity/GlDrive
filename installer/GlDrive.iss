@@ -44,10 +44,6 @@ Name: "{commonappdata}\GlDrive"; Permissions: users-modify
 ; Published app files (self-contained)
 Source: "publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-; Update-task registration helper. Installed (not deleteafterinstall) so a repair or a manual
-; re-register is possible without the full installer.
-Source: "register-update-task.ps1"; DestDir: "{app}"; Flags: ignoreversion
-
 ; WinFsp installer (bundled for silent install if needed)
 Source: "deps\winfsp.msi"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: not IsWinFspInstalled
 
