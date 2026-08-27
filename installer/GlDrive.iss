@@ -33,9 +33,20 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "autostart"; Description: "Start GlDrive automatically when Windows starts"; GroupDescription: "Startup:"
 
+[Dirs]
+; The SYSTEM update task cannot resolve the interactive user's %AppData%, so the hand-off
+; record lives here. users-modify lets the non-elevated app write it. This is untrusted input
+; to an elevated process by design: it carries no install destination and no code, and the
+; package it names is re-verified against the RSA key compiled into GlDrive.exe.
+Name: "{commonappdata}\GlDrive"; Permissions: users-modify
+
 [Files]
 ; Published app files (self-contained)
 Source: "publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+; Update-task registration helper. Installed (not deleteafterinstall) so a repair or a manual
+; re-register is possible without the full installer.
+Source: "register-update-task.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 ; WinFsp installer (bundled for silent install if needed)
 Source: "deps\winfsp.msi"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: not IsWinFspInstalled
@@ -52,12 +63,21 @@ Root: HKCU; Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 ; Install WinFsp silently if not already installed
 Filename: "msiexec.exe"; Parameters: "/i ""{tmp}\winfsp.msi"" /qn /norestart"; StatusMsg: "Installing WinFsp driver..."; Flags: runhidden waituntilterminated; Check: not IsWinFspInstalled
 
+; Register the SYSTEM task that applies updates without an interactive UAC prompt.
+; Done in PowerShell, not schtasks: schtasks /create REQUIRES a schedule and its /sd date format
+; is locale-dependent (01/01/2099 is rejected where yyyy/mm/dd is expected). Register-ScheduledTask
+; needs no trigger at all, which is exactly right - the task is on-demand only.
+; Failure is non-fatal; the app falls back to the elevation prompt.
+Filename: "powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\register-update-task.ps1"" -InstallDir ""{app}"""; StatusMsg: "Registering unattended update task..."; Flags: runhidden
+
 ; Launch after install
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 ; Kill GlDrive before uninstall
 Filename: "taskkill.exe"; Parameters: "/F /IM {#MyAppExeName}"; Flags: runhidden; RunOnceId: "KillGlDrive"
+; Leaving a SYSTEM task pointed at a deleted executable behind would be both broken and untidy.
+Filename: "schtasks.exe"; Parameters: "/delete /f /tn ""GlDrive Update Installer"""; Flags: runhidden; RunOnceId: "DelUpdateTask"
 
 [UninstallDelete]
 ; Clean up app directory (but NOT %AppData%\GlDrive — keep user config)

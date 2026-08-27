@@ -35,14 +35,30 @@ public sealed class ScreenshotModeIsolationTests
         Assert.Contains("_ownsCrashMarker = true", source);
     }
 
+    /// <summary>
+    /// The watchdog-spawn guard must exclude every mode that is not a normal app start.
+    ///
+    /// Window is taken up to the SpawnWatchdog() call rather than a fixed character count: the
+    /// original 180-char slice silently excluded the call as soon as a fourth exclusion was added,
+    /// failing for width rather than for the property under test.
+    /// </summary>
     [Fact]
-    public void Screenshot_mode_does_not_spawn_a_watchdog()
+    public void Watchdog_spawn_is_skipped_for_every_non_normal_mode()
     {
         var source = ReadSource("src/GlDrive/Program.cs");
-        var spawnGuard = source.Substring(
-            source.IndexOf("if (Array.IndexOf(args, \"--apply-update\")", StringComparison.Ordinal), 180);
+        var guardStart = source.IndexOf("if (Array.IndexOf(args, \"--apply-update\")", StringComparison.Ordinal);
+        Assert.True(guardStart >= 0, "watchdog spawn guard not found");
 
-        Assert.Contains("Array.IndexOf(args, \"--screenshots\") < 0", spawnGuard);
-        Assert.Contains("SpawnWatchdog()", spawnGuard);
+        var spawnCall = source.IndexOf("SpawnWatchdog()", guardStart, StringComparison.Ordinal);
+        Assert.True(spawnCall > guardStart, "SpawnWatchdog() does not follow the guard");
+
+        var guard = source.Substring(guardStart, spawnCall - guardStart);
+
+        Assert.Contains("Array.IndexOf(args, \"--apply-update\") < 0", guard);
+        Assert.Contains("Array.IndexOf(args, \"--screenshots\") < 0", guard);
+        // --apply-update-task is a DISTINCT argument: Array.IndexOf is an exact match, so the
+        // --apply-update entry above does NOT cover it. Without this the SYSTEM task's process
+        // spawns a watchdog and races its own file replacement.
+        Assert.Contains("Array.IndexOf(args, \"--apply-update-task\") < 0", guard);
     }
 }
