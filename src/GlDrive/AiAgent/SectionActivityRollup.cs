@@ -10,6 +10,10 @@ public sealed class SectionActivityRollup : IDisposable
     private readonly string _aiDataRoot;
     private readonly Timer _timer;
 
+    /// <summary>Race rows the last RollUp could not parse. Non-zero means the section
+    /// activity digest for that day under-reports. Mirrors LogDigester.ParseSkips.</summary>
+    public int ParseSkips { get; private set; }
+
     public SectionActivityRollup(TelemetryRecorder recorder, string aiDataRoot)
     {
         _recorder = recorder;
@@ -26,16 +30,28 @@ public sealed class SectionActivityRollup : IDisposable
     {
         try
         {
+            // Reset before the early return: a missing file must clear the previous run's
+            // count, not leave yesterday's damage reported against today.
+            ParseSkips = 0;
             var racesFile = Path.Combine(_aiDataRoot, $"races-{forDate:yyyyMMdd}.jsonl");
             if (!File.Exists(racesFile)) return;
 
+            var parseSkips = 0;
             var agg = new Dictionary<(string server, string section), SectionActivityEvent>();
             foreach (var line in File.ReadLines(racesFile))
             {
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 RaceOutcomeEvent? r;
                 try { r = JsonSerializer.Deserialize<RaceOutcomeEvent>(line); }
-                catch { continue; }
+                catch (Exception ex)
+                {
+                    // Count and report: this rollup is the agent's only view of per-section
+                    // activity, so a silently-dropped race under-reports a section forever.
+                    // Warning, not Debug — the Serilog sink runs at Information.
+                    parseSkips++;
+                    Log.Warning(ex, "SectionActivityRollup parse skip in {File}", racesFile);
+                    continue;
+                }
                 if (r is null) continue;
 
                 foreach (var p in r.Participants)
@@ -60,6 +76,11 @@ public sealed class SectionActivityRollup : IDisposable
                     agg[key] = cur;
                 }
             }
+
+            ParseSkips = parseSkips;
+            if (parseSkips > 0)
+                Log.Warning("SectionActivityRollup: {Skips} unparseable race row(s) in {File} — " +
+                    "section activity for {Date} is under-reported", parseSkips, racesFile, forDate);
 
             foreach (var ev in agg.Values)
                 _recorder.Record(TelemetryStream.SectionActivity, ev);
