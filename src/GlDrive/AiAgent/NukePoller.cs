@@ -109,7 +109,14 @@ public sealed class NukePoller : IDisposable
                 if (!line.Contains($"\"release\":\"{release}\"", StringComparison.Ordinal)) continue;
                 RaceOutcomeEvent? r;
                 try { r = JsonSerializer.Deserialize<RaceOutcomeEvent>(line); }
-                catch { continue; }
+                catch (Exception ex)
+                {
+                    // Correlation is best-effort, but a row that fails to parse here also
+                    // fails everywhere else that reads races-*.jsonl — say so once rather
+                    // than dropping it silently.
+                    Log.Warning(ex, "NukePoller race-correlation parse skip in {File}", racesFile);
+                    continue;
+                }
                 if (r?.Release == release) return r.RaceId;
             }
         }
