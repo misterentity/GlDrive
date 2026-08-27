@@ -705,6 +705,63 @@ public class UpdateChecker : IDisposable
     }
 
     /// <summary>
+    /// Registers (or refreshes) the SYSTEM update task from an ALREADY-ELEVATED context.
+    ///
+    /// Without this the task would only ever appear via the Inno installer, and an auto-update
+    /// applied from the release zip would silently keep falling back to the UAC prompt this task
+    /// exists to remove. Calling it at the end of every elevated apply means the feature
+    /// bootstraps itself: one elevated install of any kind, and every later update is unattended.
+    ///
+    /// Best-effort by design. A failure here must never fail an update that has already succeeded,
+    /// and the fallback path still works.
+    /// </summary>
+    internal static void TryRegisterUpdateTask(string installDir, Action<string> log)
+    {
+        try
+        {
+            var script = Path.Combine(installDir, "register-update-task.ps1");
+            if (!File.Exists(script))
+            {
+                log($"Update task registration skipped: {script} not present in this build");
+                return;
+            }
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            psi.ArgumentList.Add("-NoProfile");
+            psi.ArgumentList.Add("-NonInteractive");
+            psi.ArgumentList.Add("-ExecutionPolicy");
+            psi.ArgumentList.Add("Bypass");
+            psi.ArgumentList.Add("-File");
+            psi.ArgumentList.Add(script);
+            psi.ArgumentList.Add("-InstallDir");
+            psi.ArgumentList.Add(installDir);
+
+            using var proc = Process.Start(psi);
+            if (proc == null) { log("Update task registration could not start powershell.exe"); return; }
+            var stdout = proc.StandardOutput.ReadToEnd();
+            var stderr = proc.StandardError.ReadToEnd();
+            if (!proc.WaitForExit(60_000))
+            {
+                try { proc.Kill(true); } catch { }
+                log("Update task registration timed out");
+                return;
+            }
+            log($"Update task registration exit={proc.ExitCode} {stdout.Trim()} {stderr.Trim()}".Trim());
+        }
+        catch (Exception ex)
+        {
+            log($"Update task registration failed (non-fatal): {ex.Message}");
+        }
+    }
+
+    /// <summary>
     /// Entry point for <c>--apply-update-task</c>: the SYSTEM scheduled task's action. Reads the
     /// hand-off, then runs the same verified install path the interactive updater uses. The
     /// install directory is this process's OWN directory — it is never taken from the hand-off,
@@ -1207,6 +1264,12 @@ public class UpdateChecker : IDisposable
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "GlDrive", ".updating");
             try { File.Delete(appDataUpdating); } catch { }
+
+            // We are elevated RIGHT NOW and the new files are in place. Register the SYSTEM
+            // update task here so a box updated from the release zip (which never runs the Inno
+            // installer) still gets it — otherwise this whole feature only ever reaches machines
+            // that happen to run the full installer, and everything else keeps prompting for UAC.
+            TryRegisterUpdateTask(installDir, LogUpdate);
 
             LogUpdate($"Update complete, launching {newExe}");
             var child = LaunchViaDesktopShell(newExe);

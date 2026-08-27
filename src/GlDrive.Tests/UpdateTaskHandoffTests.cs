@@ -196,6 +196,38 @@ public sealed class UpdateTaskHandoffTests : IDisposable
 }
 
 /// <summary>
+/// The scheduled task only ever exists if register-update-task.ps1 actually reaches the installed
+/// directory. It originally shipped ONLY through the Inno installer, so a box updated from the
+/// release zip never registered the task and silently kept using the UAC prompt the task exists to
+/// remove — the feature would have been inert on the one path that matters most.
+///
+/// It is now published with the app, and the elevated updater runs it after a successful install.
+/// This guards the shipping half: if the script stops being copied, the feature dies quietly, and
+/// nothing else in the suite would notice.
+/// </summary>
+public sealed class UpdateTaskScriptShipsTests
+{
+    [Fact]
+    public void Registration_script_is_published_next_to_the_app()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "register-update-task.ps1");
+        Assert.True(File.Exists(path),
+            $"register-update-task.ps1 must ship with the app (looked in {AppContext.BaseDirectory}). " +
+            "Without it, zip auto-updates never register the SYSTEM update task.");
+    }
+
+    [Fact]
+    public void Registration_script_registers_the_task_the_app_looks_for()
+    {
+        // The script's default -TaskName and the name the app queries must not drift apart:
+        // if they do, the app falls back to UAC forever while the task sits there unused.
+        var script = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "register-update-task.ps1"));
+        Assert.Contains($"'{UpdateTaskHandoff.TaskName}'", script);
+        Assert.Contains("--apply-update-task", script);
+    }
+}
+
+/// <summary>
 /// ShellExecute returns ERROR_CANCELLED (1223) for BOTH "user clicked No" and "prompt expired
 /// unanswered". Only the first is a decision that should suppress a release for 24h. The two
 /// observed failures sat at an invariant 131s and 132s — the 120s secure-desktop timeout plus

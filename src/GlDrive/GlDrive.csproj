@@ -11,7 +11,7 @@
     <StartupObject>GlDrive.Program</StartupObject>
     <AssemblyName>GlDrive</AssemblyName>
     <RootNamespace>GlDrive</RootNamespace>
-    <Version>3.10.84</Version>
+    <Version>3.10.85</Version>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Description>Mount a glftpd FTPS server as a Windows drive letter</Description>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
@@ -67,4 +67,12 @@
     </None>
   </ItemGroup>
 
+
+  <ItemGroup>
+    <!-- Ships in the PUBLISH output, so it reaches the box through BOTH install paths: the
+         Inno installer and the auto-updater's zip. Shipping it only via the installer meant a
+         zip auto-update never registered the update task, and the UAC fallback this exists to
+         remove would have run forever. -->
+    <Content Include="register-update-task.ps1" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>
