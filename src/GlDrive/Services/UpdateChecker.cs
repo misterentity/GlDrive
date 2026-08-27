@@ -548,6 +548,9 @@ public class UpdateChecker : IDisposable
     /// Forget a previous decline. Called once an elevated updater has actually been launched:
     /// the user granting elevation is the event the marker was waiting for.
     /// </summary>
+    private static void ClearTimedOutUpdate() =>
+        ClearDeclinedUpdateAt(UpdateStatePath(".update-timeout"));
+
     private static void ClearDeclinedUpdate() =>
         ClearDeclinedUpdateAt(UpdateStatePath(".update-declined"));
 
@@ -585,6 +588,29 @@ public class UpdateChecker : IDisposable
     /// </summary>
     internal static readonly TimeSpan DeclineSuppressionWindow = TimeSpan.FromHours(24);
 
+    /// <summary>
+    /// How long an UNANSWERED elevation prompt suppresses auto-install.
+    ///
+    /// Much shorter than <see cref="DeclineSuppressionWindow"/>, and deliberately not zero. A 24h
+    /// window re-offers at the same hour that just failed, which is how two releases in a row had
+    /// to be installed by hand. But no window at all means every 3h poll re-downloads the ~154 MB
+    /// package and re-prompts forever — and on this path neither the .update-declined marker nor
+    /// the .update-attempt brake is written, so nothing else bounds it.
+    ///
+    /// Four hours retries within the same day, so a prompt that expired overnight gets another go
+    /// in working hours when somebody can actually answer it, at a cost of one or two re-downloads
+    /// rather than eight a day.
+    /// </summary>
+    internal static readonly TimeSpan TimeoutSuppressionWindow = TimeSpan.FromHours(4);
+
+    private static void RecordTimedOutUpdate(string tagName) =>
+        RecordDeclinedUpdateAt(UpdateStatePath(".update-timeout"), tagName, DateTime.UtcNow);
+
+    /// <summary>True when the elevation prompt for this tag expired unanswered recently.</summary>
+    private static bool WasUpdateTimedOut(string tagName) =>
+        WasUpdateDeclinedAt(UpdateStatePath(".update-timeout"), tagName, DateTime.UtcNow,
+            TimeoutSuppressionWindow);
+
     /// <summary>True when the user already declined elevation for this exact release tag.</summary>
     private static bool WasUpdateDeclined(string tagName) =>
         WasUpdateDeclinedAt(UpdateStatePath(".update-declined"), tagName, DateTime.UtcNow);
@@ -598,7 +624,8 @@ public class UpdateChecker : IDisposable
     /// Failing open matters more than honouring an ambiguous marker — the failure mode we are
     /// fixing is auto-install wedged off, silently, forever.
     /// </summary>
-    internal static bool WasUpdateDeclinedAt(string markerPath, string tagName, DateTime nowUtc)
+    internal static bool WasUpdateDeclinedAt(string markerPath, string tagName, DateTime nowUtc,
+        TimeSpan? window = null)
     {
         try
         {
@@ -613,7 +640,7 @@ public class UpdateChecker : IDisposable
                     System.Globalization.DateTimeStyles.RoundtripKind, out var declinedAtUtc)) return false;
             declinedAtUtc = declinedAtUtc.ToUniversalTime();
             if (declinedAtUtc > nowUtc) return false; // clock skew — don't trust it
-            return nowUtc - declinedAtUtc < DeclineSuppressionWindow;
+            return nowUtc - declinedAtUtc < (window ?? DeclineSuppressionWindow);
         }
         catch (Exception ex)
         {
@@ -822,6 +849,7 @@ public class UpdateChecker : IDisposable
         if (TryLaunchViaScheduledTask(packageDir, pid, tagName))
         {
             ClearDeclinedUpdate();
+            ClearTimedOutUpdate();
             RestartRequested?.Invoke();
             return;
         }
@@ -844,6 +872,7 @@ public class UpdateChecker : IDisposable
             psi.ArgumentList.Add(installDir);
             Process.Start(psi);
 
+            ClearTimedOutUpdate();
             // Elevation was GRANTED — the reason the decline marker exists no longer holds.
             // Leaving it meant a successful manual tray install still left auto-install
             // suppressed for the rest of the 24h window, so the next release also had to be
@@ -869,6 +898,11 @@ public class UpdateChecker : IDisposable
                                 "(nobody at the machine) — NOT recording a decline; will retry. " +
                                 "Re-run the installer to enable unattended updates via the SYSTEM task.",
                         tagName ?? "(unknown)", elevationStarted.Elapsed.TotalSeconds);
+                    // Short brake so the retry lands in working hours instead of re-downloading
+                    // ~154 MB on every 3h poll. Without it this path has no brake at all: the
+                    // .update-declined marker is deliberately not written, and .update-attempt is
+                    // dropped just below.
+                    if (tagName != null) RecordTimedOutUpdate(tagName);
                 }
                 else
                 {
@@ -1403,6 +1437,7 @@ public class UpdateChecker : IDisposable
                         !AutoInstall ? "auto-install disabled in config"
                         : release.TagName == _autoInstallAttemptedTag ? "already attempted this session"
                         : WasUpdateDeclined(release.TagName) ? "elevation prompt was declined recently"
+                        : WasUpdateTimedOut(release.TagName) ? "elevation prompt expired unanswered recently — retrying later"
                         : null;
 
                     if (skipReason == null)

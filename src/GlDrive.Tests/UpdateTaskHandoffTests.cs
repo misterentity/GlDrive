@@ -196,6 +196,78 @@ public sealed class UpdateTaskHandoffTests : IDisposable
 }
 
 /// <summary>
+/// An unanswered elevation prompt must still apply SOME brake.
+///
+/// The 24h decline window re-offers at the same hour that just failed, which is how two releases
+/// running had to be installed by hand — so the timeout path deliberately does not write it. But
+/// that path also drops the .update-attempt marker, so without a brake of its own every 3h poll
+/// would re-download the ~154 MB package and re-prompt forever. Four hours retries the same day,
+/// in working hours, at a cost of one or two re-downloads instead of eight.
+/// </summary>
+public sealed class ElevationTimeoutBrakeTests : IDisposable
+{
+    private readonly string _dir;
+    private readonly string _marker;
+
+    public ElevationTimeoutBrakeTests()
+    {
+        _dir = Path.Combine(Path.GetTempPath(), "gldrive-brake-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_dir);
+        _marker = Path.Combine(_dir, ".update-timeout");
+    }
+
+    public void Dispose() { try { Directory.Delete(_dir, true); } catch { } }
+
+    private static readonly DateTime Now = new(2026, 8, 27, 12, 0, 0, DateTimeKind.Utc);
+
+    [Fact]
+    public void Timeout_brake_is_much_shorter_than_the_decline_window()
+    {
+        // The whole point: a 24h suppression lands on the same bad hour tomorrow.
+        Assert.True(UpdateChecker.TimeoutSuppressionWindow < UpdateChecker.DeclineSuppressionWindow);
+        Assert.True(UpdateChecker.TimeoutSuppressionWindow > TimeSpan.Zero,
+            "a zero window means re-downloading ~154 MB on every poll");
+        Assert.True(UpdateChecker.TimeoutSuppressionWindow < TimeSpan.FromHours(12),
+            "must retry within the same day so a daytime prompt gets a chance");
+    }
+
+    [Fact]
+    public void Suppresses_within_the_timeout_window()
+    {
+        UpdateChecker.RecordDeclinedUpdateAt(_marker, "v9.9.9", Now.AddHours(-1));
+        Assert.True(UpdateChecker.WasUpdateDeclinedAt(_marker, "v9.9.9", Now,
+            UpdateChecker.TimeoutSuppressionWindow));
+    }
+
+    [Fact]
+    public void Retries_once_the_timeout_window_lapses()
+    {
+        UpdateChecker.RecordDeclinedUpdateAt(_marker, "v9.9.9",
+            Now - UpdateChecker.TimeoutSuppressionWindow - TimeSpan.FromMinutes(1));
+        Assert.False(UpdateChecker.WasUpdateDeclinedAt(_marker, "v9.9.9", Now,
+            UpdateChecker.TimeoutSuppressionWindow));
+    }
+
+    [Fact]
+    public void A_stamp_older_than_the_timeout_window_but_inside_24h_still_retries()
+    {
+        // Guards the actual regression: reusing the 24h default here would keep suppressing.
+        UpdateChecker.RecordDeclinedUpdateAt(_marker, "v9.9.9", Now.AddHours(-6));
+        Assert.False(UpdateChecker.WasUpdateDeclinedAt(_marker, "v9.9.9", Now,
+            UpdateChecker.TimeoutSuppressionWindow));
+        Assert.True(UpdateChecker.WasUpdateDeclinedAt(_marker, "v9.9.9", Now));   // default 24h
+    }
+
+    [Fact]
+    public void A_different_tag_is_not_suppressed()
+    {
+        UpdateChecker.RecordDeclinedUpdateAt(_marker, "v9.9.9", Now.AddHours(-1));
+        Assert.False(UpdateChecker.WasUpdateDeclinedAt(_marker, "v9.9.10", Now,
+            UpdateChecker.TimeoutSuppressionWindow));
+    }
+}
+
+/// <summary>
 /// The scheduled task only ever exists if register-update-task.ps1 actually reaches the installed
 /// directory. It originally shipped ONLY through the Inno installer, so a box updated from the
 /// release zip never registered the task and silently kept using the UAC prompt the task exists to
