@@ -130,7 +130,14 @@ public class SpreadScanGateCeilingTests
 
         Assert.False(CandidatePredicates.ScanMayBorrowSpreadPool(
             spreadActive: 1, spreadUsableMax: 1, mainPoolUsable: true));
-        Assert.False(CandidatePredicates.ScanMayBorrowSpreadPool(
+
+        // v3.10.87: the IDLE case at this same ceiling now borrows instead of yielding.
+        // It is not what this test is about — the 2026-08-10 shape had a live login, so
+        // the assertion above carries it — and as an incidental extra it duplicated the
+        // deadlock asserted in SpreadScanSpreadPoolYieldTests. Reserving the permit at
+        // active=0 protects no transfer and made the fallback unreachable at usableMax=1,
+        // failing the job outright. See An_idle_single_slot_spread_pool_may_be_borrowed.
+        Assert.True(CandidatePredicates.ScanMayBorrowSpreadPool(
             spreadActive: 0, spreadUsableMax: 1, mainPoolUsable: true));
     }
 

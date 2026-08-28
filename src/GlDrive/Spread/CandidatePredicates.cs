@@ -104,9 +104,26 @@ internal static class CandidatePredicates
     /// <c>10 - active >= 2</c> was true on all 534 evaluations of 2026-08-10 and the scan
     /// yielded exactly 0 times. A capacity number that isn't the contended resource cannot
     /// answer "is there room" (recurring pattern #1).
+    ///
+    /// v3.10.87 — the idle clause. Fixing the v3.10.54 inertness exposed the mirror-image
+    /// fault: <c>spreadUsableMax - spreadActive &gt;= 2</c> is UNSATISFIABLE when the gate
+    /// grants 1, so on a login-capped site the fallback was unreachable at every activity
+    /// level and a scan whose main pool timed out could not complete by ANY route. The job
+    /// then failed by construction — "Source scan never succeeded — pools unavailable
+    /// (login cap?)". 2026-08-27: 111 of 114 yields (97%) fired at <c>active=0</c>, i.e.
+    /// reserving a permit for a transfer that did not exist.
+    ///
+    /// So reserve only against a transfer that is actually in flight. The v3.10.51
+    /// starvation needed the scan (re-running every ~2s) to beat a WAITING transfer to the
+    /// permit, and that requires a transfer to be in flight; the moment one is,
+    /// <c>spreadActive &gt; 0</c> and the reserve applies unchanged. An idle pool has
+    /// nothing to starve, and a short LIST is a far smaller cost than a guaranteed failure.
+    ///
+    /// Note this changes behaviour ONLY where <c>spreadUsableMax &lt; 2</c>: at a max of 2
+    /// or more, <c>active=0</c> already satisfied the reserve.
     /// </summary>
     internal static bool ScanMayBorrowSpreadPool(int spreadActive, int spreadUsableMax, bool mainPoolUsable)
-        => !mainPoolUsable || spreadUsableMax - spreadActive >= 2;
+        => !mainPoolUsable || spreadActive == 0 || spreadUsableMax - spreadActive >= 2;
 
     /// <summary>True if this exact (file,src,dst) pair has failed enough to drop.</summary>
     internal static bool PairRetryCapped(int pairFailures) => pairFailures >= PairRetryCap;

@@ -38,11 +38,61 @@ public class SpreadScanSpreadPoolYieldTests
         => Assert.Equal(expected, CandidatePredicates.ScanMayBorrowSpreadPool(active, max, mainPoolUsable: true));
 
     [Fact]
-    public void A_single_slot_spread_pool_is_never_raided_by_a_scan()
+    public void A_busy_single_slot_spread_pool_is_never_raided_by_a_scan()
     {
-        // max=1 means the only permit IS the transfer permit.
-        Assert.False(CandidatePredicates.ScanMayBorrowSpreadPool(0, 1, mainPoolUsable: true));
+        // max=1 and a transfer already holds the permit: yield, always.
         Assert.False(CandidatePredicates.ScanMayBorrowSpreadPool(1, 1, mainPoolUsable: true));
+    }
+
+    /// <summary>
+    /// v3.10.87. The reserve rule is "leave a permit for a transfer" — but it was written
+    /// as <c>usableMax - active &gt;= 2</c>, which is UNSATISFIABLE when the login gate
+    /// puts usableMax at 1. On such a site the fallback was unreachable at EVERY activity
+    /// level, so a source scan whose main pool timed out could never complete by any route
+    /// and the job was guaranteed to fail.
+    ///
+    /// 2026-08-27 gldrive log: 111 of 114 yields (97%) fired with <c>active=0</c> —
+    /// the guard "protecting" transfers that did not exist. Dark.Matter.2024.S02E01.DV
+    /// re-scanned every 20s for 9 minutes (main-pool borrow timeout, then yield, then
+    /// rescan) and ended "Source scan never succeeded — pools unavailable (login cap?)".
+    /// That WRN fired 5 times over the 3-day window; every one is this shape.
+    ///
+    /// An IDLE pool has no transfer to starve. The v3.10.51 starvation this guard exists
+    /// to prevent needed the scan to beat a WAITING transfer to the permit, which requires
+    /// a transfer to be in flight. Once one is, active &gt; 0 and the guard holds as before.
+    /// </summary>
+    [Fact]
+    public void An_idle_single_slot_spread_pool_may_be_borrowed_rather_than_deadlocking_the_scan()
+    {
+        Assert.True(CandidatePredicates.ScanMayBorrowSpreadPool(0, 1, mainPoolUsable: true));
+    }
+
+    [Fact]
+    public void The_reserve_rule_is_satisfiable_at_every_usable_max()
+    {
+        // The regression in one line: for each pool ceiling the login gate can produce,
+        // SOME activity level must permit the borrow. A ceiling at which no state can
+        // ever scan is a deadlock, not a conservative guard.
+        for (var usableMax = 1; usableMax <= 4; usableMax++)
+        {
+            var anyAllowed = false;
+            for (var active = 0; active <= usableMax; active++)
+                if (CandidatePredicates.ScanMayBorrowSpreadPool(active, usableMax, mainPoolUsable: true))
+                    anyAllowed = true;
+
+            Assert.True(anyAllowed,
+                $"usableMax={usableMax} can never borrow at any activity level — " +
+                "the scan can only ever yield, so the job fails by construction.");
+        }
+    }
+
+    [Fact]
+    public void A_busy_pool_still_yields_even_though_idle_pools_may_borrow()
+    {
+        // Guards the new clause against over-reach: it must key on IDLE, not on scarcity.
+        Assert.False(CandidatePredicates.ScanMayBorrowSpreadPool(2, 3, mainPoolUsable: true));
+        Assert.False(CandidatePredicates.ScanMayBorrowSpreadPool(3, 3, mainPoolUsable: true));
+        Assert.False(CandidatePredicates.ScanMayBorrowSpreadPool(1, 2, mainPoolUsable: true));
     }
 
     [Fact]
