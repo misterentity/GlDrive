@@ -606,6 +606,25 @@ public class UpdateChecker : IDisposable
     private static void RecordTimedOutUpdate(string tagName) =>
         RecordDeclinedUpdateAt(UpdateStatePath(".update-timeout"), tagName, DateTime.UtcNow);
 
+    /// <summary>
+    /// Whether the in-memory "already attempted this session" latch should be handed back to the
+    /// persisted suppression markers for this tag.
+    ///
+    /// The latch exists so a failed launch does not re-download the package every poll. But a
+    /// swallowed elevation failure returns NORMALLY, so nothing clears it — and then the latch,
+    /// which is checked BEFORE the markers, makes their expiry unreachable and suppresses the
+    /// version for the whole process lifetime.
+    ///
+    /// It must therefore be released for EVERY outcome that writes a persisted marker. v3.10.84
+    /// added a second such outcome (an expired prompt writes .update-timeout instead of
+    /// .update-declined) and this condition still read only the decline marker, so timeouts wedged
+    /// the version exactly as before. Released at most once per tag per process, so a broken
+    /// marker layer costs one extra prompt, never one per poll.
+    /// </summary>
+    internal static bool ShouldReleaseAttemptLatch(
+        string tagName, string? alreadyReleasedTag, bool wasDeclined, bool wasTimedOut) =>
+        tagName != alreadyReleasedTag && (wasDeclined || wasTimedOut);
+
     /// <summary>True when the elevation prompt for this tag expired unanswered recently.</summary>
     private static bool WasUpdateTimedOut(string tagName) =>
         WasUpdateDeclinedAt(UpdateStatePath(".update-timeout"), tagName, DateTime.UtcNow,
@@ -895,9 +914,11 @@ public class UpdateChecker : IDisposable
                 if (ElevationLikelyTimedOut(elevationStarted.Elapsed))
                 {
                     Log.Warning("Update {Tag}: elevation prompt expired unanswered after {Sec:F0}s " +
-                                "(nobody at the machine) — NOT recording a decline; will retry. " +
-                                "Re-run the installer to enable unattended updates via the SYSTEM task.",
-                        tagName ?? "(unknown)", elevationStarted.Elapsed.TotalSeconds);
+                                "(nobody at the machine) — retrying after {Hours:F0}h rather than " +
+                                "suppressing for a day. Run the installer, or approve one prompt, " +
+                                "to register the SYSTEM task and stop needing elevation at all.",
+                        tagName ?? "(unknown)", elevationStarted.Elapsed.TotalSeconds,
+                        TimeoutSuppressionWindow.TotalHours);
                     // Short brake so the retry lands in working hours instead of re-downloading
                     // ~154 MB on every 3h poll. Without it this path has no brake at all: the
                     // .update-declined marker is deliberately not written, and .update-attempt is
@@ -1519,8 +1540,18 @@ public class UpdateChecker : IDisposable
                             // Scoped to the declined case only: the other early returns
                             // (no asset, blocked, bad signature) must keep the latch so we
                             // don't re-download the package every poll.
-                            if (release.TagName != _declineLatchReleasedTag &&
-                                WasUpdateDeclined(release.TagName))
+                            // Timeouts must release the latch too. v3.10.84 stopped an expired
+                            // prompt from writing .update-declined — correct in itself, but this
+                            // release condition read ONLY that marker, so the timeout path never
+                            // reached it and the latch wedged the version for the whole process
+                            // lifetime: exactly the failure this block was written to prevent.
+                            // Observed 2026-08-27: v3.10.87 timed out at 20:02 and every later
+                            // poll logged "already attempted this session" while the warning one
+                            // frame up promised "will retry". Control belongs to the persisted
+                            // markers — 24h for a decline, 4h for a timeout.
+                            if (ShouldReleaseAttemptLatch(release.TagName, _declineLatchReleasedTag,
+                                    WasUpdateDeclined(release.TagName),
+                                    WasUpdateTimedOut(release.TagName)))
                             {
                                 _declineLatchReleasedTag = release.TagName;
                                 _autoInstallAttemptedTag = null;
