@@ -196,6 +196,62 @@ public sealed class UpdateTaskHandoffTests : IDisposable
 }
 
 /// <summary>
+/// The "already attempted this session" latch stops a failed launch re-downloading the package on
+/// every poll. But a swallowed elevation failure returns NORMALLY, so nothing clears the latch —
+/// and because it is checked BEFORE the persisted markers, it makes their expiry unreachable and
+/// wedges the version for the entire process lifetime.
+///
+/// Observed in production 2026-08-27: v3.10.87's prompt expired at 20:02, and every later poll
+/// logged "already attempted this session" while the warning one frame up promised "will retry".
+/// The release condition read only the DECLINE marker, and v3.10.84 had deliberately stopped the
+/// timeout path from writing one — so the new path could never reach it.
+///
+/// The rule: release the latch for every outcome that writes a persisted marker.
+/// </summary>
+public sealed class AttemptLatchReleaseTests
+{
+    private const string Tag = "v3.10.87";
+
+    [Fact]
+    public void Released_after_a_decline()
+    {
+        Assert.True(UpdateChecker.ShouldReleaseAttemptLatch(Tag, null,
+            wasDeclined: true, wasTimedOut: false));
+    }
+
+    [Fact]
+    public void Released_after_a_timeout()
+    {
+        // The regression: this returned false, so the timeout path wedged the version.
+        Assert.True(UpdateChecker.ShouldReleaseAttemptLatch(Tag, null,
+            wasDeclined: false, wasTimedOut: true));
+    }
+
+    [Fact]
+    public void Not_released_when_neither_marker_is_set()
+    {
+        // Fail-safe: an unreadable/absent marker layer keeps the quiet, over-suppressing
+        // behaviour rather than turning into a prompt on every poll.
+        Assert.False(UpdateChecker.ShouldReleaseAttemptLatch(Tag, null,
+            wasDeclined: false, wasTimedOut: false));
+    }
+
+    [Fact]
+    public void Released_at_most_once_per_tag_per_process()
+    {
+        Assert.False(UpdateChecker.ShouldReleaseAttemptLatch(Tag, alreadyReleasedTag: Tag,
+            wasDeclined: true, wasTimedOut: true));
+    }
+
+    [Fact]
+    public void A_different_tag_may_still_be_released()
+    {
+        Assert.True(UpdateChecker.ShouldReleaseAttemptLatch("v3.10.88", alreadyReleasedTag: Tag,
+            wasDeclined: false, wasTimedOut: true));
+    }
+}
+
+/// <summary>
 /// An unanswered elevation prompt must still apply SOME brake.
 ///
 /// The 24h decline window re-offers at the same hour that just failed, which is how two releases
