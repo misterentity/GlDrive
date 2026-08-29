@@ -109,7 +109,7 @@ public sealed class AgentRunner : IDisposable
         if (!cfg.Enabled) return;
 
         var now = DateTime.Now;
-        var needCatchUp = _lastRunUtc != DateTime.MinValue && (DateTime.UtcNow - _lastRunUtc).TotalHours >= 23;
+        var needCatchUp = NeedsCatchUp(_lastRunUtc, DateTime.UtcNow);
         if (needCatchUp || _consecutiveFailedRuns > 0)
         {
             // Catch up a missed run, or retry a transiently-failed one, with
@@ -300,6 +300,45 @@ public sealed class AgentRunner : IDisposable
 
     private string LastRunPath => Path.Combine(_aiDataRoot, "last-run.json");
 
+    /// <summary>
+    /// Parses the persisted last-run stamp back into a genuine UTC instant.
+    ///
+    /// A bare <c>DateTime.TryParse</c> is WRONG here. Given an ISO-8601 string carrying a zone
+    /// designator ("...Z" or "...-07:00") the default styles CONVERT the value to the machine's
+    /// local time and hand back Kind=Local. That result was then subtracted from
+    /// <c>DateTime.UtcNow</c> — mixing a local wall-clock reading with a UTC one and inflating
+    /// the elapsed time by the whole UTC offset (7h on this box).
+    ///
+    /// Effect: every process restart re-read the stamp 7h "older" than it was, so the >=23h
+    /// catch-up predicate fired on a gap of only ~22h and the agent ran a second, unwanted time
+    /// at ~02:00 — burning an extra LLM call, an extra change budget and an extra DryRunsRemaining
+    /// decrement. Observed 2026-08-25..28: exactly one run/day at 04:00 while the process was
+    /// stable (08-18..08-24), then two runs every day across the restart-heavy release window.
+    /// East of UTC the sign flips and a legitimately-missed run is SUPPRESSED instead.
+    ///
+    /// RoundtripKind preserves the offset instead of applying it; ToUniversalTime then normalises
+    /// both the "Z" form and the "-07:00" form that an already-corrupted file was saved with, so
+    /// this also self-heals state written by the buggy build. This is the same
+    /// RoundtripKind + ToUniversalTime pairing HeartbeatMonitor and UpdateChecker's marker
+    /// readers already used — this was the one sibling in the codebase that missed it.
+    /// </summary>
+    internal static bool TryParseLastRunUtc(string? raw, out DateTime utc)
+    {
+        utc = DateTime.MinValue;
+        if (string.IsNullOrWhiteSpace(raw)) return false;
+        if (!DateTime.TryParse(raw, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind, out var parsed)) return false;
+        utc = parsed.ToUniversalTime();
+        return true;
+    }
+
+    /// <summary>
+    /// Whether a scheduled run was missed and should be caught up. Both arguments must be UTC;
+    /// see <see cref="TryParseLastRunUtc"/> for why that is not a formality.
+    /// </summary>
+    internal static bool NeedsCatchUp(DateTime lastRunUtc, DateTime nowUtc) =>
+        lastRunUtc != DateTime.MinValue && (nowUtc - lastRunUtc).TotalHours >= 23;
+
     private void LoadLastRun()
     {
         try
@@ -307,7 +346,7 @@ public sealed class AgentRunner : IDisposable
             if (File.Exists(LastRunPath))
             {
                 var node = JsonNode.Parse(File.ReadAllText(LastRunPath));
-                if (node != null && DateTime.TryParse(node["utc"]?.ToString(), out var t))
+                if (node != null && TryParseLastRunUtc(node["utc"]?.ToString(), out var t))
                     _lastRunUtc = t;
                 // A give-up counter that a restart zeroes is not a counter. This drives the
                 // ERR that tells the operator the loop is stuck, and that ERR fires at the
