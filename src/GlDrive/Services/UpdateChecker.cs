@@ -1606,23 +1606,72 @@ public static class UpdateMarkerHmac
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "GlDrive", ".updating-key");
 
-    private static byte[] GetOrCreateKey()
+    // The first update-marker calls can arrive concurrently (the test runner does this reliably
+    // on a clean profile). Without a gate, two callers can both observe a missing key, generate
+    // different values, and overwrite the same file. A marker written with the losing value then
+    // fails validation immediately. The atomic publish below also keeps another process from ever
+    // observing a partially-written DPAPI blob.
+    private static readonly object KeyCreationGate = new();
+
+    private static byte[] GetOrCreateKey() => GetOrCreateKeyAt(KeyPath);
+
+    internal static byte[] GetOrCreateKeyAt(string keyPath)
     {
-        if (File.Exists(KeyPath))
+        lock (KeyCreationGate)
         {
+            if (TryReadKey(keyPath, out var existingKey)) return existingKey;
+
+            var key = RandomNumberGenerator.GetBytes(32);
+            var protectedKey = ProtectedData.Protect(key, null, DataProtectionScope.CurrentUser);
+            var dir = Path.GetDirectoryName(keyPath)!;
+            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+
+            // Publish from the same directory so the rename is atomic. If another process wins
+            // the create race, its persisted key is authoritative and every caller converges on
+            // it instead of overwriting it with a different value.
+            var tempPath = keyPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
             {
-                var enc = File.ReadAllBytes(KeyPath);
-                return ProtectedData.Unprotect(enc, null, DataProtectionScope.CurrentUser);
-            }
-            catch { }
-        }
+                File.WriteAllBytes(tempPath, protectedKey);
+                try
+                {
+                    File.Move(tempPath, keyPath);
+                    return key;
+                }
+                catch (IOException)
+                {
+                    if (TryReadKey(keyPath, out existingKey)) return existingKey;
 
-        var key = RandomNumberGenerator.GetBytes(32);
-        var dir = Path.GetDirectoryName(KeyPath)!;
-        if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-        File.WriteAllBytes(KeyPath, ProtectedData.Protect(key, null, DataProtectionScope.CurrentUser));
-        return key;
+                    // Preserve the old self-healing behaviour for a corrupt key file, but replace
+                    // it atomically rather than exposing a truncated blob to another reader.
+                    File.Move(tempPath, keyPath, overwrite: true);
+                    return key;
+                }
+            }
+            finally
+            {
+                try { if (File.Exists(tempPath)) File.Delete(tempPath); }
+                catch { }
+            }
+        }
+    }
+
+    private static bool TryReadKey(string keyPath, out byte[] key)
+    {
+        key = [];
+        if (!File.Exists(keyPath)) return false;
+        try
+        {
+            var encrypted = File.ReadAllBytes(keyPath);
+            var candidate = ProtectedData.Unprotect(encrypted, null, DataProtectionScope.CurrentUser);
+            if (candidate.Length != 32) return false;
+            key = candidate;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static byte[] ComputeHmac(byte[] key, string payload)

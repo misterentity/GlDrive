@@ -66,6 +66,11 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   Both found by mapping subsystem surfaces for a feature, not from any symptom.
 
 ### Fixes
+- **v3.10.90** — updater HMAC key creation is now synchronized and atomically published.
+  Fresh CI profiles exposed a race where parallel callers both observed a missing DPAPI key,
+  generated different values, and overwrote the same file; an authorization written with the
+  losing value then failed validation immediately. Concurrent cold-start coverage now requires
+  every caller and the persisted file to converge on one key, with no temporary files left behind.
 - **v3.10.83** — release builds are warning-free and now fail on any future compiler
   warning. Four WPF dispatcher operations explicitly declare their intentional
   fire-and-forget lifecycle, the startup mount-failure notification contains its own tray
