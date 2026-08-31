@@ -36,29 +36,24 @@ public sealed class ScreenshotModeIsolationTests
     }
 
     /// <summary>
-    /// The watchdog-spawn guard must exclude every mode that is not a normal app start.
-    ///
-    /// Window is taken up to the SpawnWatchdog() call rather than a fixed character count: the
-    /// original 180-char slice silently excluded the call as soon as a fourth exclusion was added,
-    /// failing for width rather than for the property under test.
+    /// Updater modes must be dispatched by the custom entry point before WPF is constructed.
+    /// SYSTEM scheduled tasks run without an interactive desktop, so putting this in OnStartup
+    /// makes the hand-off depend on WPF startup succeeding in session 0.
     /// </summary>
     [Fact]
-    public void Watchdog_spawn_is_skipped_for_every_non_normal_mode()
+    public void Updater_modes_run_before_WPF_initialization()
     {
-        var source = ReadSource("src/GlDrive/Program.cs");
-        var guardStart = source.IndexOf("if (Array.IndexOf(args, \"--apply-update\")", StringComparison.Ordinal);
-        Assert.True(guardStart >= 0, "watchdog spawn guard not found");
+        var program = ReadSource("src/GlDrive/Program.cs");
+        var taskDispatch = program.IndexOf("UpdateChecker.ApplyUpdateFromTask()", StringComparison.Ordinal);
+        var interactiveDispatch = program.IndexOf("UpdateChecker.ApplyUpdate(updatePid", StringComparison.Ordinal);
+        var wpfConstruction = program.IndexOf("var app = new App()", StringComparison.Ordinal);
 
-        var spawnCall = source.IndexOf("SpawnWatchdog()", guardStart, StringComparison.Ordinal);
-        Assert.True(spawnCall > guardStart, "SpawnWatchdog() does not follow the guard");
+        Assert.True(taskDispatch >= 0 && taskDispatch < wpfConstruction);
+        Assert.True(interactiveDispatch >= 0 && interactiveDispatch < wpfConstruction);
+        Assert.Contains("Array.IndexOf(args, \"--screenshots\") < 0", program);
 
-        var guard = source.Substring(guardStart, spawnCall - guardStart);
-
-        Assert.Contains("Array.IndexOf(args, \"--apply-update\") < 0", guard);
-        Assert.Contains("Array.IndexOf(args, \"--screenshots\") < 0", guard);
-        // --apply-update-task is a DISTINCT argument: Array.IndexOf is an exact match, so the
-        // --apply-update entry above does NOT cover it. Without this the SYSTEM task's process
-        // spawns a watchdog and races its own file replacement.
-        Assert.Contains("Array.IndexOf(args, \"--apply-update-task\") < 0", guard);
+        var app = ReadSource("src/GlDrive/App.xaml.cs");
+        Assert.DoesNotContain("ApplyUpdateFromTask", app);
+        Assert.DoesNotContain("--apply-update", app);
     }
 }

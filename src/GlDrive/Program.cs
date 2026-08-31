@@ -10,6 +10,29 @@ public static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        // Updater modes must run before constructing the WPF Application. The scheduled task
+        // runs as SYSTEM in a non-interactive session, where WPF startup can terminate before
+        // App.OnStartup is reached. Dispatching here keeps the updater headless and makes the
+        // fixed-action SYSTEM task usable without a logged-in desktop.
+        var taskIdx = Array.FindIndex(args,
+            arg => arg.Equals("--apply-update-task", StringComparison.OrdinalIgnoreCase));
+        if (taskIdx >= 0)
+        {
+            UpdateChecker.ApplyUpdateFromTask();
+            Process.GetCurrentProcess().Kill();
+            return -1;
+        }
+
+        var applyIdx = Array.FindIndex(args,
+            arg => arg.Equals("--apply-update", StringComparison.OrdinalIgnoreCase));
+        if (applyIdx >= 0 && args.Length >= applyIdx + 4 &&
+            int.TryParse(args[applyIdx + 1], out var updatePid))
+        {
+            UpdateChecker.ApplyUpdate(updatePid, args[applyIdx + 2], args[applyIdx + 3]);
+            Process.GetCurrentProcess().Kill();
+            return -1;
+        }
+
         // Watchdog mode — lightweight process monitor, no WPF.
         // Launched by the main app as: GlDrive.exe --watchdog <pid>
         var wdIdx = Array.IndexOf(args, "--watchdog");
@@ -18,15 +41,9 @@ public static class Program
             return RunWatchdog(targetPid);
         }
 
-        // Normal mode — spawn watchdog then start WPF app.
-        // EXCEPT during --apply-update: the elevated updater owns restart and rollback.
-        // Spawning a second watchdog here would race file replacement and relaunch.
-        // NOTE: --apply-update-task is a DISTINCT argument, not a prefix match on --apply-update.
-        // Array.IndexOf is exact, so omitting it here let the SYSTEM task's process spawn a
-        // watchdog and race its own file replacement.
-        if (Array.IndexOf(args, "--apply-update") < 0 &&
-            Array.IndexOf(args, "--apply-update-task") < 0 &&
-            Array.IndexOf(args, "--screenshots") < 0)
+        // Normal mode — spawn watchdog then start WPF app. Screenshot mode is an isolated
+        // renderer; updater modes have already returned above.
+        if (Array.IndexOf(args, "--screenshots") < 0)
             SpawnWatchdog();
 
         var app = new App();
