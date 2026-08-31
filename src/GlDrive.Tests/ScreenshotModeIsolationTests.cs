@@ -69,4 +69,20 @@ public sealed class ScreenshotModeIsolationTests
         Assert.True(clear > entry && clear < dispatch);
         Assert.Contains("if (File.Exists(path))", source[clear..dispatch]);
     }
+
+    [Fact]
+    public void Interactive_watchdog_owns_post_SYSTEM_update_relaunch()
+    {
+        var program = ReadSource("src/GlDrive/Program.cs");
+        Assert.Contains("update-complete-{targetPid}.signal", program);
+        Assert.Contains("Update completed; relaunched GlDrive", program);
+
+        var checker = ReadSource("src/GlDrive/Services/UpdateChecker.cs");
+        var signal = checker.IndexOf("SignalUpdateCompletion(pid)", StringComparison.Ordinal);
+        var kill = checker.IndexOf("Process.GetCurrentProcess().Kill()", signal, StringComparison.Ordinal);
+        Assert.True(signal >= 0 && signal < kill);
+
+        var tray = ReadSource("src/GlDrive/UI/TrayViewModel.cs");
+        Assert.DoesNotContain("File.WriteAllText(Path.Combine(appData, \".updating\")", tray);
+    }
 }

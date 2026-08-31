@@ -66,6 +66,12 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   Both found by mapping subsystem surfaces for a feature, not from any symptom.
 
 ### Fixes
+- **v3.10.95** — unattended updates now relaunch in the signed-in user's session. The SYSTEM
+  applicator could replace and verify every file successfully but its `explorer.exe` launch stayed
+  in session 0, leaving GlDrive stopped. The user-session watchdog now preserves the updater's
+  HMAC marker, waits for an explicit ProgramData completion signal written after install or
+  rollback, then owns the relaunch. Regression coverage prevents the tray callback from replacing
+  the signed marker with the plain timestamp that previously made the watchdog exit early.
 - **v3.10.93** — the unattended SYSTEM updater now crosses its privilege boundary correctly and
   leaves an auditable task trace. A SYSTEM process cannot resolve or decrypt the interactive
   user's CurrentUser-DPAPI authorization marker, so task mode now relies on its fixed action,

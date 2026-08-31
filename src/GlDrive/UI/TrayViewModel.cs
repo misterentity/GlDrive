@@ -250,7 +250,9 @@ public class TrayViewModel : INotifyPropertyChanged
             {
                 var appData = GlDrive.Config.ConfigManager.AppDataPath;
                 File.Delete(Path.Combine(appData, ".running"));
-                File.WriteAllText(Path.Combine(appData, ".updating"), DateTime.UtcNow.ToString("O"));
+                // LaunchUpdater already wrote the HMAC-authenticated .updating marker. Do not
+                // replace it with a plain timestamp: the watchdog rejects unsigned markers and
+                // would exit instead of waiting to relaunch the completed update.
             }
             catch { }
 
