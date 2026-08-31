@@ -66,6 +66,11 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   Both found by mapping subsystem surfaces for a feature, not from any symptom.
 
 ### Fixes
+- **v3.10.91** — unattended updater modes now dispatch in `Program.Main` before WPF is
+  initialized. The SYSTEM scheduled task runs in a non-interactive session; routing its fixed
+  `--apply-update-task` action through `App.OnStartup` allowed the process to exit before the
+  signed hand-off was consumed, leaving the old version installed. Both scheduled-task and
+  interactive updater modes are now headless, with source-order regression coverage.
 - **v3.10.90** — updater HMAC key creation is now synchronized and atomically published.
   Fresh CI profiles exposed a race where parallel callers both observed a missing DPAPI key,
   generated different values, and overwrote the same file; an authorization written with the
