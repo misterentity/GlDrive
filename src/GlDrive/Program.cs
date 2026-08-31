@@ -129,7 +129,37 @@ public static class Program
         catch { updateInProgress = true; }
         if (updateInProgress)
         {
+            // The elevated updater may run as SYSTEM in session 0, which cannot reliably launch
+            // the desktop app back into this user's session. Wait for its explicit completion
+            // signal, then relaunch from this original interactive-session watchdog.
+            var completionPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                "GlDrive", $"update-complete-{targetPid}.signal");
+            var deadline = DateTime.UtcNow + TimeSpan.FromMinutes(3);
+            while (!File.Exists(completionPath) && DateTime.UtcNow < deadline)
+                Thread.Sleep(500);
+
+            var completed = File.Exists(completionPath);
+            try { File.Delete(completionPath); } catch { }
             try { File.Delete(updateMarker); } catch { }
+
+            try
+            {
+                var exe = Environment.ProcessPath;
+                var started = string.IsNullOrWhiteSpace(exe) ? null : Process.Start(new ProcessStartInfo
+                {
+                    FileName = exe,
+                    UseShellExecute = false
+                });
+                AppendWatchdogEvent(appData, completed ? "INF" : "WRN",
+                    completed
+                        ? $"Update completed; relaunched GlDrive as PID {started?.Id}."
+                        : $"Update completion timed out; attempted recovery relaunch as PID {started?.Id}.");
+            }
+            catch (Exception ex)
+            {
+                AppendWatchdogEvent(appData, "ERR", $"Post-update relaunch failed: {ex.Message}");
+            }
             return 0;
         }
         // Stale/invalid/plain marker — delete it and fall through to crash-restart logic
@@ -213,6 +243,18 @@ public static class Program
         }
 
         return 0;
+    }
+
+    private static void AppendWatchdogEvent(string appData, string level, string message)
+    {
+        try
+        {
+            var logDir = Path.Combine(appData, "logs");
+            if (!Directory.Exists(logDir)) return;
+            File.AppendAllText(Path.Combine(logDir, $"gldrive-{DateTime.Now:yyyyMMdd}.log"),
+                $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{level}] WATCHDOG: {message}{Environment.NewLine}");
+        }
+        catch { }
     }
 
     internal const string UnknownCrashReason = "unknown (no matching event log entry found)";

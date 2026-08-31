@@ -890,6 +890,7 @@ public class UpdateChecker : IDisposable
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "GlDrive", ".update-auth");
         UpdateMarkerHmac.WriteAuthorization(appDataAuthorization, pid, packageDir, installDir);
+        try { File.Delete(UpdateCompletionPath(pid)); } catch { }
 
         // Prefer the SYSTEM scheduled task: no UAC prompt, so an install that comes due at 03:35
         // no longer depends on somebody being awake to approve it.
@@ -1404,10 +1405,30 @@ public class UpdateChecker : IDisposable
             }
         }
 
+        // Signal the original interactive-session watchdog only after every install or rollback
+        // operation is complete. A SYSTEM process cannot reliably launch a desktop application
+        // into the signed-in user's session; the watchdog can.
+        SignalUpdateCompletion(pid);
+
         // Force-kill instead of normal teardown because loaded files may have been
         // renamed or replaced while this updater process was running.
         Thread.Sleep(2000);
         Process.GetCurrentProcess().Kill();
+    }
+
+    internal static string UpdateCompletionPath(int pid) => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+        "GlDrive", $"update-complete-{pid}.signal");
+
+    private static void SignalUpdateCompletion(int pid)
+    {
+        try
+        {
+            var path = UpdateCompletionPath(pid);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, DateTime.UtcNow.ToString("O"));
+        }
+        catch { }
     }
 
     internal static bool IsLegacyExtractedHandoff(
