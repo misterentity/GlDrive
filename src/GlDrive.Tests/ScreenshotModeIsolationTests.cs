@@ -56,4 +56,17 @@ public sealed class ScreenshotModeIsolationTests
         Assert.DoesNotContain("ApplyUpdateFromTask", app);
         Assert.DoesNotContain("--apply-update", app);
     }
+
+    [Fact]
+    public void System_task_consumes_handoff_before_nonreturning_update_dispatch()
+    {
+        var source = ReadSource("src/GlDrive/Services/UpdateChecker.cs");
+        var entry = source.IndexOf("public static void ApplyUpdateFromTask()", StringComparison.Ordinal);
+        var clear = source.IndexOf("UpdateTaskHandoff.Clear(path)", entry, StringComparison.Ordinal);
+        var dispatch = source.IndexOf("ApplyUpdate(handoff.Pid", entry, StringComparison.Ordinal);
+
+        Assert.True(entry >= 0);
+        Assert.True(clear > entry && clear < dispatch);
+        Assert.Contains("if (File.Exists(path))", source[clear..dispatch]);
+    }
 }

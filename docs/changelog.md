@@ -66,6 +66,14 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   Both found by mapping subsystem surfaces for a feature, not from any symptom.
 
 ### Fixes
+- **v3.10.93** — the unattended SYSTEM updater now crosses its privilege boundary correctly and
+  leaves an auditable task trace. A SYSTEM process cannot resolve or decrypt the interactive
+  user's CurrentUser-DPAPI authorization marker, so task mode now relies on its fixed action,
+  pinned install directory, strictly-newer-version check, RSA publisher signature, and two
+  locked-archive hash verifications; interactive elevation keeps HMAC authorization. The task
+  also consumes its hand-off before calling the intentionally non-returning applicator—its old
+  `finally` could never execute after `Process.Kill`—and records acceptance/rejection reasons in
+  ProgramData. Both failures were reproduced against the real installed SYSTEM task.
 - **v3.10.91** — unattended updater modes now dispatch in `Program.Main` before WPF is
   initialized. The SYSTEM scheduled task runs in a non-interactive session; routing its fixed
   `--apply-update-task` action through `App.OnStartup` allowed the process to exit before the

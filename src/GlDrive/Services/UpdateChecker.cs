@@ -816,27 +816,55 @@ public class UpdateChecker : IDisposable
     public static void ApplyUpdateFromTask()
     {
         var path = UpdateTaskHandoff.DefaultPath;
-        var handoff = UpdateTaskHandoff.TryRead(path, DateTime.UtcNow);
+        var taskLogPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "GlDrive", "update-task.log");
+        void TaskLog(string message)
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(taskLogPath)!);
+                File.AppendAllText(taskLogPath,
+                    $"[{DateTime.UtcNow:O}] {message}{Environment.NewLine}");
+            }
+            catch { }
+        }
+
+        TaskLog("SYSTEM updater entry point started");
+        var handoff = UpdateTaskHandoff.TryRead(path, DateTime.UtcNow,
+            reason => TaskLog($"Rejected handoff: {reason}"));
         if (handoff is null)
         {
             Log.Warning("Update task ran with no valid pending hand-off at {Path} — nothing to do", path);
             return;
         }
 
+        TaskLog($"Accepted handoff for {handoff.Tag}");
         var installDir = Path.GetFullPath(AppContext.BaseDirectory)
             .TrimEnd(Path.DirectorySeparatorChar);
         Log.Information("Update task applying {Tag} from {PackageDir} to {InstallDir}",
             handoff.Tag, handoff.PackageDir, installDir);
 
-        try
+        // ApplyUpdate intentionally terminates this process after success OR rollback, so code
+        // after the call (including a finally block) can never consume the request. Delete it
+        // before dispatch to prevent a stale/replayable SYSTEM handoff.
+        UpdateTaskHandoff.Clear(path);
+        if (File.Exists(path))
         {
-            ApplyUpdate(handoff.Pid, handoff.PackageDir, installDir, viaScheduledTask: true);
+            TaskLog($"Could not consume handoff for {handoff.Tag}; refusing dispatch");
+            return;
         }
-        finally
-        {
-            UpdateTaskHandoff.Clear(path);
-        }
+        TaskLog($"Consumed handoff for {handoff.Tag}; dispatching updater");
+        ApplyUpdate(handoff.Pid, handoff.PackageDir, installDir, viaScheduledTask: true);
     }
+
+    /// <summary>
+    /// Interactive elevation is authorized by a CurrentUser-DPAPI HMAC marker. The fixed-action
+    /// SYSTEM task cannot use that user's DPAPI scope; instead it pins the destination to its own
+    /// executable directory and verifies the publisher signature, version, and locked archive
+    /// twice. See <see cref="UpdateTaskHandoff"/> for the complete task threat model.
+    /// </summary>
+    internal static bool RequiresUpdateAuthorization(bool viaScheduledTask) => !viaScheduledTask;
 
     private void LaunchUpdater(VerifiedUpdatePackage package, string? tagName = null)
     {
@@ -867,6 +895,9 @@ public class UpdateChecker : IDisposable
         // no longer depends on somebody being awake to approve it.
         if (TryLaunchViaScheduledTask(packageDir, pid, tagName))
         {
+            // The SYSTEM task cannot resolve or decrypt a CurrentUser-DPAPI authorization
+            // marker. Its boundary is the fixed task action plus publisher verification.
+            try { File.Delete(appDataAuthorization); } catch { }
             ClearDeclinedUpdate();
             ClearTimedOutUpdate();
             RestartRequested?.Invoke();
@@ -1159,7 +1190,8 @@ public class UpdateChecker : IDisposable
                 UpdateMarkerHmac.WriteAuthorization(authorizationPath, pid, fullExtract, fullInstall);
             }
 
-            if (!UpdateMarkerHmac.IsValidAuthorization(authorizationPath, pid, fullExtract, fullInstall))
+            if (RequiresUpdateAuthorization(viaScheduledTask) &&
+                !UpdateMarkerHmac.IsValidAuthorization(authorizationPath, pid, fullExtract, fullInstall))
             {
                 LogUpdate("SECURITY: update authorization is missing, expired, or does not match staged files — aborting");
                 throw new InvalidDataException("Update authorization is invalid");
@@ -1197,7 +1229,8 @@ public class UpdateChecker : IDisposable
 
             // Revalidate after waiting so staging changes made while the original process
             // was shutting down cannot cross the elevation boundary.
-            if (!UpdateMarkerHmac.IsValidAuthorization(authorizationPath, pid, fullExtract, fullInstall))
+            if (RequiresUpdateAuthorization(viaScheduledTask) &&
+                !UpdateMarkerHmac.IsValidAuthorization(authorizationPath, pid, fullExtract, fullInstall))
             {
                 LogUpdate("SECURITY: staged update changed while waiting for shutdown — aborting");
                 throw new InvalidDataException("Update package changed during shutdown");
@@ -1212,7 +1245,10 @@ public class UpdateChecker : IDisposable
                     throw new InvalidDataException("Update publisher verification failed after shutdown");
                 }
             }
-            try { File.Delete(authorizationPath); } catch { }
+            if (RequiresUpdateAuthorization(viaScheduledTask))
+            {
+                try { File.Delete(authorizationPath); } catch { }
+            }
 
             // LOAD-BEARING ORDER: decompress the whole archive to a staging folder BEFORE any
             // install file is renamed. .NET binds System.IO.Compression.Native.dll lazily, on the
