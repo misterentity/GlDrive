@@ -73,30 +73,39 @@ internal sealed record UpdateTaskHandoff(
     /// Reads and validates a hand-off. Returns null — never a partially-trusted record — when
     /// anything is off. <paramref name="nowUtc"/> is injected so staleness is testable.
     /// </summary>
-    public static UpdateTaskHandoff? TryRead(string path, DateTime nowUtc)
+    public static UpdateTaskHandoff? TryRead(string path, DateTime nowUtc,
+        Action<string>? rejectionDiagnostic = null)
     {
+        UpdateTaskHandoff? Reject(string reason)
+        {
+            rejectionDiagnostic?.Invoke(reason);
+            return null;
+        }
+
         try
         {
-            if (!File.Exists(path)) return null;
+            if (!File.Exists(path)) return Reject("handoff file does not exist");
 
             var handoff = JsonSerializer.Deserialize<UpdateTaskHandoff>(File.ReadAllText(path), JsonOpts);
-            if (handoff is null) return null;
+            if (handoff is null) return Reject("handoff JSON was empty");
 
-            if (handoff.Pid <= 0) return null;
-            if (string.IsNullOrWhiteSpace(handoff.PackageDir)) return null;
+            if (handoff.Pid <= 0) return Reject("handoff PID was invalid");
+            if (string.IsNullOrWhiteSpace(handoff.PackageDir))
+                return Reject("handoff package directory was empty");
 
             // Future-dated stamps mean clock skew or tampering; don't trust either.
-            if (handoff.CreatedUtc > nowUtc) return null;
-            if (nowUtc - handoff.CreatedUtc > MaxAge) return null;
+            if (handoff.CreatedUtc > nowUtc) return Reject("handoff timestamp was in the future");
+            if (nowUtc - handoff.CreatedUtc > MaxAge) return Reject("handoff had expired");
 
-            if (!IsPlausiblePackageDir(handoff.PackageDir)) return null;
+            if (!IsPlausiblePackageDir(handoff.PackageDir))
+                return Reject("package directory failed staging validation");
 
             return handoff;
         }
         catch (Exception ex)
         {
             Log.Warning(ex, "Update hand-off could not be read — ignoring");
-            return null;
+            return Reject($"handoff read failed: {ex.GetType().Name}");
         }
     }
 

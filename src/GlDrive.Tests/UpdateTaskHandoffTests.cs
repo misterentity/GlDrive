@@ -30,6 +30,13 @@ public sealed class UpdateTaskHandoffTests : IDisposable
         _path = Path.Combine(_dir, "pending-update.json");
     }
 
+    [Fact]
+    public void System_task_uses_publisher_verification_not_current_user_DPAPI_authorization()
+    {
+        Assert.False(UpdateChecker.RequiresUpdateAuthorization(viaScheduledTask: true));
+        Assert.True(UpdateChecker.RequiresUpdateAuthorization(viaScheduledTask: false));
+    }
+
     public void Dispose() { try { Directory.Delete(_dir, true); } catch { } }
 
     /// <summary>Creates a directory shaped like a real staging folder.</summary>
