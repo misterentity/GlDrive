@@ -49,6 +49,7 @@ internal static class ScreenshotCapture
             Connection = { Host = "ftp.example.com", Port = 21, Username = "user" },
             Mount = { DriveLetter = "G", VolumeLabel = "glFTPd" }
         });
+        config.Downloads.LocalPath = @"C:\Downloads\GlDrive";
         config.Logging.Level = "Information";
         return config;
     }
@@ -315,9 +316,9 @@ internal static class ScreenshotCapture
     private static void CaptureSettings(AppConfig config)
     {
         var certManager = new CertificateManager();
-        var notificationStore = new NotificationStore();
+        var notificationStore = new NotificationStore(persistToDisk: false);
         var serverManager = new ServerManager(config, certManager, notificationStore);
-        var settings = new SettingsWindow(config, serverManager);
+        var settings = new SettingsWindow(config, serverManager, readLocalState: false);
         settings.Show();
         DoEvents();
 
