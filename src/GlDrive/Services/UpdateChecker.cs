@@ -229,9 +229,34 @@ public class UpdateChecker : IDisposable
     private const int MaxFailedInstallAttempts = 3;
 
     /// <summary>
-    /// Called at startup. If we recorded an in-flight install attempt for some tag and we are
-    /// NOT now running that version, the attempt failed — count it, and block the tag once it
-    /// has failed too many times. Running the expected version clears all failure state.
+    /// Drops the revision component and clamps an unset build to 0, so a version parsed from a
+    /// release tag ("v3.10.90" -> 3.10.90 with Revision -1) is comparable to the running
+    /// assembly version (3.10.90.0). BOTH halves of the update subsystem — the "is there
+    /// something newer" check and the post-install reconciliation — compare through this, so
+    /// they cannot drift apart again.
+    /// </summary>
+    internal static Version Normalize(Version v) => new(v.Major, v.Minor, Math.Max(v.Build, 0));
+
+    /// <summary>
+    /// True when the running version satisfies an install attempt for <paramref name="attempted"/>.
+    ///
+    /// The question is "did we get OFF the old version?", NOT "did we land on exactly this build".
+    /// An auto-install downloads whatever GitHub calls `latest`, so when a newer release is
+    /// published between the tag being recorded and the installer running, we legitimately
+    /// OVERSHOOT: attempted v3.10.90, ended up running 3.10.92. That is the update SUCCEEDING.
+    /// Judging it by equality scored it a failure (production 2026-08-31 10:12:30, "Update attempt
+    /// for v3.10.90 did not take effect (running 3.10.92.0) — failure 1/3"), and
+    /// <see cref="MaxFailedInstallAttempts"/> such overshoots latch <see cref="IsUpdateBlocked"/>
+    /// against that tag permanently — while never clearing the failure ledger, because only the
+    /// success branch deletes it.
+    /// </summary>
+    internal static bool AttemptSatisfiedBy(Version attempted, Version running)
+        => Normalize(running) >= Normalize(attempted);
+
+    /// <summary>
+    /// Called at startup. If we recorded an in-flight install attempt for some tag and we are NOT
+    /// now running at least that version, the attempt failed — count it, and block the tag once it
+    /// has failed too many times. Reaching the attempted version (or newer) clears all failure state.
     /// </summary>
     private static void ReconcileUpdateAttempt()
     {
@@ -244,14 +269,16 @@ public class UpdateChecker : IDisposable
             if (string.IsNullOrEmpty(tag)) return;
 
             var attempted = Version.TryParse(tag.TrimStart('v', 'V'), out var v) ? v : null;
-            if (attempted != null &&
-                attempted.Major == CurrentVersion.Major &&
-                attempted.Minor == CurrentVersion.Minor &&
-                Math.Max(attempted.Build, 0) == Math.Max(CurrentVersion.Build, 0))
+            if (attempted != null && AttemptSatisfiedBy(attempted, CurrentVersion))
             {
                 // The update landed. Forget every past failure.
                 try { File.Delete(UpdateStatePath(".update-failures")); } catch { }
-                Log.Information("Update to {Tag} confirmed installed", tag);
+                if (Normalize(attempted) < Normalize(CurrentVersion))
+                    Log.Information(
+                        "Update to {Tag} landed on {Running} — a newer release published while the " +
+                        "installer ran; treating as installed", tag, CurrentVersion);
+                else
+                    Log.Information("Update to {Tag} confirmed installed", tag);
                 return;
             }
 
@@ -326,10 +353,9 @@ public class UpdateChecker : IDisposable
             Log.Debug("Version check: running={Major}.{Minor}.{Build}, latest={RMajor}.{RMinor}.{RBuild}",
                 currentMajor, currentMinor, currentBuild, remoteMajor, remoteMinor, remoteBuild);
 
-            // Compare component by component to avoid Version class quirks
-            bool isNewer = remoteMajor > currentMajor
-                || (remoteMajor == currentMajor && remoteMinor > currentMinor)
-                || (remoteMajor == currentMajor && remoteMinor == currentMinor && remoteBuild > currentBuild);
+            // Normalize away the revision quirk (a tag parses with Revision -1) and compare.
+            // Same helper the post-install reconciler uses — see AttemptSatisfiedBy.
+            bool isNewer = Normalize(remote) > Normalize(CurrentVersion);
 
             if (isNewer)
             {
