@@ -5,6 +5,14 @@ namespace GlDrive.Config;
 
 public static class CredentialStore
 {
+    /// <summary>
+    /// Prevents isolated utility modes (currently screenshot rendering) from reading,
+    /// writing, or deleting credentials belonging to the interactive production app.
+    /// Screenshot mode runs in its own short-lived process, so this is deliberately
+    /// process-wide rather than an ambient async scope.
+    /// </summary>
+    internal static bool AccessDisabled { get; set; }
+
     private static string GetTargetName(string host, int port, string username) =>
         $"GlDrive:{host}:{port}:{username}";
 
@@ -13,6 +21,7 @@ public static class CredentialStore
 
     public static string? GetProxyPassword(string host, int port, string username)
     {
+        if (AccessDisabled) return null;
         var target = GetProxyTargetName(host, port, username);
         try
         {
@@ -28,6 +37,7 @@ public static class CredentialStore
 
     public static void SaveProxyPassword(string host, int port, string username, string password)
     {
+        if (AccessDisabled) return;
         var target = GetProxyTargetName(host, port, username);
         try
         {
@@ -42,6 +52,7 @@ public static class CredentialStore
 
     public static string? GetPassword(string host, int port, string username)
     {
+        if (AccessDisabled) return null;
         var target = GetTargetName(host, port, username);
         try
         {
@@ -57,6 +68,7 @@ public static class CredentialStore
 
     public static void SavePassword(string host, int port, string username, string password)
     {
+        if (AccessDisabled) return;
         var target = GetTargetName(host, port, username);
         try
         {
@@ -75,6 +87,7 @@ public static class CredentialStore
 
     public static void DeletePassword(string host, int port, string username)
     {
+        if (AccessDisabled) return;
         var target = GetTargetName(host, port, username);
         try
         {
@@ -91,6 +104,7 @@ public static class CredentialStore
 
     public static string? GetIrcPassword(string host, int port, string nick)
     {
+        if (AccessDisabled) return null;
         var target = GetIrcTargetName(host, port, nick);
         try
         {
@@ -106,6 +120,7 @@ public static class CredentialStore
 
     public static void SaveIrcPassword(string host, int port, string nick, string password)
     {
+        if (AccessDisabled) return;
         var target = GetIrcTargetName(host, port, nick);
         try
         {
@@ -120,6 +135,7 @@ public static class CredentialStore
 
     public static void DeleteIrcPassword(string host, int port, string nick)
     {
+        if (AccessDisabled) return;
         var target = GetIrcTargetName(host, port, nick);
         try
         {
@@ -138,6 +154,7 @@ public static class CredentialStore
 
     public static string? GetSshPassword(string host, int port, string username)
     {
+        if (AccessDisabled) return null;
         var target = GetSshTargetName(host, port, username);
         try
         {
@@ -153,6 +170,7 @@ public static class CredentialStore
 
     public static void SaveSshPassword(string host, int port, string username, string password)
     {
+        if (AccessDisabled) return;
         var target = GetSshTargetName(host, port, username);
         try
         {
@@ -169,6 +187,7 @@ public static class CredentialStore
 
     public static string? GetApiKey(string service)
     {
+        if (AccessDisabled) return null;
         try
         {
             var cred = CredentialManager.ReadCredential($"GlDrive:api:{service}");
@@ -179,6 +198,7 @@ public static class CredentialStore
 
     public static void SaveApiKey(string service, string key)
     {
+        if (AccessDisabled) return;
         if (string.IsNullOrEmpty(key)) return;
         try
         {
@@ -192,6 +212,7 @@ public static class CredentialStore
 
     public static void DeleteApiKey(string service)
     {
+        if (AccessDisabled) return;
         try
         {
             CredentialManager.DeleteCredential($"GlDrive:api:{service}");

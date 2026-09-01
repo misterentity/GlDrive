@@ -45,20 +45,20 @@ public class SettingsViewModel : INotifyPropertyChanged
     private bool _spreadValidateOnBorrow;
     private string _spreadKeepaliveSeconds;
 
-    public SettingsViewModel(AppConfig config)
+    public SettingsViewModel(AppConfig config, bool readLocalState = true)
     {
         _config = config;
         _logLevel = config.Logging.Level;
-        _trustedCertsInfo = GetCertsInfo();
+        _trustedCertsInfo = readLocalState ? GetCertsInfo() : "No trusted certificates.";
         _downloadLocalPath = config.Downloads.LocalPath;
         _maxConcurrentDownloads = config.Downloads.MaxConcurrentDownloads.ToString();
         _streamingBufferSize = config.Downloads.StreamingBufferSizeKb.ToString();
         _writeBufferLimit = config.Downloads.WriteBufferLimitMb.ToString();
         _qualityDefault = config.Downloads.QualityDefault;
         // Prefer Credential Manager, fall back to config (migration)
-        _omdbApiKey = CredentialStore.GetApiKey("omdb") ?? config.Downloads.OmdbApiKey;
-        _tmdbApiKey = CredentialStore.GetApiKey("tmdb") ?? config.Downloads.TmdbApiKey;
-        _openRouterApiKey = CredentialStore.GetApiKey("openrouter") ?? "";
+        _omdbApiKey = readLocalState ? CredentialStore.GetApiKey("omdb") ?? config.Downloads.OmdbApiKey : "";
+        _tmdbApiKey = readLocalState ? CredentialStore.GetApiKey("tmdb") ?? config.Downloads.TmdbApiKey : "";
+        _openRouterApiKey = readLocalState ? CredentialStore.GetApiKey("openrouter") ?? "" : "";
         _openRouterModel = config.Downloads.OpenRouterModel;
         _autoDownloadWishlist = config.Downloads.AutoDownloadWishlist;
         _autoExtract = config.Downloads.AutoExtract;

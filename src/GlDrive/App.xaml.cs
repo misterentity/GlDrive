@@ -49,6 +49,7 @@ public partial class App
         // config and constructs VMs with background persistence paths.
         if (e.Args.Contains("--screenshots", StringComparer.OrdinalIgnoreCase))
         {
+            CredentialStore.AccessDisabled = true;
             ConfigManager.ReadOnly = true;
             ScreenshotCapture.CaptureAll(ConfigManager.Load());
             Shutdown();

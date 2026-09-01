@@ -20,12 +20,12 @@ public partial class SettingsWindow : Window
     private readonly ObservableCollection<ServerListItem> _serverItems = new();
     private readonly ObservableCollection<CategoryPathItem> _categoryPaths = new();
 
-    public SettingsWindow(AppConfig config, ServerManager serverManager)
+    public SettingsWindow(AppConfig config, ServerManager serverManager, bool readLocalState = true)
     {
         InitializeComponent();
         _config = config;
         _serverManager = serverManager;
-        _vm = new SettingsViewModel(config);
+        _vm = new SettingsViewModel(config, readLocalState);
         DataContext = _vm;
 
         RefreshServerList();

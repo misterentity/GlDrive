@@ -66,6 +66,18 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   Both found by mapping subsystem surfaces for a feature, not from any symptom.
 
 ### Fixes
+- **v3.10.97** — screenshot rendering now disables all Windows Credential Manager access before
+  config/view-model construction and gives Settings an explicit demo-only state, preventing
+  production API keys, passwords, certificate counts, or user paths from appearing in generated
+  documentation images or being modified by the isolated renderer. Invite-only IRC
+  recovery now targets the nick the IRC server actually accepted
+  after a nickname collision, rather than continuing to ask `SITE INVITE` for the stale primary
+  nick. Per-channel standing retries are also coalesced into one in-flight site command: a site
+  with three channels previously sent three concurrent commands every 30 minutes even though one
+  command invites every channel, creating an avoidable flood-protection risk. Production evidence
+  was a simultaneous network interruption followed by successful FTP command replies but nine
+  hours outside four channels; the new resolver and single-flight gate have focused regression
+  coverage.
 - **v3.10.95** — unattended updates now relaunch in the signed-in user's session. The SYSTEM
   applicator could replace and verify every file successfully but its `explorer.exe` launch stayed
   in session 0, leaving GlDrive stopped. The user-session watchdog now preserves the updater's

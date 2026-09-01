@@ -59,6 +59,7 @@ public class IrcService : IDisposable
     // Pending channel joins waiting for INVITE (channel → retry count)
     private readonly Dictionary<string, int> _pendingInviteJoins = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _invitedChannels = new(StringComparer.OrdinalIgnoreCase);
+    private readonly SiteInviteRequestGate _siteInviteRequests = new();
     private readonly HashSet<string> _decryptFailHintSent = new(StringComparer.OrdinalIgnoreCase);
     // Auto-recovery for stale/corrupt DH1080 keys: a private-message key derived by an older
     // build (e.g. pre-v3.10.16, whose public-key decoder could drop bits and derive the wrong
@@ -539,9 +540,17 @@ public class IrcService : IDisposable
     /// JOIN, is what an invite-only channel is actually waiting for.
     /// </summary>
     private async Task RequestSiteInviteAsync()
+        => await _siteInviteRequests.RunAsync(ExecuteSiteInviteAsync);
+
+    private async Task ExecuteSiteInviteAsync()
     {
-        var inviteNick = _serverConfig.Irc.InviteNick;
+        var inviteNick = ResolveSiteInviteNick(_serverConfig.Irc, _currentNick);
         if (string.IsNullOrEmpty(inviteNick) || SiteInviteFunc == null) return;
+
+        if (!inviteNick.Equals(_serverConfig.Irc.InviteNick.Trim(), StringComparison.OrdinalIgnoreCase))
+            Log.Information("IRC {Server}: SITE INVITE targeting active fallback nick {ActiveNick} " +
+                            "instead of configured nick {ConfiguredNick}",
+                _serverConfig.Name, inviteNick, _serverConfig.Irc.InviteNick.Trim());
 
         using var inviteCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         try
@@ -565,6 +574,24 @@ public class IrcService : IDisposable
             AddSystemMessage("*", $"SITE INVITE failed: {ex.Message}");
             Log.Warning(ex, "IRC {Server}: SITE INVITE {Nick} failed", _serverConfig.Name, inviteNick);
         }
+    }
+
+    /// <summary>
+    /// SITE INVITE must target the nick accepted by IRC. Normally the explicit InviteNick
+    /// remains authoritative. After ERR_NICKNAMEINUSE, however, the connection is registered
+    /// as AltNick (or Nick + "_"); inviting the configured primary targets the stale ghost and
+    /// every channel remains outside despite a successful FTP command.
+    /// </summary>
+    internal static string ResolveSiteInviteNick(IrcConfig irc, string? currentNick)
+    {
+        var configuredInvite = irc.InviteNick.Trim();
+        if (configuredInvite.Length == 0) return ""; // SITE INVITE is explicitly disabled.
+
+        var active = currentNick?.Trim() ?? "";
+        var primary = irc.Nick.Trim();
+        return active.Length > 0 && !active.Equals(primary, StringComparison.OrdinalIgnoreCase)
+            ? active
+            : configuredInvite;
     }
 
     private void HandlePrivmsg(IrcMessage msg)
