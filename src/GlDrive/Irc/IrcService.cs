@@ -60,6 +60,14 @@ public class IrcService : IDisposable
     private readonly Dictionary<string, int> _pendingInviteJoins = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _invitedChannels = new(StringComparer.OrdinalIgnoreCase);
     private readonly SiteInviteRequestGate _siteInviteRequests = new();
+    // Counts INVITEs actually received from the network. ExecuteSiteInviteAsync samples
+    // this around its grace delay so an accepted-but-ineffective SITE INVITE — the
+    // 2026-09-01 failure, where "Command Successful." was followed by 25 more 473s over
+    // 9h50m — is named in the log instead of looking like success.
+    private int _invitesReceived;
+    // Last time this server's session was torn down by InviteRecoveryPolicy, so the
+    // escalation cannot turn into a reconnect loop.
+    private DateTime? _lastForcedInviteReconnectUtc;
     private readonly HashSet<string> _decryptFailHintSent = new(StringComparer.OrdinalIgnoreCase);
     // Auto-recovery for stale/corrupt DH1080 keys: a private-message key derived by an older
     // build (e.g. pre-v3.10.16, whose public-key decoder could drop bits and derive the wrong
@@ -443,6 +451,7 @@ public class IrcService : IDisposable
 
         AddSystemMessage("*", $"Invited to {channel} by {msg.Nick}");
         _invitedChannels.Add(channel);
+        Interlocked.Increment(ref _invitesReceived);
 
         // Auto-join EVERY channel we're invited to, whether or not it's in config
         // (Dave's request). Prefer the configured entry when present so its FiSH key
@@ -521,7 +530,28 @@ public class IrcService : IDisposable
             // Re-run SITE INVITE before re-joining. The fast burst only re-sent JOIN, which
             // can never succeed on a +i channel by itself — the invite is the thing that was
             // missing, and the site bot may have come back since the last attempt.
-            if (_pendingInviteJoins.GetValueOrDefault(channel, 0) > 3)
+            var attempts = _pendingInviteJoins.GetValueOrDefault(channel, 0);
+
+            // Escalate before re-issuing an ask that has already been accepted and
+            // ignored many times over. See InviteRecoveryPolicy for the incident this
+            // bounds; the short version is that 25 identical retries across 9h50m
+            // achieved nothing and a fresh session fixed it in 746 ms.
+            if (InviteRecoveryPolicy.ShouldForceReconnect(
+                    attempts, DateTime.UtcNow, _lastForcedInviteReconnectUtc))
+            {
+                _lastForcedInviteReconnectUtc = DateTime.UtcNow;
+                Log.Warning("IRC {Server}: {Channel} still invite-only after {Attempts} attempts with " +
+                    "SITE INVITE accepted each time — reconnecting the IRC session to rebuild it",
+                    _serverConfig.Name, channel, attempts);
+                AddSystemMessage("*", $"Reconnecting IRC — {channel} has been unreachable for {attempts} attempts");
+                // Drop the socket and let RunAsync's reconnect loop build a fresh
+                // IrcClient. ConnectAsync clears _channels/_pendingInviteJoins and
+                // re-runs AutoJoinChannelsAsync, so this retry chain ends here.
+                try { if (_client != null) await _client.DisconnectAsync(); } catch { }
+                return;
+            }
+
+            if (attempts > 3)
                 await RequestSiteInviteAsync();
 
             var configured = _serverConfig.Irc.Channels
@@ -562,7 +592,20 @@ public class IrcService : IDisposable
             Log.Information("IRC {Server}: SITE INVITE {Nick} -> {Reply}",
                 _serverConfig.Name, inviteNick, reply ?? "(no reply)");
             AddSystemMessage("*", reply ?? "SITE INVITE completed (no reply)");
+
+            // Grace window for the bot's INVITE. Observed latency when it works is
+            // 57 ms - 746 ms, so 2s is generous.
+            var invitesBefore = Volatile.Read(ref _invitesReceived);
             await Task.Delay(2000);
+
+            // An accepted SITE INVITE that produces no INVITE is the exact shape of the
+            // 2026-09-01 outage, and it used to be completely silent: an [INF] "Command
+            // Successful." followed 2 seconds later by an unrelated-looking 473. Say it
+            // plainly, so the next occurrence is one grep away.
+            if (Volatile.Read(ref _invitesReceived) == invitesBefore && _pendingInviteJoins.Count > 0)
+                Log.Warning("IRC {Server}: SITE INVITE was accepted ({Reply}) but no INVITE arrived " +
+                    "within 2s for {Pending} pending channel(s) — the site bot did not act on it",
+                    _serverConfig.Name, reply ?? "(no reply)", _pendingInviteJoins.Count);
         }
         catch (OperationCanceledException) when (inviteCts.IsCancellationRequested)
         {
@@ -1070,6 +1113,7 @@ public class IrcService : IDisposable
         {
             if (_client == null) return;
             var altNick = _serverConfig.Irc.AltNick;
+            var previous = _currentNick;
             if (!string.IsNullOrEmpty(altNick) && !altNick.Equals(_currentNick, StringComparison.OrdinalIgnoreCase))
             {
                 _currentNick = altNick;
@@ -1082,6 +1126,14 @@ public class IrcService : IDisposable
                 await _client.NickAsync(_currentNick);
                 AddSystemMessage("*", $"Nick in use, trying {_currentNick}");
             }
+
+            // Serilog, not just the in-app tab. A nick fallback silently changes the
+            // identity SITE INVITE targets, so it is the first thing you want to rule
+            // out when the site accepts an invite and no INVITE arrives — and until now
+            // it left no trace whatsoever in the log file.
+            Log.Warning("IRC {Server}: nick {Previous} in use — registering as {Fallback} instead; " +
+                "SITE INVITE will target {Fallback}",
+                _serverConfig.Name, previous, _currentNick);
         }
         catch (Exception ex)
         {
