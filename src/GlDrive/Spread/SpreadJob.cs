@@ -1315,7 +1315,7 @@ public class SpreadJob : IDisposable
             ownedCounts = new Dictionary<string, int>(_serverFileCount);
             destStates = new Dictionary<string, DestState>(_destStates);
             deliveredCounts = new Dictionary<string, int>(_destDelivered);
-            total = _expectedFileCount > 0 ? _expectedFileCount : _fileInfos.Count;
+            total = ResolveFileTotal(_expectedFileCount, _fileInfos.Count);
         }
 
         foreach (var serverId in created)
@@ -1661,7 +1661,7 @@ public class SpreadJob : IDisposable
         Dictionary<string, int> finalOwned;
         lock (_ownershipLock)
         {
-            finalTotal = _expectedFileCount > 0 ? _expectedFileCount : _fileInfos.Count;
+            finalTotal = ResolveFileTotal(_expectedFileCount, _fileInfos.Count);
             finalOwned = new Dictionary<string, int>(_serverFileCount);
         }
         lock (_progressLock)
@@ -1901,7 +1901,7 @@ public class SpreadJob : IDisposable
 
         // Snapshot counts under ownership lock, then update progress outside it
         var owned = _serverFileCount.GetValueOrDefault(serverId);
-        var total = _expectedFileCount > 0 ? _expectedFileCount : _fileInfos.Count;
+        var total = ResolveFileTotal(_expectedFileCount, _fileInfos.Count);
 
         lock (_progressLock)
         {
@@ -3625,14 +3625,34 @@ public class SpreadJob : IDisposable
 
     private void SetFailed(string message)
     {
-        State = SpreadJobState.Failed;
+        if (IsExpectedNoWorkOutcome(message))
+        {
+            // A queued duplicate can become obsolete while it waits behind the active
+            // race. Discovery then proves the desired end state already exists. Keep the
+            // log, history, and telemetry classifications consistent: this is an
+            // idempotent completion, not a failed/config race.
+            State = TerminalStateFor(message);
+            LastError = null;
+            Log.Information("Spread job ended without work: {Release} — {Reason}", ReleaseName, message);
+            return;
+        }
+
+        State = TerminalStateFor(message);
         LastError = message;
         Error?.Invoke(this, message);
-        if (IsExpectedNoWorkOutcome(message))
-            Log.Information("Spread job ended without work: {Release} — {Reason}", ReleaseName, message);
-        else
-            Log.Warning("Spread job failed: {Release} — {Error}", ReleaseName, message);
+        Log.Warning("Spread job failed: {Release} — {Error}", ReleaseName, message);
     }
+
+    /// <summary>
+    /// The SFV is authoritative about archive members, but it does not list ancillary
+    /// release files such as NFOs, samples, subtitles, or proof images. Once an SFV had
+    /// been parsed, using only its count understated FilesTotal while ownership still
+    /// counted every discovered file, producing impossible live/history values such as
+    /// 13 delivered of 11 total. Preserve the SFV's early-landing lower bound while
+    /// allowing the discovered union to raise the final total.
+    /// </summary>
+    internal static int ResolveFileTotal(int sfvExpected, int discovered)
+        => Math.Max(sfvExpected, discovered);
 
     /// <summary>
     /// A duplicate announce can arrive after the first race has already populated every
@@ -3641,6 +3661,9 @@ public class SpreadJob : IDisposable
     /// </summary>
     internal static bool IsExpectedNoWorkOutcome(string? message)
         => message?.Contains("release already present on all", StringComparison.OrdinalIgnoreCase) == true;
+
+    internal static SpreadJobState TerminalStateFor(string? message)
+        => IsExpectedNoWorkOutcome(message) ? SpreadJobState.Completed : SpreadJobState.Failed;
 
     /// <summary>
     /// PRD O3 — map a race failure message to a coarse category for metrics/UI.
