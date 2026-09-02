@@ -66,6 +66,12 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   Both found by mapping subsystem surfaces for a feature, not from any symptom.
 
 ### Fixes
+- **v3.10.99** — spread race accounting now keeps the SFV member count as a lower
+  bound instead of replacing the full discovered-file count, so ancillary files such
+  as NFOs and samples can no longer produce impossible live/history values like
+  `13 delivered of 11 total`. Queued duplicate races that discover the release is
+  already present on every candidate site now terminate as idempotent completions
+  rather than polluting history and failure metrics as `config` failures.
 - **v3.10.97** — screenshot rendering now disables all Windows Credential Manager access before
   config/view-model construction and gives Settings an explicit demo-only state, preventing
   production API keys, passwords, certificate counts, or user paths from appearing in generated
