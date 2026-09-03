@@ -182,9 +182,13 @@ public class BlacklistStoreTests
 
 public class RaceSummarizeTests
 {
+    private static RaceHistoryStore EmptyStore()
+        => new(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "gldrive-tests",
+            Guid.NewGuid().ToString("N") + "-race-history.json"));
+
     private static RaceHistoryStore Store(params (SpreadJobState state, bool clean, string failCat)[] entries)
     {
-        var s = new RaceHistoryStore();
+        var s = EmptyStore();
         foreach (var (state, clean, cat) in entries)
         {
             s.Add(new RaceHistoryItem
@@ -203,9 +207,36 @@ public class RaceSummarizeTests
     [Fact]
     public void Empty_store_summary()
     {
-        var sum = new RaceHistoryStore().Summarize();
+        var sum = EmptyStore().Summarize();
         Assert.Equal(0, sum.Finished);
         Assert.Equal(0.0, sum.CleanRate);
+    }
+
+    [Fact]
+    public void Store_persists_only_to_the_explicit_path()
+    {
+        var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "gldrive-tests",
+            Guid.NewGuid().ToString("N") + "-race-history.json");
+        try
+        {
+            var id = Guid.NewGuid().ToString("N");
+            var store = new RaceHistoryStore(path);
+            store.Add(new RaceHistoryItem
+            {
+                Id = id,
+                Result = SpreadJobState.Completed,
+                StartedAt = DateTime.UtcNow,
+                CompletedAt = DateTime.UtcNow
+            });
+
+            Assert.True(System.IO.File.Exists(path));
+            var json = System.IO.File.ReadAllText(path);
+            Assert.Contains(id, json, StringComparison.Ordinal);
+        }
+        finally
+        {
+            System.IO.File.Delete(path);
+        }
     }
 
     [Fact]

@@ -17,7 +17,7 @@ public class SpreadManager : IDisposable
     private readonly Queue<PendingRace> _raceQueue = new();
     private readonly SpeedTracker _speedTracker = new();
     private readonly SkiplistEvaluator _skiplist = new();
-    private readonly RaceHistoryStore _history = new();
+    private readonly RaceHistoryStore _history = new(RaceHistoryStore.DefaultFilePath);
     private readonly SectionBlacklistStore _blacklist = new();
     private readonly MetadataFilterService _metadataFilter;
     private readonly Lock _lock = new();

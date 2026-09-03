@@ -66,6 +66,12 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   Both found by mapping subsystem surfaces for a feature, not from any symptom.
 
 ### Fixes
+- **v3.10.101** — `RaceHistoryStore` now requires an explicit persistence path.
+  Summary tests previously used its parameterless production default, so running the
+  Release suite locally overwrote `%AppData%\\GlDrive\\race-history.json` with synthetic
+  entries. Production now passes its AppData path explicitly and tests use unique temporary
+  files, making it impossible for a future test constructor call to target live history by
+  accident.
 - **v3.10.100** — spread races now follow a source release when glftpd moves it
   between section trees (for example, `/incoming/tv-hd` to `/recent/tv-hd`) while
   the race is active. The migration handler probes the source site's other configured
