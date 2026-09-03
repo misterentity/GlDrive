@@ -66,6 +66,13 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   Both found by mapping subsystem surfaces for a feature, not from any symptom.
 
 ### Fixes
+- **v3.10.100** — spread races now follow a source release when glftpd moves it
+  between section trees (for example, `/incoming/tv-hd` to `/recent/tv-hd`) while
+  the race is active. The migration handler probes the source site's other configured
+  section/watch paths before discarding its ownership, forces an immediate rescan at
+  the relocated path, and builds each `RETR` path from that source's current release
+  directory instead of the first observed file path. This prevents healthy releases
+  from stalling at `0/N` and being wiped from destinations after a source-side `550`.
 - **v3.10.99** — spread race accounting now keeps the SFV member count as a lower
   bound instead of replacing the full discovered-file count, so ancillary files such
   as NFOs and samples can no longer produce impossible live/history values like

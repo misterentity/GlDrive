@@ -449,18 +449,12 @@ public class SpreadJob : IDisposable
                 if (sitePaths.ContainsKey(serverId)) continue; // Already known
                 if (!_pools.TryGetValue(serverId, out var pool)) continue;
 
-                // Probe all section paths AND the notification watch path
-                var pathsToProbe = config.SpreadSite.Sections.Values.ToList();
-                if (!string.IsNullOrEmpty(config.Notifications.WatchPath))
-                {
-                    // Watch path categories: /recent/tv-hd, /recent/x265, etc.
-                    // Try the section hint as a subdirectory of the watch path
-                    var watchBase = config.Notifications.WatchPath.TrimEnd('/');
-                    var normSection = Section.ToLowerInvariant().Replace("_", "-");
-                    pathsToProbe.Add($"{watchBase}/{normSection}");
-                }
+                // Probe all section paths AND the notification watch path. The same
+                // list drives the mid-race relocation probe (FindRelocatedSourcePath),
+                // so the two never disagree about where a site may hold a release.
+                var pathsToProbe = CandidateBasePaths(config, Section);
 
-                foreach (var basePath in pathsToProbe.Distinct())
+                foreach (var basePath in pathsToProbe)
                 {
                     try
                     {
@@ -2308,7 +2302,11 @@ public class SpreadJob : IDisposable
             if (!dstTask.IsCompletedSuccessfully) await dstTask;
 
             var dstPath = dstBasePath.TrimEnd('/') + "/" + file.Name;
-            var srcPath = file.FullPath;
+            // Derive the RETR path from the SOURCE's current release dir, never from the
+            // canonical FullPath: that is whichever server observed the file FIRST and
+            // goes stale the moment a source relocates (/incoming -> /recent) or an
+            // alternate source is spliced in (v3.10.100).
+            var srcPath = ResolveSourcePath(SourceBasePath(srcId), file);
 
             var transfer = new FxpTransfer();
             // Defer directory creation until just before STOR — prevents empty dirs
@@ -2618,14 +2616,31 @@ public class SpreadJob : IDisposable
             lock (_ownershipLock)
                 if (_sourceMigratedAway.Contains(srcId)) return; // already handled
 
-            var srcPath = _sitePathsRef != null && _sitePathsRef.TryGetValue(srcId, out var p) ? p : null;
+            var srcPath = SourceBasePath(srcId);
             if (srcPath == null) return;
+            var srcName = _serverConfigs.TryGetValue(srcId, out var sc0) ? sc0.Name : srcId;
 
             // 1. Confirming re-probe: does the source still have its release dir?
             if (await SourceStillHasRelease(srcId, srcPath, ct))
             {
                 Log.Information("Spread: source {Src} 550'd but release dir still present — transient, not migrating",
-                    _serverConfigs.TryGetValue(srcId, out var sc0) ? sc0.Name : srcId);
+                    srcName);
+                return;
+            }
+
+            // 1b. glftpd MOVES a finished release between sections (/incoming/x -> /recent/x)
+            //     without deleting it. That is a relocation, not a loss: probe the same
+            //     site's other candidate dirs before writing the source off. Without this
+            //     the site was excluded from the alternate search below and the race was
+            //     abandoned 0/22 with the release one directory over (v3.10.100).
+            var relocated = await FindRelocatedSourcePath(srcId, srcPath, ct);
+            if (relocated != null)
+            {
+                _extraSourcePaths[srcId] = relocated;    // honoured by ScanSites AND ResolveSourcePath
+                _lastSourceScanTime = DateTime.MinValue; // re-LIST the source now, not in 20s
+                _forceScan = true;
+                Log.Warning("Spread: source {Src} relocated the release to {Path} — following ({Release})",
+                    srcName, relocated, ReleaseName);
                 return;
             }
 
@@ -2739,6 +2754,81 @@ public class SpreadJob : IDisposable
             return true;
         }
     }
+
+    /// <summary>The release dir we currently believe a source holds: a failover /
+    /// relocation override first, else the Phase-1 probe result.</summary>
+    private string? SourceBasePath(string serverId)
+    {
+        if (_extraSourcePaths.TryGetValue(serverId, out var extra)) return extra;
+        return _sitePathsRef != null && _sitePathsRef.TryGetValue(serverId, out var p) ? p : null;
+    }
+
+    /// <summary>Probe the same site's OTHER candidate release dirs (section paths + the
+    /// notification watch path) for a release that 550'd at <paramref name="currentPath"/>.
+    /// Returns the first dir that exists, or null. Probe failures are not evidence.</summary>
+    private async Task<string?> FindRelocatedSourcePath(string serverId, string currentPath, CancellationToken ct)
+    {
+        if (!_serverConfigs.TryGetValue(serverId, out var config)) return null;
+        FtpConnectionPool? pool = null;
+        if (_mainPools.TryGetValue(serverId, out var mainPool)) pool = mainPool;
+        else if (_pools.TryGetValue(serverId, out var spreadPool)) pool = spreadPool;
+        if (pool == null) return null;
+
+        foreach (var candidate in RelocationCandidatePaths(config, Section, ReleaseName, currentPath))
+        {
+            try
+            {
+                using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                borrowCts.CancelAfter(TimeSpan.FromSeconds(15));
+                await using var conn = await pool.Borrow(borrowCts.Token);
+                if (await conn.Client.DirectoryExists(candidate, ct)) return candidate;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                Log.Debug(ex, "Spread: relocation probe failed on {Server} at {Path}", config.Name, candidate);
+            }
+        }
+        return null;
+    }
+
+    /// <summary>Every base dir a site may hold a release for <paramref name="section"/>:
+    /// its configured section dirs plus the notification watch path joined with the
+    /// normalised section name (e.g. /recent/tv-hd). Shared by the Phase-1 source probe
+    /// and the mid-race relocation probe.</summary>
+    internal static List<string> CandidateBasePaths(ServerConfig config, string section)
+    {
+        var paths = config.SpreadSite.Sections.Values.Select(v => v.TrimEnd('/')).ToList();
+        if (!string.IsNullOrEmpty(config.Notifications.WatchPath))
+        {
+            // Watch path categories: /recent/tv-hd, /recent/x265, etc.
+            // Try the section hint as a subdirectory of the watch path
+            var watchBase = config.Notifications.WatchPath.TrimEnd('/');
+            var normSection = section.ToLowerInvariant().Replace("_", "-");
+            paths.Add($"{watchBase}/{normSection}");
+        }
+        return paths.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>Full release paths to probe for a relocation, excluding the dir already
+    /// confirmed gone.</summary>
+    internal static List<string> RelocationCandidatePaths(
+        ServerConfig config, string section, string releaseName, string currentPath)
+    {
+        var current = currentPath.TrimEnd('/');
+        return CandidateBasePaths(config, section)
+            .Select(b => b + "/" + releaseName)
+            .Where(p => !string.Equals(p, current, StringComparison.Ordinal))
+            .ToList();
+    }
+
+    /// <summary>RETR path for <paramref name="file"/> on a source whose release dir is
+    /// <paramref name="sourceBasePath"/>. Falls back to the observed FullPath only when
+    /// no dir is known for that source.</summary>
+    internal static string ResolveSourcePath(string? sourceBasePath, SpreadFileInfo file)
+        => string.IsNullOrEmpty(sourceBasePath)
+            ? file.FullPath
+            : sourceBasePath.TrimEnd('/') + "/" + file.Name;
 
     /// <summary>True if some non-migrated source still owns at least one file.</summary>
     private bool HasRemainingSourceForMissingFiles()
