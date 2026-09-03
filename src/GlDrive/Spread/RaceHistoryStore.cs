@@ -63,7 +63,8 @@ public readonly record struct PoolHealthSnapshot(
 
 public class RaceHistoryStore
 {
-    private static readonly string FilePath = Path.Combine(ConfigManager.AppDataPath, "race-history.json");
+    internal static readonly string DefaultFilePath = Path.Combine(ConfigManager.AppDataPath, "race-history.json");
+    private readonly string _filePath;
     private readonly List<RaceHistoryItem> _items = new();
     private readonly Lock _lock = new();
     private const int MaxItems = 500;
@@ -73,6 +74,18 @@ public class RaceHistoryStore
     // hundreds of persisted races to whatever accumulated this session. Reset to
     // false on the next successful Load().
     private bool _loadFailed;
+
+    /// <summary>
+    /// The persistence path is deliberately mandatory. A parameterless constructor let unit
+    /// tests silently write their synthetic summaries into the live AppData history file.
+    /// Production passes <see cref="DefaultFilePath"/> explicitly through SpreadManager;
+    /// tests must provide an isolated temporary path.
+    /// </summary>
+    internal RaceHistoryStore(string filePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+        _filePath = filePath;
+    }
 
     public IReadOnlyList<RaceHistoryItem> Items
     {
@@ -103,8 +116,8 @@ public class RaceHistoryStore
     {
         try
         {
-            if (!File.Exists(FilePath)) { _loadFailed = false; return; }
-            var json = File.ReadAllText(FilePath);
+            if (!File.Exists(_filePath)) { _loadFailed = false; return; }
+            var json = File.ReadAllText(_filePath);
             var items = JsonSerializer.Deserialize<List<RaceHistoryItem>>(json);
             if (items != null)
             {
@@ -132,8 +145,8 @@ public class RaceHistoryStore
             Log.Warning(ex, "Failed to load race history — Save() suppressed to avoid truncating persisted races");
             try
             {
-                if (File.Exists(FilePath))
-                    File.Copy(FilePath, FilePath + ".corrupt", overwrite: true);
+                if (File.Exists(_filePath))
+                    File.Copy(_filePath, _filePath + ".corrupt", overwrite: true);
             }
             catch { /* best effort */ }
         }
@@ -149,8 +162,8 @@ public class RaceHistoryStore
     {
         try
         {
-            if (!File.Exists(FilePath)) return new();
-            var json = File.ReadAllText(FilePath);
+            if (!File.Exists(DefaultFilePath)) return new();
+            var json = File.ReadAllText(DefaultFilePath);
             return JsonSerializer.Deserialize<List<RaceHistoryItem>>(json) ?? new();
         }
         catch
@@ -186,8 +199,8 @@ public class RaceHistoryStore
             List<RaceHistoryItem> snapshot;
             lock (_lock) snapshot = _items.ToList();
             var json = JsonSerializer.Serialize(snapshot, new JsonSerializerOptions { WriteIndented = false });
-            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            SecureFile.WriteAllTextRestricted(FilePath, json);
+            Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
+            SecureFile.WriteAllTextRestricted(_filePath, json);
         }
         catch (Exception ex)
         {
