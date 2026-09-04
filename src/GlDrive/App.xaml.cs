@@ -15,6 +15,9 @@ namespace GlDrive;
 public partial class App
 {
     private SingleInstanceGuard? _guard;
+
+    /// <summary>Set by Program.Main after it has acquired the single-instance mutex.</summary>
+    internal static SingleInstanceGuard? PreAcquiredGuard { get; set; }
     private ServerManager? _serverManager;
     private TrayViewModel? _trayViewModel;
     private H.NotifyIcon.TaskbarIcon? _taskbarIcon;
@@ -54,6 +57,24 @@ public partial class App
             ScreenshotCapture.CaptureAll(ConfigManager.Load());
             Shutdown();
             return;
+        }
+
+        // Single instance check. Program.Main normally holds the mutex already (it must be
+        // held before the watchdog is spawned); acquire here only when launched some other
+        // way. Everything below this point — restart registration, the .running crash
+        // marker, .updating cleanup — is production state that belongs to the ONE primary
+        // instance, so nothing may run before the guard is held.
+        _guard = PreAcquiredGuard;
+        if (_guard == null)
+        {
+            _guard = new SingleInstanceGuard();
+            if (!_guard.TryAcquire())
+            {
+                MessageBox.Show("GlDrive is already running.", "GlDrive",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                Shutdown();
+                return;
+            }
         }
 
         // Register with Windows Application Restart Manager — if the process crashes
@@ -163,16 +184,6 @@ public partial class App
                 Log.Error(args.Exception, "Unobserved task exception");
             args.SetObserved(); // Prevent process termination
         };
-
-        // Single instance check
-        _guard = new SingleInstanceGuard();
-        if (!_guard.TryAcquire())
-        {
-            MessageBox.Show("GlDrive is already running.", "GlDrive",
-                MessageBoxButton.OK, MessageBoxImage.Information);
-            Shutdown();
-            return;
-        }
 
         // Load config
         var config = ConfigManager.Load();
@@ -587,15 +598,17 @@ public partial class App
         _controlApi = null;
         _serverManager?.Dispose();
         _taskbarIcon?.Dispose();
-        _guard?.Dispose();
 
-        // Remove only the crash marker this instance created. Utility instances such as
-        // --screenshots still run OnExit, but must never delete the marker owned by the
-        // concurrently running production process.
+        // Remove only the crash marker this instance created, and do it while the
+        // single-instance mutex is still held. Releasing the mutex first would let a new
+        // primary write its own marker in the gap, only for this exiting instance to delete
+        // it and silently disable the new primary's watchdog recovery.
+        // Utility instances such as --screenshots never own the marker and leave it alone.
         if (_ownsCrashMarker)
         {
             try { File.Delete(Path.Combine(ConfigManager.AppDataPath, ".running")); } catch { }
         }
+        _guard?.Dispose();
 
         Log.CloseAndFlush();
         base.OnExit(e);

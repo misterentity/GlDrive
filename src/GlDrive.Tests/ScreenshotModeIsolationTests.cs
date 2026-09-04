@@ -86,7 +86,11 @@ public sealed class ScreenshotModeIsolationTests
 
         Assert.True(taskDispatch >= 0 && taskDispatch < wpfConstruction);
         Assert.True(interactiveDispatch >= 0 && interactiveDispatch < wpfConstruction);
-        Assert.Contains("Array.IndexOf(args, \"--screenshots\") < 0", program);
+        // Screenshot mode must still bypass BOTH the single-instance guard and the watchdog.
+        var screenshots = program.IndexOf("Array.IndexOf(args, \"--screenshots\") >= 0", StringComparison.Ordinal);
+        var guardedBlock = program.IndexOf("if (!isScreenshots)", StringComparison.Ordinal);
+        var spawn = program.IndexOf("SpawnWatchdog();", StringComparison.Ordinal);
+        Assert.True(screenshots >= 0 && guardedBlock > screenshots && spawn > guardedBlock);
 
         var app = ReadSource("src/GlDrive/App.xaml.cs");
         Assert.DoesNotContain("ApplyUpdateFromTask", app);

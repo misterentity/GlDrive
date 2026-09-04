@@ -41,14 +41,52 @@ public static class Program
             return RunWatchdog(targetPid);
         }
 
-        // Normal mode — spawn watchdog then start WPF app. Screenshot mode is an isolated
-        // renderer; updater modes have already returned above.
-        if (Array.IndexOf(args, "--screenshots") < 0)
+        // Normal mode — hold the single-instance mutex BEFORE spawning the watchdog or
+        // constructing the WPF app. A second launch used to get all the way into
+        // App.OnStartup, where it wrote and claimed the shared .running crash marker (and
+        // deleted .updating) before the guard rejected it; its OnExit then deleted the
+        // primary's marker, so the primary's watchdog treated the primary's next death as a
+        // clean exit and never restarted it. It had also spawned a watchdog of its own.
+        // Rejecting here means a blocked launch never touches production state at all.
+        // Screenshot mode is an isolated renderer and deliberately bypasses the guard.
+        var isScreenshots = Array.IndexOf(args, "--screenshots") >= 0;
+        SingleInstanceGuard? guard = null;
+        if (!isScreenshots)
+        {
+            guard = new SingleInstanceGuard();
+            if (!guard.TryAcquire())
+            {
+                guard.Dispose();
+                // Serilog is not initialised this early — append directly, like the watchdog.
+                AppendDirectLogLine("WRN",
+                    $"Second GlDrive instance (PID {Environment.ProcessId}) blocked — an instance is " +
+                    "already running; exiting without touching its markers or spawning a watchdog.");
+                System.Windows.MessageBox.Show("GlDrive is already running.", "GlDrive",
+                    System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
+                return 0;
+            }
             SpawnWatchdog();
+        }
 
+        App.PreAcquiredGuard = guard;
         var app = new App();
         app.InitializeComponent();
         return app.Run();
+    }
+
+    private static void AppendDirectLogLine(string level, string message)
+    {
+        try
+        {
+            var logDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GlDrive", "logs");
+            if (!Directory.Exists(logDir)) return;
+            var path = Path.Combine(logDir, $"gldrive-{DateTime.Now:yyyyMMdd}.log");
+            using var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+            using var writer = new StreamWriter(stream);
+            writer.WriteLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{level}] {message}");
+        }
+        catch { }
     }
 
     /// <summary>
