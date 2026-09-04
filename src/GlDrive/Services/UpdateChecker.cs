@@ -1514,6 +1514,28 @@ public class UpdateChecker : IDisposable
         return (deleted, oldFiles.Count(File.Exists));
     }
 
+    internal static (int Deleted, int Remaining) DeleteOldUpdateFilesWithRetry(
+        string baseDir, TimeSpan initialDelay, TimeSpan retryWindow, TimeSpan retryDelay)
+    {
+        if (initialDelay > TimeSpan.Zero)
+            Thread.Sleep(initialDelay);
+
+        var timer = Stopwatch.StartNew();
+        var totalDeleted = 0;
+        (int Deleted, int Remaining) result;
+        do
+        {
+            result = DeleteOldUpdateFiles(baseDir);
+            totalDeleted += result.Deleted;
+            if (result.Remaining == 0 || timer.Elapsed >= retryWindow)
+                break;
+            Thread.Sleep(retryDelay);
+        }
+        while (true);
+
+        return (totalDeleted, result.Remaining);
+    }
+
     public static void CleanupOldUpdateFiles()
     {
         var result = DeleteOldUpdateFiles(AppContext.BaseDirectory);
@@ -1541,7 +1563,15 @@ public class UpdateChecker : IDisposable
     /// </summary>
     public static int CleanupOldUpdateFilesFromTask()
     {
-        var result = DeleteOldUpdateFiles(AppContext.BaseDirectory);
+        // The updated desktop process can start a moment before the old SYSTEM updater exits.
+        // Preserve every rollback file until that window closes, then retry while Windows
+        // releases the updater's mapped runtime DLLs (34 were still locked on the first live
+        // v3.10.103 cleanup pass and all disappeared as soon as the updater exited).
+        var result = DeleteOldUpdateFilesWithRetry(
+            AppContext.BaseDirectory,
+            initialDelay: TimeSpan.FromSeconds(10),
+            retryWindow: TimeSpan.FromSeconds(30),
+            retryDelay: TimeSpan.FromSeconds(1));
         var logPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
             "GlDrive", "update-cleanup.log");
