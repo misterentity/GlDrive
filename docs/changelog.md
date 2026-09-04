@@ -66,6 +66,13 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   Both found by mapping subsystem surfaces for a feature, not from any symptom.
 
 ### Fixes
+- **v3.10.103** — privileged auto-updates no longer strand a complete `.old` rollback tree
+  under Program Files. The normal user process could enumerate those SYSTEM-owned backups but
+  could not delete them, leaving 1,156 files after v3.10.102. The installer now registers a
+  second no-trigger, fixed-action SYSTEM task whose only action is the installed executable's
+  headless `--cleanup-old-updates` mode. Normal startup requests it only when direct cleanup
+  leaves files behind, after the updater's rollback window has closed; its cleanup root is
+  pinned to `AppContext.BaseDirectory` and cannot be supplied by a caller.
 - **v3.10.102** — duplicate launches are rejected before they can spawn a watchdog,
   register restart handling, or touch the primary instance's `.running` / `.updating`
   lifecycle markers. Previously the blocked process claimed and then deleted the primary's

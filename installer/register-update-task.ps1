@@ -1,7 +1,7 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-Registers the SYSTEM scheduled task that applies GlDrive updates without a UAC prompt.
+Registers the fixed-action SYSTEM tasks that apply GlDrive updates and clean rollback files.
 
 .DESCRIPTION
 The auto-updater waits for the app to be idle before installing. On a busy racing box that
@@ -11,26 +11,30 @@ ERROR_CANCELLED, which the app recorded as a user decision and suppressed for 24
 at the same hour the next night. Every daytime auto-install succeeded; both ~03:35 attempts
 "declined" after an invariant 131s/132s.
 
-This task removes interactive elevation from that path. It is registered by the installer, which
-already runs elevated, so no prompt is ever needed afterwards.
+The installer task removes interactive elevation from that path. A separate cleanup task removes
+SYSTEM-owned .old rollback files only after the updated application has started, so the backups
+remain available throughout the installer's rollback window. Both are registered from an already
+elevated installer/updater context.
 
 Design notes:
   * NO TRIGGER. The task can only be started on demand (`schtasks /run`). Register-ScheduledTask
     is used rather than `schtasks /create` precisely because schtasks REQUIRES a schedule and its
     /sd date format is locale-dependent — `/sd 01/01/2099` is rejected outright on a machine
     expecting yyyy/mm/dd.
-  * FIXED ACTION. The executable and its single argument are baked in here, at elevated install
-    time. A caller can ask for the task to run; it can never change what runs, what arguments it
-    gets, or where the update is installed.
+  * FIXED ACTIONS. The executable and each task's single argument are baked in here, at elevated
+    install time. A caller can ask for a task to run; it can never change what runs, what arguments
+    it gets, or which directory is touched.
   * The install destination is NOT passed. UpdateChecker.ApplyUpdate requires the destination to
     equal the elevated process's own directory, so it is pinned by where this action points.
 
-Failure is non-fatal: the app detects the missing task and falls back to interactive elevation.
+Failure is non-fatal: update installation falls back to interactive elevation and rollback cleanup
+is retried at the next startup.
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$InstallDir,
-    [string]$TaskName = 'GlDrive Update Installer'
+    [string]$TaskName = 'GlDrive Update Installer',
+    [string]$CleanupTaskName = 'GlDrive Update Cleanup'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -41,8 +45,6 @@ try {
         Write-Warning "GlDrive.exe not found at $exe - skipping update task registration."
         exit 0
     }
-
-    $action = New-ScheduledTaskAction -Execute $exe -Argument '--apply-update-task'
 
     # ServiceAccount logon for SYSTEM; Highest so it can write into Program Files.
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' `
@@ -55,23 +57,34 @@ try {
         -StartWhenAvailable `
         -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
 
-    Register-ScheduledTask -TaskName $TaskName -Action $action -Principal $principal `
-        -Settings $settings -Description 'Applies verified GlDrive updates without an interactive elevation prompt.' `
-        -Force | Out-Null
-
-    Write-Output "Registered scheduled task '$TaskName' -> $exe --apply-update-task"
-
-    # Let the non-elevated app START the task. Without this it can only fall back to the UAC
-    # prompt this task exists to remove. Read+execute only for Authenticated Users; Administrators
-    # and SYSTEM keep full control, so a standard user still cannot redefine what it runs.
+    # Let the non-elevated app START each task. Read+execute only for Authenticated Users;
+    # Administrators and SYSTEM keep full control, so a standard user still cannot redefine
+    # what either fixed action runs.
     #   BA = Builtin Administrators, SY = Local System, AU = Authenticated Users
     #   GA = Generic All, GRGX = Generic Read + Generic Execute
     $sddl = 'D:(A;;GA;;;BA)(A;;GA;;;SY)(A;;GRGX;;;AU)'
     $svc = New-Object -ComObject Schedule.Service
     $svc.Connect()
-    # [char]92 is a literal backslash: the Task Scheduler root folder.
-    $svc.GetFolder([string][char]92).GetTask($TaskName).SetSecurityDescriptor($sddl, 0)
-    Write-Output "Granted Authenticated Users run access to '$TaskName'"
+    $rootFolder = $svc.GetFolder([string][char]92)
+
+    function Register-FixedTask {
+        param(
+            [string]$Name,
+            [string]$Argument,
+            [string]$Description
+        )
+
+        $action = New-ScheduledTaskAction -Execute $exe -Argument $Argument
+        Register-ScheduledTask -TaskName $Name -Action $action -Principal $principal `
+            -Settings $settings -Description $Description -Force | Out-Null
+        $rootFolder.GetTask($Name).SetSecurityDescriptor($sddl, 0)
+        Write-Output "Registered scheduled task '$Name' -> $exe $Argument"
+    }
+
+    Register-FixedTask -Name $TaskName -Argument '--apply-update-task' `
+        -Description 'Applies verified GlDrive updates without an interactive elevation prompt.'
+    Register-FixedTask -Name $CleanupTaskName -Argument '--cleanup-old-updates' `
+        -Description 'Removes GlDrive updater rollback files after the updated application starts.'
 
     exit 0
 }

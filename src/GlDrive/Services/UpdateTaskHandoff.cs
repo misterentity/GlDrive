@@ -41,6 +41,13 @@ internal sealed record UpdateTaskHandoff(
     public const string TaskName = "GlDrive Update Installer";
 
     /// <summary>
+    /// Fixed-action SYSTEM task used to remove updater rollback files from Program Files after
+    /// the updated app has started. Keeping this separate from the installer task ensures the
+    /// backups remain available until every install/rollback operation has finished.
+    /// </summary>
+    public const string CleanupTaskName = "GlDrive Update Cleanup";
+
+    /// <summary>
     /// A hand-off older than this is refused. The app writes one immediately before triggering the
     /// task, so a stale record means the trigger failed or the file was planted — either way,
     /// re-running an old install is not what the user is waiting for.

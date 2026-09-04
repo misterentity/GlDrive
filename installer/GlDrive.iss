@@ -74,6 +74,7 @@ Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: no
 Filename: "taskkill.exe"; Parameters: "/F /IM {#MyAppExeName}"; Flags: runhidden; RunOnceId: "KillGlDrive"
 ; Leaving a SYSTEM task pointed at a deleted executable behind would be both broken and untidy.
 Filename: "schtasks.exe"; Parameters: "/delete /f /tn ""GlDrive Update Installer"""; Flags: runhidden; RunOnceId: "DelUpdateTask"
+Filename: "schtasks.exe"; Parameters: "/delete /f /tn ""GlDrive Update Cleanup"""; Flags: runhidden; RunOnceId: "DelCleanupTask"
 
 [UninstallDelete]
 ; Clean up app directory (but NOT %AppData%\GlDrive — keep user config)

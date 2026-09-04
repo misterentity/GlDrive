@@ -81,10 +81,12 @@ public sealed class ScreenshotModeIsolationTests
     {
         var program = ReadSource("src/GlDrive/Program.cs");
         var taskDispatch = program.IndexOf("UpdateChecker.ApplyUpdateFromTask()", StringComparison.Ordinal);
+        var cleanupDispatch = program.IndexOf("UpdateChecker.CleanupOldUpdateFilesFromTask()", StringComparison.Ordinal);
         var interactiveDispatch = program.IndexOf("UpdateChecker.ApplyUpdate(updatePid", StringComparison.Ordinal);
         var wpfConstruction = program.IndexOf("var app = new App()", StringComparison.Ordinal);
 
         Assert.True(taskDispatch >= 0 && taskDispatch < wpfConstruction);
+        Assert.True(cleanupDispatch >= 0 && cleanupDispatch < wpfConstruction);
         Assert.True(interactiveDispatch >= 0 && interactiveDispatch < wpfConstruction);
         // Screenshot mode must still bypass BOTH the single-instance guard and the watchdog.
         var screenshots = program.IndexOf("Array.IndexOf(args, \"--screenshots\") >= 0", StringComparison.Ordinal);
