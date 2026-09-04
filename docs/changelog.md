@@ -66,6 +66,16 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   Both found by mapping subsystem surfaces for a feature, not from any symptom.
 
 ### Fixes
+- **v3.10.102** — duplicate launches are rejected before they can spawn a watchdog,
+  register restart handling, or touch the primary instance's `.running` / `.updating`
+  lifecycle markers. Previously the blocked process claimed and then deleted the primary's
+  crash marker during `OnExit`, silently disabling watchdog recovery; a production process
+  stopped at 09:53 with no crash event or restart and remained down until manually relaunched
+  seven hours later. The primary now acquires its per-user mutex in `Program.Main`, hands that
+  guard to `App`, deletes its owned marker before releasing the mutex on shutdown, and leaves a
+  reliable early-rejection audit line through the rolling log's shared-write mode. Regression
+  coverage pins startup ordering, marker ownership, shutdown handoff, mutex exclusion, and the
+  isolated screenshot path.
 - **v3.10.101** — `RaceHistoryStore` now requires an explicit persistence path.
   Summary tests previously used its parameterless production default, so running the
   Release suite locally overwrote `%AppData%\\GlDrive\\race-history.json` with synthetic

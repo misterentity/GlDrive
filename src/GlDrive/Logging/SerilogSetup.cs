@@ -48,6 +48,10 @@ public static class SerilogSetup
                 // sized to allow IntradayRollAllowance rolls per retained day.
                 retainedFileTimeLimit: TimeSpan.FromDays(config.RetainedFiles),
                 retainedFileCountLimit: config.RetainedFiles * IntradayRollAllowance,
+                // Program.Main records rejected second launches before Serilog is configured.
+                // The primary keeps this file open for its whole lifetime, so allow that
+                // one-line audit append (and other watchdog/startup diagnostics) to coexist.
+                shared: true,
                 outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
             .WriteTo.Sink(AgentSink)
             .CreateLogger();
