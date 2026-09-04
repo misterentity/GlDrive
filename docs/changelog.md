@@ -66,6 +66,11 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   Both found by mapping subsystem surfaces for a feature, not from any symptom.
 
 ### Fixes
+- **v3.10.104** — the privileged rollback cleanup waits 10 seconds for the old SYSTEM updater's
+  rollback window to close, then retries locked files for up to 30 seconds. The first live
+  v3.10.103 pass removed 1,122 files but found 34 runtime files still mapped by the exiting
+  updater; a retry after that process exited removed all 34. This bounded retry closes that final
+  update/cleanup race while retaining the fixed-root and fixed-action security constraints.
 - **v3.10.103** — privileged auto-updates no longer strand a complete `.old` rollback tree
   under Program Files. The normal user process could enumerate those SYSTEM-owned backups but
   could not delete them, leaving 1,156 files after v3.10.102. The installer now registers a

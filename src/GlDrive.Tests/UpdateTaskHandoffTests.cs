@@ -391,6 +391,27 @@ public sealed class OldUpdateCleanupTests : IDisposable
     }
 
     [Fact]
+    public async Task Retries_files_that_are_temporarily_locked_by_the_exiting_updater()
+    {
+        var locked = Path.Combine(_root, "runtime.dll.old");
+        File.WriteAllText(locked, "old");
+        using var handle = new FileStream(locked, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        var release = Task.Run(async () =>
+        {
+            await Task.Delay(100);
+            handle.Dispose();
+        });
+
+        var result = UpdateChecker.DeleteOldUpdateFilesWithRetry(
+            _root, TimeSpan.Zero, TimeSpan.FromSeconds(2), TimeSpan.FromMilliseconds(25));
+        await release;
+
+        Assert.Equal(1, result.Deleted);
+        Assert.Equal(0, result.Remaining);
+        Assert.False(File.Exists(locked));
+    }
+
+    [Fact]
     public void Headless_cleanup_never_accepts_a_caller_supplied_directory()
     {
         var source = File.ReadAllText(Path.Combine(
@@ -400,6 +421,8 @@ public sealed class OldUpdateCleanupTests : IDisposable
         var method = source[entry..end];
 
         Assert.Contains("AppContext.BaseDirectory", method);
+        Assert.Contains("initialDelay: TimeSpan.FromSeconds(10)", method);
+        Assert.Contains("retryWindow: TimeSpan.FromSeconds(30)", method);
         Assert.DoesNotContain("string baseDir", method);
         Assert.DoesNotContain("args", method);
     }
