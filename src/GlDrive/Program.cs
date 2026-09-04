@@ -14,6 +14,11 @@ public static class Program
         // runs as SYSTEM in a non-interactive session, where WPF startup can terminate before
         // App.OnStartup is reached. Dispatching here keeps the updater headless and makes the
         // fixed-action SYSTEM task usable without a logged-in desktop.
+        var cleanupIdx = Array.FindIndex(args,
+            arg => arg.Equals("--cleanup-old-updates", StringComparison.OrdinalIgnoreCase));
+        if (cleanupIdx >= 0)
+            return UpdateChecker.CleanupOldUpdateFilesFromTask();
+
         var taskIdx = Array.FindIndex(args,
             arg => arg.Equals("--apply-update-task", StringComparison.OrdinalIgnoreCase));
         if (taskIdx >= 0)

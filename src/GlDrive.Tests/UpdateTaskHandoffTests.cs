@@ -359,6 +359,65 @@ public sealed class UpdateTaskScriptShipsTests
         var script = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "register-update-task.ps1"));
         Assert.Contains($"'{UpdateTaskHandoff.TaskName}'", script);
         Assert.Contains("--apply-update-task", script);
+        Assert.Contains($"'{UpdateTaskHandoff.CleanupTaskName}'", script);
+        Assert.Contains("--cleanup-old-updates", script);
+    }
+}
+
+public sealed class OldUpdateCleanupTests : IDisposable
+{
+    private readonly string _root = Path.Combine(Path.GetTempPath(), $"gldrive-old-{Guid.NewGuid():N}");
+
+    public OldUpdateCleanupTests() => Directory.CreateDirectory(_root);
+
+    [Fact]
+    public void Deletes_only_old_files_recursively_from_the_fixed_root()
+    {
+        var nested = Directory.CreateDirectory(Path.Combine(_root, "nested")).FullName;
+        var rootOld = Path.Combine(_root, "one.dll.old");
+        var nestedOld = Path.Combine(nested, "two.exe.old");
+        var keep = Path.Combine(nested, "keep.dll");
+        File.WriteAllText(rootOld, "old");
+        File.WriteAllText(nestedOld, "old");
+        File.WriteAllText(keep, "current");
+
+        var result = UpdateChecker.DeleteOldUpdateFiles(_root);
+
+        Assert.Equal(2, result.Deleted);
+        Assert.Equal(0, result.Remaining);
+        Assert.False(File.Exists(rootOld));
+        Assert.False(File.Exists(nestedOld));
+        Assert.True(File.Exists(keep));
+    }
+
+    [Fact]
+    public void Headless_cleanup_never_accepts_a_caller_supplied_directory()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(), "src", "GlDrive", "Services", "UpdateChecker.cs"));
+        var entry = source.IndexOf("public static int CleanupOldUpdateFilesFromTask()", StringComparison.Ordinal);
+        var end = source.IndexOf("public void StartPeriodicCheck", entry, StringComparison.Ordinal);
+        var method = source[entry..end];
+
+        Assert.Contains("AppContext.BaseDirectory", method);
+        Assert.DoesNotContain("string baseDir", method);
+        Assert.DoesNotContain("args", method);
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var dir = AppContext.BaseDirectory;
+        for (var i = 0; i < 12 && dir != null; i++)
+        {
+            if (File.Exists(Path.Combine(dir, "src", "GlDrive", "GlDrive.csproj"))) return dir;
+            dir = Directory.GetParent(dir)?.FullName;
+        }
+        throw new InvalidOperationException("Could not locate repository root");
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
     }
 }
 

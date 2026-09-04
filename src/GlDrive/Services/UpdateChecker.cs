@@ -1491,21 +1491,70 @@ public class UpdateChecker : IDisposable
         }
     }
 
-    public static void CleanupOldUpdateFiles()
+    internal static (int Deleted, int Remaining) DeleteOldUpdateFiles(string baseDir)
     {
+        var deleted = 0;
+        string[] oldFiles;
         try
         {
-            var baseDir = AppContext.BaseDirectory;
-            var deleted = 0;
-            foreach (var file in Directory.EnumerateFiles(baseDir, "*.old", SearchOption.AllDirectories))
-            {
-                try { File.Delete(file); deleted++; }
-                catch { }
-            }
-            if (deleted > 0)
-                Log.Information("Cleaned up {Count} .old update files", deleted);
+            oldFiles = Directory.GetFiles(
+                Path.GetFullPath(baseDir), "*.old", SearchOption.AllDirectories);
+        }
+        catch
+        {
+            return (0, 1);
+        }
+
+        foreach (var file in oldFiles)
+        {
+            try { File.Delete(file); deleted++; }
+            catch { }
+        }
+
+        return (deleted, oldFiles.Count(File.Exists));
+    }
+
+    public static void CleanupOldUpdateFiles()
+    {
+        var result = DeleteOldUpdateFiles(AppContext.BaseDirectory);
+        if (result.Deleted > 0)
+            Log.Information("Cleaned up {Count} .old update files", result.Deleted);
+
+        if (result.Remaining <= 0) return;
+
+        // Auto-updates are applied by SYSTEM under Program Files, so their rollback files are
+        // also SYSTEM-owned. A normal startup cannot remove them. Ask the separately registered,
+        // fixed-action cleanup task to run our constrained headless entry point; /run cannot add
+        // caller-controlled arguments or redirect the task to another directory.
+        var exit = RunSchtasks($"/run /tn \"{UpdateTaskHandoff.CleanupTaskName}\"");
+        if (exit == 0)
+            Log.Information("Requested privileged cleanup of {Count} remaining .old update files",
+                result.Remaining);
+        else
+            Log.Warning("Could not start update cleanup task {Task} (exit {Exit}); cleanup will be " +
+                        "retried at next startup", UpdateTaskHandoff.CleanupTaskName, exit);
+    }
+
+    /// <summary>
+    /// Headless fixed-action scheduled-task entry point. The cleanup root is deliberately the
+    /// executable's own directory and is never accepted from the command line or another file.
+    /// </summary>
+    public static int CleanupOldUpdateFilesFromTask()
+    {
+        var result = DeleteOldUpdateFiles(AppContext.BaseDirectory);
+        var logPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "GlDrive", "update-cleanup.log");
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+            File.AppendAllText(logPath,
+                $"[{DateTime.UtcNow:O}] root={Path.GetFullPath(AppContext.BaseDirectory)} " +
+                $"deleted={result.Deleted} remaining={result.Remaining}{Environment.NewLine}");
         }
         catch { }
+
+        return result.Remaining == 0 ? 0 : 1;
     }
 
     public void StartPeriodicCheck(CancellationToken cancellationToken = default)
