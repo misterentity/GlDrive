@@ -702,13 +702,18 @@ public class FtpConnectionPool : IAsyncDisposable
                     // connect; everyone after that falls through to plain
                     // fail-and-backoff (the slot will free when an active transfer
                     // finishes). RecordConnect re-arms it on the next success.
+                    // The episode flag alone was inert under sustained pressure (a kill
+                    // makes the next connect succeed, which re-arms it), so the factory
+                    // also enforces a per-ACCOUNT minimum interval — see GhostKillThrottle.
                     if (Interlocked.CompareExchange(ref _ghostKilledSinceSuccess, 1, 0) == 0)
                     {
                         try
                         {
-                            await _factory.KillGhosts(ct);
-                            IncrementGhostKill();
-                            Log.Information("Pool: ghost kill (once per episode) triggered by login-limit from BNC");
+                            if (await _factory.KillGhosts(ct))
+                            {
+                                IncrementGhostKill();
+                                Log.Information("Pool: ghost kill (once per episode) triggered by login-limit from BNC");
+                            }
                         }
                         catch (OperationCanceledException) when (ct.IsCancellationRequested)
                         {
@@ -733,10 +738,11 @@ public class FtpConnectionPool : IAsyncDisposable
                 {
                     try
                     {
-                        await _factory.KillGhosts(ct);
-                        IncrementGhostKill();
-                        // Retry connection after ghost kill
-                        if (Interlocked.Increment(ref _created) <= EffectiveMaxSize)
+                        var killed = await _factory.KillGhosts(ct);
+                        if (killed) IncrementGhostKill();
+                        // Retry connection after ghost kill. A suppressed kill changed
+                        // nothing server-side, so a retry would only repeat the failure.
+                        if (killed && Interlocked.Increment(ref _created) <= EffectiveMaxSize)
                         {
                             try
                             {
@@ -756,7 +762,7 @@ public class FtpConnectionPool : IAsyncDisposable
                                     throw;
                             }
                         }
-                        else
+                        else if (killed)
                         {
                             Interlocked.Decrement(ref _created);
                         }
