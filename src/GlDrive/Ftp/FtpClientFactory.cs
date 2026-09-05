@@ -17,10 +17,17 @@ public class FtpClientFactory
 
     public string Host => _serverConfig.Connection.Host;
 
-    public FtpClientFactory(ServerConfig serverConfig, CertificateManager certManager)
+    // One throttle per factory == one per account/site: MountService builds a single
+    // factory and hands the same instance to SpreadManager, so every pool that can
+    // request a ghost kill for this account shares this interval.
+    private readonly GhostKillThrottle _ghostKillThrottle;
+
+    public FtpClientFactory(ServerConfig serverConfig, CertificateManager certManager,
+        GhostKillThrottle? ghostKillThrottle = null)
     {
         _serverConfig = serverConfig;
         _certManager = certManager;
+        _ghostKillThrottle = ghostKillThrottle ?? new GhostKillThrottle();
     }
 
     public AsyncFtpClient Create()
@@ -200,9 +207,24 @@ public class FtpClientFactory
     /// glftpd BNC convention: login with ! prefix kills stale sessions for that user.
     /// The ghost-kill connection is immediately disconnected after login.
     /// </summary>
-    public async Task KillGhosts(CancellationToken ct = default)
+    /// <summary>
+    /// Log in as <c>!username</c> so glftpd drops this account's other sessions.
+    /// Returns false — without touching the network — when a kill was already issued
+    /// within <see cref="GhostKillThrottle.MinInterval"/>: the sessions the BNC is
+    /// counting are then either our own live connections or quarantined ones still
+    /// inside their deferred-teardown window, and a second <c>!user</c> login would
+    /// sever the live ones and read to the BNC as a reconnect storm.
+    /// </summary>
+    public async Task<bool> KillGhosts(CancellationToken ct = default)
     {
         var conn = _serverConfig.Connection;
+        if (!_ghostKillThrottle.TryAcquire(DateTime.UtcNow, out var sinceLast))
+        {
+            Log.Information(
+                "Ghost kill suppressed for {Host}: last !{User} login was {Ago:F1}s ago (min interval {Min}s) — the sessions the BNC counts are our own",
+                conn.Host, conn.Username, sinceLast.TotalSeconds, (int)_ghostKillThrottle.MinInterval.TotalSeconds);
+            return false;
+        }
         var password = CredentialStore.GetPassword(conn.Host, conn.Port, conn.Username) ?? "";
         var ghostUser = "!" + conn.Username;
 
@@ -241,5 +263,6 @@ public class FtpClientFactory
             try { await client.Disconnect(ct); } catch { }
             try { client.Dispose(); } catch { }
         }
+        return true;
     }
 }

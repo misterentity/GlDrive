@@ -66,6 +66,13 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   Both found by mapping subsystem surfaces for a feature, not from any symptom.
 
 ### Fixes
+- **v3.10.105** — ghost-kill logins are rate-limited per account. `FtpConnectionPool` fired at
+  most one `!user` kill per "pressure episode", but an episode ended on the next successful
+  connect and a kill guarantees that connect succeeds, so under sustained pressure the guard
+  re-armed within seconds: seven `!entity` logins in 20 s on 2026-09-04, each one severing the
+  account's live sessions and failing the in-flight FXP transfer whose failure had triggered it.
+  `FtpClientFactory.KillGhosts` now consults a `GhostKillThrottle` (60 s minimum interval, shared
+  by every pool for the account) before touching the network and reports whether it killed.
 - **v3.10.104** — the privileged rollback cleanup waits 10 seconds for the old SYSTEM updater's
   rollback window to close, then retries locked files for up to 30 seconds. The first live
   v3.10.103 pass removed 1,122 files but found 34 runtime files still mapped by the exiting
