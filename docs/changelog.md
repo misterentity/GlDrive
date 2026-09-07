@@ -66,6 +66,15 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   Both found by mapping subsystem surfaces for a feature, not from any symptom.
 
 ### Fixes
+- **v3.10.106** — every FTP connection teardown leaked its native GnuTLS session and
+  certificate credentials. `FtpConnectionPool.NeutralizeGnuTls` detached the GnuTLS wrapper
+  from FluentFTP's socket stream (the v3.5.1 crash guard) and then dropped it, so neither
+  `gnutls_deinit` nor `gnutls_certificate_free_credentials` ever ran; each credentials object
+  holds a parsed copy of the whole Windows trust store, about 2.3 MB per connection. Production
+  reached 911 MB private / 1,040 MB working set after 51 h and 293 connections with a 100 MB
+  managed heap. The wrapper is now returned by `NeutralizeGnuTls` and disposed on the deferred
+  teardown path (after the 20 s recv-drain window, serialized by `SerializedGnuTlsStream`) in
+  the quarantine funnel and both disconnect paths.
 - **v3.10.105** — ghost-kill logins are rate-limited per account. `FtpConnectionPool` fired at
   most one `!user` kill per "pressure episode", but an episode ended on the next successful
   connect and a kill guarantees that connect succeeds, so under sustained pressure the guard
