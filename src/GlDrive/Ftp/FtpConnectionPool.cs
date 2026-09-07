@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Threading.Channels;
 using FluentFTP;
 using FluentFTP.Client.BaseClient;
+using FluentFTP.Streams;
 using Serilog;
 
 namespace GlDrive.Ftp;
@@ -310,6 +311,9 @@ public class FtpConnectionPool : IAsyncDisposable
     // races the in-flight native read and SEGVs the process (5 watchdog restarts
     // observed 2026-06-06, every one ~3s after a quarantine). 15s CommTimeout + grace.
     private const int AbandonedReclaimSeconds = 20;
+
+    // The actual deferred-teardown delay. Tests shorten it; production never touches it.
+    internal static TimeSpan AbandonedReclaimDelay { get; set; } = TimeSpan.FromSeconds(AbandonedReclaimSeconds);
 
     /// <summary>
     /// NOOP-probe a connection with a short managed deadline. Reports whether the
@@ -914,11 +918,15 @@ public class FtpConnectionPool : IAsyncDisposable
     /// (arrival-rate x AbandonedReclaimSeconds); a fixed cap with force-dispose was the
     /// v2.5.1 ring-eviction SEGV (fixed v3.9.0). Caller decrements _active first.
     /// </summary>
-    private void Quarantine(AsyncFtpClient client, string reason, bool recvQuiescent)
+    internal void Quarantine(AsyncFtpClient client, string reason, bool recvQuiescent)
     {
+        // The GnuTLS wrapper NeutralizeGnuTls detaches from the socket stream. It is freed
+        // on the deferred task below, after the native recv has provably drained — see
+        // FreeDetachedGnuTls for why dropping it instead leaked ~2.3 MB per connection.
+        IFtpStream? detached = null;
         if (recvQuiescent)
         {
-            try { NeutralizeGnuTls(client); }
+            try { detached = NeutralizeGnuTls(client); }
             catch (Exception ex) { Log.Debug(ex, "Pool: NeutralizeGnuTls during quarantine failed"); }
         }
 
@@ -942,16 +950,20 @@ public class FtpConnectionPool : IAsyncDisposable
             // gnutls_deinit on a not-yet-drained session. After AbandonedReclaimSeconds
             // (> CommTimeout 15s) the native recv has provably returned — socket close
             // + session free are now safe.
-            try { await Task.Delay(TimeSpan.FromSeconds(AbandonedReclaimSeconds)).ConfigureAwait(false); }
+            try { await Task.Delay(AbandonedReclaimDelay).ConfigureAwait(false); }
             catch { }
             if (!recvQuiescent)
             {
-                try { NeutralizeGnuTls(client); }
+                try { detached = NeutralizeGnuTls(client); }
                 catch (Exception ex) { Log.Debug(ex, "Pool: deferred neutralize ({Reason}) threw", reason); }
             }
             try { client.Dispose(); }
             catch (Exception ex) { Log.Debug(ex, "Pool: deferred dispose ({Reason}) threw", reason); }
-            finally { Interlocked.Decrement(ref _quarantineLive); }
+            finally
+            {
+                FreeDetachedGnuTls(detached, reason);
+                Interlocked.Decrement(ref _quarantineLive);
+            }
         });
     }
 
@@ -1027,10 +1039,13 @@ public class FtpConnectionPool : IAsyncDisposable
     /// with a native access violation if the underlying socket is dead or the TLS
     /// session is corrupt. This method:
     /// 1. Sets IsSessionUsable=false on GnuTlsInternalStream to skip gnutls_bye()
-    /// 2. Closes the raw socket so any remaining native I/O fails cleanly
+    /// 2. Detaches the GnuTLS wrapper from the socket stream and RETURNS it — the caller
+    ///    must hand it to <see cref="FreeDetachedGnuTls"/> once the native recv has drained.
+    /// 3. Closes the raw socket so any remaining native I/O fails cleanly
     /// </summary>
-    private static void NeutralizeGnuTls(AsyncFtpClient client)
+    internal static IFtpStream? NeutralizeGnuTls(AsyncFtpClient client)
     {
+        IFtpStream? detached = null;
         try
         {
             // PRD H1: stop the built-in NOOP daemon so a quarantined (never-disposed)
@@ -1042,7 +1057,7 @@ public class FtpConnectionPool : IAsyncDisposable
 
             // Get the FtpSocketStream via the public IInternalFtpClient interface
             var stream = ((IInternalFtpClient)client).GetBaseStream();
-            if (stream == null) return;
+            if (stream == null) return null;
 
             // Get m_customStream (the GnuTLS wrapper) via reflection
             var customStreamField = stream.GetType().GetField("m_customStream",
@@ -1075,14 +1090,22 @@ public class FtpConnectionPool : IAsyncDisposable
                     }
                 }
 
-                // Belt-and-braces (PRD v3.5.1): NULL the m_customStream pointer on
-                // the FtpSocketStream so that if a later Dispose() chain runs
-                // (e.g. quarantine FIFO eviction), it has no GnuTLS wrapper to
-                // tear down. gnutls_deinit() on a corrupted session is what
-                // SEGVs the process — observed 2026-05-25 10:17 after an
-                // evicted-oldest force-dispose. Native session memory leaks
-                // (small + bounded by eviction rate) instead of crashing.
-                try { customStreamField?.SetValue(stream, null); } catch { }
+                // Detach the wrapper from the FtpSocketStream so FluentFTP's own
+                // Dispose() chain (which runs immediately, possibly under a live native
+                // recv) cannot reach gnutls_deinit. v3.5.1 did this and then DROPPED the
+                // wrapper — "native session memory leaks (small + bounded)". It was
+                // neither: each control session also owns certificate credentials holding
+                // a parsed copy of the whole Windows trust store, ~2.3 MB per connection
+                // (911 MB private after 51 h / 293 connections on 2026-09-06). Since
+                // v3.10.22 SerializedGnuTlsStream.Dispose serializes the free against any
+                // in-flight recv, so the detached wrapper is returned to the caller and
+                // freed on the deferred teardown path instead.
+                try
+                {
+                    customStreamField?.SetValue(stream, null);
+                    detached = customStream as IFtpStream;
+                }
+                catch { }
             }
 
             // Also close the raw socket to prevent any stray native I/O
@@ -1098,6 +1121,22 @@ public class FtpConnectionPool : IAsyncDisposable
         {
             Log.Debug(ex, "NeutralizeGnuTls: failed (non-fatal)");
         }
+        return detached;
+    }
+
+    /// <summary>
+    /// Free the GnuTLS wrapper that <see cref="NeutralizeGnuTls"/> detached. Safe to call only
+    /// once the native recv has drained (after <see cref="AbandonedReclaimDelay"/>, or on an
+    /// idle connection); <c>SerializedGnuTlsStream.Dispose</c> additionally serializes against
+    /// any read still holding the I/O lock and leaks (with a warning) rather than free under it.
+    /// With IsSessionUsable already false, the library skips gnutls_bye and just runs
+    /// gnutls_deinit + gnutls_certificate_free_credentials.
+    /// </summary>
+    internal static void FreeDetachedGnuTls(IFtpStream? detached, string reason)
+    {
+        if (detached == null) return;
+        try { detached.Dispose(); }
+        catch (Exception ex) { Log.Warning(ex, "Pool: freeing detached GnuTLS session ({Reason}) threw", reason); }
     }
 
     /// <summary>
@@ -1106,7 +1145,7 @@ public class FtpConnectionPool : IAsyncDisposable
     /// </summary>
     private static void DisconnectAndDispose(AsyncFtpClient client)
     {
-        NeutralizeGnuTls(client);
+        var detached = NeutralizeGnuTls(client);
         _ = Task.Run(async () =>
         {
             try
@@ -1117,6 +1156,7 @@ public class FtpConnectionPool : IAsyncDisposable
             catch { }
             try { client.Dispose(); }
             catch { }
+            FreeDetachedGnuTls(detached, "disconnect");
         });
     }
 
@@ -1125,7 +1165,7 @@ public class FtpConnectionPool : IAsyncDisposable
     /// </summary>
     private static async Task SafeDisconnectAndDispose(AsyncFtpClient client)
     {
-        NeutralizeGnuTls(client);
+        var detached = NeutralizeGnuTls(client);
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
@@ -1134,6 +1174,7 @@ public class FtpConnectionPool : IAsyncDisposable
         catch { }
         try { client.Dispose(); }
         catch { }
+        FreeDetachedGnuTls(detached, "disconnect-async");
     }
 
     public async ValueTask DisposeAsync()
