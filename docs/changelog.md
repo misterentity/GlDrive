@@ -66,6 +66,15 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   Both found by mapping subsystem surfaces for a feature, not from any symptom.
 
 ### Fixes
+- **v3.10.108** — source relocation is detected from the first successful empty listing
+  after a source previously supplied files, instead of waiting for several in-flight RETRs
+  to fail on the stale path. While the same-site relocation probe resolves
+  `/incoming` → `/recent`, that source is excluded from transfer scoring. A separate
+  setup-failure policy now preserves a successfully borrowed peer when the other endpoint's
+  pool is exhausted before any TYPE/PASV/CPSV/STOR/RETR command begins; expected pool/gate
+  pressure remains visible in pool diagnostics without a duplicate transfer warning. This
+  prevents the September 8 cascade where three stale-path 550s emptied both pools, new
+  sessions hit the BNC login cap, and four pre-transfer failures poisoned the healthy peer.
 - **v3.10.106** — every FTP connection teardown leaked its native GnuTLS session and
   certificate credentials. `FtpConnectionPool.NeutralizeGnuTls` detached the GnuTLS wrapper
   from FluentFTP's socket stream (the v3.5.1 crash guard) and then dropped it, so neither
