@@ -69,6 +69,50 @@ internal static class FileOwnershipReconciler
         }
     }
 
+    /// <summary>
+    /// Apply the NEGATIVE half of a listing: a site that previously owned a file and
+    /// no longer lists it loses that ownership, and a file no site lists any more
+    /// leaves the race set entirely. Without this the set was add-only: a volume the
+    /// source listed once and its zipscript deleted seconds later (wrong-release
+    /// upload, 2026-09-07) stayed "missing" forever, driving completion sweeps that
+    /// reinitialised every pool, ghost-kills that severed live sessions, and finally
+    /// a SITE WIPE of the 27 good files the destination already held.
+    ///
+    /// An empty listing is NOT evidence about individual files — glftpd moves a
+    /// finished release between sections, which reads as "0 files" for one cycle and
+    /// is handled by the relocation follower — so it prunes nothing.
+    /// Returns the names dropped from <paramref name="fileInfos"/> so the caller can
+    /// clean its own per-file maps and log the change.
+    /// </summary>
+    internal static List<string> Prune(
+        string serverId,
+        IReadOnlyCollection<SpreadFileInfo> listing,
+        Dictionary<string, HashSet<string>> ownership,
+        Dictionary<string, SpreadFileInfo> fileInfos,
+        Dictionary<(string fileName, string serverId), long> observedSizes,
+        Dictionary<string, int> serverFileCount)
+    {
+        var dropped = new List<string>();
+        if (listing.Count == 0) return dropped;
+
+        var listed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var f in listing) listed.Add(f.Name);
+
+        foreach (var (name, owners) in ownership.ToList())
+        {
+            if (listed.Contains(name) || !owners.Contains(serverId)) continue;
+
+            RemoveOwner(serverId, owners, serverFileCount);
+            observedSizes.Remove((name, serverId));
+
+            if (owners.Count > 0) continue;
+            ownership.Remove(name);
+            fileInfos.Remove(name);
+            dropped.Add(name);
+        }
+        return dropped;
+    }
+
     private static void RemoveOwner(
         string serverId,
         HashSet<string> owners,

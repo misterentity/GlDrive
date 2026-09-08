@@ -1893,6 +1893,21 @@ public class SpreadJob : IDisposable
                 _pendingSfv = (serverId, file.FullPath, file.Name);
         }
 
+        // The listing's NEGATIVE half: anything this site owned and no longer lists
+        // is gone from it. A nuke marker aborts the walk mid-directory and returns a
+        // partial list, which must never be read as "the rest was deleted".
+        if (!_isNuked)
+        {
+            var dropped = FileOwnershipReconciler.Prune(serverId, files, _fileOwnership, _fileInfos, _observedFileSizes, _serverFileCount);
+            if (dropped.Count > 0)
+            {
+                foreach (var name in dropped) _fileActions.Remove(name);
+                Log.Information("Spread: {Server} no longer lists {Count} file(s) it had before and no other site holds them — " +
+                    "dropped from the race set ({Release}): {Files}",
+                    serverConfig.Name, dropped.Count, ReleaseName, string.Join(", ", dropped));
+            }
+        }
+
         // Snapshot counts under ownership lock, then update progress outside it
         var owned = _serverFileCount.GetValueOrDefault(serverId);
         var total = ResolveFileTotal(_expectedFileCount, _fileInfos.Count);
