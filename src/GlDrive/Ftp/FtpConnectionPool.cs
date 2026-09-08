@@ -716,7 +716,7 @@ public class FtpConnectionPool : IAsyncDisposable
                             if (await _factory.KillGhosts(ct))
                             {
                                 IncrementGhostKill();
-                                Log.Information("Pool: ghost kill (once per episode) triggered by login-limit from BNC");
+                                Log.Information("Pool: ghost kill triggered by login-limit from BNC (per-account throttle, min 60s apart)");
                             }
                         }
                         catch (OperationCanceledException) when (ct.IsCancellationRequested)
