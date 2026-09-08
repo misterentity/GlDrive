@@ -61,6 +61,25 @@ public sealed class SpreadSourceRelocationTests
             paths);
     }
 
+    [Theory]
+    [InlineData(true, 19, 0, false, false, true)]
+    [InlineData(false, 19, 0, false, false, false)]
+    [InlineData(true, 0, 0, false, false, false)]
+    [InlineData(true, 19, 1, false, false, false)]
+    [InlineData(true, 19, 0, true, false, false)]
+    [InlineData(true, 19, 0, false, true, false)]
+    public void Empty_source_listing_policy_requires_prior_content_and_no_presence_marker(
+        bool isSource,
+        int previouslyOwned,
+        int listed,
+        bool completionMarker,
+        bool missingStub,
+        bool expected)
+    {
+        Assert.Equal(expected, SpreadJob.ShouldProbeSourceRelocation(
+            isSource, previouslyOwned, listed, completionMarker, missingStub));
+    }
+
     [Fact]
     public void Source_path_is_rebuilt_from_the_sources_current_release_dir()
     {
@@ -124,6 +143,45 @@ public sealed class SpreadSourceRelocationTests
         // predicates is the v3.10.45 shape; both must consult CandidateBasePaths.
         Assert.Contains("var pathsToProbe = CandidateBasePaths(config, Section);", Source);
         Assert.Contains("RelocationCandidatePaths(config, Section, ReleaseName, currentPath)", Source);
+    }
+
+    [Fact]
+    public void Previously_populated_source_with_empty_listing_starts_relocation_probe()
+    {
+        var scan = Source.IndexOf("private async Task ScanSites(", StringComparison.Ordinal);
+        var handler = Source.IndexOf("private async Task HandleSourceMigration(", StringComparison.Ordinal);
+        var body = Source[scan..handler];
+
+        Assert.Contains("ShouldProbeSourceRelocation(", body);
+        Assert.Contains("suspectedSourceMigrations.Add(serverId)", body);
+        Assert.Contains("HandleSourceMigration(sourceId, _cts.Token)", body);
+    }
+
+    [Fact]
+    public void Relocation_pending_source_is_excluded_from_transfer_scoring()
+    {
+        var scorer = Source.IndexOf(
+            "private (SpreadFileInfo file, string srcId, string dstId)? FindBestTransfer",
+            StringComparison.Ordinal);
+        var execute = Source.IndexOf("private async Task ExecuteTransfer(", scorer, StringComparison.Ordinal);
+        var body = Source[scorer..execute];
+
+        Assert.Contains("_sourceMigrationPending.Contains(srcId)", body);
+    }
+
+    [Fact]
+    public void Relocation_pending_state_is_bounded_by_handler_lifetime()
+    {
+        var handler = Source.IndexOf("private async Task HandleSourceMigration(", StringComparison.Ordinal);
+        var nextMethod = Source.IndexOf(
+            "private async Task<bool> SourceStillHasRelease", handler, StringComparison.Ordinal);
+        var body = Source[handler..nextMethod];
+
+        var add = body.IndexOf("_sourceMigrationPending.Add(srcId)", StringComparison.Ordinal);
+        var firstProbe = body.IndexOf("await SourceStillHasRelease", StringComparison.Ordinal);
+        var remove = body.IndexOf("_sourceMigrationPending.Remove(srcId)", StringComparison.Ordinal);
+        Assert.True(add >= 0 && add < firstProbe, "source must be parked before the first async probe");
+        Assert.True(remove > firstProbe, "pending state must be cleared by the handler's finally path");
     }
 
     private static string ReadSpreadJob()

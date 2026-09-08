@@ -179,6 +179,12 @@ public class SpreadJob : IDisposable
     // Sources confirmed to have LOST the release mid-race (moved/archived/deleted).
     // Purged from _fileOwnership and never reselected. Guarded by _ownershipLock.
     private readonly HashSet<string> _sourceMigratedAway = new(StringComparer.Ordinal);
+    // A source whose release path is currently being re-probed after a 550 or an
+    // unexpectedly empty listing. Dispatch must pause for this source until the
+    // relocation decision finishes; otherwise the scheduler keeps launching RETRs
+    // against the stale /incoming path and can exhaust both endpoint pools before
+    // the /recent probe completes. Guarded by _ownershipLock.
+    private readonly HashSet<string> _sourceMigrationPending = new(StringComparer.Ordinal);
     // Single-flight guard for the failover search (0/1 via Interlocked).
     private int _failoverInFlight;
     // The live source set (mirrors RunAsync's local sourceServers + failover additions).
@@ -1614,6 +1620,11 @@ public class SpreadJob : IDisposable
 
         await Task.WhenAll(tasks);
 
+        // A successful, completely empty listing from a source that previously owned
+        // files is the earliest observable signal of glftpd moving /incoming -> /recent.
+        // Queue the async relocation probe after releasing _ownershipLock.
+        var suspectedSourceMigrations = new HashSet<string>(StringComparer.Ordinal);
+
         // Process all results under lock once
         lock (_ownershipLock)
         {
@@ -1622,6 +1633,15 @@ public class SpreadJob : IDisposable
                 var serverName = _serverConfigs.TryGetValue(serverId, out var cfg) ? cfg.Name : serverId;
                 Log.Information("Spread scan: {Server} found {Count} files at {Path}",
                     serverName, files.Count, scanTargets.GetValueOrDefault(serverId, "?"));
+                if (ShouldProbeSourceRelocation(
+                    _sourceServersField.Contains(serverId),
+                    _serverFileCount.GetValueOrDefault(serverId),
+                    files.Count,
+                    signals.SawCompletionMarker,
+                    signals.HasMissingStub))
+                {
+                    suspectedSourceMigrations.Add(serverId);
+                }
                 ProcessFiles(serverId, files);
                 _destSawMarker[serverId] = signals.SawCompletionMarker;
                 _destHasMissingStub[serverId] = signals.HasMissingStub;
@@ -1670,6 +1690,9 @@ public class SpreadJob : IDisposable
         if (_spreadConfig.WaitForDestinationComplete)
             EvaluateDestCompletion(finalTotal);
         ProgressChanged?.Invoke(this);
+
+        foreach (var sourceId in suspectedSourceMigrations)
+            _ = HandleSourceMigration(sourceId, _cts.Token);
     }
 
     /// <summary>
@@ -2096,6 +2119,11 @@ public class SpreadJob : IDisposable
                     // from it. Skip every (file, this-src, *) candidate.
                     if (_sourceCreditDenied.Contains(srcId)) { skippedFailures++; continue; }
 
+                    // A relocation probe is resolving this source's current release
+                    // directory. Launching another RETR now would use the same stale
+                    // path that triggered the probe and needlessly discard two sessions.
+                    if (_sourceMigrationPending.Contains(srcId)) { skippedFailures++; continue; }
+
                     // Source's pool is in a BNC cooldown — new connections are
                     // parked, so a Borrow would just throw. Skip every candidate
                     // pulling from it until the cooldown clears.
@@ -2264,6 +2292,7 @@ public class SpreadJob : IDisposable
         PooledConnection? srcConn = null;
         PooledConnection? dstConn = null;
         IAsyncDisposable? gates = null;
+        var transferProtocolStarted = false;
 
         try
         {
@@ -2368,6 +2397,7 @@ public class SpreadJob : IDisposable
             // TYPE I is sent inside FxpTransfer — don't send it here too
             // (double TYPE I causes response queue desync on BNC servers)
 
+            transferProtocolStarted = true;
             var ok = await transfer.ExecuteAsync(srcConn!, dstConn, srcPath, dstPath, mode,
                 _spreadConfig.TransferTimeoutSeconds, ct,
                 raceId: Id, srcServerId: srcId, dstServerId: dstId,
@@ -2579,15 +2609,31 @@ public class SpreadJob : IDisposable
             {
                 Log.Debug("FXP deferred (BNC cooldown): {File} ({Src} -> {Dst})", file.Name, srcId, dstId);
             }
+            else if (!transferProtocolStarted && FxpFailurePolicy.IsExpectedSetupDeferral(ex))
+            {
+                // Borrow/setup never reached TYPE/PASV/CPSV/STOR/RETR. The pool already
+                // recorded the exhaustion/login-pressure event and the file will be
+                // rescored, so don't duplicate it as a transfer warning with another
+                // full stack trace.
+                Log.Information("FXP setup deferred: {File} ({Src} -> {Dst}) — {Error}; {Cause}",
+                    file.Name, srcId, dstId, ex.Message,
+                    BorrowStarvationDiagnoser.Describe(
+                        _serverConfigs[srcId].Name, SnapshotPool(srcPool),
+                        _serverConfigs[dstId].Name, SnapshotPool(dstPool)));
+            }
             else
             {
                 Log.Warning(ex, "FXP transfer error: {File} ({Src} -> {Dst})", file.Name, srcId, dstId);
             }
 
-            // Mark connections as poisoned so pool discards them instead of reusing
-            // (GnuTLS stream may be corrupt after failed/cancelled transfer)
-            if (srcConn != null) srcConn.Poisoned = true;
-            if (dstConn != null) dstConn.Poisoned = true;
+            // A peer borrowed before the other pool failed has not issued a single FTP
+            // command and is pristine. Poison only after transfer protocol actually
+            // began; otherwise a one-sided pool exhaustion collapses the healthy pool too.
+            if (FxpFailurePolicy.ShouldPoisonPeers(transferProtocolStarted))
+            {
+                if (srcConn != null) srcConn.Poisoned = true;
+                if (dstConn != null) dstConn.Poisoned = true;
+            }
         }
         finally
         {
@@ -2626,10 +2672,14 @@ public class SpreadJob : IDisposable
     {
         if (_isNuked) return;
         if (Interlocked.CompareExchange(ref _failoverInFlight, 1, 0) != 0) return; // already running
+        var markedPending = false;
         try
         {
             lock (_ownershipLock)
+            {
                 if (_sourceMigratedAway.Contains(srcId)) return; // already handled
+                markedPending = _sourceMigrationPending.Add(srcId);
+            }
 
             var srcPath = SourceBasePath(srcId);
             if (srcPath == null) return;
@@ -2744,6 +2794,10 @@ public class SpreadJob : IDisposable
         }
         finally
         {
+            if (markedPending)
+            {
+                lock (_ownershipLock) _sourceMigrationPending.Remove(srcId);
+            }
             Interlocked.Exchange(ref _failoverInFlight, 0);
         }
     }
@@ -2836,6 +2890,23 @@ public class SpreadJob : IDisposable
             .Where(p => !string.Equals(p, current, StringComparison.Ordinal))
             .ToList();
     }
+
+    /// <summary>
+    /// An empty listing is relocation evidence only after this source previously
+    /// supplied real files. Completion/missing markers prove the directory still
+    /// exists even when every returned entry is filtered from the transfer set.
+    /// </summary>
+    internal static bool ShouldProbeSourceRelocation(
+        bool isSource,
+        int previouslyOwnedFiles,
+        int listedFiles,
+        bool sawCompletionMarker,
+        bool hasMissingStub)
+        => isSource
+           && previouslyOwnedFiles > 0
+           && listedFiles == 0
+           && !sawCompletionMarker
+           && !hasMissingStub;
 
     /// <summary>RETR path for <paramref name="file"/> on a source whose release dir is
     /// <paramref name="sourceBasePath"/>. Falls back to the observed FullPath only when

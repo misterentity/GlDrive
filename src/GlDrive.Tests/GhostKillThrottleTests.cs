@@ -66,7 +66,7 @@ public class GhostKillThrottleTests
     }
 
     [Fact]
-    public void ConcurrentCallersAtTheSameInstant_OnlyOneWins()
+    public async Task ConcurrentCallersAtTheSameInstant_OnlyOneWins()
     {
         var t = new GhostKillThrottle(TimeSpan.FromSeconds(60));
         using var start = new ManualResetEventSlim(false);
@@ -77,7 +77,7 @@ public class GhostKillThrottleTests
             if (t.TryAcquire(T0)) Interlocked.Increment(ref wins);
         })).ToArray();
         start.Set();
-        Task.WaitAll(tasks);
+        await Task.WhenAll(tasks);
         Assert.Equal(1, wins);
     }
 
