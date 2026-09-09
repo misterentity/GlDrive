@@ -66,6 +66,13 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   Both found by mapping subsystem surfaces for a feature, not from any symptom.
 
 ### Fixes
+- **v3.10.109** — a rejected STOR in Relay mode (glftpd `425 Can't build data connection`,
+  about 1% of relay transfers on 2026-09-06..08, 42 events) attributed the fault to BOTH
+  connections and discarded a healthy destination login per event. The rejection is the final
+  reply on the destination's control channel — the identical in-sync state the 553 dupe-skip
+  branch already returns to the pool 200+ times a day — so only the entangled source (an
+  accepted RETR streaming into a socket we close) is poisoned now. Each event previously cost a
+  20 s quarantined login slot plus a reconnect against a 4-login account cap.
 - **v3.10.108** — source relocation is detected from the first successful empty listing
   after a source previously supplied files, instead of waiting for several in-flight RETRs
   to fail on the stale path. While the same-site relocation probe resolves
