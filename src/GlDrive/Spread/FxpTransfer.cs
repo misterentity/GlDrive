@@ -562,7 +562,17 @@ public class FxpTransfer
                 return true;
             }
             if (storReply.Code != "150" && storReply.Code != "125")
-                throw Fault(FxpFaultSide.Both, $"STOR failed: {storReply.Code} {storReply.Message}");
+            {
+                // A rejected STOR (glftpd `425 Can't build data connection`, ~1% of relay
+                // transfers on 2026-09-06..08) is the FINAL reply on dest: its control
+                // channel is in sync and its data sequence never began — the identical
+                // state the dupe-skip branch above returns to the pool 200+ times a day.
+                // Only the source is entangled (an accepted RETR streaming into a socket
+                // we are about to close), so attribute Source; `Both` cost one healthy
+                // dest login per event against a 4-login cap.
+                CpsvDataHelper.EndDataSequence(dst);
+                throw Fault(FxpFaultSide.Source, $"STOR failed: {storReply.Code} {storReply.Message}");
+            }
 
             // Negotiate TLS as server on both (glftpd does SSL_connect)
             srcSsl = await CpsvDataHelper.NegotiateDataTls(srcTcp.GetStream(), ct);
