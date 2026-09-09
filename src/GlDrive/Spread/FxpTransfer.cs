@@ -523,12 +523,8 @@ public class FxpTransfer
 
             if (BeforeStore != null) await BeforeStore(ct);
 
-            // Send data commands. In Relay both CPSV data sockets are already open
-            // and TLS is negotiated right after STOR — a failure here leaves the peer
-            // entangled, so attribute Both (conservative) rather than one side.
             var retrReply = await src.Execute($"RETR {Ftp.CpsvDataHelper.SanitizeFtpPath(srcPath)}", ct);
-            if (retrReply.Code != "150" && retrReply.Code != "125")
-                throw Fault(FxpFaultSide.Both, $"RETR failed: {retrReply.Code} {retrReply.Message}");
+            AcceptRelayRetrReply(dst, retrReply);
 
             var storReply = await dst.Execute($"STOR {Ftp.CpsvDataHelper.SanitizeFtpPath(dstPath)}", ct);
             if (IsDupeRejection(storReply))
@@ -651,6 +647,20 @@ public class FxpTransfer
             dstSsl?.Dispose();
             srcTcp.Dispose();
             dstTcp?.Dispose();
+        }
+    }
+
+    internal void AcceptRelayRetrReply(AsyncFtpClient dst, FtpReply retrReply)
+    {
+        if (retrReply.Code != "150" && retrReply.Code != "125")
+        {
+            // STOR has not been sent: destination CPSV completed, but no transfer
+            // command owes a reply. Closing its unused data socket in finally is
+            // sufficient. Keep the source quarantined, including unexpected replies
+            // and service shutdowns; only the untouched destination is reusable.
+            // Transport exceptions never reach this method and retain both marks.
+            CpsvDataHelper.EndDataSequence(dst);
+            throw Fault(FxpFaultSide.Source, $"RETR failed: {retrReply.Code} {retrReply.Message}");
         }
     }
 

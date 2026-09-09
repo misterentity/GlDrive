@@ -66,6 +66,13 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   Both found by mapping subsystem surfaces for a feature, not from any symptom.
 
 ### Fixes
+- **v3.10.110** — a rejected Relay RETR now preserves the unused destination login.
+  Both CPSV sockets were open, but STOR had not been sent; marking both connections
+  poisoned and leaving the destination's pending-sequence marker set discarded a
+  healthy login twice on September 9. The rejection clears only the destination
+  marker and attributes the failure to the source. Transport exceptions retain the
+  conservative cleanup of both connections. Seven regression cases cover rejected
+  and accepted replies, source quarantine, and command ordering.
 - **v3.10.109** — a rejected STOR in Relay mode (glftpd `425 Can't build data connection`,
   about 1% of relay transfers on 2026-09-06..08, 42 events) attributed the fault to BOTH
   connections and discarded a healthy destination login per event. The rejection is the final
