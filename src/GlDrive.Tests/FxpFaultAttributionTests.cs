@@ -27,5 +27,6 @@ public class FxpFaultAttributionTests
         Assert.True(System.Enum.IsDefined(FxpFaultSide.Source));
         Assert.True(System.Enum.IsDefined(FxpFaultSide.Dest));
         Assert.True(System.Enum.IsDefined(FxpFaultSide.Both));
+        Assert.True(System.Enum.IsDefined(FxpFaultSide.Neither));
     }
 }

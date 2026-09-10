@@ -21,7 +21,13 @@ public enum TransferState { Idle, NegotiatingPassive, NegotiatingActive, Transfe
 /// this <see cref="None"/>, which the caller conservatively maps to Both — never
 /// under-poisoning a possibly-corrupt session (a native-crash risk).
 /// </summary>
-public enum FxpFaultSide { None, Source, Dest, Both }
+/// <summary>
+/// Which connection a failed transfer may have left corrupt. None (the default) and
+/// Both poison both connections. Neither is the explicit "clean protocol rejection
+/// before any transfer began" verdict: both control channels answered in sync, so
+/// neither login is spent.
+/// </summary>
+public enum FxpFaultSide { None, Source, Dest, Both, Neither }
 
 public class FxpTransfer
 {
@@ -524,7 +530,7 @@ public class FxpTransfer
             if (BeforeStore != null) await BeforeStore(ct);
 
             var retrReply = await src.Execute($"RETR {Ftp.CpsvDataHelper.SanitizeFtpPath(srcPath)}", ct);
-            AcceptRelayRetrReply(dst, retrReply);
+            AcceptRelayRetrReply(src, dst, retrReply);
 
             var storReply = await dst.Execute($"STOR {Ftp.CpsvDataHelper.SanitizeFtpPath(dstPath)}", ct);
             if (IsDupeRejection(storReply))
@@ -650,17 +656,25 @@ public class FxpTransfer
         }
     }
 
-    internal void AcceptRelayRetrReply(AsyncFtpClient dst, FtpReply retrReply)
+    internal void AcceptRelayRetrReply(AsyncFtpClient src, AsyncFtpClient dst, FtpReply retrReply)
     {
         if (retrReply.Code != "150" && retrReply.Code != "125")
         {
             // STOR has not been sent: destination CPSV completed, but no transfer
             // command owes a reply. Closing its unused data socket in finally is
-            // sufficient. Keep the source quarantined, including unexpected replies
-            // and service shutdowns; only the untouched destination is reusable.
-            // Transport exceptions never reach this method and retain both marks.
+            // sufficient. Transport exceptions never reach this method and retain
+            // both marks.
             CpsvDataHelper.EndDataSequence(dst);
-            throw Fault(FxpFaultSide.Source, $"RETR failed: {retrReply.Code} {retrReply.Message}");
+
+            // A FINAL negative reply to RETR (550 after the source moved the
+            // release, 425, 450) is the same state on the source that the STOR
+            // rejection branch below relies on for the dest: the rejection IS the
+            // completion, the server closed its data socket, nothing is streaming.
+            // Neither login is spent. Only a 421 (session closing) or a
+            // non-negative code (a stale reply) keeps the source quarantined.
+            var rejection = CpsvDataHelper.RejectDataCommand(src, "RETR", retrReply);
+            throw Fault(rejection.ControlChannelInSync ? FxpFaultSide.Neither : FxpFaultSide.Source,
+                rejection.Message);
         }
     }
 

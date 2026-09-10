@@ -88,6 +88,29 @@ public static class CpsvDataHelper
         => PendingSequences.Remove(client);
 
     /// <summary>
+    /// The server answered the data command with something other than 150/125.
+    /// A FINAL negative reply (550 No such file, 425 Can't build data connection,
+    /// 553 path-filter deny, ...) means no transfer began and no 226 will follow:
+    /// the control channel is in sync and the connection is reusable, so the
+    /// pending mark is cleared. A 421 (session closing) or a non-negative code
+    /// (a stale reply — the desync signature) keeps the mark, and the pool
+    /// discards the connection on return. Returns the exception for the caller to
+    /// throw so the attribution lives next to the throw site.
+    ///
+    /// Before v3.10.112 every such rejection kept the mark: each hourly search-index
+    /// build discarded two healthy connections, and a burst of `RETR 550` from a
+    /// source that had just moved a release cost one login per reply against a
+    /// 4-login cap (2026-09-08 03:02: ghost-kills, a 90 s BNC cooldown, four
+    /// "Pool exhausted" transfer errors).
+    /// </summary>
+    internal static DataCommandRejectedException RejectDataCommand(AsyncFtpClient client, string verb, FtpReply reply)
+    {
+        var inSync = FtpCommandRejection.LeavesChannelInSync(reply.Code);
+        if (inSync) EndDataSequence(client);
+        return new DataCommandRejectedException(verb, reply, inSync);
+    }
+
+    /// <summary>
     /// True when a CPSV data sequence on this client did not run to completion,
     /// leaving an unread reply on the control channel. Such a connection is
     /// unusable and must be discarded rather than returned to the pool.
@@ -237,7 +260,7 @@ public static class CpsvDataHelper
             // Send LIST command BEFORE TLS — server initiates SSL_connect after this
             var listReply = await client.Execute($"LIST -a {SanitizeFtpPath(remotePath)}", ct);
             if (listReply.Code != "150" && listReply.Code != "125")
-                throw new IOException($"LIST failed: {listReply.Code} {listReply.Message}");
+                throw RejectDataCommand(client, "LIST", listReply);
 
             // Now negotiate TLS (server should be doing SSL_connect)
             var ssl = await NegotiateDataTls(tcp.GetStream(), ct);
@@ -280,7 +303,7 @@ public static class CpsvDataHelper
         {
             var retrReply = await client.Execute($"RETR {SanitizeFtpPath(remotePath)}", ct);
             if (retrReply.Code != "150" && retrReply.Code != "125")
-                throw new IOException($"RETR failed: {retrReply.Code} {retrReply.Message}");
+                throw RejectDataCommand(client, "RETR", retrReply);
 
             var ssl = await NegotiateDataTls(tcp.GetStream(), ct);
 
@@ -328,7 +351,7 @@ public static class CpsvDataHelper
         {
             var retrReply = await client.Execute($"RETR {SanitizeFtpPath(remotePath)}", ct);
             if (retrReply.Code != "150" && retrReply.Code != "125")
-                throw new IOException($"RETR failed: {retrReply.Code} {retrReply.Message}");
+                throw RejectDataCommand(client, "RETR", retrReply);
 
             var ssl = await NegotiateDataTls(tcp.GetStream(), ct);
 
@@ -375,7 +398,7 @@ public static class CpsvDataHelper
         {
             var storReply = await client.Execute($"STOR {SanitizeFtpPath(remotePath)}", ct);
             if (storReply.Code != "150" && storReply.Code != "125")
-                throw new IOException($"STOR failed: {storReply.Code} {storReply.Message}");
+                throw RejectDataCommand(client, "STOR", storReply);
 
             var ssl = await NegotiateDataTls(tcp.GetStream(), ct);
 
@@ -420,7 +443,7 @@ public static class CpsvDataHelper
         {
             var storReply = await client.Execute($"STOR {SanitizeFtpPath(remotePath)}", ct);
             if (storReply.Code != "150" && storReply.Code != "125")
-                throw new IOException($"STOR failed: {storReply.Code} {storReply.Message}");
+                throw RejectDataCommand(client, "STOR", storReply);
 
             var ssl = await NegotiateDataTls(tcp.GetStream(), ct);
             try
