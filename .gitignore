@@ -7,6 +7,15 @@ obj/
 # Installer build artifacts
 installer/publish/
 installer/output/
+/GlDrive-v*-win-x64.zip
+/GlDriveSetup-v*.exe
+
+# Local tooling output and preserved scratch work
+/.claude-flow/
+/.swarm/
+/.playwright-mcp/
+/.release-tools/
+/.local-archive/
 
 # Personal scripts
 transfer-movies.ps1
@@ -17,3 +26,4 @@ installer/keys/codesign.pfx
 
 # Design package reference (decompressed from claude.ai/design)
 .design-package/
+/.design-package-v2/
