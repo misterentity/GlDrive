@@ -66,6 +66,13 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   Both found by mapping subsystem surfaces for a feature, not from any symptom.
 
 ### Fixes
+- **v3.10.113** — hotfix for a v3.10.111 regression that first ran live inside v3.10.112:
+  `CompleteDataSequence` validated the completion reply BEFORE clearing the pending mark, so
+  glftpd's `426 Data Connection: Success.` after every fully relayed STOR (and the legitimate 426
+  to a dupe-skip ABOR) quarantined a healthy login per successful file — 12 of 12 relays and 10 of
+  12 dupe-skips in the first race, vs 8 of 1,536 and 1 of 91 on .110. A consumed reply now always
+  clears the mark; validation is per caller (RETR receivers strict, STOR senders and ABOR lenient).
+  8 new tests, 5/5 mutants caught.
 - **v3.10.112** — a final negative reply to a CPSV data command (`LIST 550`, `RETR 550`,
   `STOR 425`) no longer quarantines the connection. The "owes a reply" mark set before the
   data command was only cleared by a successful completion read, so a clean rejection —

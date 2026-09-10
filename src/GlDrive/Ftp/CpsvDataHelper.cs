@@ -64,13 +64,27 @@ public static class CpsvDataHelper
     /// <summary>
     /// Reads the transfer-completion reply and clears the desync flag. Only a
     /// successful read clears it — if GetReply throws, the channel really is
-    /// still out of sync and the connection stays marked.
+    /// still out of sync and the connection stays marked. With
+    /// <paramref name="validate"/> the reply must be 226/250 or an IOException
+    /// is thrown AFTER the mark is cleared: a reply that has been read is no
+    /// longer on the wire, so the channel is in sync whatever the code says.
+    /// v3.10.111 validated first and left the mark set on glftpd's
+    /// `426 Data Connection: Success.` after every fully relayed STOR — one
+    /// destination login per successful file (12 of 12 on 2026-09-09 22:28).
+    /// Senders (STOR) and ABOR pass validate:false: their bytes were flushed
+    /// before the reply, and ABOR's legitimate answer IS a 426.
     /// </summary>
-    internal static async Task<FtpReply> CompleteDataSequence(AsyncFtpClient client, CancellationToken ct)
+    internal static async Task<FtpReply> CompleteDataSequence(AsyncFtpClient client, CancellationToken ct, bool validate = true)
     {
         var reply = await client.GetReply(ct);
-        ValidateCompletion(reply);
+        return AcceptCompletionReply(client, reply, validate);
+    }
+
+    /// <summary>Consuming the reply clears the mark; validating it is the caller's choice.</summary>
+    internal static FtpReply AcceptCompletionReply(AsyncFtpClient client, FtpReply reply, bool validate)
+    {
         EndDataSequence(client);
+        if (validate) ValidateCompletion(reply);
         return reply;
     }
 
@@ -410,7 +424,7 @@ public static class CpsvDataHelper
                 ssl.Close();
                 tcp.Close();
 
-                var completeReply = await CompleteDataSequence(client, ct);
+                var completeReply = await CompleteDataSequence(client, ct, validate: false);
                 Log.Debug("STOR complete: {Code} {Message}", completeReply.Code, completeReply.Message);
             }
             finally
@@ -452,7 +466,7 @@ public static class CpsvDataHelper
                 await stream.CopyToAsync(ssl, ct);
                 ssl.Close();
                 tcp.Close();
-                var completeReply = await CompleteDataSequence(client, ct);
+                var completeReply = await CompleteDataSequence(client, ct, validate: false);
                 Log.Debug("STOR stream complete: {Code} {Message}", completeReply.Code, completeReply.Message);
             }
             finally
