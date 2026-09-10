@@ -23,7 +23,7 @@ dotnet build src/GlDrive/GlDrive.csproj
 dotnet run --project src/GlDrive/GlDrive.csproj
 ```
 
-The `.sln` file has no project references — always build via the `.csproj` directly. Version of record lives in `src/GlDrive/GlDrive.csproj` `<Version>` property.
+`GlDrive.sln` includes both the application and test projects. Build/test either the solution or the explicit `.csproj`. Version of record lives in `src/GlDrive/GlDrive.csproj` `<Version>` property.
 
 ### Release
 

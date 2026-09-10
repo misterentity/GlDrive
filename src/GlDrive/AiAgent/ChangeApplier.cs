@@ -26,8 +26,10 @@ public sealed class ChangeApplier
     }
 
     public RunReport Apply(IEnumerable<AgentChange> changes, GlDrive.Config.AppConfig config,
-                           GlDrive.Config.AgentConfig agentCfg, string runId, bool dryRun)
+                           GlDrive.Config.AgentConfig agentCfg, string runId, bool dryRun,
+                           Action<AuditRow>? record = null, bool configOnly = false)
     {
+        record ??= _audit.Append;
         var report = new RunReport();
         var perCategoryCount = new Dictionary<string, int>();
         double confidenceFloor = agentCfg.ConfidenceThreshold_x100 / 100.0;
@@ -52,6 +54,8 @@ public sealed class ChangeApplier
 
             if (_freeze.IsFrozen(change.Target))
                 reject = "frozen";
+            else if (configOnly && !dryRun && change.Category is AgentCategories.WishlistPrune or AgentCategories.ErrorReport)
+                reject = "requires-manual-action";
             else if (!_validators.TryGetValue(change.Category, out var v))
                 reject = "unknown-category";
             else if (change.Confidence < confidenceFloor && change.Category != AgentCategories.ErrorReport)
@@ -91,7 +95,7 @@ public sealed class ChangeApplier
                 }
 
                 string? beforeNorm = NormalizeScalar(change.Before);
-                if (configNode is not null && !string.IsNullOrEmpty(beforeNorm))
+                if (configNode is not null && (configOnly || !string.IsNullOrEmpty(beforeNorm)))
                 {
                     JsonNode? resolved;
                     try { resolved = JsonPointer.Resolve(configNode, change.Target); }
@@ -128,7 +132,7 @@ public sealed class ChangeApplier
                     }
                     if (mutationOk)
                     {
-                        _audit.Append(new AuditRow
+                        record(new AuditRow
                         {
                             RunId = runId,
                             Category = change.Category,
@@ -141,6 +145,7 @@ public sealed class ChangeApplier
                             Applied = true,
                             DryRun = dryRun
                         });
+                        if (configOnly && !dryRun) configNodeBuilt = false;
                         report.Applied++;
                         perCategoryCount[change.Category] = perCategoryCount.GetValueOrDefault(change.Category) + 1;
                         report.AppliedByCategory[change.Category] = perCategoryCount[change.Category];
@@ -149,7 +154,7 @@ public sealed class ChangeApplier
                 }
             }
 
-            _audit.Append(new AuditRow
+            record(new AuditRow
             {
                 RunId = runId,
                 Category = change.Category,

@@ -16,6 +16,33 @@ namespace GlDrive.Filesystem;
 public class GlDriveFileSystem : FileSystemBase
 {
     private readonly FtpOperations _ftp;
+    private readonly object _nodesGate = new();
+    private readonly Dictionary<string, FileNode> _openFiles = new(StringComparer.Ordinal);
+    private readonly HashSet<FileNode> _openDirectories = new();
+
+    private FileNode RegisterOpen(FileNode candidate)
+    {
+        lock (_nodesGate)
+        {
+            if (candidate.IsDirectory) { _openDirectories.Add(candidate); return candidate; }
+            if (_openFiles.TryGetValue(candidate.RemotePath, out var existing))
+            {
+                existing.OpenCount++;
+                candidate.Dispose();
+                return existing;
+            }
+            candidate.OpenCount = 1;
+            _openFiles.Add(candidate.RemotePath, candidate);
+            return candidate;
+        }
+    }
+
+    private sealed class NodeLock : IDisposable
+    {
+        private readonly object _gate;
+        internal NodeLock(FileNode node) { _gate = node.SyncRoot; Monitor.Enter(_gate); }
+        public void Dispose() => Monitor.Exit(_gate);
+    }
     private readonly DirectoryCache _cache;
     private readonly string _rootPath;
     private readonly string _volumeLabel;
@@ -230,6 +257,7 @@ public class GlDriveFileSystem : FileSystemBase
                 node.SpillThresholdBytes = _spillThresholdBytes;
             }
 
+            node = RegisterOpen(node);
             fileNode = node;
             fileDesc = node;
             FillFileInfo(node, out fileInfo);
@@ -285,6 +313,7 @@ public class GlDriveFileSystem : FileSystemBase
                 node.IsDirty = false;
             }
 
+            node = RegisterOpen(node);
             fileNode = node;
             fileDesc = node;
             FillFileInfo(node, out fileInfo);
@@ -308,6 +337,7 @@ public class GlDriveFileSystem : FileSystemBase
     {
         fileInfo = default;
         var node = (FileNode)fileNode0;
+        using var nodeLock = new NodeLock(node);
 
         try
         {
@@ -317,6 +347,8 @@ public class GlDriveFileSystem : FileSystemBase
             node.ReadBufferLoaded = false;
             node.WriteBufferFile?.Dispose();
             node.WriteBufferFile = null;
+            node.WriteBufferTempPath = null;
+            node.WriteBuffer?.Dispose();
             node.WriteBuffer = new MemoryStream();
             node.IsDirty = true;
             node.FileSize = 0;
@@ -340,17 +372,15 @@ public class GlDriveFileSystem : FileSystemBase
     {
         bytesTransferred = 0;
         var node = (FileNode)fileNode0;
+        using var nodeLock = new NodeLock(node);
 
         try
         {
             // Load entire file on first read
-            if (!node.ReadBufferLoaded)
+            if (!node.ReadBufferLoaded && node.WriteBuffer == null && node.WriteBufferFile == null)
             {
                 Log.Debug("Read: downloading {Path}", node.RemotePath);
-                var data = _ftp.DownloadFile(node.RemotePath).GetAwaiter().GetResult();
-                node.ReadBuffer = new MemoryStream(data);
-                node.ReadBufferLoaded = true;
-                node.FileSize = data.Length;
+                node.LoadReadBuffer(stream => _ftp.DownloadToStream(node.RemotePath, stream).GetAwaiter().GetResult());
             }
 
             var stream = (Stream?)node.WriteBufferFile ?? node.WriteBuffer ?? node.ReadBuffer;
@@ -396,17 +426,14 @@ public class GlDriveFileSystem : FileSystemBase
         bytesTransferred = 0;
         fileInfo = default;
         var node = (FileNode)fileNode0;
+        using var nodeLock = new NodeLock(node);
 
         try
         {
-            var writeStream = node.GetOrCreateWriteStream();
-
-            // If we had a read buffer but no writes yet, copy read data to write stream
-            if (node.ReadBufferLoaded && writeStream.Length == 0 && node.ReadBuffer != null && node.ReadBuffer.Length > 0)
-            {
-                node.ReadBuffer.Position = 0;
-                node.ReadBuffer.CopyTo(writeStream);
-            }
+            var requestedEnd = checked((writeToEndOfFile ? node.FileSize : (long)offset) + length);
+            var writeStream = node.PrepareWriteStream(
+                stream => _ftp.DownloadToStream(node.RemotePath, stream).GetAwaiter().GetResult(),
+                constrainedIo ? node.FileSize : requestedEnd);
 
             var pos = writeToEndOfFile ? writeStream.Length : (long)offset;
 
@@ -414,10 +441,14 @@ public class GlDriveFileSystem : FileSystemBase
             {
                 length = (uint)Math.Max(0, writeStream.Length - pos);
                 if (length == 0)
+                {
+                    FillFileInfo(node, out fileInfo);
                     return STATUS_SUCCESS;
+                }
             }
 
             // Expand if needed
+            writeStream = node.GetOrCreateWriteStream(checked(pos + length));
             if (pos + length > writeStream.Length)
                 writeStream.SetLength(pos + length);
 
@@ -454,10 +485,30 @@ public class GlDriveFileSystem : FileSystemBase
     {
         fileInfo = default;
         if (fileNode0 is not FileNode node)
+        {
+            lock (_nodesGate)
+            {
+                var status = STATUS_SUCCESS;
+                foreach (var open in _openFiles.Values)
+                {
+                    var result = Flush(open, open, out _);
+                    if (result != STATUS_SUCCESS) status = result;
+                }
+                return status;
+            }
+        }
+        using var nodeLock = new NodeLock(node);
+        try
+        {
+            UploadDirtyBuffer(node);
+            FillFileInfo(node, out fileInfo);
             return STATUS_SUCCESS;
-
-        FillFileInfo(node, out fileInfo);
-        return STATUS_SUCCESS;
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Flush failed: {Path}", node.RemotePath);
+            return NtStatusMapper.MapException(ex);
+        }
     }
 
     public override int GetFileInfo(
@@ -467,6 +518,7 @@ public class GlDriveFileSystem : FileSystemBase
     {
         fileInfo = default;
         var node = (FileNode)fileNode0;
+        using var nodeLock = new NodeLock(node);
         FillFileInfo(node, out fileInfo);
         return STATUS_SUCCESS;
     }
@@ -483,6 +535,7 @@ public class GlDriveFileSystem : FileSystemBase
     {
         fileInfo = default;
         var node = (FileNode)fileNode0;
+        using var nodeLock = new NodeLock(node);
         // FTP doesn't support setting timestamps, just acknowledge
         FillFileInfo(node, out fileInfo);
         return STATUS_SUCCESS;
@@ -497,17 +550,39 @@ public class GlDriveFileSystem : FileSystemBase
     {
         fileInfo = default;
         var node = (FileNode)fileNode0;
+        using var nodeLock = new NodeLock(node);
 
-        if (!setAllocationSize)
+        try
         {
-            var writeStream = node.GetOrCreateWriteStream();
-            writeStream.SetLength((long)newSize);
-            node.FileSize = (long)newSize;
-            node.IsDirty = true;
-        }
+            if (!setAllocationSize)
+            {
+                var size = checked((long)newSize);
+                var writeStream = node.PrepareWriteStream(
+                    stream => _ftp.DownloadToStream(node.RemotePath, stream).GetAwaiter().GetResult(), size);
+                writeStream.SetLength(size);
+                node.FileSize = size;
+                node.IsDirty = true;
+            }
 
-        FillFileInfo(node, out fileInfo);
-        return STATUS_SUCCESS;
+            FillFileInfo(node, out fileInfo);
+            return STATUS_SUCCESS;
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "SetFileSize failed: {Path}", node.RemotePath);
+            return NtStatusMapper.MapException(ex);
+        }
+    }
+
+    private void UploadDirtyBuffer(FileNode node)
+    {
+        if (!node.IsDirty) return;
+        var uploadStream = node.GetWriteStreamForUpload();
+        if (uploadStream == null) return;
+        Log.Debug("Uploading buffered write: {Path} ({Bytes} bytes)", node.RemotePath, uploadStream.Length);
+        _ftp.UploadFile(node.RemotePath, uploadStream).GetAwaiter().GetResult();
+        node.IsDirty = false;
+        _cache.InvalidateParent(node.RemotePath);
     }
 
     public override void Cleanup(
@@ -517,6 +592,7 @@ public class GlDriveFileSystem : FileSystemBase
         uint flags)
     {
         var node = (FileNode)fileNode0;
+        using var nodeLock = new NodeLock(node);
 
         try
         {
@@ -535,23 +611,14 @@ public class GlDriveFileSystem : FileSystemBase
                 else
                     _ftp.DeleteFile(remotePath).GetAwaiter().GetResult();
 
+                node.IsDirty = false;
                 _cache.InvalidateParent(remotePath);
                 _cache.Invalidate(remotePath);
                 return;
             }
 
             // Upload dirty write buffer on close
-            if (node.IsDirty)
-            {
-                var uploadStream = node.GetWriteStreamForUpload();
-                if (uploadStream != null)
-                {
-                    Log.Debug("Cleanup upload: {Path} ({Bytes} bytes)", node.RemotePath, uploadStream.Length);
-                    _ftp.UploadFile(node.RemotePath, uploadStream).GetAwaiter().GetResult();
-                    node.IsDirty = false;
-                    _cache.InvalidateParent(node.RemotePath);
-                }
-            }
+            UploadDirtyBuffer(node);
 
             // Free read buffer eagerly to reduce memory pressure
             node.ReadBuffer?.Dispose();
@@ -566,8 +633,33 @@ public class GlDriveFileSystem : FileSystemBase
 
     public override void Close(object fileNode0, object fileDesc0)
     {
-        if (fileNode0 is FileNode node)
-            node.Dispose();
+        if (fileNode0 is not FileNode node) return;
+        lock (_nodesGate)
+        {
+            if (node.OpenCount > 1) { node.OpenCount--; return; }
+            lock (node.SyncRoot)
+            {
+                if (node.IsDirty)
+                {
+                    try
+                    {
+                        var recovery = node.PreserveFailedWrite(Path.Combine(
+                            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                            "GlDrive", "write-recovery"), _volumeLabel);
+                        Log.Error("Upload failed; recover buffered file {RemotePath} from {RecoveryPath}", node.RemotePath, recovery);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Keep the buffer alive for a later volume flush if recovery storage fails.
+                        Log.Error(ex, "Could not preserve failed write for {Path}; retaining open buffer", node.RemotePath);
+                        return;
+                    }
+                }
+                if (_openFiles.GetValueOrDefault(node.RemotePath) == node) _openFiles.Remove(node.RemotePath);
+                _openDirectories.Remove(node);
+                node.Dispose();
+            }
+        }
     }
 
     public override bool ReadDirectoryEntry(
@@ -582,6 +674,7 @@ public class GlDriveFileSystem : FileSystemBase
         fileName = null!;
         fileInfo = default;
         var node = (FileNode)fileNode0;
+        using var nodeLock = new NodeLock(node);
 
         try
         {
@@ -663,26 +756,40 @@ public class GlDriveFileSystem : FileSystemBase
         string newFileName,
         bool replaceIfExists)
     {
-        try
+        lock (_nodesGate)
         {
             var fromPath = ToRemotePath(fileName);
             var toPath = ToRemotePath(newFileName);
-            Log.Debug("Rename: {From} -> {To}", fromPath, toPath);
-
-            _ftp.Rename(fromPath, toPath).GetAwaiter().GetResult();
-            _cache.InvalidateParent(fromPath);
-            _cache.InvalidateParent(toPath);
-            _cache.Invalidate(fromPath);
-            // Evict the DESTINATION's own cached listing too — a rename can replace an
-            // existing dir at toPath (replaceIfExists), so a stale child listing under
-            // toPath must not survive. Mirrors the source eviction above.
-            _cache.Invalidate(toPath);
-            return STATUS_SUCCESS;
-        }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "Rename failed: {FileName} -> {NewFileName}", fileName, newFileName);
-            return NtStatusMapper.MapException(ex);
+            var affected = _openFiles.Values.Concat(_openDirectories)
+                .Where(n => n.RemotePath == fromPath || n.RemotePath.StartsWith(fromPath + "/", StringComparison.Ordinal))
+                .ToList();
+            if (fileNode0 is FileNode renamed && !affected.Contains(renamed)) affected.Add(renamed);
+            foreach (var open in affected) Monitor.Enter(open.SyncRoot);
+            try
+            {
+                Log.Debug("Rename: {From} -> {To}", fromPath, toPath);
+                if (_openFiles.TryGetValue(toPath, out var destination) && !affected.Contains(destination))
+                    return STATUS_ACCESS_DENIED; // Replacing an open destination would orphan its dirty buffer.
+                _ftp.Rename(fromPath, toPath).GetAwaiter().GetResult();
+                foreach (var open in affected)
+                {
+                    _openFiles.Remove(open.RemotePath);
+                    open.RemotePath = toPath + open.RemotePath[fromPath.Length..];
+                    open.DirEntries = null;
+                    if (!open.IsDirectory) _openFiles[open.RemotePath] = open;
+                }
+                _cache.InvalidateParent(fromPath);
+                _cache.InvalidateParent(toPath);
+                _cache.Invalidate(fromPath);
+                _cache.Invalidate(toPath);
+                return STATUS_SUCCESS;
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Rename failed: {FileName} -> {NewFileName}", fileName, newFileName);
+                return NtStatusMapper.MapException(ex);
+            }
+            finally { foreach (var open in affected) Monitor.Exit(open.SyncRoot); }
         }
     }
 

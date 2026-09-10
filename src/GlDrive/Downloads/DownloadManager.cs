@@ -18,6 +18,7 @@ public class DownloadManager : IDisposable
     private readonly SemaphoreSlim _concurrency;
     private CancellationTokenSource? _cts;
     private Task? _processorTask;
+    private int _disposed;
     private readonly Dictionary<string, CancellationTokenSource> _activeCts = new();
     private Task? _progressPersistTask;
 
@@ -59,6 +60,10 @@ public class DownloadManager : IDisposable
 
     public void Start()
     {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        if (_processorTask is { IsCompleted: false } || _progressPersistTask is { IsCompleted: false })
+            throw new InvalidOperationException("Download manager is already running or still stopping");
+        _cts?.Dispose();
         _cts = new CancellationTokenSource();
         // New generation — any retry task still pending from a previous run will
         // see the bumped generation and no-op instead of enqueuing into this run.
@@ -92,25 +97,18 @@ public class DownloadManager : IDisposable
 
     public async Task StopAsync(TimeSpan? timeout = null)
     {
-        _cts?.Cancel();
-        lock (_activeCts)
+        Stop();
+        var workers = Task.WhenAll(_processorTask ?? Task.CompletedTask,
+            _progressPersistTask ?? Task.CompletedTask);
+        try
         {
-            foreach (var cts in _activeCts.Values)
-                cts.Cancel();
-            _activeCts.Clear();
+            await workers.WaitAsync(timeout ?? TimeSpan.FromSeconds(5));
         }
-        if (_processorTask != null)
+        catch (TimeoutException)
         {
-            try
-            {
-                await _processorTask.WaitAsync(timeout ?? TimeSpan.FromSeconds(5));
-            }
-            catch (TimeoutException)
-            {
-                Log.Warning("DownloadManager stop timed out — abandoning background task");
-            }
-            catch { }
+            Log.Warning("DownloadManager stop timed out — abandoning background task");
         }
+        catch (Exception ex) { Log.Debug(ex, "DownloadManager worker failed during stop"); }
 
         // Drain pending retry tasks (their Task.Delay is cancelled by _cts above, so
         // they finish promptly) before disposing _cts, so none fire post-stop.
@@ -122,8 +120,7 @@ public class DownloadManager : IDisposable
             catch { }
         }
 
-        _cts?.Dispose();
-        _cts = null;
+        _store.Save();
     }
 
     public void Stop()
@@ -135,8 +132,8 @@ public class DownloadManager : IDisposable
                 cts.Cancel();
             _activeCts.Clear();
         }
-        _cts?.Dispose();
-        _cts = null;
+        // Workers can still register cancellation callbacks while they unwind.
+        // Dispose the source together with their semaphores after they finish.
     }
 
     public bool Enqueue(DownloadItem item)
@@ -316,7 +313,9 @@ public class DownloadManager : IDisposable
     private void ScheduleRetry(DownloadItem item, int delaySeconds)
     {
         var gen = Volatile.Read(ref _generation);
-        var token = _cts?.Token ?? CancellationToken.None;
+        var source = _cts;
+        if (source == null || source.IsCancellationRequested) return;
+        var token = source.Token;
         Task task = null!;
         task = Task.Run(async () =>
         {
@@ -588,10 +587,11 @@ public class DownloadManager : IDisposable
         }
         catch (OperationCanceledException)
         {
-            item.Status = DownloadStatus.Cancelled;
+            item.Status = StatusAfterCancellation(item.Status, globalCt.IsCancellationRequested);
             _store.Update(item);
+            if (globalCt.IsCancellationRequested) _store.Save();
             DownloadStatusChanged?.Invoke(item);
-            EmitDownloadOutcome(item, "cancelled");
+            if (item.Status == DownloadStatus.Cancelled) EmitDownloadOutcome(item, "cancelled");
         }
         catch (Exception ex) when (DownloadTargetVolume.IsVolumeAbsent(ex, item.LocalPath))
         {
@@ -717,11 +717,29 @@ public class DownloadManager : IDisposable
         return $"{size:F1} {units[i]}";
     }
 
+    internal static DownloadStatus StatusAfterCancellation(DownloadStatus current, bool stopping) =>
+        stopping && current != DownloadStatus.Cancelled ? DownloadStatus.Queued : DownloadStatus.Cancelled;
+
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         Stop();
-        _concurrency.Dispose();
-        _queueSignal.Dispose();
+        // Cancellation is asynchronous. A worker's finally still releases its slot
+        // and saves its item, so keep both semaphore and store alive until it exits.
+        Task[] retries;
+        lock (_retryLock) retries = _retryTasks.ToArray();
+        var drain = Task.WhenAll(retries.Append(_processorTask ?? Task.CompletedTask)
+            .Append(_progressPersistTask ?? Task.CompletedTask));
+        _ = drain.ContinueWith(completed =>
+        {
+            if (completed.IsFaulted)
+                Log.Warning(completed.Exception, "DownloadManager shutdown worker failed");
+            _store.Save();
+            _store.Flush();
+            _cts?.Dispose();
+            _concurrency.Dispose();
+            _queueSignal.Dispose();
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         GC.SuppressFinalize(this);
     }
 }

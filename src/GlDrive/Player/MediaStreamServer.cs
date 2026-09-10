@@ -19,6 +19,10 @@ public class MediaStreamServer : IDisposable
     private CancellationTokenSource _cts = new();
     private readonly string _authToken = Guid.NewGuid().ToString("N");
     private int _port;
+    private int _disposed;
+    private readonly GlDrive.Util.BackgroundTasks _workers = new();
+    private readonly SemaphoreSlim _slots = new(8);
+    private Task? _acceptLoop;
 
     public int Port => _port;
     public string BaseUrl => $"http://127.0.0.1:{_port}/";
@@ -39,12 +43,14 @@ public class MediaStreamServer : IDisposable
 
     public void Start()
     {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        if (_listener != null) return;
         _port = FindFreePort();
         _listener = new HttpListener();
         _listener.Prefixes.Add($"http://127.0.0.1:{_port}/");
         _listener.Start();
         Directory.CreateDirectory(LibraryPath);
-        _ = AcceptLoop();
+        _acceptLoop = AcceptLoop();
         Log.Information("Media stream server started on port {Port}, library at {Path}", _port, LibraryPath);
     }
 
@@ -62,7 +68,13 @@ public class MediaStreamServer : IDisposable
             try
             {
                 var ctx = await _listener!.GetContextAsync();
-                _ = Task.Run(() => HandleRequest(ctx));
+                if (!_slots.Wait(0)) { ctx.Response.StatusCode = 503; ctx.Response.Close(); continue; }
+                if (!_workers.TryRun(async () =>
+                {
+                    using var abort = _cts.Token.Register(() => { try { ctx.Response.Abort(); } catch { } });
+                    try { await HandleRequest(ctx); }
+                    finally { _slots.Release(); }
+                })) { _slots.Release(); ctx.Response.Close(); }
             }
             catch (ObjectDisposedException) { break; }
             catch (HttpListenerException) { break; }
@@ -86,7 +98,7 @@ public class MediaStreamServer : IDisposable
                 ctx.Response.Close();
                 return;
             }
-            Log.Debug("Media stream request: {Method} {Url}", ctx.Request.HttpMethod, rawUrl);
+            Log.Debug("Media stream request: {Method} {Path}", ctx.Request.HttpMethod, ctx.Request.Url?.AbsolutePath);
 
             if (rawUrl.StartsWith("/rar-stream"))
                 await HandleRarStream(ctx);
@@ -103,8 +115,14 @@ public class MediaStreamServer : IDisposable
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            Log.Warning(ex, "Media stream request error for {Url}", ctx.Request.RawUrl);
+            Log.Warning(ex, "Media stream request error for {Path}", ctx.Request.Url?.AbsolutePath);
             try { ctx.Response.StatusCode = 500; ctx.Response.Close(); } catch { }
+        }
+        finally
+        {
+            // Disconnects and cancellation also need to release the HTTP response.
+            try { ctx.Response.Close(); }
+            catch (Exception ex) { Log.Debug(ex, "Media stream response close failed"); }
         }
     }
 
@@ -216,7 +234,7 @@ public class MediaStreamServer : IDisposable
 
         // Stream from FTP, saving to library if streaming from the start
         Directory.CreateDirectory(releaseDir);
-        var tempFile = cachedFile + ".partial";
+        var tempFile = cachedFile + $".{Guid.NewGuid():N}.partial";
         FileStream? saveStream = null;
 
         // Only save to library when streaming from the beginning (no seek)
@@ -234,10 +252,14 @@ public class MediaStreamServer : IDisposable
             await using var conn = await server.Pool.Borrow(streamCts.Token);
             // Reset timeout — streaming can take as long as needed
             streamCts.CancelAfter(Timeout.InfiniteTimeSpan);
+            conn.Poisoned = true;
+            var reachesEnd = !range.IsPartial || range.End == fileSize - 1;
             if (server.Pool.UseCpsv)
-                await StreamCpsv(conn.Client, remotePath, range.Offset, range.Length, ctx.Response.OutputStream, _cts.Token, saveStream);
+                await StreamCpsv(conn.Client, remotePath, range.Offset, range.Length, ctx.Response.OutputStream, _cts.Token, saveStream, reachesEnd);
             else
-                await StreamStandard(conn.Client, remotePath, range.Offset, range.Length, ctx.Response.OutputStream, _cts.Token, saveStream);
+                await StreamStandard(conn.Client, remotePath, range.Offset, range.Length, ctx.Response.OutputStream, _cts.Token, saveStream, reachesEnd);
+
+            conn.Poisoned = !reachesEnd;
 
             // Rename .partial to final when complete
             if (saveStream != null)
@@ -246,8 +268,7 @@ public class MediaStreamServer : IDisposable
                 saveStream = null;
                 try
                 {
-                    if (File.Exists(cachedFile)) File.Delete(cachedFile);
-                    File.Move(tempFile, cachedFile);
+                    File.Move(tempFile, cachedFile, overwrite: true);
                     moveSucceeded = true;
                     Log.Information("Cached video to library: {Path}", cachedFile);
                 }
@@ -342,7 +363,8 @@ public class MediaStreamServer : IDisposable
 
                     // Stream to disk — use CPSV for BNC servers, standard PASV otherwise
                     await using var conn = await server.Pool!.Borrow(_cts.Token);
-                    var tempPath = localPath + ".partial";
+                    conn.Poisoned = true;
+                    var tempPath = localPath + $".{Guid.NewGuid():N}.partial";
                     try
                     {
                         await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None);
@@ -358,15 +380,18 @@ public class MediaStreamServer : IDisposable
                             while ((rd = await ftpStream.ReadAsync(buf, _cts.Token)) > 0)
                                 await fileStream.WriteAsync(buf.AsMemory(0, rd), _cts.Token);
                             ftpStream.Close();
-                            await conn.Client.GetReply(_cts.Token);
+                            CpsvDataHelper.ValidateCompletion(await conn.Client.GetReply(_cts.Token));
                         }
+                        if (vol.Size >= 0 && fileStream.Length != vol.Size)
+                            throw new EndOfStreamException("RAR volume length differs from listing.");
+                        conn.Poisoned = false;
                     }
                     catch
                     {
                         try { File.Delete(tempPath); } catch { }
                         throw;
                     }
-                    File.Move(tempPath, localPath);
+                    File.Move(tempPath, localPath, overwrite: true);
                     Log.Information("Volume {Num}/{Total} downloaded", volNum, volumes.Count);
                 }
                 else
@@ -408,21 +433,14 @@ public class MediaStreamServer : IDisposable
             // Stream decompressed entry to HTTP AND save to library
             await using var entryStream = videoEntry.OpenEntryStream();
             FileStream? saveStream = null;
-            var tempExtractPath = extractedPath + ".partial";
+            var tempExtractPath = extractedPath + $".{Guid.NewGuid():N}.partial";
             try { saveStream = new FileStream(tempExtractPath, FileMode.Create, FileAccess.Write, FileShare.None); }
             catch (Exception ex) { Log.Warning(ex, "Could not create extraction cache file"); }
 
             try
             {
-                var buffer = new byte[256 * 1024];
-                int read;
-                while ((read = await entryStream.ReadAsync(buffer, _cts.Token)) > 0)
-                {
-                    await ctx.Response.OutputStream.WriteAsync(buffer.AsMemory(0, read), _cts.Token);
-                    await ctx.Response.OutputStream.FlushAsync(_cts.Token);
-                    if (saveStream != null)
-                        await saveStream.WriteAsync(buffer.AsMemory(0, read), _cts.Token);
-                }
+                await GlDrive.Util.StreamTransfer.CopyAsync(entryStream, ctx.Response.OutputStream,
+                    videoEntry.Size, _cts.Token, saveStream);
 
                 // Finalize the cached extraction
                 if (saveStream != null)
@@ -431,8 +449,7 @@ public class MediaStreamServer : IDisposable
                     saveStream = null;
                     try
                     {
-                        if (File.Exists(extractedPath)) File.Delete(extractedPath);
-                        File.Move(tempExtractPath, extractedPath);
+                        File.Move(tempExtractPath, extractedPath, overwrite: true);
                         Log.Information("Cached extracted video to library: {Path}", extractedPath);
 
                         // Delete RAR volumes now that we have the extracted video
@@ -642,33 +659,25 @@ public class MediaStreamServer : IDisposable
     }
 
     private static async Task StreamStandard(AsyncFtpClient client, string remotePath, long offset,
-        long? maxBytes, Stream output, CancellationToken ct, FileStream? saveStream = null)
+        long? maxBytes, Stream output, CancellationToken ct, FileStream? saveStream = null, bool reachesEnd = true)
     {
         await using var ftpStream = await client.OpenRead(remotePath, FtpDataType.Binary, offset, token: ct);
 
-        var buffer = new byte[256 * 1024];
-        var remaining = maxBytes ?? long.MaxValue;
-        int read;
-        while (remaining > 0 &&
-               (read = await ftpStream.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)), ct)) > 0)
-        {
-            await output.WriteAsync(buffer.AsMemory(0, read), ct);
-            await output.FlushAsync(ct);
-            if (saveStream != null)
-                await saveStream.WriteAsync(buffer.AsMemory(0, read), ct);
-            remaining -= read;
-        }
-
+        await GlDrive.Util.StreamTransfer.CopyAsync(ftpStream, output, maxBytes, ct, saveStream);
         ftpStream.Close();
-        await client.GetReply(ct);
+        if (reachesEnd) CpsvDataHelper.ValidateCompletion(await client.GetReply(ct));
     }
 
     private static async Task StreamCpsv(AsyncFtpClient client, string remotePath, long offset,
-        long? maxBytes, Stream output, CancellationToken ct, FileStream? saveStream = null)
+        long? maxBytes, Stream output, CancellationToken ct, FileStream? saveStream = null, bool reachesEnd = true)
     {
-        await client.Execute("TYPE I", ct);
+        var type = await client.Execute("TYPE I", ct);
+        if (!type.Success) throw new IOException($"TYPE failed: {type.Code}");
         if (offset > 0)
-            await client.Execute($"REST {offset}", ct);
+        {
+            var rest = await client.Execute($"REST {offset}", ct);
+            if (rest.Code != "350") throw new IOException($"REST failed: {rest.Code}");
+        }
 
         var tcp = await CpsvDataHelper.OpenDataTcp(client, ct);
         try
@@ -680,22 +689,10 @@ public class MediaStreamServer : IDisposable
             var ssl = await CpsvDataHelper.NegotiateDataTls(tcp.GetStream(), ct);
             try
             {
-                var buffer = new byte[256 * 1024];
-                var remaining = maxBytes ?? long.MaxValue;
-                int read;
-                while (remaining > 0 &&
-                       (read = await ssl.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)), ct)) > 0)
-                {
-                    await output.WriteAsync(buffer.AsMemory(0, read), ct);
-                    await output.FlushAsync(ct);
-                    if (saveStream != null)
-                        await saveStream.WriteAsync(buffer.AsMemory(0, read), ct);
-                    remaining -= read;
-                }
-
+                await GlDrive.Util.StreamTransfer.CopyAsync(ssl, output, maxBytes, ct, saveStream);
                 ssl.Close();
                 tcp.Close();
-                await CpsvDataHelper.CompleteDataSequence(client, ct);
+                if (reachesEnd) await CpsvDataHelper.CompleteDataSequence(client, ct);
             }
             finally { ssl.Dispose(); }
         }
@@ -757,7 +754,7 @@ public class MediaStreamServer : IDisposable
                 continue;
             }
 
-            var tempPath = localPath + ".partial";
+            var tempPath = localPath + $".{Guid.NewGuid():N}.partial";
 
             // Retry the entire borrow+download up to 5 times
             for (int attempt = 0; ; attempt++)
@@ -790,6 +787,7 @@ public class MediaStreamServer : IDisposable
                 try
                 {
                     await using var _ = conn;
+                    conn.Poisoned = true;
                     await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None);
 
                     if (server.Pool!.UseCpsv)
@@ -815,14 +813,18 @@ public class MediaStreamServer : IDisposable
                             onProgress?.Invoke($"Downloading {i + 1}/{volumes.Count} — {pct}%", pct);
                         }
                         ftpStream.Close();
-                        await conn.Client.GetReply(ct);
+                        CpsvDataHelper.ValidateCompletion(await conn.Client.GetReply(ct));
                     }
+                    if (vol.Size >= 0 && fileStream.Length != vol.Size)
+                        throw new EndOfStreamException("RAR volume length differs from listing.");
+                    conn.Poisoned = false;
                     break;
                 }
-                catch (OperationCanceledException) { throw; }
+                catch (OperationCanceledException) { try { File.Delete(tempPath); } catch { } throw; }
                 catch (Exception ex) when (attempt < 4 && !ct.IsCancellationRequested)
                 {
                     try { File.Delete(tempPath); } catch { }
+                    downloadedBytes = volStartBytes;
                     onProgress?.Invoke($"Download failed ({ex.Message}), retry {attempt + 1}/5...", totalBytes > 0 ? (int)(downloadedBytes * 100 / totalBytes) : 0);
                     Log.Warning(ex, "Volume download attempt {Attempt} failed, retrying", attempt + 1);
                     await Task.Delay(TimeSpan.FromSeconds(2 * (attempt + 1)), ct);
@@ -833,7 +835,7 @@ public class MediaStreamServer : IDisposable
                     throw;
                 }
             }
-            File.Move(tempPath, localPath);
+            File.Move(tempPath, localPath, overwrite: true);
 
             // Signal VLC to start playing as soon as first .rar volume is downloaded
             if (!playSignaled && localPath.EndsWith(".rar", StringComparison.OrdinalIgnoreCase))
@@ -849,6 +851,7 @@ public class MediaStreamServer : IDisposable
 
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _cts.Cancel();
         // Stop then Dispose the listener to release the HTTP.sys URL reservation; null-guarded so a
         // double Dispose is a no-op (Stop/Close already torn down → _listener is null on the 2nd call).
@@ -858,7 +861,10 @@ public class MediaStreamServer : IDisposable
         // equivalent to Close(), so Close alone is the correct teardown. Null-guarded for double-Dispose.
         try { _listener?.Close(); } catch { }
         _listener = null;
-        _cts.Dispose();
+        var drain = Task.WhenAll(_acceptLoop ?? Task.CompletedTask, _workers.StopAsync());
+        try { drain.Wait(TimeSpan.FromSeconds(3)); } catch { }
+        _ = drain.ContinueWith(_ => { _cts.Dispose(); _slots.Dispose(); },
+            CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         GC.SuppressFinalize(this);
     }
 }

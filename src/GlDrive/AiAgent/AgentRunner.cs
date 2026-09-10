@@ -23,6 +23,7 @@ public sealed class AgentRunner : IDisposable
 
     private readonly SemaphoreSlim _runGate = new(1, 1);
     private Timer? _timer;
+    private int _disposed;
     private DateTime _lastRunUtc = DateTime.MinValue;
     // Consecutive transient run failures (model HTTP errors / exceptions). Drives
     // exponential retry backoff in ScheduleNext — the old flat 1-min catch-up retry
@@ -90,7 +91,8 @@ public sealed class AgentRunner : IDisposable
     public void Abort()
     {
         Stop();
-        _activeRunCts?.Cancel();
+        try { _activeRunCts?.Cancel(); }
+        catch (ObjectDisposedException) { } // Run finished between capture and cancellation.
     }
 
     public Task RunNowAsync() => RunOnceAsync(manualTrigger: true);
@@ -104,6 +106,7 @@ public sealed class AgentRunner : IDisposable
 
     private void ScheduleNext()
     {
+        if (Volatile.Read(ref _disposed) != 0) return;
         _timer?.Dispose();
         var cfg = _getConfig().Agent;
         if (!cfg.Enabled) return;
@@ -133,6 +136,7 @@ public sealed class AgentRunner : IDisposable
 
     private async Task RunOnceAsync(bool manualTrigger = false)
     {
+        if (Volatile.Read(ref _disposed) != 0) return;
         if (!await _runGate.WaitAsync(0))
         {
             Log.Information("AgentRunner: run already in progress; skipping trigger (manual={Manual})", manualTrigger);
@@ -140,6 +144,7 @@ public sealed class AgentRunner : IDisposable
         }
 
         _activeRunCts = new CancellationTokenSource();
+        if (Volatile.Read(ref _disposed) != 0) _activeRunCts.Cancel();
         var ct = _activeRunCts.Token;
         var runId = Guid.NewGuid().ToString();
         var started = DateTime.Now;
@@ -150,7 +155,13 @@ public sealed class AgentRunner : IDisposable
 
         try
         {
-            var cfg = _getConfig();
+            ct.ThrowIfCancellationRequested();
+            AgentConfigCommit.Recover(_configFilePath, _aiDataRoot, _audit);
+            var baseline = File.ReadAllText(_configFilePath);
+            // Work from the same detached snapshot used by the prompt and compare-and-save.
+            var cfg = JsonSerializer.Deserialize<AppConfig>(baseline,
+                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })
+                ?? throw new IOException("Configuration is null");
             if (!cfg.Agent.Enabled && !manualTrigger)
             {
                 status = "disabled";
@@ -172,7 +183,7 @@ public sealed class AgentRunner : IDisposable
             var frozenPaths = _freeze.All.Select(e => e.Path).ToList();
 
             JsonNode? configNode;
-            try { configNode = JsonNode.Parse(File.ReadAllText(_configFilePath)); }
+            try { configNode = JsonNode.Parse(baseline); }
             catch (Exception ex)
             {
                 status = "failed-config-read";
@@ -241,18 +252,16 @@ public sealed class AgentRunner : IDisposable
 
             bool dryRun = cfg.Agent.DryRunsRemaining > 0;
 
-            var applyReport = _applier.Apply(outcome.Result.Changes, cfg, cfg.Agent, runId, dryRun);
-            var suggestionReport = _applier.Apply(outcome.Result.Suggestions, cfg, cfg.Agent, runId, dryRun: true);
-
-            if (!dryRun) _saveConfig(cfg);
-
+            ct.ThrowIfCancellationRequested();
+            var auditRows = new List<AuditRow>();
+            var applyReport = _applier.Apply(outcome.Result.Changes, cfg, cfg.Agent, runId, dryRun,
+                auditRows.Add, configOnly: true);
+            var suggestionReport = _applier.Apply(outcome.Result.Suggestions, cfg, cfg.Agent, runId, dryRun: true,
+                auditRows.Add, configOnly: true);
+            if (cfg.Agent.DryRunsRemaining > 0) cfg.Agent.DryRunsRemaining--;
+            ct.ThrowIfCancellationRequested();
+            AgentConfigCommit.Commit(_configFilePath, baseline, cfg, auditRows, _aiDataRoot, _saveConfig, _audit);
             _memo.Save(outcome.Result.MemoUpdate);
-
-            if (cfg.Agent.DryRunsRemaining > 0)
-            {
-                cfg.Agent.DryRunsRemaining -= 1;
-                _saveConfig(cfg);
-            }
 
             var footer =
                 $"\n\n---\n_Tokens: {outcome.InputTokens} in / {outcome.OutputTokens} out — est. ${outcome.EstimatedCostUsd:F3}_\n" +
@@ -273,7 +282,6 @@ public sealed class AgentRunner : IDisposable
         }
         finally
         {
-            _runGate.Release();
             _activeRunCts?.Dispose();
             _activeRunCts = null;
             // Persist on EVERY exit, not just the success path. The failure count is the state
@@ -295,6 +303,7 @@ public sealed class AgentRunner : IDisposable
             }
             catch (Exception ex) { Log.Debug(ex, "ai-briefs prune failed"); }
             Log.Information("AgentRunner run {Id} finished status={Status}", runId, status);
+            _runGate.Release();
         }
     }
 
@@ -370,13 +379,14 @@ public sealed class AgentRunner : IDisposable
                 ["utc"] = _lastRunUtc.ToString("O"),
                 ["consecutiveFailures"] = _consecutiveFailedRuns,
             };
-            File.WriteAllText(LastRunPath, obj.ToJsonString());
+            GlDrive.Util.SecureFile.WriteAllTextRestricted(LastRunPath, obj.ToJsonString());
         }
         catch { }
     }
 
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         Abort();  // app is shutting down — full cancel is OK
         SystemEvents.PowerModeChanged -= OnPower;
         SystemEvents.TimeChanged -= OnTimeChanged;

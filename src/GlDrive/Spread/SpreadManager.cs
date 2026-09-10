@@ -23,7 +23,8 @@ public class SpreadManager : IDisposable
     private readonly Lock _lock = new();
     private readonly SpreadPoolRecoveryLoop _poolRecovery = new();
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _poolInitGates = new();
-    private bool _disposed;
+    private volatile bool _disposed;
+    private readonly GlDrive.Util.BackgroundTasks _workers = new();
 
     // Global per-server transfer-gate (v2.4: Option A). Each FXP transfer
     // acquires BOTH src and dst gates before STOR. Without this, concurrent
@@ -326,6 +327,7 @@ public class SpreadManager : IDisposable
         IReadOnlyList<string> serverIds, SpreadMode mode,
         string? knownSourceServerId = null, string? knownSourcePath = null)
     {
+        if (_disposed) return null;
         // Sanitize inputs
         releaseName = SanitizeFtpPath(releaseName);
         section = SanitizeFtpPath(section);
@@ -452,17 +454,22 @@ public class SpreadManager : IDisposable
         };
         job.ServerConfigResolver = id => _config.Servers.FirstOrDefault(s => s.Id == id);
 
-        lock (_lock) _activeJobs.Add(job);
+        lock (_lock)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _activeJobs.Add(job);
+        }
         JobStarted?.Invoke(job);
 
         var sids = serverIds;
-        _ = Task.Run(async () =>
+        _workers.TryRun(async () =>
         {
             try
             {
                 // Re-initialize dead spread pools before running.
                 // Pools die when all connections are poisoned/discarded (GnuTLS crashes,
                 // network errors) and there's no keepalive/reconnect for spread pools.
+                if (_disposed) return;
                 await ReinitDeadPools(sids);
 
                 // Re-capture pool snapshot AFTER reinit — ReinitDeadPools may have
@@ -488,6 +495,7 @@ public class SpreadManager : IDisposable
 
                 job.UpdatePools(fresh);
 
+                if (_disposed) return;
                 await job.RunAsync();
             }
             catch (Exception ex)
@@ -726,7 +734,7 @@ public class SpreadManager : IDisposable
         // Pre-check: rules evaluation + metadata filter happen async (metadata
         // filter may do an HTTP call). Fire and forget — TryAutoRace stays sync
         // for its callers, but the gating runs in the background.
-        _ = Task.Run(async () =>
+        _workers.TryRun(async () =>
         {
             try
             {
@@ -1294,53 +1302,43 @@ public class SpreadManager : IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
-        _poolRecovery.Dispose();
-
-        // Flush speed history before tearing down — debounced saves may have
-        // skipped recent transfers, and the whole point of persistence is
-        // having the data available on next launch.
-        try { _speedTracker.Save(); }
-        catch (Exception ex) { Log.Debug(ex, "SpreadManager.Dispose: speed-tracker save failed"); }
-
-        foreach (var gate in _serverGates.Values)
-        {
-            try { gate.Dispose(); } catch { }
-        }
-        _serverGates.Clear();
-
-        _metadataFilter.Dispose();
-
         List<SpreadJob> jobs;
         lock (_lock)
         {
+            if (_disposed) return;
+            _disposed = true;
             jobs = _activeJobs.ToList();
-            _activeJobs.Clear();
             _raceQueue.Clear();
         }
-        foreach (var job in jobs)
-            job.Stop();
-
-        List<FtpConnectionPool> pools;
-        lock (_lock)
+        _poolRecovery.Dispose();
+        foreach (var job in jobs) job.Stop();
+        var workers = _workers.StopAsync();
+        var teardown = Task.Run(async () =>
         {
-            pools = _spreadPools.Values.ToList();
-            _spreadPools.Clear();
-            _factories.Clear();
-        }
-
-        // Dispose pools on the threadpool and block briefly — fire-and-forget
-        // risks leaving native GnuTLS sessions open past process exit.
-        Task.Run(async () =>
-        {
-            foreach (var pool in pools)
+            try { await workers; }
+            catch (Exception ex) { Log.Warning(ex, "Spread worker failed while stopping"); }
+            try { _speedTracker.Save(); }
+            catch (Exception ex) { Log.Warning(ex, "Final speed history save failed"); }
+            foreach (var gate in _serverGates.Values) gate.Dispose();
+            _serverGates.Clear();
+            _metadataFilter.Dispose();
+            List<FtpConnectionPool> pools;
+            lock (_lock)
+            {
+                pools = _spreadPools.Values.ToList();
+                _spreadPools.Clear();
+                _factories.Clear();
+                _activeJobs.Clear();
+            }
+            await Task.WhenAll(pools.Select(async pool =>
             {
                 try { await pool.DisposeAsync(); }
-                catch (Exception ex) { Log.Debug(ex, "Spread pool dispose error"); }
-            }
-        }).Wait(TimeSpan.FromSeconds(5));
-
+                catch (Exception ex) { Log.Warning(ex, "Spread pool dispose error"); }
+            }));
+        });
+        // If a native call outlives the deadline, its gates remain valid until it exits.
+        if (!teardown.Wait(TimeSpan.FromSeconds(5)))
+            Log.Warning("Spread shutdown exceeded 5 seconds; resource disposal deferred until workers exit");
         GC.SuppressFinalize(this);
     }
 

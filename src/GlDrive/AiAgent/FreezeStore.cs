@@ -10,6 +10,7 @@ public sealed class FreezeStore
     private readonly string _path;
     private List<FreezeEntry> _entries = new();
     private readonly object _lock = new();
+    private bool _loadFailed;
     public event Action? Changed;
 
     public FreezeStore(string aiDataRoot)
@@ -26,7 +27,7 @@ public sealed class FreezeStore
     public bool IsFrozen(string pointer)
     {
         lock (_lock)
-            return _entries.Any(e => JsonPointer.IsAncestorOrSelf(e.Path, pointer));
+            return _loadFailed || _entries.Any(e => JsonPointer.IsAncestorOrSelf(e.Path, pointer));
     }
 
     public void Freeze(string pointer, string? note = null)
@@ -34,9 +35,11 @@ public sealed class FreezeStore
         bool changed;
         lock (_lock)
         {
+            if (_loadFailed) throw new IOException("Freeze settings could not be read; restore frozen.json before editing restrictions.");
             if (_entries.Any(e => e.Path == pointer)) return;
-            _entries.Add(new FreezeEntry(pointer, DateTime.UtcNow.ToString("O"), note));
-            Save();
+            var next = _entries.Append(new FreezeEntry(pointer, DateTime.UtcNow.ToString("O"), note)).ToList();
+            Save(next);
+            _entries = next;
             changed = true;
         }
         if (changed) Changed?.Invoke();
@@ -47,9 +50,10 @@ public sealed class FreezeStore
         bool changed;
         lock (_lock)
         {
-            var removed = _entries.RemoveAll(e => e.Path == pointer);
-            changed = removed > 0;
-            if (changed) Save();
+            if (_loadFailed) throw new IOException("Freeze settings could not be read; restore frozen.json before editing restrictions.");
+            var next = _entries.Where(e => e.Path != pointer).ToList();
+            changed = next.Count != _entries.Count;
+            if (changed) { Save(next); _entries = next; }
         }
         if (changed) Changed?.Invoke();
     }
@@ -58,26 +62,24 @@ public sealed class FreezeStore
     {
         try
         {
-            if (File.Exists(_path))
-                _entries = JsonSerializer.Deserialize<List<FreezeEntry>>(File.ReadAllText(_path)) ?? new();
+            _entries = JsonSerializer.Deserialize<List<FreezeEntry>>(File.ReadAllText(_path))
+                ?? throw new JsonException("Missing freeze entries");
+            if (_entries.Any(e => e == null || e.Path == null)) throw new JsonException("Invalid freeze entry");
         }
+        catch (FileNotFoundException) { }
+        catch (DirectoryNotFoundException) { }
         catch (Exception ex)
         {
-            Serilog.Log.Warning(ex, "FreezeStore load failed; treating as empty");
+            Serilog.Log.Warning(ex, "FreezeStore load failed; freezing all AI changes until restored");
+            _loadFailed = true;
             _entries = new();
         }
     }
 
-    private void Save()
+    private void Save(List<FreezeEntry> entries)
     {
-        try
-        {
-            File.WriteAllText(_path,
-                JsonSerializer.Serialize(_entries, new JsonSerializerOptions { WriteIndented = true }));
-        }
-        catch (Exception ex)
-        {
-            Serilog.Log.Warning(ex, "FreezeStore save failed");
-        }
+        Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
+        GlDrive.Util.SecureFile.WriteAllTextRestricted(_path,
+            JsonSerializer.Serialize(entries, new JsonSerializerOptions { WriteIndented = true }));
     }
 }

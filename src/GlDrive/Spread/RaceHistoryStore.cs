@@ -196,11 +196,11 @@ public class RaceHistoryStore
         }
         try
         {
-            List<RaceHistoryItem> snapshot;
-            lock (_lock) snapshot = _items.ToList();
-            var json = JsonSerializer.Serialize(snapshot, new JsonSerializerOptions { WriteIndented = false });
             Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
-            SecureFile.WriteAllTextRestricted(_filePath, json);
+            SecureFile.WriteAllTextRestricted(_filePath, () =>
+            {
+                lock (_lock) return JsonSerializer.Serialize(_items);
+            });
         }
         catch (Exception ex)
         {

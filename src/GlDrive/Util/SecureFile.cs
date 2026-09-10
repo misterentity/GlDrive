@@ -14,11 +14,21 @@ public static class SecureFile
     // because the .tmp staging file was locked or the rename clashed.
     private static readonly ConcurrentDictionary<string, object> _locks = new(StringComparer.OrdinalIgnoreCase);
 
+    internal static void WithPathLock(string path, Action action)
+    {
+        lock (_locks.GetOrAdd(Path.GetFullPath(path), _ => new object())) action();
+    }
+
     public static void WriteAllTextRestricted(string path, string content)
+        => WriteAllTextRestricted(path, () => content);
+
+    /// <summary>Capture mutable state only after earlier saves to this path finish.</summary>
+    public static void WriteAllTextRestricted(string path, Func<string> createContent)
     {
         var gate = _locks.GetOrAdd(Path.GetFullPath(path), _ => new object());
         lock (gate)
         {
+            var content = createContent();
             // Belt-and-suspenders: even with the per-path lock, another GlDrive process
             // (e.g. a watchdog-spawned restart still draining writes) or AV/OneDrive
             // can hold the file briefly. Retry with short backoff before giving up.
@@ -56,27 +66,28 @@ public static class SecureFile
         security.AddAccessRule(new FileSystemAccessRule(
             currentUser, FileSystemRights.FullControl, AccessControlType.Allow));
 
-        var tempPath = path + ".tmp";
-        if (File.Exists(tempPath))
+        var tempPath = path + $".{Guid.NewGuid():N}.tmp";
+        try
         {
-            try { File.Delete(tempPath); } catch { }
-        }
+            using (var fs = System.IO.FileSystemAclExtensions.Create(
+                new System.IO.FileInfo(tempPath),
+                FileMode.CreateNew,
+                FileSystemRights.WriteData | FileSystemRights.ReadData,
+                FileShare.None,
+                bufferSize: 4096,
+                FileOptions.None,
+                security))
+            using (var writer = new StreamWriter(fs, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
+            {
+                writer.Write(content);
+                writer.Flush();
+                fs.Flush(flushToDisk: true);
+            }
 
-        using (var fs = System.IO.FileSystemAclExtensions.Create(
-            new System.IO.FileInfo(tempPath),
-            FileMode.CreateNew,
-            FileSystemRights.WriteData | FileSystemRights.ReadData,
-            FileShare.None,
-            bufferSize: 4096,
-            FileOptions.None,
-            security))
-        using (var writer = new StreamWriter(fs, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
-        {
-            writer.Write(content);
+            File.Move(tempPath, path, overwrite: true);
+            RestrictFilePermissions(path);
         }
-
-        File.Move(tempPath, path, overwrite: true);
-        RestrictFilePermissions(path);
+        finally { if (File.Exists(tempPath)) File.Delete(tempPath); }
     }
 
     public static void RestrictFilePermissions(string path)

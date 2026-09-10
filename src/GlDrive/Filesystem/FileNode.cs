@@ -5,15 +5,17 @@ namespace GlDrive.Filesystem;
 
 public class FileNode : IDisposable
 {
-    public string RemotePath { get; }
+    public string RemotePath { get; internal set; }
+    internal object SyncRoot { get; } = new();
+    internal int OpenCount { get; set; }
     public bool IsDirectory { get; set; }
     public long FileSize { get; set; }
     public DateTime CreationTime { get; set; }
     public DateTime LastWriteTime { get; set; }
     public DateTime LastAccessTime { get; set; }
 
-    // Read buffer — whole-file download on first Read
-    public MemoryStream? ReadBuffer { get; set; }
+    // Reads are staged on disk, keeping large media files out of the managed heap.
+    public Stream? ReadBuffer { get; set; }
     public bool ReadBufferLoaded { get; set; }
 
     // Write buffer — accumulate writes, upload on Cleanup
@@ -54,7 +56,7 @@ public class FileNode : IDisposable
     /// <summary>
     /// Returns the active write stream, spilling to disk if memory exceeds threshold.
     /// </summary>
-    public Stream GetOrCreateWriteStream()
+    public Stream GetOrCreateWriteStream(long requiredLength = 0)
     {
         if (WriteBufferFile != null)
             return WriteBufferFile;
@@ -63,14 +65,25 @@ public class FileNode : IDisposable
             WriteBuffer = new MemoryStream();
 
         // Check if we need to spill to temp file
-        if (SpillThresholdBytes > 0 && WriteBuffer.Length >= SpillThresholdBytes)
+        if (SpillThresholdBytes > 0 && Math.Max(WriteBuffer.Length, requiredLength) >= SpillThresholdBytes)
         {
             var tempPath = Path.Combine(Path.GetTempPath(), $"gldrive-{Guid.NewGuid():N}.tmp");
             var fs = new FileStream(tempPath, FileMode.Create, FileAccess.ReadWrite, FileShare.None, 81920, FileOptions.DeleteOnClose);
 
             // Copy existing memory buffer to file
-            WriteBuffer.Position = 0;
-            WriteBuffer.CopyTo(fs);
+            var position = WriteBuffer.Position;
+            try
+            {
+                WriteBuffer.Position = 0;
+                WriteBuffer.CopyTo(fs);
+                fs.Position = position;
+            }
+            catch
+            {
+                fs.Dispose();
+                WriteBuffer.Position = position;
+                throw;
+            }
             WriteBuffer.Dispose();
             WriteBuffer = null;
 
@@ -80,6 +93,89 @@ public class FileNode : IDisposable
         }
 
         return WriteBuffer;
+    }
+
+    /// <summary>
+    /// Seed the first write with the existing file, even if the caller never read
+    /// it. An empty write buffer would otherwise replace untouched bytes with zeros
+    /// or truncate them when uploaded. A created/overwritten file already has a
+    /// write buffer, so it never fetches old contents.
+    /// </summary>
+    internal Stream PrepareWriteStream(Func<byte[]> loadExisting, long requiredLength = 0)
+    {
+        if (WriteBuffer != null || WriteBufferFile != null)
+            return GetOrCreateWriteStream(requiredLength);
+
+        using var downloaded = !ReadBufferLoaded && FileSize != 0
+            ? new MemoryStream(loadExisting(), writable: false) : null;
+        var existing = ReadBufferLoaded ? ReadBuffer : downloaded;
+        var position = existing?.Position ?? 0;
+        try
+        {
+            var stream = GetOrCreateWriteStream(Math.Max(requiredLength, existing?.Length ?? 0));
+            if (existing != null)
+            {
+                existing.Position = 0;
+                existing.CopyTo(stream);
+            }
+            return stream;
+        }
+        catch
+        {
+            WriteBuffer?.Dispose();
+            WriteBuffer = null;
+            WriteBufferFile?.Dispose();
+            WriteBufferFile = null;
+            WriteBufferTempPath = null;
+            throw;
+        }
+        finally
+        {
+            if (existing != null) existing.Position = position;
+        }
+    }
+
+    internal void LoadReadBuffer(Action<Stream> download)
+    {
+        if (ReadBufferLoaded) return;
+        var path = Path.Combine(Path.GetTempPath(), $"gldrive-read-{Guid.NewGuid():N}.tmp");
+        var stream = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite,
+            FileShare.None, 81920, FileOptions.DeleteOnClose);
+        try
+        {
+            download(stream);
+            stream.Position = 0;
+            ReadBuffer = stream;
+            FileSize = stream.Length;
+            ReadBufferLoaded = true;
+        }
+        catch { stream.Dispose(); throw; }
+    }
+
+    internal Stream PrepareWriteStream(Action<Stream> download, long requiredLength = 0)
+    {
+        if (WriteBuffer == null && WriteBufferFile == null && !ReadBufferLoaded && FileSize != 0)
+            LoadReadBuffer(download);
+        return PrepareWriteStream(() => throw new InvalidOperationException("Read buffer was not loaded"), requiredLength);
+    }
+
+    internal string? PreserveFailedWrite(string recoveryDirectory, string volume)
+    {
+        if (!IsDirty) return null;
+        var source = GetWriteStreamForUpload();
+        if (source == null) return null;
+        Directory.CreateDirectory(recoveryDirectory);
+        var path = Path.Combine(recoveryDirectory, Guid.NewGuid().ToString("N") + ".data");
+        // Establish a restricted ACL before copying file content.
+        GlDrive.Util.SecureFile.WriteAllTextRestricted(path, "");
+        using (var target = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.None))
+        {
+            source.CopyTo(target);
+            target.Flush(flushToDisk: true);
+        }
+        GlDrive.Util.SecureFile.WriteAllTextRestricted(path + ".json",
+            System.Text.Json.JsonSerializer.Serialize(new { Volume = volume, RemotePath, Length = source.Length, SavedUtc = DateTime.UtcNow }));
+        return path;
     }
 
     /// <summary>

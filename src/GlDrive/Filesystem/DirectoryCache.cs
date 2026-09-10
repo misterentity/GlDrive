@@ -28,8 +28,8 @@ public class DirectoryCache
 
     public DirectoryCache(int ttlSeconds = 30, int maxEntries = 500)
     {
-        _ttlSeconds = ttlSeconds;
-        _maxEntries = maxEntries;
+        _ttlSeconds = Math.Max(0, ttlSeconds);
+        _maxEntries = Math.Max(1, maxEntries);
     }
 
     public bool TryGet(string remotePath, out FtpListItem[] items)
@@ -44,15 +44,25 @@ public class DirectoryCache
                 return true;
             }
 
+            // Without a refresher, a stale hit would prevent the caller from ever
+            // fetching a fresh listing. Capture the delegate before scheduling it.
+            var refresh = BackgroundRefresh;
+            if (refresh == null)
+            {
+                Interlocked.Increment(ref _misses);
+                items = [];
+                return false;
+            }
+
             // Stale-while-revalidate: return expired data immediately, trigger async refresh
-            if (BackgroundRefresh != null && _refreshing.TryAdd(key, 0))
+            if (_refreshing.TryAdd(key, 0))
             {
                 Interlocked.Increment(ref _staleHits);
                 _ = Task.Run(async () =>
                 {
                     try
                     {
-                        await BackgroundRefresh(remotePath);
+                        await refresh(remotePath);
                     }
                     catch (Exception ex)
                     {
@@ -150,14 +160,15 @@ public class DirectoryCache
 
     private void EvictOldest()
     {
-        // Find the oldest quarter by scanning once (O(n) instead of O(n log n) sort)
+        // Evict the oldest quarter. Always remove at least one entry, including
+        // when the configured capacity is smaller than four.
         var entries = _cache.ToArray();
         Array.Sort(entries, (a, b) => a.Value.CachedAt.CompareTo(b.Value.CachedAt));
-        var toRemove = entries.Length / 4;
+        var toRemove = Math.Min(entries.Length, Math.Max(1, entries.Length / 4));
         for (int i = 0; i < toRemove; i++)
         {
-            _cache.TryRemove(entries[i].Key, out _);
-            Interlocked.Increment(ref _evictions);
+            if (_cache.TryRemove(entries[i].Key, out _))
+                Interlocked.Increment(ref _evictions);
         }
     }
 
@@ -166,7 +177,8 @@ public class DirectoryCache
         if (string.IsNullOrEmpty(path)) return "/";
         path = path.Replace('\\', '/');
         if (!path.StartsWith('/')) path = "/" + path;
-        return path.TrimEnd('/');
+        path = path.TrimEnd('/');
+        return path.Length == 0 ? "/" : path;
     }
 
     private class CachedDirectory
@@ -185,12 +197,18 @@ public class DirectoryCache
             Items = items;
             CachedAt = DateTime.UtcNow;
             _nameLookup = new Lazy<Dictionary<string, FtpListItem>>(
-                () => Items.ToDictionary(i => i.Name, StringComparer.Ordinal),
+                () =>
+                {
+                    var lookup = new Dictionary<string, FtpListItem>(StringComparer.Ordinal);
+                    foreach (var item in Items)
+                        lookup.TryAdd(item.Name, item);
+                    return lookup;
+                },
                 LazyThreadSafetyMode.ExecutionAndPublication);
         }
 
         public bool IsExpired(int ttlSeconds) =>
-            (DateTime.UtcNow - CachedAt).TotalSeconds > ttlSeconds;
+            ttlSeconds <= 0 || (DateTime.UtcNow - CachedAt).TotalSeconds >= ttlSeconds;
 
         public FtpListItem? FindByName(string name)
         {

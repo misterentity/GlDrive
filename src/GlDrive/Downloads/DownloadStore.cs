@@ -11,6 +11,8 @@ public class DownloadStore
     private readonly string _filePath;
     private volatile bool _savePending;
     private readonly Timer _debounceTimer;
+    private readonly object _saveLock = new();
+    private bool _closed;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -59,32 +61,45 @@ public class DownloadStore
     /// <summary>Schedule a debounced save (writes to disk after 2s of inactivity).</summary>
     private void ScheduleSave()
     {
-        _savePending = true;
-        _debounceTimer.Change(2000, Timeout.Infinite);
+        lock (_saveLock)
+        {
+            if (_closed) return;
+            _savePending = true;
+            _debounceTimer.Change(2000, Timeout.Infinite);
+        }
     }
 
     /// <summary>Immediate save — used for critical state changes (add, remove, complete).</summary>
     public void Save()
     {
-        _savePending = false;
-        _debounceTimer.Change(Timeout.Infinite, Timeout.Infinite);
-        FlushSave();
+        lock (_saveLock)
+        {
+            if (_closed) return;
+            _debounceTimer.Change(Timeout.Infinite, Timeout.Infinite);
+            FlushSave();
+        }
     }
 
     private void FlushSave()
     {
-        _savePending = false;
-        List<DownloadItem> snapshot;
-        lock (_lock) snapshot = _items.ToList();
-        try
+        // Order snapshot creation AND persistence together. Locking just the final
+        // file write allowed an older timer snapshot to overwrite a newer Save().
+        lock (_saveLock)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
-            var json = JsonSerializer.Serialize(snapshot, JsonOptions);
-            SecureFile.WriteAllTextRestricted(_filePath, json);
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Failed to save downloads");
+            if (_closed) return;
+            try
+            {
+                string json;
+                lock (_lock) json = JsonSerializer.Serialize(_items, JsonOptions);
+                Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
+                SecureFile.WriteAllTextRestricted(_filePath, json);
+                _savePending = false;
+            }
+            catch (Exception ex)
+            {
+                _savePending = true;
+                Log.Error(ex, "Failed to save downloads");
+            }
         }
     }
 
@@ -143,7 +158,12 @@ public class DownloadStore
     /// <summary>Flush any pending save before shutdown.</summary>
     public void Flush()
     {
-        if (_savePending) FlushSave();
-        _debounceTimer.Dispose();
+        lock (_saveLock)
+        {
+            if (_closed) return;
+            if (_savePending) FlushSave();
+            _closed = true;
+            _debounceTimer.Dispose();
+        }
     }
 }

@@ -142,12 +142,12 @@
                             <StackPanel Orientation="Horizontal">
                                 <Ellipse Width="6" Height="6" Fill="{DynamicResource GoodBrush}"
                                          VerticalAlignment="Center" Margin="0,0,5,0"/>
-                                <TextBlock Text="TLS 1.2 // PROT P" Style="{DynamicResource TagTextStyle}"
+                                <TextBlock Text="FTPS" Style="{DynamicResource TagTextStyle}"
                                            Foreground="{DynamicResource GoodBrush}"/>
                             </StackPanel>
                         </Border>
                         <Border Style="{DynamicResource TagAccentStyle}" Padding="7,2">
-                            <TextBlock Text="FXP RELAY ACTIVE" Style="{DynamicResource TagTextStyle}"
+                            <TextBlock Text="FXP" Style="{DynamicResource TagTextStyle}"
                                        Foreground="{DynamicResource AccentBrush}"/>
                         </Border>
                     </StackPanel>
@@ -182,7 +182,7 @@
             </TabItem>
 
             <!-- Overview Tab -->
-            <TabItem x:Name="OverviewTab">
+            <TabItem x:Name="OverviewTab" AutomationProperties.Name="Overview">
                 <TabItem.Header>
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -545,7 +545,7 @@
             </TabItem>
 
             <!-- Notifications Tab -->
-            <TabItem>
+            <TabItem AutomationProperties.Name="Notifications">
                 <TabItem.Header>
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -670,7 +670,7 @@
             </TabItem>
 
             <!-- Wishlist Tab -->
-            <TabItem>
+            <TabItem AutomationProperties.Name="Wishlist">
                 <TabItem.Header>
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -771,7 +771,7 @@
             </TabItem>
 
             <!-- Downloads Tab -->
-            <TabItem>
+            <TabItem AutomationProperties.Name="Downloads">
                 <TabItem.Header>
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -1010,7 +1010,7 @@
             </TabItem>
 
             <!-- Search Tab -->
-            <TabItem>
+            <TabItem AutomationProperties.Name="Search">
                 <TabItem.Header>
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -1222,7 +1222,7 @@
             </TabItem>
 
             <!-- Player Tab -->
-            <TabItem>
+            <TabItem AutomationProperties.Name="Player">
                 <TabItem.Header>
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -1759,7 +1759,7 @@
             </TabItem>
 
             <!-- Upcoming Tab -->
-            <TabItem>
+            <TabItem AutomationProperties.Name="Upcoming">
                 <TabItem.Header>
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -1905,7 +1905,7 @@
             </TabItem>
 
             <!-- Plex Tab -->
-            <TabItem>
+            <TabItem AutomationProperties.Name="Plex">
                 <TabItem.Header>
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -2054,7 +2054,7 @@
             </TabItem>
 
             <!-- IRC Tab -->
-            <TabItem>
+            <TabItem AutomationProperties.Name="IRC">
                 <TabItem.Header>
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -2242,7 +2242,7 @@
             </TabItem>
 
             <!-- PreDB Tab -->
-            <TabItem>
+            <TabItem AutomationProperties.Name="PreDB">
                 <TabItem.Header>
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -2350,7 +2350,7 @@
             </TabItem>
 
             <!-- Spread Tab -->
-            <TabItem x:Name="SpreadTab">
+            <TabItem x:Name="SpreadTab" AutomationProperties.Name="Spread">
                 <TabItem.Header>
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -2757,7 +2757,7 @@
             </TabItem>
 
             <!-- Browse Tab -->
-            <TabItem x:Name="BrowseTab">
+            <TabItem x:Name="BrowseTab" AutomationProperties.Name="Browse">
                 <TabItem.Header>
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -2871,7 +2871,7 @@
             </TabItem>
 
             <!-- Mounts Tab -->
-            <TabItem x:Name="MountsTab">
+            <TabItem x:Name="MountsTab" AutomationProperties.Name="Mounts">
                 <TabItem.Header>
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -3033,7 +3033,7 @@
             </TabItem>
 
             <!-- World Monitor Tab -->
-            <TabItem>
+            <TabItem AutomationProperties.Name="World Monitor">
                 <TabItem.Header>
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -3049,7 +3049,7 @@
             </TabItem>
 
             <!-- Discord Tab -->
-            <TabItem>
+            <TabItem AutomationProperties.Name="Discord">
                 <TabItem.Header>
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -3065,7 +3065,7 @@
             </TabItem>
 
             <!-- Streems Tab -->
-            <TabItem>
+            <TabItem AutomationProperties.Name="Streems">
                 <TabItem.Header>
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -3081,7 +3081,7 @@
             </TabItem>
 
             <!-- AI Agent Tab -->
-            <TabItem>
+            <TabItem AutomationProperties.Name="AI Agent">
                 <TabItem.Header>
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -3123,23 +3123,11 @@
         </Border>
 
         <!-- ============================================================== -->
-        <!-- BOTTOM MARQUEE STRIP (scrolling status feed)                    -->
+        <!-- BOTTOM STATUS STRIP (live status; no simulated metrics)        -->
         <!-- ============================================================== -->
         <Border Grid.Row="3" Background="{DynamicResource MarqueeBackgroundBrush}"
                 BorderBrush="{DynamicResource LineBrush}" BorderThickness="0,1,0,0"
                 ClipToBounds="True">
-            <Border.Resources>
-                <Storyboard x:Key="MarqueeLocalStoryboard" RepeatBehavior="Forever">
-                    <DoubleAnimation Storyboard.TargetName="MarqueeText"
-                                    Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.X)"
-                                    From="0" To="-2400" Duration="0:1:00"/>
-                </Storyboard>
-            </Border.Resources>
-            <Border.Triggers>
-                <EventTrigger RoutedEvent="FrameworkElement.Loaded">
-                    <BeginStoryboard Storyboard="{StaticResource MarqueeLocalStoryboard}"/>
-                </EventTrigger>
-            </Border.Triggers>
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
@@ -3151,23 +3139,26 @@
                             Margin="14,0,0,0">
                     <Ellipse Width="6" Height="6" Fill="{DynamicResource GoodBrush}" Margin="0,0,6,0"
                              VerticalAlignment="Center"/>
-                    <TextBlock Text="SYS:ONLINE" FontFamily="{DynamicResource MonoFontFamily}"
+                    <TextBlock Text="STATUS" FontFamily="{DynamicResource MonoFontFamily}"
                                FontSize="10" Foreground="{DynamicResource TextDimBrush}"/>
                 </StackPanel>
 
-                <Canvas Grid.Column="1" ClipToBounds="True" Margin="18,0">
-                    <TextBlock x:Name="MarqueeText"
-                               Canvas.Top="6"
+                <Grid Grid.Column="1" ClipToBounds="True" Margin="18,0">
+                    <TextBlock VerticalAlignment="Center"
                                TextWrapping="NoWrap"
+                               TextTrimming="CharacterEllipsis"
                                FontFamily="{DynamicResource MonoFontFamily}"
                                FontSize="10"
-                               Foreground="{DynamicResource TextDimBrush}"
-                               Text="[RX] 12.4 MB/s  //  [TX] 4.1 MB/s  //  SITE-A RTT 38ms  //  SITE-B RTT 14ms  //  SPREAD ACTIVE: 4  //  POOL 18/24  //  NODE ENGAGED  //  KERNEL OK  //  [RX] 12.4 MB/s  //  [TX] 4.1 MB/s  //  SITE-A RTT 38ms  //  SITE-B RTT 14ms  //  SPREAD ACTIVE: 4  //  POOL 18/24  //  NODE ENGAGED  //  KERNEL OK  //  ">
-                        <TextBlock.RenderTransform>
-                            <TranslateTransform X="0" Y="0"/>
-                        </TextBlock.RenderTransform>
+                               Foreground="{DynamicResource TextDimBrush}">
+                        <TextBlock.Text>
+                            <MultiBinding StringFormat="{}{0}  //  {1}  //  {2}">
+                                <Binding Path="StatusBarSpeed"/>
+                                <Binding Path="StatusBarQueueCount"/>
+                                <Binding Path="StatusBarConnections"/>
+                            </MultiBinding>
+                        </TextBlock.Text>
                     </TextBlock>
-                </Canvas>
+                </Grid>
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
                             Margin="0,0,14,0">
