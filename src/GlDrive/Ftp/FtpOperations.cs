@@ -29,12 +29,14 @@ public class FtpOperations
 
             return await conn.Client.GetListing(remotePath, FtpListOption.AllFiles, ct);
         }
-        catch
+        catch (Exception ex) when (!FtpCommandRejection.IsClean(ex))
         {
             // Data-channel failure (TLS error, cancellation, IOException, etc.) may leave
             // the control channel with an unread completion reply. Returning this connection
             // to the pool would desync subsequent ops (e.g., CPSV reply reading TYPE A's
-            // stale response). Poison so the pool discards it.
+            // stale response). Poison so the pool discards it. A clean final rejection
+            // (LIST 550 / 425) is exempt: the reply IS the completion, the channel is in
+            // sync, and CpsvDataHelper already cleared its pending mark.
             conn.Poisoned = true;
             throw;
         }
@@ -74,7 +76,7 @@ public class FtpOperations
                 throw new IOException($"Failed to download {remotePath}");
             return ms.ToArray();
         }
-        catch
+        catch (Exception ex) when (!FtpCommandRejection.IsClean(ex))
         {
             conn.Poisoned = true;
             throw;
@@ -95,10 +97,18 @@ public class FtpOperations
     {
         await using var conn = await _pool.Borrow(ct);
         conn.Poisoned = true;
-        if (_pool.UseCpsv)
-            await CpsvDataHelper.DownloadFileToStream(conn.Client, remotePath, destination, null, ct);
-        else if (!await conn.Client.DownloadStream(destination, remotePath, token: ct))
-            throw new IOException($"Failed to download {remotePath}");
+        try
+        {
+            if (_pool.UseCpsv)
+                await CpsvDataHelper.DownloadFileToStream(conn.Client, remotePath, destination, null, ct);
+            else if (!await conn.Client.DownloadStream(destination, remotePath, token: ct))
+                throw new IOException($"Failed to download {remotePath}");
+        }
+        catch (Exception ex) when (FtpCommandRejection.IsClean(ex))
+        {
+            conn.Poisoned = false;
+            throw;
+        }
         conn.Poisoned = false;
     }
 
@@ -120,7 +130,7 @@ public class FtpOperations
             if (status != FtpStatus.Success)
                 throw new IOException($"Failed to upload {remotePath}: {status}");
         }
-        catch
+        catch (Exception ex) when (!FtpCommandRejection.IsClean(ex))
         {
             conn.Poisoned = true;
             throw;
@@ -162,7 +172,7 @@ public class FtpOperations
                     throw new IOException($"Failed to upload {remotePath}: {status}");
             }
         }
-        catch
+        catch (Exception ex) when (!FtpCommandRejection.IsClean(ex))
         {
             conn.Poisoned = true;
             throw;

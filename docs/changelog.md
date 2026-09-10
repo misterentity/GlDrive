@@ -66,6 +66,18 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   Both found by mapping subsystem surfaces for a feature, not from any symptom.
 
 ### Fixes
+- **v3.10.112** — a final negative reply to a CPSV data command (`LIST 550`, `RETR 550`,
+  `STOR 425`) no longer quarantines the connection. The "owes a reply" mark set before the
+  data command was only cleared by a successful completion read, so a clean rejection —
+  no transfer began, no `226` will follow, channel in sync — still cost a login on return
+  to the pool. Every hourly search-index build discarded two connections this way (39 of
+  102 poisoned-discards on 2026-09-09), and three `RETR 550` replies from a source that had
+  just moved a release (09-08 03:02) cost six logins against a 4-login cap, cascading into
+  ghost-kills, a 90 s BNC cooldown and four `Pool exhausted` transfer errors. The shared
+  `RejectDataCommand` helper clears the mark for final 4xx/5xx (not 421, not a stale
+  non-negative code); Relay RETR rejection attributes `Neither`; `FtpOperations` and the
+  spread scan exempt clean rejections from poison-on-failure; the index crawl isolates a
+  failed subdirectory and reports the first failure at Information. 20 new tests, 7/7 mutants caught.
 - **v3.10.110** — a rejected Relay RETR now preserves the unused destination login.
   Both CPSV sockets were open, but STOR had not been sent; marking both connections
   poisoned and leaving the destination's pending-sequence marker set discarded a

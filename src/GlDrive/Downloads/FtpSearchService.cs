@@ -275,38 +275,74 @@ public class FtpSearchService : IDisposable
     public async Task RefreshIndex(IProgress<string>? progress = null, CancellationToken ct = default)
     {
         var entries = new List<IndexEntry>();
+        var report = new IndexCrawlReport();
         progress?.Report("Building search index...");
 
         foreach (var searchPath in _searchConfig.SearchPaths)
         {
             var root = searchPath.TrimEnd('/');
-            try
-            {
-                await CrawlForIndex(root, root, 0, _searchConfig.MaxDepth, entries, ct);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                Log.Debug(ex, "Index crawl failed for {Path}", root);
-            }
+            await CrawlForIndex(ListViaPool, root, root, 0, _searchConfig.MaxDepth, entries, report, ct);
         }
 
         lock (_indexLock)
             _index = entries;
 
         progress?.Report($"Index built: {entries.Count} entries");
-        Log.Information("Search index built with {Count} entries", entries.Count);
+        if (report.Failed > 0)
+            Log.Information("Search index built with {Count} entries — {Failed} directory listing(s) failed, first {Path}: {Error}",
+                entries.Count, report.Failed, report.FirstFailedPath, report.FirstError);
+        else
+            Log.Information("Search index built with {Count} entries", entries.Count);
     }
 
-    private async Task CrawlForIndex(
-        string path, string searchRoot,
-        int depth, int maxDepth, List<IndexEntry> entries, CancellationToken ct)
+    internal delegate Task<FtpListItem[]> DirectoryLister(string path, CancellationToken ct);
+
+    /// <summary>How many listings a crawl lost, and the first one, for the build summary line.</summary>
+    internal sealed class IndexCrawlReport
+    {
+        public int Failed { get; private set; }
+        public string? FirstFailedPath { get; private set; }
+        public string? FirstError { get; private set; }
+
+        public void Record(string path, Exception ex)
+        {
+            Failed++;
+            if (FirstFailedPath != null) return;
+            FirstFailedPath = path;
+            FirstError = ex.Message;
+        }
+    }
+
+    private async Task<FtpListItem[]> ListViaPool(string path, CancellationToken ct)
     {
         // Borrow per-listing so we don't hold a connection for the entire crawl
+        await using var conn = await _pool.Borrow(ct);
+        return await ListDirect(conn.Client, path, ct);
+    }
+
+    /// <summary>
+    /// Crawls <paramref name="path"/> to <paramref name="maxDepth"/>. A listing that
+    /// fails (a release the site moved between the parent and child listings, a
+    /// denied directory) costs only its own subtree and is recorded in
+    /// <paramref name="report"/>; before v3.10.112 it aborted the whole search root,
+    /// and the failure was logged at Debug against an Information sink, so the hourly
+    /// pair of quarantined connections it caused had no visible explanation.
+    /// Cancellation still propagates.
+    /// </summary>
+    internal static async Task CrawlForIndex(
+        DirectoryLister list, string path, string searchRoot,
+        int depth, int maxDepth, List<IndexEntry> entries, IndexCrawlReport report, CancellationToken ct)
+    {
         FtpListItem[] items;
-        await using (var conn = await _pool.Borrow(ct))
+        try
         {
-            items = await ListDirect(conn.Client, path, ct);
+            items = await list(path, ct);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            report.Record(path, ex);
+            return;
         }
 
         foreach (var item in items)
@@ -328,7 +364,7 @@ public class FtpSearchService : IDisposable
             });
 
             if (depth < maxDepth)
-                await CrawlForIndex(item.FullName, searchRoot, depth + 1, maxDepth, entries, ct);
+                await CrawlForIndex(list, item.FullName, searchRoot, depth + 1, maxDepth, entries, report, ct);
         }
     }
 
@@ -524,7 +560,7 @@ public class FtpSearchService : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private class IndexEntry
+    internal sealed class IndexEntry
     {
         public string Name { get; set; } = "";
         public string NormalizedName { get; set; } = "";

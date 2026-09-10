@@ -1790,7 +1790,7 @@ public class SpreadJob : IDisposable
                 conn.Poisoned = true;
                 throw;
             }
-            catch (IOException)
+            catch (IOException ex) when (!FtpCommandRejection.IsClean(ex))
             {
                 conn.Poisoned = true;
                 throw;
@@ -3074,6 +3074,11 @@ public class SpreadJob : IDisposable
             case FxpFaultSide.Dest:
                 if (dstConn != null) dstConn.Poisoned = true;
                 Log.Debug("Poison attribution: dest only (FaultSide=Dest)");
+                break;
+            case FxpFaultSide.Neither:
+                // Clean protocol rejection before any transfer began — both control
+                // channels answered in sync. Spending a login here is pure loss.
+                Log.Debug("Poison attribution: neither (clean rejection before transfer)");
                 break;
             default: // None or Both — ambiguous, poison both
                 if (srcConn != null) srcConn.Poisoned = true;
