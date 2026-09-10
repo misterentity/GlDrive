@@ -546,7 +546,8 @@ public class FxpTransfer
                     // Clears the mark OpenDataTcp set: the aborted RETR's reply has
                     // now been consumed, so src is back in sync and reusable. If ABOR
                     // throws, the mark deliberately stays set and the pool discards.
-                    await CpsvDataHelper.CompleteDataSequence(src, ct);
+                    // ABOR's legitimate reply is a 426 — never validate it.
+                    await CpsvDataHelper.CompleteDataSequence(src, ct, validate: false);
                 }
                 catch (Exception abortEx)
                 {
@@ -632,8 +633,12 @@ public class FxpTransfer
                 // mark. A raw GetReply here would leave BOTH connections flagged
                 // after every SUCCESSFUL relay and the pool would discard them on
                 // return — the v3.10.14 shape (~2,871 needless quarantines/day).
+                // The dest is the receiver of a STOR whose bytes we already flushed;
+                // glftpd answers its data-close with `426 Data Connection: Success.`
+                // on every relay — validating that discarded one dest login per
+                // successful file (v3.10.112 first run). Source RETR stays strict.
                 var srcComplete = await CpsvDataHelper.CompleteDataSequence(src, ct);
-                var dstComplete = await CpsvDataHelper.CompleteDataSequence(dst, ct);
+                var dstComplete = await CpsvDataHelper.CompleteDataSequence(dst, ct, validate: false);
                 Log.Debug("Relay complete: src={SrcCode}, dst={DstCode}", srcComplete.Code, dstComplete.Code);
             }
             catch (Exception replyEx) when (totalRelayed > 0)
