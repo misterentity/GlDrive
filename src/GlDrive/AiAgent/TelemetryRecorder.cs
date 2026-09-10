@@ -19,17 +19,28 @@ public sealed class TelemetryRecorder : IDisposable
     private readonly int _maxFileMB;
     private readonly Dictionary<TelemetryStream, StreamWriterTask> _writers = new();
     private readonly Dictionary<TelemetryStream, int> _drops = new();
+    private readonly object _dropLock = new();
+    private readonly CancellationTokenSource _cts = new();
+    private int _disposed;
     private DateTime _lastDropWarnUtc = DateTime.MinValue;
 
     public TelemetryRecorder(string appDataRoot, int maxFileMB)
+        : this(appDataRoot, maxFileMB,
+            (path, text, ct) => File.AppendAllTextAsync(path, text, FileEncoding, ct))
+    {
+    }
+
+    internal TelemetryRecorder(string appDataRoot, int maxFileMB,
+        Func<string, string, CancellationToken, Task> append, int queueCapacity = 2048)
     {
         _root = Path.Combine(appDataRoot, "ai-data");
         Directory.CreateDirectory(_root);
         _maxFileMB = maxFileMB;
         foreach (TelemetryStream s in Enum.GetValues<TelemetryStream>())
         {
-            _writers[s] = new StreamWriterTask(s, _root);
             _drops[s] = 0;
+            _writers[s] = new StreamWriterTask(s, _root, append, queueCapacity,
+                count => RecordDrops(s, count), _cts.Token);
         }
     }
 
@@ -57,10 +68,12 @@ public sealed class TelemetryRecorder : IDisposable
     /// </summary>
     internal static readonly Encoding FileEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
 
-    internal static bool IsAcceptableSize(string json) => json.Length <= MaxEventBytes;
+    internal static bool IsAcceptableSize(string json) =>
+        json.Length <= MaxEventBytes && FileEncoding.GetByteCount(json) <= MaxEventBytes;
 
     public void Record<T>(TelemetryStream stream, T evt) where T : TelemetryEnvelope
     {
+        if (Volatile.Read(ref _disposed) != 0) return;
         try
         {
             var json = JsonSerializer.Serialize(evt, evt.GetType(), JsonOpts);
@@ -70,13 +83,13 @@ public sealed class TelemetryRecorder : IDisposable
                 // Debug line would be invisible (the Serilog sink runs at Information).
                 Log.Warning("Telemetry event dropped: {Stream} serialized to {Bytes} bytes, over the {Max}-byte cap. "
                           + "This indicates a pathological field value upstream.",
-                    stream, json.Length, MaxEventBytes);
+                    stream, FileEncoding.GetByteCount(json), MaxEventBytes);
+                RecordDrops(stream, 1);
                 return;
             }
             if (!_writers[stream].TryEnqueue(json))
             {
-                Interlocked.Increment(ref CollectionsMarshal_GetValueRef(_drops, stream));
-                WarnDropsOnce();
+                RecordDrops(stream, 1);
             }
         }
         catch (Exception ex)
@@ -85,63 +98,115 @@ public sealed class TelemetryRecorder : IDisposable
         }
     }
 
-    private void WarnDropsOnce()
+    private void RecordDrops(TelemetryStream stream, int count)
     {
-        var now = DateTime.UtcNow;
-        if ((now - _lastDropWarnUtc).TotalMinutes < 5) return;
-        _lastDropWarnUtc = now;
-        Log.Warning("Telemetry drops: {Drops}", string.Join(",", _drops.Select(kv => $"{kv.Key}={kv.Value}")));
+        string summary;
+        lock (_dropLock)
+        {
+            _drops[stream] += count;
+            var now = DateTime.UtcNow;
+            if ((now - _lastDropWarnUtc).TotalMinutes < 5) return;
+            _lastDropWarnUtc = now;
+            summary = string.Join(",", _drops.Select(kv => $"{kv.Key}={kv.Value}"));
+        }
+        Log.Warning("Telemetry drops: {Drops}", summary);
     }
 
-    public Dictionary<TelemetryStream, int> GetDropCounts() => new(_drops);
+    public Dictionary<TelemetryStream, int> GetDropCounts()
+    {
+        lock (_dropLock) return new(_drops);
+    }
 
     public void Dispose()
     {
-        foreach (var w in _writers.Values) w.Dispose();
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        // Complete every stream first, then allow all queues to drain in parallel.
+        // Cancelling first used to discard accepted events during a normal exit.
+        foreach (var w in _writers.Values) w.Complete();
+        var drain = Task.WhenAll(_writers.Values.Select(w => w.Completion));
+        try
+        {
+            if (!drain.Wait(TimeSpan.FromSeconds(2)))
+            {
+                Log.Warning("Telemetry shutdown drain timed out; cancelling remaining writes");
+                _cts.Cancel();
+            }
+        }
+        catch (Exception ex) { Log.Warning(ex, "Telemetry shutdown drain failed"); }
+        // A timed-out write can still be using the token. Dispose its source only
+        // after the pumps finish, without extending the shutdown deadline.
+        _ = drain.ContinueWith(_ => _cts.Dispose(), CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 
-    private static ref int CollectionsMarshal_GetValueRef(Dictionary<TelemetryStream, int> dict, TelemetryStream key)
-        => ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(dict, key, out _);
-
-    private sealed class StreamWriterTask : IDisposable
+    private sealed class StreamWriterTask
     {
-        private readonly Channel<string> _channel = Channel.CreateBounded<string>(
-            new BoundedChannelOptions(2048)
-            {
-                FullMode = BoundedChannelFullMode.DropNewest,
-                SingleReader = true
-            });
+        private readonly Channel<string> _channel;
         private readonly Task _pump;
-        private readonly CancellationTokenSource _cts = new();
+        private readonly CancellationToken _ct;
+        private readonly Func<string, string, CancellationToken, Task> _append;
+        private readonly Action<int> _recordDrops;
         private readonly TelemetryStream _stream;
         private readonly string _root;
 
-        public StreamWriterTask(TelemetryStream stream, string root)
+        public StreamWriterTask(TelemetryStream stream, string root,
+            Func<string, string, CancellationToken, Task> append, int queueCapacity,
+            Action<int> recordDrops, CancellationToken ct)
         {
             _stream = stream; _root = root;
+            _append = append;
+            _recordDrops = recordDrops;
+            _ct = ct;
+            // TryWrite stays non-blocking and returns false at capacity. DropNewest
+            // silently evicts a previously accepted row while returning true.
+            _channel = Channel.CreateBounded<string>(new BoundedChannelOptions(queueCapacity)
+            {
+                FullMode = BoundedChannelFullMode.Wait,
+                SingleReader = true
+            });
             _pump = Task.Run(PumpAsync);
         }
 
         public bool TryEnqueue(string line) => _channel.Writer.TryWrite(line);
+        public Task Completion => _pump;
+        public void Complete() => _channel.Writer.TryComplete();
 
         private async Task PumpAsync()
         {
             try
             {
-                while (await _channel.Reader.WaitToReadAsync(_cts.Token))
+                var batch = new StringBuilder();
+                while (await _channel.Reader.WaitToReadAsync(_ct))
                 {
-                    while (_channel.Reader.TryRead(out var line))
+                    _ct.ThrowIfCancellationRequested();
+                    batch.Clear();
+                    var count = 0;
+                    // One open/append/close per bounded batch, rather than per row.
+                    while (count < 64 && batch.Length < MaxEventBytes && _channel.Reader.TryRead(out var line))
                     {
-                        try
-                        {
-                            var path = Path.Combine(_root, FileName(DateTime.Now));
-                            await File.AppendAllTextAsync(path, line + "\n", FileEncoding, _cts.Token);
-                        }
-                        catch (Exception ex) { Log.Debug(ex, "telemetry write fail {Stream}", _stream); }
+                        batch.Append(line).Append('\n');
+                        count++;
+                    }
+                    try
+                    {
+                        var path = Path.Combine(_root, FileName(DateTime.Now));
+                        await _append(path, batch.ToString(), _ct).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        _recordDrops(count);
+                        Log.Debug(ex, "telemetry write fail {Stream}", _stream);
+                        if (_ct.IsCancellationRequested) break;
                     }
                 }
             }
             catch (OperationCanceledException) { /* shutdown */ }
+            finally
+            {
+                var abandoned = 0;
+                while (_channel.Reader.TryRead(out _)) abandoned++;
+                if (abandoned > 0) _recordDrops(abandoned);
+            }
         }
 
         private string FileName(DateTime d)
@@ -165,11 +230,5 @@ public sealed class TelemetryRecorder : IDisposable
             return $"{prefix}-{d:yyyyMMdd}.jsonl";
         }
 
-        public void Dispose()
-        {
-            _channel.Writer.TryComplete();
-            try { _cts.Cancel(); _pump.Wait(TimeSpan.FromSeconds(2)); } catch { }
-            _cts.Dispose();
-        }
     }
 }

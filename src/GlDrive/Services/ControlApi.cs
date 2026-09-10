@@ -1,4 +1,5 @@
 using System.Net;
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using GlDrive.Config;
@@ -43,6 +44,12 @@ public sealed class ControlApi : IDisposable
     private HttpListener? _listener;
     private CancellationTokenSource? _cts;
     private Task? _loop;
+    internal const int MaxConcurrentRequests = 16;
+    private readonly SemaphoreSlim _requestSlots = new(MaxConcurrentRequests);
+    private readonly ConcurrentDictionary<HttpListenerContext, TaskCompletionSource> _requests = new();
+    private int _disposed;
+    internal TimeSpan RequestTimeout { get; set; } = TimeSpan.FromSeconds(15);
+    internal int ActiveRequestCount => _requests.Count;
 
     public ControlApi(AppConfig config, Func<SpreadManager?> getSpread,
         Func<IReadOnlyList<string>> getConnectedServerIds)
@@ -70,6 +77,8 @@ public sealed class ControlApi : IDisposable
 
     public void Start()
     {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        if (_listener != null) return;
         if (!_config.ControlApi.Enabled) return;
         if (string.IsNullOrWhiteSpace(_config.ControlApi.Token))
         {
@@ -88,6 +97,7 @@ public sealed class ControlApi : IDisposable
         {
             // Most often HTTP.SYS refusing the namespace reservation, or the port is taken.
             Log.Error(ex, "Control API failed to bind {Prefix} — control surface unavailable", prefix);
+            _listener?.Close();
             _listener = null;
             return;
         }
@@ -106,11 +116,42 @@ public sealed class ControlApi : IDisposable
             catch (Exception) when (ct.IsCancellationRequested) { return; }
             catch (Exception ex) { Log.Debug(ex, "Control API accept failed"); continue; }
 
-            _ = Task.Run(() => Handle(ctx), ct);
+            if (!_requestSlots.Wait(0))
+            {
+                try { ctx.Response.StatusCode = 503; ctx.Response.Close(); }
+                catch (Exception ex) { Log.Debug(ex, "Control API overload response failed"); }
+                continue;
+            }
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _requests[ctx] = completion;
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    deadline.CancelAfter(RequestTimeout);
+                    // Closing the context also interrupts HTTP.SYS reads that do not
+                    // promptly honor managed cancellation.
+                    using var abort = deadline.Token.Register(() =>
+                    {
+                        try { ctx.Response.Abort(); }
+                        catch (Exception ex) { Log.Debug(ex, "Control API abort failed"); }
+                    });
+                    await Handle(ctx, deadline.Token);
+                }
+                finally
+                {
+                    try { ctx.Response.Close(); }
+                    catch (Exception ex) { Log.Debug(ex, "Control API response close failed"); }
+                    _requestSlots.Release();
+                    completion.TrySetResult();
+                    _requests.TryRemove(ctx, out _);
+                }
+            });
         }
     }
 
-    private async Task Handle(HttpListenerContext ctx)
+    private async Task Handle(HttpListenerContext ctx, CancellationToken ct)
     {
         try
         {
@@ -144,7 +185,7 @@ public sealed class ControlApi : IDisposable
             // (now the router) only ever sees an already-authenticated, already-loopback request.
             if (_routes.TryMatch(method, path, out var handler, out var parameters))
             {
-                await handler!(ControlRequest.FromContext(ctx, path, parameters));
+                await handler!(ControlRequest.FromContext(ctx, path, parameters, ct));
                 return;
             }
 
@@ -156,6 +197,7 @@ public sealed class ControlApi : IDisposable
 
             await Respond(ctx, 404, new { error = "not found", code = "not_found", path });
         }
+        catch (Exception) when (ct.IsCancellationRequested) { }
         catch (Exception ex)
         {
             Log.Debug(ex, "Control API request failed");
@@ -204,9 +246,20 @@ public sealed class ControlApi : IDisposable
 
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         try { _cts?.Cancel(); } catch { }
         try { _listener?.Stop(); _listener?.Close(); } catch { }
-        try { _loop?.Wait(TimeSpan.FromSeconds(2)); } catch { }
-        _cts?.Dispose();
+        var drain = Task.Run(async () =>
+        {
+            if (_loop != null) await _loop;
+            await Task.WhenAll(_requests.Values.Select(r => r.Task));
+        });
+        try { drain.Wait(TimeSpan.FromSeconds(2)); }
+        catch (Exception ex) { Log.Debug(ex, "Control API request drain failed"); }
+        _ = drain.ContinueWith(_ =>
+        {
+            _cts?.Dispose();
+            _requestSlots.Dispose();
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 }

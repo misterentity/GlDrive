@@ -6,11 +6,13 @@ on:
     paths:
       - 'src/**'
       - 'installer/**'
+      - 'GlDrive.sln'
       - '.github/workflows/ci.yml'
   pull_request:
     paths:
       - 'src/**'
       - 'installer/**'
+      - 'GlDrive.sln'
       - '.github/workflows/ci.yml'
   workflow_dispatch:
 
@@ -24,17 +26,16 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
-          dotnet-quality: 'preview'
 
-      # Unit tests only need the pure-logic surface of GlDrive; the test
-      # project references GlDrive.csproj, so this restores + builds both.
+      # Tests cover pure logic, persistence, and isolated loopback HTTP requests.
+      # The test project references GlDrive.csproj, restoring/building both.
       # WinFsp/GnuTLS native bits come from NuGet (winfsp.net, FluentFTP.GnuTLS)
       # and aren't exercised by the tests (no mount / no live FTP).
       - name: Restore
         run: dotnet restore src/GlDrive.Tests/GlDrive.Tests.csproj -warnaserror:NU1901,NU1902,NU1903,NU1904
 
       - name: Build (Release)
-        run: dotnet build src/GlDrive.Tests/GlDrive.Tests.csproj -c Release --no-restore
+        run: dotnet build GlDrive.sln -c Release --no-restore
 
       - name: Test
         run: dotnet test src/GlDrive.Tests/GlDrive.Tests.csproj -c Release --no-build --logger "console;verbosity=normal"

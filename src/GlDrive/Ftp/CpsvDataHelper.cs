@@ -69,8 +69,15 @@ public static class CpsvDataHelper
     internal static async Task<FtpReply> CompleteDataSequence(AsyncFtpClient client, CancellationToken ct)
     {
         var reply = await client.GetReply(ct);
+        ValidateCompletion(reply);
         EndDataSequence(client);
         return reply;
+    }
+
+    internal static void ValidateCompletion(FtpReply reply)
+    {
+        if (reply.Code is not ("226" or "250"))
+            throw new IOException($"FTP transfer did not complete: {reply.Code} {reply.Message}");
     }
 
     /// <summary>

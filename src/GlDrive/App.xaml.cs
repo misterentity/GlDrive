@@ -592,11 +592,11 @@ public partial class App
         SectionActivityRollup = null;
         TelemetryRetention?.Dispose();
         TelemetryRetention = null;
-        TelemetryRecorder?.Dispose();
-        TelemetryRecorder = null;
         _controlApi?.Dispose();
         _controlApi = null;
         _serverManager?.Dispose();
+        TelemetryRecorder?.Dispose();
+        TelemetryRecorder = null;
         _taskbarIcon?.Dispose();
 
         // Remove only the crash marker this instance created, and do it while the

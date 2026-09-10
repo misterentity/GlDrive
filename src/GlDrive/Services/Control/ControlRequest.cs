@@ -32,21 +32,23 @@ public sealed class ControlRequest
     private readonly HttpListenerContext? _ctx;
     private readonly IReadOnlyDictionary<string, string> _parameters;
     private readonly NameValueCollection _query;
+    private readonly CancellationToken _ct;
 
     public string Path { get; }
 
     private ControlRequest(HttpListenerContext? ctx, string path,
-        IReadOnlyDictionary<string, string> parameters, NameValueCollection query)
+        IReadOnlyDictionary<string, string> parameters, NameValueCollection query, CancellationToken ct = default)
     {
         _ctx = ctx;
         Path = path;
         _parameters = parameters;
         _query = query;
+        _ct = ct;
     }
 
     public static ControlRequest FromContext(HttpListenerContext ctx, string path,
-        IReadOnlyDictionary<string, string> parameters)
-        => new(ctx, path, parameters, ctx.Request.QueryString);
+        IReadOnlyDictionary<string, string> parameters, CancellationToken ct = default)
+        => new(ctx, path, parameters, ctx.Request.QueryString, ct);
 
     /// <summary>Parsing-only instance for unit tests; responding on it throws.</summary>
     public static ControlRequest ForTesting(
@@ -89,7 +91,8 @@ public sealed class ControlRequest
         var total = 0;
         while (total < buffer.Length)
         {
-            var read = await _ctx.Request.InputStream.ReadAsync(buffer.AsMemory(total, buffer.Length - total));
+            var read = await _ctx.Request.InputStream.ReadAsync(buffer.AsMemory(total, buffer.Length - total), _ct)
+                .AsTask().WaitAsync(_ct);
             if (read == 0) break;
             total += read;
         }
@@ -106,7 +109,7 @@ public sealed class ControlRequest
         _ctx.Response.StatusCode = status;
         _ctx.Response.ContentType = "application/json";
         _ctx.Response.ContentLength64 = bytes.Length;
-        await _ctx.Response.OutputStream.WriteAsync(bytes);
+        await _ctx.Response.OutputStream.WriteAsync(bytes, _ct);
         _ctx.Response.Close();
     }
 

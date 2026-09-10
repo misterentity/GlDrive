@@ -2,7 +2,7 @@
 
 **Mount glftpd FTPS servers as native Windows drive letters.** A single tray app for the full site-user workflow — browse in Explorer, auto-download from a wishlist, race releases between sites via FXP, chat on FiSH-encrypted IRC, stream media, watch the PreDB.
 
-Built on .NET 10, WPF, WinFsp, FluentFTP, and GnuTLS. Windows 11, x64. Current version: **3.10.110**.
+Built on .NET 10, WPF, WinFsp, FluentFTP, and GnuTLS. Windows 11, x64. Current version: **3.10.111**.
 
 > **For contributors:** the full architecture reference lives in [docs/](docs/). See [docs/project-overview-pdr.md](docs/project-overview-pdr.md) for the design rationale and [docs/system-architecture.md](docs/system-architecture.md) for Mermaid diagrams and protocol walkthroughs.
 
@@ -158,10 +158,11 @@ git clone https://github.com/misterentity/GlDrive.git
 cd GlDrive
 dotnet build src/GlDrive/GlDrive.csproj
 dotnet run   --project src/GlDrive/GlDrive.csproj
-dotnet test  src/GlDrive.Tests/GlDrive.Tests.csproj   # 740 tests
+dotnet test  src/GlDrive.Tests/GlDrive.Tests.csproj
 ```
 
-The `.sln` file has no project references — always target the `.csproj` directly.
+`GlDrive.sln` includes the app and test projects, so `dotnet build GlDrive.sln` and
+`dotnet test GlDrive.sln` also build and verify the application.
 
 `src/GlDrive.Tests` covers the pure logic: crypto round-trips against known-answer vectors,
 login-gate accounting, spread scoring, zipscript artifact filtering, failure classification,

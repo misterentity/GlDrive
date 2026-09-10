@@ -91,6 +91,17 @@ public class FtpOperations
         return new MemoryStream(data, false);
     }
 
+    public async Task DownloadToStream(string remotePath, Stream destination, CancellationToken ct = default)
+    {
+        await using var conn = await _pool.Borrow(ct);
+        conn.Poisoned = true;
+        if (_pool.UseCpsv)
+            await CpsvDataHelper.DownloadFileToStream(conn.Client, remotePath, destination, null, ct);
+        else if (!await conn.Client.DownloadStream(destination, remotePath, token: ct))
+            throw new IOException($"Failed to download {remotePath}");
+        conn.Poisoned = false;
+    }
+
     public async Task UploadFile(string remotePath, byte[] data, CancellationToken ct = default)
     {
         var conn = await _pool.Borrow(ct);

@@ -22,6 +22,7 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
     private string _spreadStatus = "";
     private SpreadJobVm? _selectedSpreadJob;
     private bool _isRefreshing;
+    private bool _disposed;
 
     // Per-job max-observed speed for adaptive sparkline scaling. Keyed by
     // SpreadJob.Id. Pruned in RefreshFromManager when the job is removed
@@ -118,17 +119,21 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         LoadHistory();
 
         // Subscribe to auto-race detection events from both notification polling and IRC announces
-        _serverManager.NewReleaseDetected += (serverId, serverName, category, release, remotePath) =>
-        {
-            Application.Current?.Dispatcher.BeginInvoke(() =>
-            {
-                AddAutoRaceLog(category, release, serverName, "Detected");
-                AddFeedItem(release, category, "DETECTED", serverName);
-            });
-        };
+        _serverManager.NewReleaseDetected += OnNewReleaseDetected;
 
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _refreshTimer.Tick += (_, _) => SafeRefresh();
+    }
+
+    private void OnNewReleaseDetected(string serverId, string serverName, string category,
+        string release, string remotePath)
+    {
+        Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            if (_disposed) return;
+            AddAutoRaceLog(category, release, serverName, "Detected");
+            AddFeedItem(release, category, "DETECTED", serverName);
+        });
     }
 
     public void RefreshSections()
@@ -790,6 +795,8 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
 
     public void Dispose()
     {
+        _disposed = true;
+        _serverManager.NewReleaseDetected -= OnNewReleaseDetected;
         _refreshTimer.Stop();
         GC.SuppressFinalize(this);
     }

@@ -1,12 +1,14 @@
 using System.IO;
 using System.Text;
 using System.Text.Json;
+using GlDrive.Util;
 using Serilog;
 
 namespace GlDrive.AiAgent;
 
 public class AuditRow
 {
+    public string? Id { get; set; }
     public string Ts { get; set; } = DateTime.UtcNow.ToString("O");
     public string RunId { get; set; } = "";
     public string Category { get; set; } = "";
@@ -66,6 +68,20 @@ public class AuditTrail
                     JsonSerializer.Serialize(row, JsonOpts) + "\n", FileEncoding);
         }
         catch (Exception ex) { Log.Warning(ex, "AuditTrail append failed"); }
+    }
+
+    internal void AppendBatchRequired(IReadOnlyList<AuditRow> rows)
+    {
+        lock (_lock)
+        {
+            var existing = File.Exists(_path) ? File.ReadAllText(_path) : "";
+            var ids = ReadAll().Where(r => r.Id != null).Select(r => r.Id!).ToHashSet();
+            var pending = rows.Where(r => r.Id == null || !ids.Contains(r.Id)).ToList();
+            if (pending.Count == 0) return;
+            var separator = existing.Length > 0 && !existing.EndsWith('\n') ? "\n" : "";
+            SecureFile.WriteAllTextRestricted(_path, existing + separator +
+                string.Join("\n", pending.Select(r => JsonSerializer.Serialize(r, JsonOpts))) + "\n");
+        }
     }
 
     public IEnumerable<AuditRow> ReadAll()
@@ -137,7 +153,7 @@ public class AuditTrail
             if (!updated) return;
             // "\n" to match Append; StringBuilder.AppendLine would emit CRLF and leave
             // the file with mixed line endings after the first undo.
-            File.WriteAllText(_path, string.Join("\n", output) + "\n", FileEncoding);
+            SecureFile.WriteAllTextRestricted(_path, string.Join("\n", output) + "\n");
         }
     }
 }

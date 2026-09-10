@@ -1173,7 +1173,7 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
     private async Task PlayFromFtp(string serverId, string remotePath, string releaseName = "")
     {
         var url = $"{_streamServer!.BaseUrl}stream?token={_streamServer.AuthToken}&server={Uri.EscapeDataString(serverId)}&path={Uri.EscapeDataString(remotePath)}&release={Uri.EscapeDataString(releaseName)}";
-        Log.Information("Playing FTP stream: {Url}", url);
+        Log.Information("Playing FTP stream: {Path} on {Server}", remotePath, serverId);
 
         SaveCurrentPosition();
         _currentReleaseName = releaseName;

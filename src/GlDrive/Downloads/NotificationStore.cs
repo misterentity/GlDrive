@@ -82,16 +82,13 @@ public class NotificationStore
     {
         if (!_persistToDisk) return;
 
-        string json;
-        lock (_lock)
-        {
-            json = JsonSerializer.Serialize(_items, JsonOptions);
-        }
-
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            SecureFile.WriteAllTextRestricted(FilePath, json);
+            SecureFile.WriteAllTextRestricted(FilePath, () =>
+            {
+                lock (_lock) return JsonSerializer.Serialize(_items, JsonOptions);
+            });
         }
         catch (Exception ex)
         {

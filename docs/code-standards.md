@@ -13,7 +13,7 @@ Conventions the GlDrive codebase actually uses. This is a description of the exi
 - **`win-x64`** — no other RID is supported; `RuntimeIdentifier` is hard-pinned in the csproj
 - **Nullable reference types enabled** — treat nullability warnings as errors to avoid
 - **Implicit usings enabled** — don't add `using System;` at the top of every file by hand
-- **No tests.** Changes are verified by building, running, and driving the UI. Don't invent a test project unless it's discussed first
+- **Tests:** use the existing `src/GlDrive.Tests` xUnit project for logic, persistence, and concurrency regressions. Build and exercise the UI for changes involving WPF, WinFsp, or live FTP
 
 ## Project structure
 
@@ -145,7 +145,7 @@ CLAUDE.md at the repo root is the source of truth for Claude-assisted workflows.
 
 ## Things to avoid
 
-- **Do not add tests without discussing first.** The project has deliberately chosen to verify via build+run. Adding a test project changes the CI story and nobody's asking for that yet
+- **Use the existing test project.** Add targeted behavioral regressions for reliability fixes; do not introduce a second test framework or substitute mocked FTP for live protocol verification
 - **Do not introduce new logging frameworks.** Serilog is load-bearing
 - **Do not add mocks for the FTP layer.** CPSV is subtle enough that mocked behavior diverges from real glftpd constantly — if you want to validate FTP code, point it at a test glftpd instance
 - **Do not add `StaticResource` brushes.** See above

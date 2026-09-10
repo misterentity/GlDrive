@@ -148,7 +148,14 @@ Write-Host "`n=== Creating GitHub release $Tag ===" -ForegroundColor Cyan
 
 Push-Location $Root
 try {
-    gh release create $Tag @assets --title $Tag --generate-notes
+    $ReleaseCommit = git rev-parse HEAD
+    if ($LASTEXITCODE -ne 0) { throw 'Could not resolve release commit' }
+    $NotesFile = Join-Path $Root "docs\releases\$Tag.md"
+    if (Test-Path -LiteralPath $NotesFile) {
+        gh release create $Tag @assets --target $ReleaseCommit --title $Tag --notes-file $NotesFile
+    } else {
+        gh release create $Tag @assets --target $ReleaseCommit --title $Tag --generate-notes
+    }
     if ($LASTEXITCODE -ne 0) {
         Write-Error "gh release create failed"
         exit 1

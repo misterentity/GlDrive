@@ -586,12 +586,18 @@ public class ServerManager : IDisposable
 
         foreach (var irc in _ircServices.Values)
         {
-            try { Task.Run(() => irc.StopAsync()).GetAwaiter().GetResult(); } catch { }
+            try { Task.Run(() => irc.StopAsync()).Wait(TimeSpan.FromSeconds(3)); } catch { }
             irc.Dispose();
         }
         _ircServices.Clear();
 
-        UnmountAll();
+        var unmounts = _servers.Values.Select(server => Task.Run(server.UnmountAsync)).ToArray();
+        try
+        {
+            if (!Task.WhenAll(unmounts).Wait(TimeSpan.FromSeconds(10)))
+                Log.Warning("Server shutdown exceeded 10 seconds; remaining teardown continues in background");
+        }
+        catch (Exception ex) { Log.Warning(ex, "Server shutdown failed"); }
         GC.SuppressFinalize(this);
     }
 }

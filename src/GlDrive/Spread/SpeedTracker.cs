@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using GlDrive.Util;
 using Serilog;
 
 namespace GlDrive.Spread;
@@ -92,20 +93,18 @@ public class SpeedTracker
         if (_persistPath == null) return;
         try
         {
-            Dictionary<string, double[]> snapshot;
-            lock (_lock)
-            {
-                snapshot = _speeds.ToDictionary(
-                    kv => $"{kv.Key.src}\t{kv.Key.dst}",
-                    kv => kv.Value.ToArray());
-            }
-
             var dir = Path.GetDirectoryName(_persistPath);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-
-            var tmp = _persistPath + ".tmp";
-            File.WriteAllText(tmp, JsonSerializer.Serialize(snapshot));
-            File.Move(tmp, _persistPath, overwrite: true);
+            SecureFile.WriteAllTextRestricted(_persistPath, () =>
+            {
+                lock (_lock)
+                {
+                    var snapshot = _speeds.ToDictionary(
+                        kv => $"{kv.Key.src}\t{kv.Key.dst}",
+                        kv => kv.Value.ToArray());
+                    return JsonSerializer.Serialize(snapshot);
+                }
+            });
         }
         catch (Exception ex)
         {
