@@ -12,6 +12,11 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.115 — connection health verification (2026-09-11)
+
+- Reject negative or incomplete FTP NOOP replies, verify reconnect health before reporting recovery, and propagate shutdown cancellation without false connection-loss events.
+- Include server and failure reason in connection-monitor diagnostics. Add 11 regression cases and a native FTPS rejection/recovery smoke test. See [release report](releases/v3.10.115.md) for validation and remaining remote-server failures.
+
 ## v3.10 — AI self-tuning revival, extractor & auto-update reliability (2026-07)
 
 ### Features

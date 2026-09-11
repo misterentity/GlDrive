@@ -8,6 +8,7 @@ using GlDrive.Filesystem;
 using GlDrive.Ftp;
 using GlDrive.Tls;
 using GlDrive.Player;
+using GlDrive.Services;
 
 // This harness only connects to the disposable loopback fixture, with an isolated trust store.
 var state = JsonDocument.Parse(File.ReadAllText(args[0])).RootElement;
@@ -18,7 +19,8 @@ var config = new ServerConfig { Name = "Release verification", Connection = new(
 var certs = new CertificateManager(Path.Combine(root, "trusted.json"));
 certs.TrustCertificate($"127.0.0.1:{port}", fingerprint);
 certs.CertificatePrompt += (_, _) => Task.FromResult(false);
-await using var pool = new FtpConnectionPool(new FtpClientFactory(config, certs), 2);
+var factory = new FtpClientFactory(config, certs);
+await using var pool = new FtpConnectionPool(factory, 2);
 using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(90));
 await pool.Initialize(deadline.Token);
 var ftp = new FtpOperations(pool);
@@ -96,6 +98,33 @@ try
     Check(!File.Exists(renamed), "WinFsp delete");
 }
 finally { host.Unmount(); }
+
+// A real FTP rejection is returned normally by FluentFTP.Execute, not thrown.
+// Exercise the monitor loop and recovery against the native FTPS fixture.
+var lost = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+var restored = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+var lossCount = 0;
+var monitor = new ConnectionMonitor(pool, factory, new PoolConfig
+{
+    KeepaliveIntervalSeconds = 1,
+    ReconnectInitialDelaySeconds = 1,
+    ReconnectMaxDelaySeconds = 2
+});
+monitor.ConnectionLost += () => { Interlocked.Increment(ref lossCount); lost.TrySetResult(); };
+monitor.ConnectionRestored += () => restored.TrySetResult();
+File.WriteAllText(Path.Combine(root, "noop-replies"), "");
+File.WriteAllText(Path.Combine(root, "reject-noop-once"), "2");
+monitor.Start();
+try
+{
+    await lost.Task.WaitAsync(TimeSpan.FromSeconds(10));
+    Check(lossCount == 1, "monitor rejects a real negative NOOP reply");
+    await restored.Task.WaitAsync(TimeSpan.FromSeconds(10));
+    Check(File.ReadAllLines(Path.Combine(root, "noop-replies")).SequenceEqual(new[] { "500", "500", "200" }),
+        "monitor waits for a positive NOOP after a rejected reconnect probe");
+}
+finally { await monitor.StopAsync(); }
+Check(lossCount == 1, "monitor shutdown does not report a false connection loss");
 Console.WriteLine("PASS: local native FTPS and WinFsp verification complete");
 
 static void Check(bool success, string step)

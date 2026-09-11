@@ -8,4 +8,6 @@ Run on Windows with .NET 10, installed WinFsp, Python, pyftpdlib and pyOpenSSL. 
 
 The harness checks real GnuTLS/FluentFTP transfers, mounted-file disk buffering, shared open handles, dirty rename and volume flush. It then mounts an unused drive letter to exercise Windows create/write/flush/read/rename/delete through WinFsp. It unmounts its own drive in `finally`.
 
+It also rejects two NOOP probes through the disposable fixture: the monitor must signal connection loss, reject the first reconnect probe, and wait for a positive reply before reporting recovery. Shutdown must not emit another connection-loss event.
+
 This does not exercise a remote glftpd BNC's CPSV behavior or replace an extended live-server soak.

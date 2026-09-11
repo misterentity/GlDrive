@@ -15,7 +15,7 @@ Everything needed to go from a local checkout to a published GitHub Release, and
 - **`gh` CLI** authenticated against the target repo (for `release.ps1`)
 - **PowerShell** — `build.ps1` and `release.ps1` are PowerShell scripts, run them from `powershell -File …`
 
-The solution file `GlDrive.sln` has no embedded project references. Always drive builds against `src/GlDrive/GlDrive.csproj` directly.
+`GlDrive.sln` includes the application and test projects. `dotnet build GlDrive.sln -c Release` builds both.
 
 ## Local dev loop
 
@@ -95,13 +95,14 @@ On top of `build.ps1`, the release script:
 
 1. Reads the version the same way
 2. Fails fast if `gh release view v<version>` finds an existing tag (bump the version)
-3. Invokes `build.ps1`
+3. Verifies the bundled WinFsp MSI pin, runs the Release tests with NuGet vulnerability warnings treated as errors, then invokes `build.ps1`
 4. Verifies both `GlDriveSetup-v<version>.exe` and `GlDrive-v<version>-win-x64.zip` exist
 5. Computes SHA-256 for both files using `System.Security.Cryptography.SHA256` (*not* `Get-FileHash` — this avoids an encoding gotcha the updater hits)
 6. Writes `installer/output/checksums.sha256` in the format `<hash> *<filename>` (GNU coreutils style with the `*` binary-mode marker — `UpdateChecker` depends on this)
-7. Runs `gh release create v<version> <exe> <zip> <checksums.sha256> --title v<version> --generate-notes`
+7. Signs the checksum file with the gitignored RSA private key and includes `checksums.sha256.sig`
+8. Runs `gh release create` targeting the current commit, using `docs/releases/v<version>.md` as release notes when present (otherwise generated notes)
 
-The `--generate-notes` flag pulls the commit log since the previous tag into the GitHub release body; there's no separate release-notes file.
+Standard order: commit and push the reviewed version, verify GitHub CI, then run `powershell -File installer/release.ps1`. Verify the published asset hashes/signature, installed version, control API health, and application logs. Record remaining external failures and the production observation window in the release report.
 
 ### `installer/GlDrive.iss`
 

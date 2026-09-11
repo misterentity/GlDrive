@@ -17,7 +17,7 @@ public class ConnectionMonitor
 
     // Managed timeout for the keepalive NOOP. Kept under FluentFTP.GnuTLS's 15s
     // CommTimeout floor so the health check yields promptly without cancelling the
-    // native recv (see MonitorLoop for why cancelling it is fatal).
+    // native recv (see ProbeConnectionAsync for why cancelling it is fatal).
     private static readonly TimeSpan NoopTimeout = TimeSpan.FromSeconds(10);
 
     public event Action? ConnectionLost;
@@ -49,7 +49,7 @@ public class ConnectionMonitor
             }
             catch (TimeoutException)
             {
-                Log.Warning("ConnectionMonitor stop timed out — abandoning background task");
+                Log.Warning("ConnectionMonitor[{Server}] stop timed out — abandoning background task", _factory.Host);
             }
             catch { }
         }
@@ -73,65 +73,36 @@ public class ConnectionMonitor
                 await Task.Delay(TimeSpan.FromSeconds(_config.KeepaliveIntervalSeconds), ct);
 
                 // Health check via NOOP
-                bool healthy;
+                string? failure = null;
                 try
                 {
-                    await using var conn = await _pool.Borrow(ct);
-                    try
-                    {
-                        // Managed-timeout NOOP with a NON-cancellable underlying read.
-                        // Passing a cancellable token into FluentFTP's read abandons the
-                        // native GnuTLS recv() mid-syscall; if the pool then tears the
-                        // connection down while that recv drains, GnuTlsInternalStream.Read
-                        // faults with an uncatchable AccessViolationException that kills the
-                        // whole process (dominant crash signature, Event Log .NET Runtime
-                        // id 1026). On timeout we leave the read draining (observing its
-                        // exception) and poison the connection so the pool's DEFERRED
-                        // teardown reclaims it only after the recv has finished.
-                        var noop = conn.Client.Execute("NOOP", CancellationToken.None);
-                        var winner = await Task.WhenAny(noop, Task.Delay(NoopTimeout, ct));
-                        if (winner == noop)
-                        {
-                            await noop;          // surface a genuine NOOP failure as unhealthy
-                            healthy = true;
-                        }
-                        else
-                        {
-                            _ = noop.ContinueWith(t => { _ = t.Exception; }, TaskScheduler.Default);
-                            ct.ThrowIfCancellationRequested(); // propagate a real shutdown cancel
-                            conn.Poisoned = true;              // draining recv — defer teardown
-                            healthy = false;
-                        }
-                    }
-                    catch
-                    {
-                        // NOOP failed (dropped / SSL fault). The session may be mid-recv or
-                        // corrupt — poison so the pool discards it via the deferred path
-                        // rather than returning a possibly-live connection for reuse.
-                        conn.Poisoned = true;
-                        healthy = false;
-                    }
+                    await CheckHealthAsync(ct);
                 }
-                catch
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
-                    // Borrow itself failed (pool exhausted / cooldown) — nothing to poison.
-                    healthy = false;
+                    throw;
                 }
+                catch (Exception ex)
+                {
+                    failure = ex.Message;
+                }
+                ct.ThrowIfCancellationRequested();
 
                 // Log periodic metrics every ~5 minutes (10 cycles at 30s interval)
                 if (++_healthCheckCount % 10 == 0)
                     PeriodicMetricsCallback?.Invoke();
 
-                if (healthy && !_wasConnected)
+                if (failure == null && !_wasConnected)
                 {
                     _wasConnected = true;
-                    Log.Information("Connection restored");
+                    Log.Information("ConnectionMonitor[{Server}]: connection restored", _factory.Host);
                     ConnectionRestored?.Invoke();
                 }
-                else if (!healthy && _wasConnected)
+                else if (failure != null && _wasConnected)
                 {
                     _wasConnected = false;
-                    Log.Warning("Connection lost, attempting reconnect...");
+                    Log.Warning("ConnectionMonitor[{Server}]: connection lost ({Reason}), attempting reconnect...",
+                        _factory.Host, failure);
                     ConnectionLost?.Invoke();
                     await AttemptReconnect(ct);
                 }
@@ -142,8 +113,42 @@ public class ConnectionMonitor
             }
             catch (Exception ex)
             {
-                Log.Debug(ex, "Monitor loop error");
+                Log.Debug(ex, "ConnectionMonitor[{Server}]: monitor loop error", _factory.Host);
             }
+        }
+    }
+
+    private async Task CheckHealthAsync(CancellationToken ct)
+    {
+        await using var conn = await _pool.Borrow(ct);
+        await ProbeConnectionAsync(conn, token => conn.Client.Execute("NOOP", token), ct);
+    }
+
+    internal static async Task ProbeConnectionAsync(
+        PooledConnection conn, Func<CancellationToken, Task<FluentFTP.FtpReply>> executeNoop,
+        CancellationToken ct, TimeSpan? timeout = null)
+    {
+        ct.ThrowIfCancellationRequested();
+        Task<FluentFTP.FtpReply>? noop = null;
+        try
+        {
+            // Cancel only the managed wait. Cancelling the native GnuTLS recv can race
+            // session teardown and crash the process. Failed/abandoned reads must use
+            // the pool's deferred quarantine, including cancellation during shutdown.
+            noop = executeNoop(CancellationToken.None);
+            var reply = await noop.WaitAsync(timeout ?? NoopTimeout, ct);
+            ct.ThrowIfCancellationRequested();
+            // Execute returns negative FTP replies normally; awaiting it is not proof
+            // of health. NOOP requires a positive completion (not a 1xx/3xx reply).
+            if (reply.Code?.StartsWith("2", StringComparison.Ordinal) != true)
+                throw new FtpCommandException(reply);
+        }
+        catch
+        {
+            conn.Poisoned = true;
+            if (noop != null)
+                _ = noop.ContinueWith(t => { _ = t.Exception; }, TaskScheduler.Default);
+            throw;
         }
     }
 
@@ -156,12 +161,16 @@ public class ConnectionMonitor
         {
             try
             {
-                Log.Information("Reconnecting in {Delay}s...", delay);
+                Log.Information("ConnectionMonitor[{Server}]: reconnecting in {Delay}s...", _factory.Host, delay);
                 await Task.Delay(TimeSpan.FromSeconds(delay), ct);
 
                 await _pool.Initialize(ct);
+                // Initialize is a no-op when another connection already exists. Verify
+                // a real reply before announcing recovery, even in a nonempty pool.
+                await CheckHealthAsync(ct);
+                ct.ThrowIfCancellationRequested();
                 _wasConnected = true;
-                Log.Information("Reconnected successfully");
+                Log.Information("ConnectionMonitor[{Server}]: reconnected successfully", _factory.Host);
                 ConnectionRestored?.Invoke();
                 return;
             }
@@ -176,15 +185,15 @@ public class ConnectionMonitor
                     (ftpEx.CompletionCode is "421" or "450"))
                 {
                     var bncCooldown = 7200; // 2 hours in seconds
-                    Log.Warning("BNC rate-limit detected ({Code}: {Message}) — backing off for {Cooldown}s",
-                        ftpEx.CompletionCode, ftpEx.Message, bncCooldown);
+                    Log.Warning("ConnectionMonitor[{Server}]: BNC rate-limit detected ({Code}: {Message}) — backing off for {Cooldown}s",
+                        _factory.Host, ftpEx.CompletionCode, ftpEx.Message, bncCooldown);
                     BncRateLimitDetected?.Invoke(
                         $"BNC rate-limit ({ftpEx.CompletionCode}) — cooldown ~2 hours");
                     delay = bncCooldown;
                 }
                 else
                 {
-                    Log.Warning(ex, "Reconnect attempt failed");
+                    Log.Warning(ex, "ConnectionMonitor[{Server}]: reconnect attempt failed", _factory.Host);
                     delay = Math.Min(delay * 2, maxDelay);
                 }
             }
