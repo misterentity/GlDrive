@@ -16,6 +16,7 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 
 - Reject negative or incomplete FTP NOOP replies, verify reconnect health before reporting recovery, and propagate shutdown cancellation without false connection-loss events.
 - Include server and failure reason in connection-monitor diagnostics. Add 11 regression cases and a native FTPS rejection/recovery smoke test. See [release report](releases/v3.10.115.md) for validation and remaining remote-server failures.
+- Preserve significant trailing zero bytes in DH1080 public keys. Twelve deterministic cases cover a crypto failure exposed by CI, including both ECB/CBC message round-trips and standard/FiSH wire formats.
 
 ## v3.10 — AI self-tuning revival, extractor & auto-update reliability (2026-07)
 

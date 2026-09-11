@@ -337,8 +337,8 @@ public class Dh1080Tests
     [Fact]
     public void Both_parties_derive_the_same_key_variants()
     {
-        // Deterministic fixed private keys (not random) so this can never flake on the
-        // rare, ecosystem-wide DH1080 wire-format edge case. Both parties MUST derive
+        // Fixed private keys make this sample repeatable; Dh1080TrailingZeroTests also
+        // covers the rare zero-sextet wire-format edge cases. Both parties MUST derive
         // byte-identical key variants from every exchange — a regression in the pubkey
         // encode/decode round-trip (see Dh1080_decodes_public_key_whose_encoding_ends_in_A)
         // would make many of these disagree.
