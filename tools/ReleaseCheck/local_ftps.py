@@ -26,13 +26,31 @@ cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
 pem = root / "fixture.pem"
 pem.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
                                  serialization.NoEncryption()) + cert.public_bytes(serialization.Encoding.PEM))
+class ReleaseCheckHandler(TLS_FTPHandler):
+    def ftp_NOOP(self, line):
+        reject = root / "reject-noop-once"
+        if reject.exists():
+            remaining = int(reject.read_text()) - 1
+            if remaining > 0:
+                reject.write_text(str(remaining))
+            else:
+                reject.unlink()
+            with (root / "noop-replies").open("a") as replies:
+                replies.write("500\n")
+            self.respond("500 Fixture NOOP rejection")
+        else:
+            with (root / "noop-replies").open("a") as replies:
+                replies.write("200\n")
+            super().ftp_NOOP(line)
+
+
 authorizer = DummyAuthorizer()
 authorizer.add_user("release-check", "", str(data), perm="elradfmwMT")
-TLS_FTPHandler.authorizer = authorizer
-TLS_FTPHandler.certfile = str(pem)
-TLS_FTPHandler.tls_control_required = True
-TLS_FTPHandler.tls_data_required = True
-server = FTPServer(("127.0.0.1", 0), TLS_FTPHandler)
+ReleaseCheckHandler.authorizer = authorizer
+ReleaseCheckHandler.certfile = str(pem)
+ReleaseCheckHandler.tls_control_required = True
+ReleaseCheckHandler.tls_data_required = True
+server = FTPServer(("127.0.0.1", 0), ReleaseCheckHandler)
 state = {"port": server.socket.getsockname()[1], "root": str(root),
          "fingerprint": cert.fingerprint(hashes.SHA256()).hex().upper()}
 pathlib.Path(sys.argv[1]).write_text(json.dumps(state))
