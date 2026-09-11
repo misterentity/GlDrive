@@ -22,8 +22,8 @@ namespace GlDrive.Irc;
 ///    character after the real data. A 135-byte pubkey encodes to 181
 ///    chars (180 real + trailing 'A'), not 180.
 ///
-/// The decoder (b64toh) strips trailing zero-valued chars ('A' and any
-/// non-alphabet junk) before unpacking, which naturally compensates.
+/// Decode only that one flush character. Some legacy b64toh implementations
+/// strip significant zero sextets too, corrupting rare public keys.
 /// </summary>
 public class Dh1080
 {
@@ -84,9 +84,8 @@ public class Dh1080
         // Standard base64 of 135 bytes is 180 chars, no '=' padding (135 is a
         // multiple of 3). Append the trailing 'A' that fish-irssi's htob64 always
         // emits for byte-aligned input, producing the canonical 181-char string.
-        // Peers that use the strip-trailing-zero decoder (fish-irssi, mIRC FiSH,
-        // HexChat FiSH, KVIrc FiSH) will correctly discard the 'A' and decode 135
-        // bytes; strict-length mIRC-style decoders expect exactly 181 chars.
+        // Strict-length mIRC-style decoders expect exactly 181 chars. Our decoder
+        // removes only this flush marker, preserving significant trailing zeros.
         return Convert.ToBase64String(padded) + "A";
     }
 
@@ -214,59 +213,31 @@ public class Dh1080
     }
 
     /// <summary>
-    /// Decodes a DH1080 public key from its base64 wire form to raw big-endian bytes.
-    ///
-    /// This is a faithful port of the canonical fish-irssi / py-fishcrypt / mIRC FiSH 10
-    /// `b64toh`/`dh1080_b64decode`: it uses the STANDARD RFC-4648 alphabet and strips the
-    /// trailing flush char(s) the encoder appends for byte-aligned input, then unpacks the
-    /// remaining sextets MSB-first.
-    ///
-    /// The previous homegrown decoder ("strip ALL trailing 'A' then pad with '='") was WRONG:
-    /// when a public key's natural base64 encoding itself ended in an 'A' (≈1/64 of keys,
-    /// i.e. the low 6 bits of the last byte are zero), it stripped one 'A' too many, dropped
-    /// low-order bits, and derived a different shared secret than the peer. That silently
-    /// broke ~1.5% of DH1080 exchanges per direction (~3% of exchanges overall) — the real
-    /// "DH1080 key exchange doesn't work" symptom. This port matches the rest of the FiSH
-    /// ecosystem byte-for-byte, so GlDrive fails only on the same rare inputs every FiSH
-    /// client fails on (and those simply prompt a retry).
+    /// Decode standard base64, allowing the one extra A emitted by FiSH's encoder
+    /// when the input contains a multiple of three bytes. Length modulo four identifies
+    /// that flush marker; other trailing A characters are significant zero bits.
+    /// Stripping them changes the public integer (and therefore the shared secret).
     /// </summary>
     private static byte[] DecodeDh1080PublicKey(string s)
     {
-        var buf = new int[128];
-        for (var idx = 0; idx < 64; idx++) buf[StdB64Alphabet[idx]] = idx;
-        int Val(char c) => c < 128 ? buf[c] : 0; // non-alphabet chars decode to 0, matching the reference
+        if (s.Length < 2 || s.Length > 181)
+            throw new CryptographicException("Invalid DH1080 public key length");
 
-        int L = s.Length;
-        if (L < 2) throw new CryptographicException("Invalid DH1080 public key (too short)");
-
-        // Strip trailing zero-value chars starting from the second-to-last position
-        // (the encoder's flush char plus any genuinely-zero trailing sextets).
-        for (var idx = L - 2; idx >= 0; idx--)
+        if (s.Length % 4 == 1)
         {
-            if (Val(s[idx]) == 0) L--;
-            else break;
+            if (s[^1] != 'A')
+                throw new CryptographicException("Invalid DH1080 flush marker");
+            s = s[..^1];
         }
-        if (L < 2) throw new CryptographicException("Invalid DH1080 public key (too short)");
 
-        var d = new byte[L];
-        int i = 0, k = 0;
-        while (true)
+        try
         {
-            i++;
-            if (k + 1 < L) d[i - 1] = (byte)((Val(s[k]) << 2) & 0xFF); else break;
-            k++;
-            if (k < L) d[i - 1] |= (byte)(Val(s[k]) >> 4); else break;
-            i++;
-            if (k + 1 < L) d[i - 1] = (byte)((Val(s[k]) << 4) & 0xFF); else break;
-            k++;
-            if (k < L) d[i - 1] |= (byte)(Val(s[k]) >> 2); else break;
-            i++;
-            if (k + 1 < L) d[i - 1] = (byte)((Val(s[k]) << 6) & 0xFF); else break;
-            k++;
-            if (k < L) d[i - 1] |= (byte)(Val(s[k]) & 0xFF); else break;
-            k++;
+            return Convert.FromBase64String(s.PadRight((s.Length + 3) / 4 * 4, '='));
         }
-        return d[..(i - 1)];
+        catch (FormatException ex)
+        {
+            throw new CryptographicException("Invalid DH1080 public key encoding", ex);
+        }
     }
 
     public static string FormatInit(string pubKeyBase64) => $"DH1080_INIT {pubKeyBase64}";
