@@ -56,17 +56,40 @@ public class FxpRelayRouteMemoryTests : IDisposable
     }
 
     [Fact]
-    public void First_failure_reports_true_for_prominent_log_then_false()
+    public void First_failure_is_reported_as_first()
     {
-        Assert.True(FxpTransfer.RecordDirectFailure("src", "dst", Now));
-        Assert.False(FxpTransfer.RecordDirectFailure("src", "dst", Now.AddHours(7)));
+        Assert.Equal(DirectProbeFailure.First, FxpTransfer.RecordDirectFailure("src", "dst", Now));
+    }
+
+    /// <summary>
+    /// A failed re-probe after the TTL spends two logins exactly like the first
+    /// failure did. It must be distinguishable from "not cached" so the caller can
+    /// log it on the Information sink — before v3.10.114 it came back as a bare
+    /// <c>false</c> and was logged at Debug, invisible in production.
+    /// </summary>
+    [Fact]
+    public void Failed_reprobe_after_ttl_is_reported_as_reprobe()
+    {
+        FxpTransfer.RecordDirectFailure("src", "dst", Now);
+        var later = Now + FxpTransfer.RelayRouteRetry + TimeSpan.FromMinutes(1);
+        Assert.True(FxpTransfer.ShouldAttemptDirect("src", "dst", later));
+        Assert.Equal(DirectProbeFailure.Reprobe, FxpTransfer.RecordDirectFailure("src", "dst", later));
+        // The re-probe failure re-arms the TTL from its own timestamp.
+        Assert.False(FxpTransfer.ShouldAttemptDirect("src", "dst", later + TimeSpan.FromHours(1)));
+    }
+
+    [Fact]
+    public void Reprobe_outcome_is_never_confused_with_not_cached()
+    {
+        FxpTransfer.RecordDirectFailure("src", "dst", Now);
+        Assert.NotEqual(DirectProbeFailure.NotCached, FxpTransfer.RecordDirectFailure("src", "dst", Now.AddHours(7)));
     }
 
     [Fact]
     public void Missing_server_ids_never_cache()
     {
-        Assert.False(FxpTransfer.RecordDirectFailure("", "dst", Now));
-        Assert.False(FxpTransfer.RecordDirectFailure("src", "", Now));
+        Assert.Equal(DirectProbeFailure.NotCached, FxpTransfer.RecordDirectFailure("", "dst", Now));
+        Assert.Equal(DirectProbeFailure.NotCached, FxpTransfer.RecordDirectFailure("src", "", Now));
         Assert.True(FxpTransfer.ShouldAttemptDirect("", "dst", Now));
         Assert.True(FxpTransfer.ShouldAttemptDirect("src", "", Now));
     }

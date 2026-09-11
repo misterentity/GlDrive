@@ -29,6 +29,9 @@ public enum TransferState { Idle, NegotiatingPassive, NegotiatingActive, Transfe
 /// </summary>
 public enum FxpFaultSide { None, Source, Dest, Both, Neither }
 
+/// <summary>Outcome of <see cref="FxpTransfer.RecordDirectFailure"/>.</summary>
+internal enum DirectProbeFailure { NotCached, First, Reprobe }
+
 public class FxpTransfer
 {
     private static readonly Regex PasvRegex = new(@"\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)\)", RegexOptions.Compiled);
@@ -53,15 +56,23 @@ public class FxpTransfer
             || nowUtc - failedAt >= RelayRouteRetry;
     }
 
-    /// <summary>Returns true if this is the first recorded failure for the route
-    /// (caller logs it prominently once; repeats are re-probe expiries).</summary>
-    internal static bool RecordDirectFailure(string srcServerId, string dstServerId, DateTime nowUtc)
+    /// <summary>
+    /// Records a failed direct probe and says which kind it was. <see cref="DirectProbeFailure.First"/>
+    /// is the route's first recorded failure; <see cref="DirectProbeFailure.Reprobe"/> is a failure
+    /// of the periodic re-probe after <see cref="RelayRouteRetry"/>. Both cost two logins (the probe
+    /// poisons both connections) and both are logged at Information by the caller. Before
+    /// v3.10.114 the re-probe outcome was a bool "not first" and logged at Debug, so the
+    /// two-login spend every 6 h on a route that has failed direct since 2026-07-01 was
+    /// invisible on the Information sink (2026-09-10 14:01: `FXP complete` followed by two
+    /// poisoned-discards with no explaining line).
+    /// </summary>
+    internal static DirectProbeFailure RecordDirectFailure(string srcServerId, string dstServerId, DateTime nowUtc)
     {
-        if (string.IsNullOrEmpty(srcServerId) || string.IsNullOrEmpty(dstServerId)) return false;
+        if (string.IsNullOrEmpty(srcServerId) || string.IsNullOrEmpty(dstServerId)) return DirectProbeFailure.NotCached;
         var key = (srcServerId, dstServerId);
         var first = !_relayOnlyRoutes.ContainsKey(key);
         _relayOnlyRoutes[key] = nowUtc;
-        return first;
+        return first ? DirectProbeFailure.First : DirectProbeFailure.Reprobe;
     }
 
     internal static void RecordDirectSuccess(string srcServerId, string dstServerId)
@@ -177,13 +188,25 @@ public class FxpTransfer
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
-                        if (RecordDirectFailure(srcServerId, dstServerId, DateTime.UtcNow))
-                            Log.Information("FXP route {Src}->{Dst}: direct CPSV-PASV failed ({Error}) — " +
-                                "using Relay for this route for the next {Hours}h (a failed direct attempt " +
-                                "poisons both connections, costing two fresh logins per file)",
-                                srcServerId, dstServerId, ex.Message, RelayRouteRetry.TotalHours);
-                        else
-                            Log.Debug("CpsvPasv failed ({Error}), trying Relay mode — connections will be poisoned", ex.Message);
+                        switch (RecordDirectFailure(srcServerId, dstServerId, DateTime.UtcNow))
+                        {
+                            case DirectProbeFailure.First:
+                                Log.Information("FXP route {Src}->{Dst}: direct CPSV-PASV failed ({Error}) — " +
+                                    "using Relay for this route for the next {Hours}h (a failed direct attempt " +
+                                    "poisons both connections, costing two fresh logins per file)",
+                                    srcServerId, dstServerId, ex.Message, RelayRouteRetry.TotalHours);
+                                break;
+                            case DirectProbeFailure.Reprobe:
+                                // The two poisoned-discards that follow this file's `FXP complete`
+                                // are THIS probe, not a transfer fault — name it on the same sink.
+                                Log.Information("FXP route {Src}->{Dst}: direct CPSV-PASV re-probe failed again ({Error}) — " +
+                                    "staying on Relay for another {Hours}h; both connections poisoned (two logins)",
+                                    srcServerId, dstServerId, ex.Message, RelayRouteRetry.TotalHours);
+                                break;
+                            default:
+                                Log.Debug("CpsvPasv failed ({Error}), trying Relay mode — connections will be poisoned", ex.Message);
+                                break;
+                        }
                         source.Poisoned = true;
                         dest.Poisoned = true;
                         // Both are already poisoned (floor); clear the CpsvPasv attribution

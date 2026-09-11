@@ -211,6 +211,15 @@ public class FtpConnectionPool : IAsyncDisposable
     private int _permitsHeld;
     private static readonly TimeSpan PermitAcquireTimeout = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// Server host this pool connects to, for log lines. Every server runs at least two
+    /// pools (main + spread), and the pool-level lines carried no identity: on 2026-09-10
+    /// two of seventeen poisoned-discards could not be attributed to a server at all, and
+    /// a five-minute run of `new connection failed` had to be tied to superbnc by the
+    /// borrow-timeout line thirty seconds later. Null factory = tests.
+    /// </summary>
+    public string Name => _factory?.Host ?? "?";
+
     public FtpConnectionPool(FtpClientFactory factory, int maxSize = 3)
         : this(factory, maxSize, null) { }
 
@@ -648,14 +657,14 @@ public class FtpConnectionPool : IAsyncDisposable
                 if (refused)
                 {
                     Interlocked.Exchange(ref _refusedUntilTicks, DateTime.UtcNow.Add(CooldownWindow).Ticks);
-                    Log.Information("Pool: server entering {Sec}s BNC cooldown (refusal detected) — pausing new connections",
-                        (int)CooldownWindow.TotalSeconds);
+                    Log.Information("Pool[{Pool}]: server entering {Sec}s BNC cooldown (refusal detected) — pausing new connections",
+                        Name, (int)CooldownWindow.TotalSeconds);
                 }
                 else if (gateCapped)
                 {
                     Interlocked.Exchange(ref _gateBackoffUntilTicks, DateTime.UtcNow.Add(LoginGateCooldown).Ticks);
-                    Log.Information("Pool: server entering {Sec}s login-cap backoff (no permit available) — pausing new connections",
-                        (int)LoginGateCooldown.TotalSeconds);
+                    Log.Information("Pool[{Pool}]: server entering {Sec}s login-cap backoff (no permit available) — pausing new connections",
+                        Name, (int)LoginGateCooldown.TotalSeconds);
                 }
                 Interlocked.Decrement(ref _created);
                 // PRD O4 — demote to Information. The underlying cause (login limit,
@@ -663,9 +672,9 @@ public class FtpConnectionPool : IAsyncDisposable
                 // episode by dedicated paths; repeating it as WRN for every retry
                 // floods the log. The failure-taxonomy metrics surface the pattern.
                 if (_created >= _maxSize)
-                    Log.Debug(ex, "Pool: new connection failed (at capacity, created={Created}, max={Max})", _created, _maxSize);
+                    Log.Debug(ex, "Pool[{Pool}]: new connection failed (at capacity, created={Created}, max={Max})", Name, _created, _maxSize);
                 else
-                    Log.Information(ex, "Pool: new connection failed (created={Created}, max={Max})", _created, _maxSize);
+                    Log.Information(ex, "Pool[{Pool}]: new connection failed (created={Created}, max={Max})", Name, _created, _maxSize);
 
                 // BNC explicitly said we're out of logins — kill ghosts, but throttle to
                 // once per 5s. Without the throttle, multiple concurrent Borrow() callers
@@ -938,8 +947,8 @@ public class FtpConnectionPool : IAsyncDisposable
         ReleasePermit();
 
         var live = Interlocked.Increment(ref _quarantineLive);
-        Log.Information("Pool: quarantined connection ({Reason}, deferred teardown {Delay}s, live={Live}, created={Created})",
-            reason, AbandonedReclaimSeconds, live, _created);
+        Log.Information("Pool[{Pool}]: quarantined connection ({Reason}, deferred teardown {Delay}s, live={Live}, created={Created})",
+            Name, reason, AbandonedReclaimSeconds, live, _created);
         if (live > 200)
             Log.Warning("Pool: deferred-teardown backlog high (live={Live}) — quarantine arrival outrunning the {Delay}s drain window",
                 live, AbandonedReclaimSeconds);
