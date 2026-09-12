@@ -12,6 +12,12 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.116 — attributed poisoned discards (2026-09-11)
+
+- Every poisoned connection now carries the reason it was poisoned (`PooledConnection.Poison(reason)`), and the pool prints it on the quarantine line: `poisoned-discard: scan LIST /x: data-channel deadline` instead of a bare `poisoned-discard` for all 28 poison sites alike. A structural test rejects any new bare `Poisoned = true` in production code.
+- A deadline inside a scan LIST (data TCP connect, data TLS) no longer reports as "main pool exhausted": it spent a login, so it is wrapped as `ScanListingFailedException`, logged with its cause, and classified as a fault rather than contention.
+- A failed `ABOR` after a Relay dupe-skip (the only way a dupe-skip spends the source login; 3 of 248 on 2026-09-10/11) is now logged at Information with the exception type. See [release report](releases/v3.10.116.md).
+
 ## v3.10.115 — connection health verification (2026-09-11)
 
 - Reject negative or incomplete FTP NOOP replies, verify reconnect health before reporting recovery, and propagate shutdown cancellation without false connection-loss events.

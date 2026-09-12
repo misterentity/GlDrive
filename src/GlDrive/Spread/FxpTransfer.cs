@@ -207,8 +207,8 @@ public class FxpTransfer
                                 Log.Debug("CpsvPasv failed ({Error}), trying Relay mode — connections will be poisoned", ex.Message);
                                 break;
                         }
-                        source.Poisoned = true;
-                        dest.Poisoned = true;
+                        source.Poison("direct CPSV-PASV probe failed");
+                        dest.Poison("direct CPSV-PASV probe failed");
                         // Both are already poisoned (floor); clear the CpsvPasv attribution
                         // so any subsequent Relay failure attributes to the Relay outcome.
                         FaultSide = FxpFaultSide.None;
@@ -574,7 +574,12 @@ public class FxpTransfer
                 }
                 catch (Exception abortEx)
                 {
-                    Log.Debug(abortEx, "ABOR after dupe-detect failed (non-fatal)");
+                    // Non-fatal for the file, but it is the ONLY reason the source login is
+                    // spent on a dupe-skip: 3 of 248 relay dupe-skips on 2026-09-10/11 did
+                    // this and the cause was unreadable at Debug on an Information sink.
+                    Log.Information("FXP dupe-skip (Relay): ABOR after dupe-detect failed for {Path} " +
+                        "({Type}: {Message}) — source connection will be discarded",
+                        srcPath, abortEx.GetType().Name, abortEx.Message);
                 }
 
                 // dst's STOR was rejected outright, so its data sequence never began

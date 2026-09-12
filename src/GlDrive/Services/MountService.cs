@@ -569,7 +569,7 @@ public class MountService : IDisposable
                     // then break out — don't keep hammering a broken socket.
                     if (!conn.Client.IsConnected)
                     {
-                        conn.Poisoned = true;
+                        conn.Poison($"SITE stats command '{cmd}' left the connection disconnected");
                         connDied = true;
                         break;
                     }
@@ -603,7 +603,7 @@ public class MountService : IDisposable
                 {
                     Log.Information("LIST trailer fallback failed for {Server}: {Msg}",
                         _serverConfig.Name, listEx.Message);
-                    if (!conn.Client.IsConnected) conn.Poisoned = true;
+                    if (!conn.Client.IsConnected) conn.Poison("LIST trailer fallback left the connection disconnected");
                 }
             }
 

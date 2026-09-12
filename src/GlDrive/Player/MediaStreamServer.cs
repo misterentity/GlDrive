@@ -252,7 +252,7 @@ public class MediaStreamServer : IDisposable
             await using var conn = await server.Pool.Borrow(streamCts.Token);
             // Reset timeout — streaming can take as long as needed
             streamCts.CancelAfter(Timeout.InfiniteTimeSpan);
-            conn.Poisoned = true;
+            conn.Poison("media stream RETR abandoned before completion");
             var reachesEnd = !range.IsPartial || range.End == fileSize - 1;
             if (server.Pool.UseCpsv)
                 await StreamCpsv(conn.Client, remotePath, range.Offset, range.Length, ctx.Response.OutputStream, _cts.Token, saveStream, reachesEnd);
@@ -363,7 +363,7 @@ public class MediaStreamServer : IDisposable
 
                     // Stream to disk — use CPSV for BNC servers, standard PASV otherwise
                     await using var conn = await server.Pool!.Borrow(_cts.Token);
-                    conn.Poisoned = true;
+                    conn.Poison("RAR volume RETR abandoned before completion");
                     var tempPath = localPath + $".{Guid.NewGuid():N}.partial";
                     try
                     {
@@ -787,7 +787,7 @@ public class MediaStreamServer : IDisposable
                 try
                 {
                     await using var _ = conn;
-                    conn.Poisoned = true;
+                    conn.Poison("archive volume RETR abandoned before completion");
                     await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None);
 
                     if (server.Pool!.UseCpsv)
