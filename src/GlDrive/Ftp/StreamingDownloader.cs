@@ -53,7 +53,7 @@ public class StreamingDownloader
             // can leave an unread completion reply on the control channel. Returning this
             // connection to the pool risks reply desync and SEGV on reuse — poison so the
             // pool discards instead of recycling it. Mirrors FtpOperations.ListDirectory.
-            conn.Poisoned = true;
+            conn.Poison($"streaming RETR {remotePath} failed");
             throw;
         }
         finally

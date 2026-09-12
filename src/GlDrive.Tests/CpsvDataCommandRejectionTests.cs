@@ -104,7 +104,7 @@ public sealed class CpsvDataCommandRejectionTests
         // healthy; poisoning it is the needless login loss this release removes.
         var ops = ReadSource("Ftp", "FtpOperations.cs");
         var poisonCatches = Regex.Matches(ops,
-            @"catch\s*(\([^)]*\))?\s*(when\s*\((?:[^()]|\([^()]*\))*\))?\s*\{\s*(//[^\n]*\n\s*)*conn\.Poisoned = true;");
+            @"catch\s*(\([^)]*\))?\s*(when\s*\((?:[^()]|\([^()]*\))*\))?\s*\{\s*(//[^\n]*\n\s*)*conn\.Poison\(");
         Assert.True(poisonCatches.Count >= 4, $"expected the FtpOperations poison catches, found {poisonCatches.Count}");
         foreach (Match m in poisonCatches)
             Assert.Contains("when (!FtpCommandRejection.IsClean(ex))", m.Value);
@@ -112,8 +112,11 @@ public sealed class CpsvDataCommandRejectionTests
         var job = ReadSource("Spread", "SpreadJob.cs");
         var scan = job.IndexOf("items = await CpsvDataHelper.ListDirectory(conn.Client, currentPath", StringComparison.Ordinal);
         Assert.True(scan > 0);
+        // Anchor on the borrow scope, not a character distance: v3.10.116 added an
+        // in-LIST cancellation branch between the LIST and this catch.
+        var scopeEnd = job.IndexOf("List<string>? subdirs", scan, StringComparison.Ordinal);
         var ioCatch = job.IndexOf("catch (IOException", scan, StringComparison.Ordinal);
-        Assert.True(ioCatch > scan && ioCatch - scan < 800);
+        Assert.True(ioCatch > scan && scopeEnd > ioCatch, "the scan's IOException catch left the LIST borrow scope");
         var line = job.Substring(ioCatch, job.IndexOf('\n', ioCatch) - ioCatch);
         Assert.Contains("when (!FtpCommandRejection.IsClean(ex))", line);
     }

@@ -879,11 +879,14 @@ public class FtpConnectionPool : IAsyncDisposable
     /// socket close + dispose only fire once the recv has provably returned. This was
     /// the dominant crash funnel pre-v3.9.0 (poisoned Discard -> inline socket.Close).
     /// </summary>
-    internal void Discard(AsyncFtpClient client)
+    internal void Discard(AsyncFtpClient client, string? cause = null)
     {
         Interlocked.Decrement(ref _active);
         IncrementDisconnect();
-        QuarantineDeferred(client, "poisoned-discard");
+        // The quarantine line is the ONLY record of a spent login. Without the cause it
+        // reads "poisoned-discard" for all 28 poison sites alike, and on 2026-09-11 six
+        // superbnc discards had no adjacent line naming who spent them (v3.10.116).
+        QuarantineDeferred(client, cause == null ? "poisoned-discard" : $"poisoned-discard: {cause}");
     }
 
     /// <summary>
@@ -1223,12 +1226,42 @@ public class PooledConnection : IAsyncDisposable
 
     public AsyncFtpClient Client => _client ?? throw new ObjectDisposedException(nameof(PooledConnection));
 
+    private string? _poisonReason;
+
     /// <summary>
     /// Mark this connection as poisoned so it will be discarded instead of returned
     /// to the pool. Call this after a cancellation or error that may have left the
-    /// GnuTLS stream in a corrupt state.
+    /// GnuTLS stream in a corrupt state. Prefer <see cref="Poison"/>: setting this
+    /// flag without a reason is recorded as "unattributed" on the quarantine line,
+    /// and a structural test keeps production code from doing so.
     /// </summary>
-    public bool Poisoned { get; set; }
+    public bool Poisoned
+    {
+        get => _poisonReason != null;
+        set
+        {
+            if (value) _poisonReason ??= UnattributedReason;
+            else _poisonReason = null;
+        }
+    }
+
+    internal const string UnattributedReason = "unattributed";
+    internal const string PendingReplyReason = "pending data reply left on control channel";
+
+    /// <summary>The reason recorded by the first <see cref="Poison"/> call, if any.</summary>
+    public string? PoisonReason => _poisonReason;
+
+    /// <summary>
+    /// Poison with a reason. The FIRST reason wins: the site closest to the failure
+    /// (a transport catch, a route probe) names it, and the generic attribution that
+    /// runs later in the finally chain must not overwrite it.
+    /// </summary>
+    public void Poison(string reason)
+        => _poisonReason ??= string.IsNullOrWhiteSpace(reason) ? UnattributedReason : reason;
+
+    /// <summary>What the quarantine line says. A poison reason outranks the pending mark.</summary>
+    internal static string DescribeDiscard(string? poisonReason, bool pendingDataSequence)
+        => poisonReason ?? (pendingDataSequence ? PendingReplyReason : UnattributedReason);
 
     public ValueTask DisposeAsync()
     {
@@ -1240,8 +1273,9 @@ public class PooledConnection : IAsyncDisposable
             // connection would read that stale reply instead of its own. Discard
             // regardless of who borrowed it — the invariant belongs to the
             // connection, not to any one call site.
-            if (Poisoned || CpsvDataHelper.HasPendingDataSequence(client))
-                _pool.Discard(client);
+            var pending = CpsvDataHelper.HasPendingDataSequence(client);
+            if (_poisonReason != null || pending)
+                _pool.Discard(client, DescribeDiscard(_poisonReason, pending));
             else
                 _pool.Return(client);
         }

@@ -1071,8 +1071,8 @@ public class SpreadManager : IDisposable
         if (!ok)
         {
             // Poison connections after failed transfer — GnuTLS session may be corrupt
-            srcConn.Poisoned = true;
-            dstConn.Poisoned = true;
+            srcConn.Poison("direct FXP transfer failed");
+            dstConn.Poison("direct FXP transfer failed");
             throw new IOException($"FXP transfer failed: {transfer.ErrorMessage}");
         }
     }
@@ -1132,8 +1132,8 @@ public class SpreadManager : IDisposable
                 srcServerId: srcServerId, dstServerId: dstServerId);
             if (!ok)
             {
-                srcConn.Poisoned = true;
-                dstConn.Poisoned = true;
+                srcConn.Poison("direct FXP transfer failed");
+                dstConn.Poison("direct FXP transfer failed");
             }
         }
     }

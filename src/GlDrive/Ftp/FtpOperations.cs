@@ -37,7 +37,7 @@ public class FtpOperations
             // stale response). Poison so the pool discards it. A clean final rejection
             // (LIST 550 / 425) is exempt: the reply IS the completion, the channel is in
             // sync, and CpsvDataHelper already cleared its pending mark.
-            conn.Poisoned = true;
+            conn.Poison($"LIST {remotePath}: {ex.GetType().Name}");
             throw;
         }
         finally
@@ -78,7 +78,7 @@ public class FtpOperations
         }
         catch (Exception ex) when (!FtpCommandRejection.IsClean(ex))
         {
-            conn.Poisoned = true;
+            conn.Poison($"RETR {remotePath}: {ex.GetType().Name}");
             throw;
         }
         finally
@@ -96,7 +96,7 @@ public class FtpOperations
     public async Task DownloadToStream(string remotePath, Stream destination, CancellationToken ct = default)
     {
         await using var conn = await _pool.Borrow(ct);
-        conn.Poisoned = true;
+        conn.Poison("RETR-to-stream abandoned before completion");
         try
         {
             if (_pool.UseCpsv)
@@ -132,7 +132,7 @@ public class FtpOperations
         }
         catch (Exception ex) when (!FtpCommandRejection.IsClean(ex))
         {
-            conn.Poisoned = true;
+            conn.Poison($"STOR {remotePath}: {ex.GetType().Name}");
             throw;
         }
         finally
@@ -174,7 +174,7 @@ public class FtpOperations
         }
         catch (Exception ex) when (!FtpCommandRejection.IsClean(ex))
         {
-            conn.Poisoned = true;
+            conn.Poison($"STOR {remotePath}: {ex.GetType().Name}");
             throw;
         }
         finally

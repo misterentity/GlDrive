@@ -34,6 +34,11 @@ internal static class ScanFailureClassifier
         // No exception is not evidence of contention (recurring pattern #1).
         if (ex == null) return false;
 
+        // A LIST that failed AFTER a connection was borrowed spent a login. It wraps a
+        // cancellation (the data-channel deadline) or an IOException, so it must be
+        // recognised before either of those is read as "never got a connection".
+        if (ex is ScanListingFailedException) return false;
+
         // A borrow that timed out or was cancelled never opened a connection.
         // TaskCanceledException derives from OperationCanceledException.
         if (ex is System.OperationCanceledException) return true;

@@ -145,7 +145,7 @@ public class ConnectionMonitor
         }
         catch
         {
-            conn.Poisoned = true;
+            conn.Poison("NOOP probe failed");
             if (noop != null)
                 _ = noop.ContinueWith(t => { _ = t.Exception; }, TaskScheduler.Default);
             throw;

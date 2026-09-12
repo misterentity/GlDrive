@@ -1545,8 +1545,20 @@ public class SpreadJob : IDisposable
                     files.Clear();
                     lastError = ex;
                 }
+                catch (ScanListingFailedException ex)
+                {
+                    // A borrowed connection failed mid-LIST and was discarded: one spent
+                    // login, not contention. Until v3.10.116 this branch was silent when the
+                    // fallback then succeeded, leaving a poisoned-discard with no cause line.
+                    Log.Information("Spread scan: main pool listing of {Server} failed after borrow ({Reason}) — " +
+                        "connection discarded, falling back to spread pool", serverName, ex.Message);
+                    files.Clear();
+                    lastError = ex;
+                }
                 catch (Exception ex)
                 {
+                    Log.Information("Spread scan: main pool listing of {Server} failed ({Type}: {Message}) — " +
+                        "falling back to spread pool", serverName, ex.GetType().Name, ex.Message);
                     lastError = ex;
                     files.Clear();
                 }
@@ -1784,16 +1796,25 @@ public class SpreadJob : IDisposable
                 else
                     items = await conn.Client.GetListing(currentPath, FtpListOption.AllFiles, ct);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 // Cancellation mid-read poisons the GnuTLS stream — discard this connection
-                conn.Poisoned = true;
+                conn.Poison("scan LIST cancelled by caller");
                 throw;
+            }
+            catch (OperationCanceledException ex)
+            {
+                // NOT our token: a deadline inside the LIST itself (10s data TCP connect,
+                // 10s data TLS in CpsvDataHelper). A login was borrowed and is now spent —
+                // the opposite of a borrow timeout, which the caller and
+                // ScanFailureClassifier would otherwise read this as (v3.10.116).
+                conn.Poison($"scan LIST {currentPath}: data-channel deadline");
+                throw new ScanListingFailedException(currentPath, ex);
             }
             catch (IOException ex) when (!FtpCommandRejection.IsClean(ex))
             {
-                conn.Poisoned = true;
-                throw;
+                conn.Poison($"scan LIST {currentPath}: {ex.GetType().Name}");
+                throw new ScanListingFailedException(currentPath, ex);
             }
         }
 
@@ -2558,8 +2579,8 @@ public class SpreadJob : IDisposable
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             // Job cancelled — don't log as error
-            if (srcConn != null) srcConn.Poisoned = true;
-            if (dstConn != null) dstConn.Poisoned = true;
+            if (srcConn != null) srcConn.Poison("FXP job cancelled mid-transfer");
+            if (dstConn != null) dstConn.Poison("FXP job cancelled mid-transfer");
         }
         catch (OperationCanceledException)
         {
@@ -2631,8 +2652,8 @@ public class SpreadJob : IDisposable
             // began; otherwise a one-sided pool exhaustion collapses the healthy pool too.
             if (FxpFailurePolicy.ShouldPoisonPeers(transferProtocolStarted))
             {
-                if (srcConn != null) srcConn.Poisoned = true;
-                if (dstConn != null) dstConn.Poisoned = true;
+                if (srcConn != null) srcConn.Poison($"FXP transfer error after protocol began: {ex.GetType().Name}");
+                if (dstConn != null) dstConn.Poison($"FXP transfer error after protocol began: {ex.GetType().Name}");
             }
         }
         finally
@@ -3068,11 +3089,11 @@ public class SpreadJob : IDisposable
         switch (transfer.FaultSide)
         {
             case FxpFaultSide.Source:
-                if (srcConn != null) srcConn.Poisoned = true;
+                if (srcConn != null) srcConn.Poison("FXP fault attributed to source");
                 Log.Debug("Poison attribution: source only (FaultSide=Source)");
                 break;
             case FxpFaultSide.Dest:
-                if (dstConn != null) dstConn.Poisoned = true;
+                if (dstConn != null) dstConn.Poison("FXP fault attributed to dest");
                 Log.Debug("Poison attribution: dest only (FaultSide=Dest)");
                 break;
             case FxpFaultSide.Neither:
@@ -3081,8 +3102,8 @@ public class SpreadJob : IDisposable
                 Log.Debug("Poison attribution: neither (clean rejection before transfer)");
                 break;
             default: // None or Both — ambiguous, poison both
-                if (srcConn != null) srcConn.Poisoned = true;
-                if (dstConn != null) dstConn.Poisoned = true;
+                if (srcConn != null) srcConn.Poison("FXP fault side ambiguous — both poisoned");
+                if (dstConn != null) dstConn.Poison("FXP fault side ambiguous — both poisoned");
                 break;
         }
     }
