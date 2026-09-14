@@ -12,6 +12,12 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.117 — notification polling recovery (2026-09-14)
+
+- Internal data-channel cancellation no longer permanently stops notification polling. Only requested shutdown ends the loop.
+- Notification listings use the shared FTP operations so unclean failures quarantine connections with a cause, while clean rejections remain reusable.
+- Incomplete category polls preserve snapshots and successful categories, report the failed path and server, and activate the existing retry backoff. Six recovery regression cases and three native notification smoke assertions added. See [release report](releases/v3.10.117.md).
+
 ## v3.10.116 — attributed poisoned discards (2026-09-11)
 
 - Every poisoned connection now carries the reason it was poisoned (`PooledConnection.Poison(reason)`), and the pool prints it on the quarantine line: `poisoned-discard: scan LIST /x: data-channel deadline` instead of a bare `poisoned-discard` for all 28 poison sites alike. A structural test rejects any new bare `Poisoned = true` in production code.
