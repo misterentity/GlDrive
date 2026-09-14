@@ -1,4 +1,5 @@
 using FluentFTP;
+using System.IO;
 using GlDrive.Config;
 using GlDrive.Ftp;
 using Serilog;
@@ -7,7 +8,10 @@ namespace GlDrive.Services;
 
 public class NewReleaseMonitor
 {
-    private readonly FtpConnectionPool _pool;
+    private readonly Func<string, CancellationToken, Task<FtpListItem[]>> _listDirectory;
+    private readonly Func<int> _activeCount;
+    private readonly Func<TimeSpan, CancellationToken, Task> _delay;
+    private readonly string _server;
     private readonly NotificationConfig _config;
     private readonly Func<MountState> _getState;
     private readonly Dictionary<string, HashSet<string>> _snapshot = new();
@@ -19,8 +23,20 @@ public class NewReleaseMonitor
     public event Action<string, string, string>? NewReleaseDetected; // category, release, remotePath
 
     public NewReleaseMonitor(FtpConnectionPool pool, NotificationConfig config, Func<MountState> getState)
+        : this(config, getState, new FtpOperations(pool).ListDirectory,
+            () => pool.ActiveCount, pool.ControlHost)
     {
-        _pool = pool;
+    }
+
+    internal NewReleaseMonitor(NotificationConfig config, Func<MountState> getState,
+        Func<string, CancellationToken, Task<FtpListItem[]>> listDirectory,
+        Func<int> activeCount, string server,
+        Func<TimeSpan, CancellationToken, Task>? delay = null)
+    {
+        _listDirectory = listDirectory;
+        _activeCount = activeCount;
+        _server = server;
+        _delay = delay ?? Task.Delay;
         _config = config;
         _getState = getState;
     }
@@ -60,7 +76,7 @@ public class NewReleaseMonitor
         _cts = null;
     }
 
-    private async Task PollLoop(CancellationToken ct)
+    internal async Task PollLoop(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
@@ -69,7 +85,7 @@ public class NewReleaseMonitor
                 var delay = _consecutiveErrors >= 3
                     ? Math.Min(_config.PollIntervalSeconds * 2, 300)
                     : _config.PollIntervalSeconds;
-                await Task.Delay(TimeSpan.FromSeconds(delay), ct);
+                await _delay(TimeSpan.FromSeconds(delay), ct);
 
                 if (_getState() != MountState.Connected)
                     continue;
@@ -77,7 +93,7 @@ public class NewReleaseMonitor
                 await PollCycle(ct);
                 _consecutiveErrors = 0;
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 break;
             }
@@ -85,24 +101,18 @@ public class NewReleaseMonitor
             {
                 _consecutiveErrors++;
                 if (_consecutiveErrors <= 3)
-                    Log.Warning(ex, "NewReleaseMonitor poll error ({Count} consecutive)", _consecutiveErrors);
+                    Log.Warning(ex, "NewReleaseMonitor[{Server}] poll error ({Count} consecutive)", _server, _consecutiveErrors);
                 else
-                    Log.Debug(ex, "NewReleaseMonitor poll error ({Count} consecutive, backing off)", _consecutiveErrors);
+                    Log.Debug(ex, "NewReleaseMonitor[{Server}] poll error ({Count} consecutive, backing off)", _server, _consecutiveErrors);
             }
         }
     }
 
-    private async Task PollCycle(CancellationToken ct)
+    internal async Task PollCycle(CancellationToken ct)
     {
-        // Discover categories with a short-lived connection — release before per-category sleep.
-        FtpListItem[] categories;
-        {
-            await using var listConn = await _pool.Borrow(ct);
-            if (_pool.UseCpsv)
-                categories = await CpsvDataHelper.ListDirectory(listConn.Client, _config.WatchPath, _pool.ControlHost, ct);
-            else
-                categories = await listConn.Client.GetListing(_config.WatchPath, FtpListOption.AllFiles, ct);
-        }
+        // FtpOperations owns borrow/disposal and quarantines unclean LIST failures,
+        // while preserving connections after clean final rejections (425 / 550).
+        var categories = await _listDirectory(_config.WatchPath, ct);
 
         var excluded = _config.ExcludedCategories;
         var categoryDirs = categories
@@ -111,29 +121,34 @@ public class NewReleaseMonitor
             .Where(name => !excluded.Any(ex => string.Equals(ex, name, StringComparison.OrdinalIgnoreCase)))
             .ToList();
 
+        Exception? firstFailure = null;
+        string? firstFailedPath = null;
+        var failedCategories = 0;
         foreach (var category in categoryDirs)
         {
             ct.ThrowIfCancellationRequested();
 
             // Throttle without holding a pool slot — sleep, then borrow per category.
-            if (_pool.ActiveCount > 0)
-                await Task.Delay(2000, ct);
+            if (_activeCount() > 0)
+                await _delay(TimeSpan.FromSeconds(2), ct);
             else
-                await Task.Delay(200, ct);
+                await _delay(TimeSpan.FromMilliseconds(200), ct);
 
             var categoryPath = _config.WatchPath.TrimEnd('/') + "/" + category;
             FtpListItem[] releases;
             try
             {
-                await using var conn = await _pool.Borrow(ct);
-                if (_pool.UseCpsv)
-                    releases = await CpsvDataHelper.ListDirectory(conn.Client, categoryPath, _pool.ControlHost, ct);
-                else
-                    releases = await conn.Client.GetListing(categoryPath, FtpListOption.AllFiles, ct);
+                releases = await _listDirectory(categoryPath, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {
-                Log.Debug(ex, "Failed to list {Category}, skipping", categoryPath);
+                firstFailure ??= ex;
+                firstFailedPath ??= categoryPath;
+                failedCategories++;
                 continue;
             }
 
@@ -171,5 +186,11 @@ public class NewReleaseMonitor
             _seeded = true;
             Log.Information("NewReleaseMonitor seeded with {Count} categories", categoryDirs.Count);
         }
+
+        // Keep successful categories current and retain failed categories' snapshots,
+        // but let the loop report and back off an incomplete poll instead of resetting
+        // its error counter. One summary per cycle avoids a warning per category.
+        if (firstFailure != null)
+            throw new IOException($"{failedCategories} category listing(s) failed; first {firstFailedPath}", firstFailure);
     }
 }
