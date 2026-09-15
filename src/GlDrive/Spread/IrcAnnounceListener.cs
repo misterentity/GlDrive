@@ -43,17 +43,21 @@ public class IrcAnnounceListener : IDisposable
         "the", "from", "for", "with", "and", "now", "new"
     };
 
-    private static bool IsPlausibleReleaseName(string? candidate)
+    internal static bool IsPlausibleReleaseName(string? candidate)
     {
         if (string.IsNullOrWhiteSpace(candidate)) return false;
         var s = candidate.Trim();
         if (s.Length < 10) return false;
         if (KnownAnnounceVerbs.Contains(s)) return false;
-        // Scene names always have at least one of: '.', '-', or a digit
+        // Scene names always carry a structural token: a '.' or '_' separator, a digit
+        // (year / resolution / episode), or an uppercase letter (the group tag). A hyphen
+        // alone is NOT structure — hyphenated lowercase prose ("father-to-be") passed the
+        // old check and launched a 23-probe auto-race off a plot summary (v3.10.118).
+        // Validated against 24,881 matched announces: only the prose line is rejected.
         bool hasStructure = false;
         foreach (var c in s)
         {
-            if (c == '.' || c == '-' || (c >= '0' && c <= '9'))
+            if (c == '.' || c == '_' || (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z'))
             {
                 hasStructure = true;
                 break;
