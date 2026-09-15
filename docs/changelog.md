@@ -12,6 +12,11 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.119 — FiSH diagnostic privacy (2026-09-15)
+
+- Removed secret-key fragments from successful/failed message decryption and both DH1080 exchange completion logs. Eight-character keys were previously fully reconstructable from the supposed mask.
+- Nine behavioral regressions cover rendered and structured diagnostics; 1,324 tests, the Release build, native FTPS/WinFsp smoke and WPF render checks passed. See [release report](releases/v3.10.119.md) for evidence and remaining external failures.
+
 ## v3.10.117 — notification polling recovery (2026-09-14)
 
 - Internal data-channel cancellation no longer permanently stops notification polling. Only requested shutdown ends the loop.
