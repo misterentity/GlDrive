@@ -693,8 +693,9 @@ public class IrcService : IDisposable
                     var bestQ = winIdx >= 0 ? qualities[winIdx] : 0;
                     if (decrypted != null && bestQ >= FishCipher.FailedDecryptQualityThreshold)
                     {
-                        Log.Information("FiSH PM {Target}: prefix={Prefix} cipherLen={CL} keyMask={KM} winKey={Idx} decrypted={Stats}",
-                            effectiveTarget, prefix, text.Length, MaskKey(keyEntry.Key), winIdx, TextStats(decrypted));
+                        // Diagnostics must never contain key material, including partial keys.
+                        Log.Information("FiSH PM {Target}: prefix={Prefix} cipherLen={CL} winKey={Idx} decrypted={Stats}",
+                            effectiveTarget, prefix, text.Length, winIdx, TextStats(decrypted));
 
                         // If a non-primary key won, swap so future encrypts/decrypts use it primary.
                         if (winIdx > 0)
@@ -733,8 +734,8 @@ public class IrcService : IDisposable
                     {
                         // All keys produced garbage (wrong key entirely — peer using a different KDF or static key).
                         var ch = CipherHash(text);
-                        Log.Warning("FiSH PM {Target}: decrypt failed. prefix={Prefix} cipherLen={CL} cipherHash={Hash} keyMask={KM} qualities=[{Q0:F2},{Q1:F2}] manual={Manual} hasSecret={HasSecret}",
-                            effectiveTarget, prefix, text.Length, ch, MaskKey(keyEntry.Key),
+                        Log.Warning("FiSH PM {Target}: decrypt failed. prefix={Prefix} cipherLen={CL} cipherHash={Hash} qualities=[{Q0:F2},{Q1:F2}] manual={Manual} hasSecret={HasSecret}",
+                            effectiveTarget, prefix, text.Length, ch,
                             qualities.Length > 0 ? qualities[0] : 0,
                             qualities.Length > 1 ? qualities[1] : 0,
                             keyEntry.Manual, !string.IsNullOrEmpty(keyEntry.DhSecretHex));
@@ -858,8 +859,8 @@ public class IrcService : IDisposable
                     else
                     {
                         var ch = CipherHash(text);
-                        Log.Warning("FiSH NOTICE {Target}: decrypt failed. prefix={Prefix} cipherLen={CL} cipherHash={Hash} keyMask={KM} qualities=[{Q0:F2},{Q1:F2}] manual={Manual} hasSecret={HasSecret}",
-                            effectiveTarget, prefix, text.Length, ch, MaskKey(keyEntry.Key),
+                        Log.Warning("FiSH NOTICE {Target}: decrypt failed. prefix={Prefix} cipherLen={CL} cipherHash={Hash} qualities=[{Q0:F2},{Q1:F2}] manual={Manual} hasSecret={HasSecret}",
+                            effectiveTarget, prefix, text.Length, ch,
                             qualities.Length > 0 ? qualities[0] : 0,
                             qualities.Length > 1 ? qualities[1] : 0,
                             keyEntry.Manual, !string.IsNullOrEmpty(keyEntry.DhSecretHex));
@@ -1351,9 +1352,6 @@ public class IrcService : IDisposable
     private static string MaskMid(string s) =>
         s.Length < 12 ? "***" : $"{s[..6]}...{s[^6..]}";
 
-    private static string MaskKey(string k) =>
-        k.Length < 8 ? "***" : $"{k[..4]}...{k[^4..]}";
-
     private static string TextStats(string s)
     {
         if (string.IsNullOrEmpty(s)) return "len=0";
@@ -1576,8 +1574,8 @@ public class IrcService : IDisposable
                 return;
             }
 
-            Log.Information("DH1080 FINISH send to {Nick}: ourPubLen={Len} ourPubMask={Mask} primaryKey={KM} altKey={AM}",
-                nick, ourPub.Length, MaskMid(ourPub), MaskKey(primaryKey), MaskKey(altKey));
+            Log.Information("DH1080 FINISH send to {Nick}: ourPubLen={Len} ourPubMask={Mask}",
+                nick, ourPub.Length, MaskMid(ourPub));
 
             await _client.NoticeAsync(nick, Dh1080.FormatFinish(ourPub));
             AddSystemMessage(nick, $"DH1080 key exchange completed (initiated by {nick}) — {dhMode} mode");
@@ -1608,8 +1606,7 @@ public class IrcService : IDisposable
                 return;
             }
 
-            Log.Information("DH1080 derived for {Nick}: primaryKey={KM} altKey={AM}",
-                nick, MaskKey(primaryKey), MaskKey(altKey));
+            Log.Information("DH1080 derived for {Nick}: primary and alternate keys stored", nick);
 
             AddSystemMessage(nick, $"DH1080 key exchange completed — {dhMode} mode");
         }
