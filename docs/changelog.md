@@ -12,6 +12,12 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.121 — startup evidence and scan cancellation (2026-09-16)
+
+- Do not infer an unexpected exit from heartbeat age after planned downtime. Preserve previous running-marker evidence and report it after logging initialization; describe unknown exit causes accurately.
+- Propagate spread-scan shutdown cancellation without attempting another pool or recording it as contention. Internal deadlines still allow fallback.
+- All 1,340 regression tests, Release build, native FTPS/WinFsp smoke and 15 WPF renders passed. See the [release report](releases/v3.10.121.md) for deployment evidence and remaining external failures.
+
 ## v3.10.119 — FiSH diagnostic privacy (2026-09-15)
 
 - Removed secret-key fragments from successful/failed message decryption and both DH1080 exchange completion logs. Eight-character keys were previously fully reconstructable from the supposed mask.
