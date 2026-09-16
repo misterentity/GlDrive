@@ -83,21 +83,10 @@ public partial class App
         // managed exception handlers.
         RegisterApplicationRestart(null, 0);
 
-        // Crash recovery: if we detect an unclean shutdown (crash marker exists),
-        // log the restart. The watchdog writes "CRASH:<timestamp>" when it restarts us.
+        // Preserve the previous marker before claiming this session's marker. Reporting
+        // must wait until Serilog is configured, otherwise startup evidence is dropped.
         var crashMarker = Path.Combine(ConfigManager.AppDataPath, ".running");
-        if (File.Exists(crashMarker))
-        {
-            try
-            {
-                var markerContent = File.ReadAllText(crashMarker).Trim();
-                if (markerContent.StartsWith("CRASH:"))
-                    Log.Warning("GlDrive: restarted by watchdog after crash at {CrashTime}", markerContent[6..]);
-                else
-                    Log.Warning("GlDrive: detected unclean shutdown (previous session did not exit cleanly)");
-            }
-            catch { Log.Warning("GlDrive: detected unclean shutdown"); }
-        }
+        var previousSession = PreviousSessionDiagnostics.Capture(crashMarker);
         try
         {
             File.WriteAllText(crashMarker, DateTime.UtcNow.ToString("O"));
@@ -206,35 +195,11 @@ public partial class App
             catch { /* headless/early — log already has it */ }
         });
 
-        // Heartbeat diagnostic: inspect the previous instance's last heartbeat BEFORE
-        // starting a new one (the new monitor overwrites the file on first tick).
-        // A recent heartbeat (<90s) at startup means the previous process was alive
-        // until it died — instant native crash. A stale heartbeat means it hung first.
+        // A heartbeat survives clean exits and OS restarts. Its age measures elapsed
+        // time, not a hang or crash. Only a retained running marker supports an
+        // unclean-exit notification; even that does not establish the cause.
         var heartbeatCheck = GlDrive.Services.HeartbeatMonitor.CheckStaleHeartbeat();
-        // TODO(v1.85.x): if stale, surface to user via tray balloon after tray init.
-        TimeSpan? staleHeartbeatAge = null;
-        if (heartbeatCheck.HadHeartbeat)
-        {
-            var age = heartbeatCheck.AgeAtStartup ?? TimeSpan.Zero;
-            if (age > TimeSpan.FromSeconds(90))
-            {
-                Log.Warning("Previous instance heartbeat stale at startup — age={AgeSec}s, snapshot={Snapshot}",
-                    (int)age.TotalSeconds, heartbeatCheck.RawJson);
-                staleHeartbeatAge = age;
-            }
-            else
-                // A fresh heartbeat only proves the previous instance was ALIVE until
-                // shortly before this start — the file is never deleted on clean exit,
-                // so it can NOT distinguish clean shutdown from a native crash (the
-                // watchdog's [FTL] line is the crash signal). The old wording claimed
-                // "shut down cleanly" one second after watchdog-confirmed crashes.
-                Log.Information("Previous instance alive until ~{AgeSec}s before this start (no pre-exit hang; " +
-                    "see watchdog for crash-vs-clean)", (int)age.TotalSeconds);
-        }
-        else
-        {
-            Log.Information("No previous heartbeat file found (first run or clean shutdown)");
-        }
+        var previousExitIncomplete = previousSession.Report(Log.Logger, heartbeatCheck);
         _heartbeat = new GlDrive.Services.HeartbeatMonitor();
 
         // Initialize AI agent telemetry recorder
@@ -364,20 +329,19 @@ public partial class App
         TrayIconSetup.Configure(_taskbarIcon, _trayViewModel);
         _taskbarIcon.ForceCreate(false);
 
-        // One-shot tray balloon so the user knows last session likely crashed.
+        // One-shot tray balloon for an observed incomplete shutdown, without guessing why.
         // Best-effort: tray init may not have fully wired into the shell yet on
         // some boots; defer to Background dispatcher tick so the icon is live.
-        if (staleHeartbeatAge is { } staleAge)
+        if (previousExitIncomplete)
         {
-            var ageSec = (int)staleAge.TotalSeconds;
             var icon = _taskbarIcon;
             _ = Dispatcher.BeginInvoke(new Action(() =>
             {
                 try
                 {
                     icon?.ShowNotification(
-                        "GlDrive recovered",
-                        $"Previous session ended unexpectedly ({ageSec}s heartbeat gap). Logs in %AppData%\\GlDrive\\logs.",
+                        "GlDrive restarted",
+                        "Previous shutdown did not complete; cause unknown. Logs in %AppData%\\GlDrive\\logs.",
                         H.NotifyIcon.Core.NotificationIcon.Warning);
                 }
                 catch (Exception ex) { Log.Debug(ex, "Heartbeat toast failed"); }

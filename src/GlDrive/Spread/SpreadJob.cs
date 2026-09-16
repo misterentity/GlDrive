@@ -1423,6 +1423,7 @@ public class SpreadJob : IDisposable
 
     private async Task ScanSites(Dictionary<string, string> sitePaths, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         // Merge in any alternate sources discovered by failover (read-only snapshot).
         // sitePaths itself is NEVER mutated (the dispatch loop enumerates it elsewhere);
         // we build a separate map for this scan only.
@@ -1527,6 +1528,11 @@ public class SpreadJob : IDisposable
                     await ScanDirectoryRecursive(mainPool, basePath, basePath, files, signals, 0, ct);
                     scanDone = true;
                 }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    // Stopping the job must not become a fallback login attempt.
+                    throw;
+                }
                 catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
                 {
                     // Borrow timeout on main pool — don't blow away the whole scan,
@@ -1567,6 +1573,7 @@ public class SpreadJob : IDisposable
             // The fallback must never take the LAST spread permit — an FXP borrow waits
             // 30s while this scan re-runs every ~2s, so an unconditional fallback starves
             // transfers forever. See CandidatePredicates.ScanMayBorrowSpreadPool.
+            ct.ThrowIfCancellationRequested();
             var yieldedToTransfers = false;
             if (!scanDone && spreadPool != null)
             {
@@ -1589,6 +1596,10 @@ public class SpreadJob : IDisposable
                             serverName, basePath);
                         await ScanDirectoryRecursive(spreadPool, basePath, basePath, files, signals, 0, ct);
                         scanDone = true;
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                    {
+                        throw;
                     }
                     catch (Exception ex)
                     {
@@ -1631,6 +1642,7 @@ public class SpreadJob : IDisposable
         });
 
         await Task.WhenAll(tasks);
+        ct.ThrowIfCancellationRequested();
 
         // A successful, completely empty listing from a source that previously owned
         // files is the earliest observable signal of glftpd moving /incoming -> /recent.

@@ -10,8 +10,8 @@ namespace GlDrive.Services;
 /// Writes a heartbeat JSON file every 30 seconds containing process state
 /// (pid, time, version, thread count, working set, GC counts). On startup,
 /// the previous instance's last heartbeat can be inspected via
-/// <see cref="CheckStaleHeartbeat"/> to distinguish instant native crashes
-/// (recent heartbeat) from hangs that crashed later (stale heartbeat).
+/// <see cref="CheckStaleHeartbeat"/> for timing evidence. A heartbeat survives clean
+/// shutdown and cannot by itself distinguish downtime, OS restart, hang or crash.
 ///
 /// Native crashes in GnuTLS / WinFsp / CPSV bypass managed exception handlers
 /// (Dispatcher / AppDomain / Unobserved) and skip the v1.65 crashdump writer,
