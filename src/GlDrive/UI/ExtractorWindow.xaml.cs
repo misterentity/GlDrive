@@ -1504,6 +1504,53 @@ public partial class ExtractorWindow : Window
         // through this method, so this is the only placement that cannot be bypassed.
         if (SkipIfAbandoned(item.FilePath)) return;
 
+        // The SECOND invariant this chokepoint owes every route, and it was missing until
+        // v3.10.120. WaitForVolumeSetReady shipped in v3.10.62/.63 wired into exactly one
+        // caller — HandleWatchedFileAsync — while the initial watch-folder scan and the
+        // recovery scan reached extraction directly. On 2026-09-14 09:31:28, one second
+        // after launch, both startup routes ran UnRAR against incomplete UHD sets with no
+        // "watched archive detected" / "still arriving" / "settled" line anywhere in the
+        // log, took exit 3, and recorded the sets durably unrecoverable.
+        //
+        // ExtractFailureClassifier's "unpacked file size does not match header" marker is
+        // Permanent ONLY on the promise that "a still-arriving set must never reach
+        // extraction" — a promise written in its source and kept by one caller out of
+        // three. A restart landing mid-download of a multi-volume set is routine here
+        // (the updater polls every 3h), so this was live every time that coincided.
+        //
+        // Placed here for the same reason SkipIfAbandoned is, in the words already above:
+        // guarding call sites is how this defect survived two fixes. For a set that has
+        // already settled — including the watcher route, which gates early for its own
+        // logging — this returns Ready after one 2s sample and logs nothing.
+        // Task.Run, not a bare await: two of the three routes call this from inside
+        // Dispatcher.Invoke, so the captured context is the UI thread. WaitForVolumeSetReady
+        // samples the whole volume set every 2s and can legitimately run for hours on a big
+        // set — on the dispatcher that would freeze the window for the entire download. The
+        // watcher route already ran it on a pool thread; this makes that true for all three.
+        var readiness = await Task.Run(
+            () => WaitForVolumeSetReady(item.FilePath, _lifetimeCts.Token), _lifetimeCts.Token);
+
+        if (readiness != ArchiveWaitOutcome.Ready)
+        {
+            // Same two endings the watcher route draws, for the same reasons: a stall may
+            // clear on a retry, the arrival ceiling cannot. Neither is a durable verdict —
+            // an incomplete set is not a corrupt one, which is the entire defect.
+            if (ArchiveWait.DeservesRetry(readiness))
+            {
+                Log.Warning("Extractor: archive stalled before it was ready — {Path}", item.FilePath);
+                ScheduleWatchRetry(item.FilePath);
+            }
+            else
+            {
+                Log.Warning(
+                    "Extractor: archive never stopped growing — abandoning {Path} without consuming a retry",
+                    item.FilePath);
+                AbandonWatchedPath(item.FilePath, "still growing at the arrival ceiling", durable: false);
+            }
+
+            return;
+        }
+
         var gateHeld = false;
 
         var outputDir = GetOutputDir(item);
