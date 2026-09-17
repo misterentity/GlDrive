@@ -983,7 +983,7 @@ public class SpreadManager : IDisposable
 
         if (viableReceiverCount == 0)
         {
-            var reason = $"No viable destination ({string.Join(", ", receiverExclusions)})";
+            var reason = CandidatePredicates.DescribeNoViableDestination(receiverExclusions, sectionMissing, denials, category);
             Log.Information("Auto-race skipped: {Reason} for {Release} [{Section}]",
                 reason, releaseName, category);
             AutoRaceAttempted?.Invoke(category, releaseName, $"Skipped — {reason}");

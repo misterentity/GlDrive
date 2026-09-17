@@ -12,6 +12,11 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.122 — complete auto-race skip attribution (2026-09-16)
+
+- The "No viable destination" auto-race skip now names sites dropped earlier for a missing section mapping or a rules/metadata denial. Every tv-sports skip had blamed only the download-only source, while the fixable cause (zephyr has no [tv-sports] section) was never logged.
+- 1,344 regression tests (four new, wiring mutation caught) and the Release build passed. See the [release report](releases/v3.10.122.md).
+
 ## v3.10.121 — startup evidence and scan cancellation (2026-09-16)
 
 - Do not infer an unexpected exit from heartbeat age after planned downtime. Preserve previous running-marker evidence and report it after logging initialization; describe unknown exit causes accurately.

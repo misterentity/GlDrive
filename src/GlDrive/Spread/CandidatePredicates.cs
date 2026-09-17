@@ -75,6 +75,26 @@ internal static class CandidatePredicates
     }
 
     /// <summary>
+    /// Reason for the auto-race "no viable destination" skip. Sites dropped before the
+    /// receiver check (no section mapping, rules/metadata denial) are candidates too —
+    /// omitting them made every tv-sports skip blame the download-only source while the
+    /// fixable cause (zephyr has no [tv-sports]) was never printed (v3.10.122).
+    /// </summary>
+    internal static string DescribeNoViableDestination(
+        IEnumerable<string> receiverExclusions,
+        IReadOnlyCollection<string> sectionMissing,
+        IReadOnlyCollection<string> denials,
+        string category)
+    {
+        var parts = new List<string> { string.Join(", ", receiverExclusions) };
+        if (sectionMissing.Count > 0)
+            parts.Add($"no [{category}] on: {string.Join(", ", sectionMissing)}");
+        if (denials.Count > 0)
+            parts.Add($"denied: {string.Join(", ", denials)}");
+        return $"No viable destination ({string.Join("; ", parts)})";
+    }
+
+    /// <summary>
     /// May a directory scan fall back onto the dedicated FXP (spread) pool?
     ///
     /// The fallback exists so a saturated main pool can't abandon a scan outright, but
