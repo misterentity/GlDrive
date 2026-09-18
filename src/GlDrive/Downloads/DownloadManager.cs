@@ -390,6 +390,12 @@ public class DownloadManager : IDisposable
             _store.Update(item);
             DownloadStatusChanged?.Invoke(item);
 
+            itemCts.Token.ThrowIfCancellationRequested();
+            // Check the destination before listing remotely. Otherwise a network outage
+            // burns retries on a download that should remain parked for an absent drive.
+            if (DownloadTargetVolume.MissingVolumeRoot(item.LocalPath) is { } missingRoot)
+                throw new DriveNotFoundException($"Destination drive {missingRoot} is not mounted");
+
             // List files in the release directory
             var files = await _ftp.ListDirectory(item.RemotePath, itemCts.Token);
             var dataFiles = files.Where(f => f.Type == FluentFTP.FtpObjectType.File).ToList();
