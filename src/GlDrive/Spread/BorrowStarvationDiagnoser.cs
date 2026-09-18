@@ -44,7 +44,8 @@ public static class BorrowStarvationDiagnoser
         int Created,
         int Active,
         int MaxSize,
-        bool IsInLoginGateBackoff = false);
+        bool IsInLoginGateBackoff = false,
+        bool IsHostUnreachable = false);
 
     /// <summary>
     /// One-line cause for a single pool. Never speculates beyond the counters.
@@ -62,6 +63,17 @@ public static class BorrowStarvationDiagnoser
             return $"account login-gate backoff — no login permit was free, so new " +
                    $"connections are parked ~20s (created={s.Created}/{s.MaxSize}, active={s.Active}); " +
                    "local contention on this account — nothing was refused remotely";
+
+        // Checked BEFORE the empty-pool branch, because created=0 is what BOTH look
+        // like and only one of them is about the server. "Every connection was
+        // discarded" and "no connection was ever established" are different facts;
+        // a ghost session is a stale login on a server we reached, so it cannot
+        // explain a host that DNS does not resolve. On 2026-09-17 this branch told
+        // the operator to run !username against an unresolvable hostname 14,061
+        // times — advice that, taken, severs the account's own live sessions.
+        if (s.IsHostUnreachable)
+            return $"host unreachable — no connection was ever established (created=0/{s.MaxSize}); " +
+                   "DNS or routing, not the server — nothing was refused and no login was attempted";
 
         if (s.IsExhausted || (s.Created <= 0 && s.Active <= 0))
             return $"pool empty — every connection was discarded (created=0/{s.MaxSize}); " +
@@ -103,5 +115,6 @@ public static class BorrowStarvationDiagnoser
 
     /// <summary>A pool that could not hand out a connection on demand.</summary>
     public static bool IsStarved(PoolState s) =>
-        s.IsInCooldown || s.IsInLoginGateBackoff || s.IsExhausted || s.Created <= 0 || s.Active >= s.Created;
+        s.IsInCooldown || s.IsInLoginGateBackoff || s.IsHostUnreachable
+        || s.IsExhausted || s.Created <= 0 || s.Active >= s.Created;
 }

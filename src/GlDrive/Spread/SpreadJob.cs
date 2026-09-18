@@ -2310,7 +2310,8 @@ public class SpreadJob : IDisposable
     }
 
     private static BorrowStarvationDiagnoser.PoolState SnapshotPool(FtpConnectionPool p) =>
-        new(p.IsInCooldown, p.IsExhausted, p.TotalCreated, p.ActiveCount, p.MaxSize, p.IsInLoginGateBackoff);
+        new(p.IsInCooldown, p.IsExhausted, p.TotalCreated, p.ActiveCount, p.MaxSize,
+            p.IsInLoginGateBackoff, p.IsHostUnreachable);
 
     private async Task ExecuteTransfer(SpreadFileInfo file, string srcId, string dstId,
         string dstBasePath, CancellationToken ct)
