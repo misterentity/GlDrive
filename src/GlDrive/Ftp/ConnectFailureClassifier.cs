@@ -46,9 +46,38 @@ public static class ConnectFailureClassifier
         /// <summary>The local account login gate had no permit to hand out.</summary>
         AccountLoginCapped,
 
+        /// <summary>
+        /// The attempt never reached the server at all: DNS did not resolve the host,
+        /// or the network/host was unreachable. Defined by the TRANSPORT-LAYER outcome,
+        /// not by any reply — because there was no reply.
+        /// </summary>
+        HostUnreachable,
+
         /// <summary>A genuine connect fault — timeout, TLS failure, reset.</summary>
         ConnectFault,
     }
+
+    /// <summary>
+    /// Socket outcomes that mean the attempt never reached the server.
+    ///
+    /// Membership is decided by ONE property — did a packet ever get to the far end? —
+    /// not by enumerating codes we have happened to observe. Name resolution failures
+    /// and unreachable-network/host errors qualify; <c>ConnectionRefused</c> (10061),
+    /// <c>ConnectionReset</c> (10054) and <c>ConnectionAborted</c> (10053) deliberately
+    /// do NOT, because in every one of those a host answered — that is a statement about
+    /// the server, and the existing refusal/fault verdicts own it.
+    /// </summary>
+    private static readonly System.Collections.Generic.HashSet<System.Net.Sockets.SocketError> Unreachable =
+        new()
+        {
+            System.Net.Sockets.SocketError.HostNotFound,        // 11001 — DNS: no such host
+            System.Net.Sockets.SocketError.TryAgain,            // 11002 — DNS: non-authoritative, retry
+            System.Net.Sockets.SocketError.NoRecovery,          // 11003 — DNS: non-recoverable
+            System.Net.Sockets.SocketError.NoData,              // 11004 — DNS: valid name, no address
+            System.Net.Sockets.SocketError.NetworkDown,         // 10050
+            System.Net.Sockets.SocketError.NetworkUnreachable,  // 10051
+            System.Net.Sockets.SocketError.HostUnreachable,     // 10065
+        };
 
     /// <param name="ex">The exception the connect attempt threw.</param>
     /// <param name="callerCancelled">Whether the token the caller passed to Borrow is cancelled.</param>
@@ -80,6 +109,18 @@ public static class ConnectFailureClassifier
         // read only the top-level ex.Message, so a wrapped SocketException carrying
         // the refusal text missed its 90s BNC cooldown. That's the expensive
         // direction to get wrong: the real BNC lockout runs ~2 hours.
+        // Before any verdict that describes the SERVER or the ACCOUNT. If the packet
+        // never arrived, nothing about logins, ghost sessions or BNC state was
+        // observed, so none of those verdicts may be asserted. On 2026-09-17 the box
+        // lost DNS and its LAN route at 06:05; every one of the 14,219 resulting
+        // attempts landed in ConnectFault, which arms no backoff — so the pool
+        // re-attempted at ~32/second for 105 minutes and wrote ~14,200 identical
+        // stacks at Information, rolling the log three times. The classifier's own
+        // header already described that exact damage from 2026-08-13; the fix then
+        // named a single non-finding and let everything else fall through here.
+        if (IsUnreachable(ex))
+            return ConnectFailure.HostUnreachable;
+
         if (IndicatesRefusal(ex) || (bncStatedLoginLimit && ghostKillAlreadySpent))
             return ConnectFailure.ServerRefused;
 
@@ -99,6 +140,20 @@ public static class ConnectFailureClassifier
     /// kill, counting an exhaustion, logging a stack — is gated on this being true.
     /// </summary>
     public static bool IsRealFinding(ConnectFailure f) => f != ConnectFailure.CallerAbandoned;
+
+    /// <summary>
+    /// Walk the exception chain for a socket outcome in <see cref="Unreachable"/>.
+    /// Keys on <see cref="System.Net.Sockets.SocketException.SocketErrorCode"/> rather
+    /// than message text: the text is localized by the OS, so a substring match would
+    /// silently stop working on a non-English machine.
+    /// </summary>
+    public static bool IsUnreachable(System.Exception? ex)
+    {
+        if (ex is null) return false;
+        if (ex is System.Net.Sockets.SocketException se && Unreachable.Contains(se.SocketErrorCode))
+            return true;
+        return IsUnreachable(ex.InnerException);
+    }
 
     /// <summary>
     /// Walk the exception chain for a message stating the server actively refused the

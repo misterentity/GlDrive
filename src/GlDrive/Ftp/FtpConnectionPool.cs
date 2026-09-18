@@ -51,6 +51,14 @@ public class FtpConnectionPool : IAsyncDisposable
     // side had no part in. Same defect v3.10.48 fixed in the message, reintroduced
     // through the state it reads. Two causes, two fields.
     private long _gateBackoffUntilTicks;
+    // ...and the same rule a third time. A host that does not resolve, or a network
+    // with no route to it, is neither a refusal nor a permit shortage, so it gets its
+    // OWN deadline field rather than borrowing one whose name would then lie. Longer
+    // than the gate backoff because nothing local can shorten it: DNS and routing
+    // recover on their own schedule, and re-asking every 31ms (2026-09-17: ~32
+    // attempts/second for 105 minutes) neither fixes them nor learns anything new.
+    private long _unreachableUntilTicks;
+    private static readonly TimeSpan UnreachableCooldown = TimeSpan.FromSeconds(60);
 
     // Health counters — flushed hourly by HealthRollup
     public double AvgConnectMs { get; private set; }
@@ -111,7 +119,14 @@ public class FtpConnectionPool : IAsyncDisposable
     /// This is the predicate for scheduling decisions; the two flags above exist
     /// so the DIAGNOSIS can still name which one applies.
     /// </summary>
-    public bool IsThrottled => IsInCooldown || IsInLoginGateBackoff;
+    /// <summary>
+    /// True while new-connection creation is parked because the host could not be
+    /// reached at all (DNS failure, or no route). Says nothing about the server —
+    /// we never got far enough to learn anything about it.
+    /// </summary>
+    public bool IsHostUnreachable => Interlocked.Read(ref _unreachableUntilTicks) > DateTime.UtcNow.Ticks;
+
+    public bool IsThrottled => IsInCooldown || IsInLoginGateBackoff || IsHostUnreachable;
 
     /// <summary>PRD O2 — last observed BNC login cap (parsed from "restricted to N simultaneous logins"), or null.</summary>
     public int? ObservedLoginCap { get; private set; }
@@ -132,6 +147,7 @@ public class FtpConnectionPool : IAsyncDisposable
         Interlocked.Exchange(ref _ghostKilledSinceSuccess, 0);
         Interlocked.Exchange(ref _refusedUntilTicks, 0);
         Interlocked.Exchange(ref _gateBackoffUntilTicks, 0);
+        Interlocked.Exchange(ref _unreachableUntilTicks, 0);
         lock (_connectMsSamples)
         {
             if (_connectMsSamples.Count < MaxHealthSamples) _connectMsSamples.Add(ms);
@@ -258,6 +274,18 @@ public class FtpConnectionPool : IAsyncDisposable
             _loginGate?.Release(_priorityLogins);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Short, human-readable transport outcome for the unreachable log line — the one
+    /// fact the dropped stack actually carried.
+    /// </summary>
+    private static string DescribeUnreachable(Exception ex)
+    {
+        for (Exception? e = ex; e != null; e = e.InnerException)
+            if (e is System.Net.Sockets.SocketException se)
+                return $"{se.SocketErrorCode}/{se.ErrorCode}";
+        return "unreachable";
     }
 
     /// <summary>
@@ -580,12 +608,20 @@ public class FtpConnectionPool : IAsyncDisposable
         // reason differs, and the reason is what the operator reads.
         var refusedUntil = Interlocked.Read(ref _refusedUntilTicks);
         var gateUntil = Interlocked.Read(ref _gateBackoffUntilTicks);
-        var parkedUntil = Math.Max(refusedUntil, gateUntil);
+        // The third parked state has to be READ here as well as armed in the failure
+        // handler, or arming it changes nothing: this is the only place the pool
+        // declines to open a connection. A backoff that is written but never consulted
+        // is the v3.10.54 shape — 0 fires in 534 evaluations, failing silently.
+        var unreachableUntil = Interlocked.Read(ref _unreachableUntilTicks);
+        var parkedUntil = Math.Max(refusedUntil, Math.Max(gateUntil, unreachableUntil));
         if (parkedUntil > 0 && DateTime.UtcNow.Ticks < parkedUntil)
         {
-            var reason = DateTime.UtcNow.Ticks < refusedUntil
+            var nowTicks = DateTime.UtcNow.Ticks;
+            var reason = nowTicks < refusedUntil
                 ? "Server in BNC cooldown"
-                : "Account login-gate backoff (no permit)";
+                : nowTicks < unreachableUntil
+                    ? "Host unreachable (DNS or routing) — nothing was refused and no login was attempted"
+                    : "Account login-gate backoff (no permit)";
             if (_created <= 0)
             {
                 IncrementExhaust();
@@ -654,7 +690,17 @@ public class FtpConnectionPool : IAsyncDisposable
                 // fail-fast instead of re-spinning the gate. (Mutually exclusive with the
                 // 90s refusal cooldown above; refusal wins.)
                 var gateCapped = verdict == ConnectFailureClassifier.ConnectFailure.AccountLoginCapped;
-                if (refused)
+                var unreachable = verdict == ConnectFailureClassifier.ConnectFailure.HostUnreachable;
+                var armedUnreachable = false;
+                if (unreachable)
+                {
+                    // Only the transition INTO the window logs; re-arming while already
+                    // parked is silent. Without this the rate-limit would be no limit at
+                    // all, because every attempt re-arms.
+                    armedUnreachable = Interlocked.Read(ref _unreachableUntilTicks) <= DateTime.UtcNow.Ticks;
+                    Interlocked.Exchange(ref _unreachableUntilTicks, DateTime.UtcNow.Add(UnreachableCooldown).Ticks);
+                }
+                else if (refused)
                 {
                     Interlocked.Exchange(ref _refusedUntilTicks, DateTime.UtcNow.Add(CooldownWindow).Ticks);
                     Log.Information("Pool[{Pool}]: server entering {Sec}s BNC cooldown (refusal detected) — pausing new connections",
@@ -671,7 +717,20 @@ public class FtpConnectionPool : IAsyncDisposable
                 // BNC cooldown, ghost-kill triggered) is already logged once per
                 // episode by dedicated paths; repeating it as WRN for every retry
                 // floods the log. The failure-taxonomy metrics surface the pattern.
-                if (_created >= _maxSize)
+                if (unreachable)
+                {
+                    // No stack, and one line per cooldown window rather than one per
+                    // attempt. The stack for an unresolved host is byte-identical every
+                    // time and names only the socket layer, so 14,219 copies of it
+                    // (2026-09-17) carried exactly as much information as one and cost
+                    // three log rollovers, evicting the history needed to diagnose it.
+                    if (armedUnreachable)
+                        Log.Warning(
+                            "Pool[{Pool}]: host unreachable ({Detail}) — parking new connections for {Sec}s. " +
+                            "Nothing was refused and no login was attempted; this is DNS or routing, not the server.",
+                            Name, DescribeUnreachable(ex), (int)UnreachableCooldown.TotalSeconds);
+                }
+                else if (_created >= _maxSize)
                     Log.Debug(ex, "Pool[{Pool}]: new connection failed (at capacity, created={Created}, max={Max})", Name, _created, _maxSize);
                 else
                     Log.Information(ex, "Pool[{Pool}]: new connection failed (created={Created}, max={Max})", Name, _created, _maxSize);
