@@ -30,6 +30,46 @@ public class FtpClientFactory
         _ghostKillThrottle = ghostKillThrottle ?? new GhostKillThrottle();
     }
 
+    /// <summary>
+    /// Settings that forbid FluentFTP from acting on a control channel behind the
+    /// back of whoever currently owns it. The pool hands a connection to exactly one
+    /// borrower at a time, and every one of these defaults breaks that exclusivity.
+    ///
+    /// <c>Noop = false</c> — the library's NOOP daemon read on its own background
+    /// thread, racing the pool's neutralize/dispose and crashing the process from
+    /// <c>GnuTlsInternalStream.Read</c> (6x Event 1026 on 2026-06-02). Keeping idle
+    /// connections warm is the pool's owner-exclusive keepalive instead.
+    ///
+    /// <c>DisconnectWithQuit = false</c> — the QUIT+read cycle during Disconnect
+    /// read from poisoned GnuTLS streams during disposal and crashed the process.
+    ///
+    /// <c>SelfConnectMode = Never</c> — the library default is
+    /// <see cref="FtpSelfConnectMode.OnConnectionLost"/>, which makes any
+    /// <c>Execute</c> on a control channel FluentFTP believes has dropped perform a
+    /// full reconnect (AUTH TLS, USER, PASS) transparently, inside the command. That
+    /// login is issued by the library, so <see cref="ServerLoginGate"/> never sees it
+    /// and cannot reserve against it — on a 4-login account the cap is then overshot
+    /// by a login nothing in our accounting knows exists, the BNC answers 530, and
+    /// the pool reports a server fault while its own counter still reads
+    /// <c>created=0</c>. On 2026-09-18 (v3.10.124) 62 exception stacks carried the
+    /// signature <c>Execute -> Connect(reConnect) -> HandshakeAsync</c>, rising from
+    /// 31 two days earlier — and those are only the silent re-logins that FAILED; a
+    /// successful one logs nothing at all, which is why the cost was attributed to
+    /// borrow timeouts and ghost sessions for as long as it was.
+    ///
+    /// With <c>Never</c> a dropped connection makes the command throw, the caller
+    /// disposes the <c>PooledConnection</c>, the pool discards it, and the
+    /// replacement is created through the gate — the path the pool already takes
+    /// whenever a silent reconnect fails today. Explicit <c>Connect</c> still works:
+    /// this factory calls it directly, and the pool has no other way in.
+    /// </summary>
+    internal static void ApplyOwnerExclusiveConfig(FtpConfig config)
+    {
+        config.Noop = false;
+        config.DisconnectWithQuit = false;
+        config.SelfConnectMode = FtpSelfConnectMode.Never;
+    }
+
     public AsyncFtpClient Create()
     {
         var conn = _serverConfig.Connection;
@@ -103,27 +143,7 @@ public class FtpClientFactory
         // when connections are in a poisoned state (e.g., after failed FXP transfers)
         client.Config.StaleDataCheck = false;
 
-        // FluentFTP's built-in NOOP daemon is DISABLED. It ran reads on its own
-        // background thread, every NoopInterval, independent of who owned the
-        // connection. When the pool neutralized/disposed a poisoned connection
-        // (socket Close + m_customStream null in NeutralizeGnuTls) while a daemon
-        // read was in flight, the read dereferenced freed state and threw an NRE
-        // from GnuTlsInternalStream.Read that escaped to terminate the process —
-        // 6 such crashes on 2026-06-02 (Event 1026), all stack
-        // `GnuTlsInternalStream.Read` <- threadpool dispatch, NOT the NoopDaemon
-        // frame our UnobservedTaskException handler suppresses.
-        //
-        // Keeping idle pool connections warm is now the pool's job via the
-        // owner-exclusive FtpConnectionPool keepalive (ConfigureHealth): it reads
-        // a connection OUT of the channel before NOOPing it, so a keepalive read
-        // can never run concurrently with a borrow, quarantine, or dispose of the
-        // same connection. No background thread ever reads a connection another
-        // thread might be tearing down — the race is gone.
-        client.Config.Noop = false;
-
-        // Skip QUIT+read cycle during Disconnect — prevents GnuTLS from attempting
-        // to read from poisoned streams during disposal, which crashes the process
-        client.Config.DisconnectWithQuit = false;
+        ApplyOwnerExclusiveConfig(client.Config);
 
         // Self-signed cert validation via TOFU
         // Run on a thread pool thread with no sync context to avoid deadlocks
