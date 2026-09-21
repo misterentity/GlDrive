@@ -68,6 +68,12 @@ public class FtpClientFactory
         config.Noop = false;
         config.DisconnectWithQuit = false;
         config.SelfConnectMode = FtpSelfConnectMode.Never;
+        // Execute also requests a reconnect on a HEALTHY encrypted connection
+        // after the default 750 socket transactions. With Never that becomes a
+        // command failure, potentially halfway through our custom CPSV sequence.
+        // Disable library-owned recycling as well as library-owned reconnects;
+        // real connection loss still fails and is recovered through the pool.
+        config.SslSessionLength = 0;
     }
 
     public AsyncFtpClient Create()

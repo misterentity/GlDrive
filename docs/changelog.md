@@ -12,6 +12,15 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.126 — preserve healthy FTPS sessions (2026-09-21)
+
+- Disable FluentFTP's transaction-count session recycling alongside its automatic reconnect policy. Healthy sessions no longer fail at the default TLS transaction limit, interrupt CPSV sequences, or churn pooled logins.
+- A native regression reproduced the production exception before the fix, then passed 800 commands on one session without re-login. All 1,371 regression tests and 22 native FTPS/WinFsp assertions passed. See the [release report](releases/v3.10.126.md).
+
+## v3.10.125 — pool-owned reconnects (prerelease, 2026-09-18)
+
+- Prevent FluentFTP from logging in outside the shared login gate. Version 3.10.126 completes this change by also disabling transaction-count recycling.
+
 ## v3.10.124 — check download destination before FTP access (2026-09-18)
 
 - Check for an absent destination drive before listing the remote release. A network outage can no longer consume the retry budget of a download that should be parked waiting for its drive.
