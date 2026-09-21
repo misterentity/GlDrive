@@ -24,6 +24,21 @@ await using var pool = new FtpConnectionPool(factory, 2);
 using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(90));
 await pool.Initialize(deadline.Token);
 var ftp = new FtpOperations(pool);
+// Cross FluentFTP's default TLS transaction limit on the SAME borrowed session.
+// SelfConnectMode.Never with the default SslSessionLength rejects a healthy
+// connection here, before the command ever reaches the fixture.
+await using (var connection = await pool.Borrow(deadline.Token))
+{
+    var client = connection.Client;
+    var connectCount = client.Status.ConnectCount;
+    for (var i = 0; i < 800; i++)
+    {
+        var reply = await client.Execute("NOOP", deadline.Token);
+        if (reply.Code != "200") throw new Exception($"NOOP {i} failed: {reply.Code}");
+    }
+    Check(client.Status.ConnectCount == connectCount,
+        "800 native FTPS commands survive the TLS transaction limit without re-login");
+}
 var remoteRoot = "/check-" + Guid.NewGuid().ToString("N");
 await ftp.CreateDirectory(remoteRoot, deadline.Token);
 var notificationRoot = remoteRoot + "/notifications";

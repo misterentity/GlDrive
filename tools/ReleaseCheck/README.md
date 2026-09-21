@@ -6,7 +6,7 @@ Run on Windows with .NET 10, installed WinFsp, Python, pyftpdlib and pyOpenSSL. 
 2. Run `dotnet run --project tools/ReleaseCheck -c Release -- <temporary-state-json-path>`.
 3. Stop the fixture process and remove its directory (the `root` in the state JSON) after verifying that it is under the system temporary directory.
 
-The harness checks real GnuTLS/FluentFTP transfers, mounted-file disk buffering, shared open handles, dirty rename and volume flush. It then mounts an unused drive letter to exercise Windows create/write/flush/read/rename/delete through WinFsp. It unmounts its own drive in `finally`.
+The harness first runs 800 commands on one borrowed FTPS session, crossing FluentFTP's default TLS transaction limit and verifying that no re-login occurs. It then checks real GnuTLS/FluentFTP transfers, mounted-file disk buffering, shared open handles, dirty rename and volume flush. It mounts an unused drive letter to exercise Windows create/write/flush/read/rename/delete through WinFsp and unmounts its own drive in `finally`.
 
 It also rejects two NOOP probes through the disposable fixture: the monitor must signal connection loss, reject the first reconnect probe, and wait for a positive reply before reporting recovery. Shutdown must not emit another connection-loss event.
 
