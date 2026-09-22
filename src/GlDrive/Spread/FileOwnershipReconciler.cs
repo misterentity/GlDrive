@@ -81,6 +81,11 @@ internal static class FileOwnershipReconciler
     /// An empty listing is NOT evidence about individual files — glftpd moves a
     /// finished release between sections, which reads as "0 files" for one cycle and
     /// is handled by the relocation follower — so it prunes nothing.
+    ///
+    /// A listing is a snapshot from when the LIST ran, not from when it is applied.
+    /// A transfer that completed in between recorded ownership the snapshot cannot
+    /// contain; <paramref name="confirmedAfterListing"/> names those files so their
+    /// absence is not read as a deletion (2026-09-21: 55 files re-sent into dupe-skips).
     /// Returns the names dropped from <paramref name="fileInfos"/> so the caller can
     /// clean its own per-file maps and log the change.
     /// </summary>
@@ -90,7 +95,8 @@ internal static class FileOwnershipReconciler
         Dictionary<string, HashSet<string>> ownership,
         Dictionary<string, SpreadFileInfo> fileInfos,
         Dictionary<(string fileName, string serverId), long> observedSizes,
-        Dictionary<string, int> serverFileCount)
+        Dictionary<string, int> serverFileCount,
+        Func<string, bool>? confirmedAfterListing = null)
     {
         var dropped = new List<string>();
         if (listing.Count == 0) return dropped;
@@ -101,6 +107,7 @@ internal static class FileOwnershipReconciler
         foreach (var (name, owners) in ownership.ToList())
         {
             if (listed.Contains(name) || !owners.Contains(serverId)) continue;
+            if (confirmedAfterListing?.Invoke(name) == true) continue;
 
             RemoveOwner(serverId, owners, serverFileCount);
             observedSizes.Remove((name, serverId));

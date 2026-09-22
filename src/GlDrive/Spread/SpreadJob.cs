@@ -129,6 +129,12 @@ public class SpreadJob : IDisposable
     private readonly Dictionary<string, ActiveTransferInfo> _activeTransfers = new();
     private readonly HashSet<(string fileName, string dstId)> _inFlightFiles =
         new(new FileDstTupleComparer());
+    // Ownership epoch (under _ownershipLock): bumped on every confirmed transfer and
+    // captured when a LIST starts, so a listing applied after a completion it could
+    // not have seen doesn't revoke that completion (see FileOwnershipReconciler.Prune).
+    private long _ownershipEpoch;
+    private readonly Dictionary<(string fileName, string dstId), long> _transferConfirmedEpoch =
+        new(new FileDstTupleComparer());
 
     // Directory cleanup: track created dirs and successful transfers per destination
     private readonly HashSet<string> _dirsCreated = new(); // serverId values that got MKD
@@ -1486,7 +1492,7 @@ public class SpreadJob : IDisposable
                 return $"{name}:{kv.Value}";
             })));
 
-        var results = new List<(string serverId, List<SpreadFileInfo> files, ScanSignals signals)>();
+        var results = new List<(string serverId, List<SpreadFileInfo> files, ScanSignals signals, long listingEpoch)>();
         var scanLock = new Lock();
         var hardFailureCount = 0;
         var contentionDeferralCount = 0;
@@ -1517,6 +1523,8 @@ public class SpreadJob : IDisposable
             var files = new List<SpreadFileInfo>();
             var signals = new ScanSignals();
             var scanDone = false;
+            long listingEpoch;
+            lock (_ownershipLock) listingEpoch = _ownershipEpoch;
             Exception? lastError = null;
 
             if (mainPool != null)
@@ -1611,7 +1619,7 @@ public class SpreadJob : IDisposable
             if (scanDone)
             {
                 Log.Information("Spread scan: {Server} returned {Count} files", serverName, files.Count);
-                lock (scanLock) results.Add((serverId, files, signals));
+                lock (scanLock) results.Add((serverId, files, signals, listingEpoch));
             }
             else if (!yieldedToTransfers)
             {
@@ -1652,7 +1660,7 @@ public class SpreadJob : IDisposable
         // Process all results under lock once
         lock (_ownershipLock)
         {
-            foreach (var (serverId, files, signals) in results)
+            foreach (var (serverId, files, signals, listingEpoch) in results)
             {
                 var serverName = _serverConfigs.TryGetValue(serverId, out var cfg) ? cfg.Name : serverId;
                 Log.Information("Spread scan: {Server} found {Count} files at {Path}",
@@ -1666,7 +1674,7 @@ public class SpreadJob : IDisposable
                 {
                     suspectedSourceMigrations.Add(serverId);
                 }
-                ProcessFiles(serverId, files);
+                ProcessFiles(serverId, files, listingEpoch);
                 _destSawMarker[serverId] = signals.SawCompletionMarker;
                 _destHasMissingStub[serverId] = signals.HasMissingStub;
                 if (_sourceServersField.Contains(serverId))
@@ -1915,9 +1923,11 @@ public class SpreadJob : IDisposable
         }
     }
 
-    private void ProcessFiles(string serverId, List<SpreadFileInfo> files)
+    private void ProcessFiles(string serverId, List<SpreadFileInfo> files, long listingEpoch)
     {
         // Called inside _ownershipLock
+        bool ConfirmedAfterListing(string name) =>
+            _transferConfirmedEpoch.TryGetValue((name, serverId), out var epoch) && epoch > listingEpoch;
         var serverConfig = _serverConfigs[serverId];
         var siteRules = serverConfig.SpreadSite.Skiplist;
         var globalRules = _spreadConfig.GlobalSkiplist;
@@ -1932,7 +1942,8 @@ public class SpreadJob : IDisposable
             var isNewFile = !_fileInfos.ContainsKey(file.Name);
             FileOwnershipReconciler.Observe(
                 serverId, file, _fileOwnership, _fileInfos, _observedFileSizes,
-                _serverFileCount, _inFlightFiles.Contains((file.Name, serverId)));
+                _serverFileCount,
+                _inFlightFiles.Contains((file.Name, serverId)) || ConfirmedAfterListing(file.Name));
 
             if (isNewFile && _fileInfos.ContainsKey(file.Name))
             {
@@ -1954,7 +1965,7 @@ public class SpreadJob : IDisposable
         // partial list, which must never be read as "the rest was deleted".
         if (!_isNuked)
         {
-            var dropped = FileOwnershipReconciler.Prune(serverId, files, _fileOwnership, _fileInfos, _observedFileSizes, _serverFileCount);
+            var dropped = FileOwnershipReconciler.Prune(serverId, files, _fileOwnership, _fileInfos, _observedFileSizes, _serverFileCount, ConfirmedAfterListing);
             if (dropped.Count > 0)
             {
                 foreach (var name in dropped) _fileActions.Remove(name);
@@ -2452,6 +2463,7 @@ public class SpreadJob : IDisposable
                 lock (_ownershipLock)
                 {
                     _observedFileSizes[(file.Name, dstId)] = file.Size;
+                    _transferConfirmedEpoch[(file.Name, dstId)] = ++_ownershipEpoch;
                     if (_fileOwnership.TryGetValue(file.Name, out var owners) && owners.Add(dstId))
                     {
                         _serverFileCount.TryGetValue(dstId, out var cnt);
