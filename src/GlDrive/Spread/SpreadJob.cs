@@ -1485,12 +1485,17 @@ public class SpreadJob : IDisposable
             if (live.Count > 0) scanTargets = live; // never scan nothing
         }
 
-        Log.Information("Spread scan starting for {Count} servers: {Paths}",
-            scanTargets.Count, string.Join(", ", scanTargets.Select(kv =>
-            {
-                var name = _serverConfigs.TryGetValue(kv.Key, out var c) ? c.Name : kv.Key;
-                return $"{name}:{kv.Value}";
-            })));
+        // Per-snapshot diagnostics dominate busy race logs; keep outcomes and failures
+        // at Information/Warning so normal operation preserves useful incident history.
+        if (Log.IsEnabled(Serilog.Events.LogEventLevel.Debug))
+        {
+            Log.Debug("Spread scan starting for {Count} servers: {Paths}",
+                scanTargets.Count, string.Join(", ", scanTargets.Select(kv =>
+                {
+                    var name = _serverConfigs.TryGetValue(kv.Key, out var c) ? c.Name : kv.Key;
+                    return $"{name}:{kv.Value}";
+                })));
+        }
 
         var results = new List<(string serverId, List<SpreadFileInfo> files, ScanSignals signals, long listingEpoch)>();
         var scanLock = new Lock();
@@ -1531,7 +1536,7 @@ public class SpreadJob : IDisposable
             {
                 try
                 {
-                    Log.Information("Spread scan: listing {Server} at {Path} (using main pool)...",
+                    Log.Debug("Spread scan: listing {Server} at {Path} (using main pool)...",
                         serverName, basePath);
                     await ScanDirectoryRecursive(mainPool, basePath, basePath, files, signals, 0, ct);
                     scanDone = true;
@@ -1600,7 +1605,7 @@ public class SpreadJob : IDisposable
                 {
                     try
                     {
-                        Log.Information("Spread scan: listing {Server} at {Path} (using spread pool fallback)...",
+                        Log.Debug("Spread scan: listing {Server} at {Path} (using spread pool fallback)...",
                             serverName, basePath);
                         await ScanDirectoryRecursive(spreadPool, basePath, basePath, files, signals, 0, ct);
                         scanDone = true;
@@ -1618,7 +1623,7 @@ public class SpreadJob : IDisposable
 
             if (scanDone)
             {
-                Log.Information("Spread scan: {Server} returned {Count} files", serverName, files.Count);
+                Log.Debug("Spread scan: {Server} returned {Count} files", serverName, files.Count);
                 lock (scanLock) results.Add((serverId, files, signals, listingEpoch));
             }
             else if (!yieldedToTransfers)
@@ -1663,7 +1668,7 @@ public class SpreadJob : IDisposable
             foreach (var (serverId, files, signals, listingEpoch) in results)
             {
                 var serverName = _serverConfigs.TryGetValue(serverId, out var cfg) ? cfg.Name : serverId;
-                Log.Information("Spread scan: {Server} found {Count} files at {Path}",
+                Log.Debug("Spread scan: {Server} found {Count} files at {Path}",
                     serverName, files.Count, scanTargets.GetValueOrDefault(serverId, "?"));
                 if (ShouldProbeSourceRelocation(
                     _sourceServersField.Contains(serverId),

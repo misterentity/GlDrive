@@ -547,7 +547,7 @@ public class MountService : IDisposable
                     connDied = true;
                     break;
                 }
-                Log.Information("RefreshStatsAsync running for {Server} via '{Cmd}'", _serverConfig.Name, cmd);
+                Log.Debug("RefreshStatsAsync running for {Server} via '{Cmd}'", _serverConfig.Name, cmd);
                 try
                 {
                     var stats = await SiteStatsCollector.RefreshAsync(
@@ -582,7 +582,7 @@ public class MountService : IDisposable
             // Skip when the connection already died — LIST will just throw the same parser error.
             if (!connDied && (best == null || (best.Credits == null && best.Ratio == null)))
             {
-                Log.Information("RefreshStatsAsync falling back to LIST trailer for {Server}", _serverConfig.Name);
+                Log.Debug("RefreshStatsAsync falling back to LIST trailer for {Server}", _serverConfig.Name);
                 try
                 {
                     // Honor the 10s statsCts deadline so a slow/hung LIST can't pin this
@@ -590,8 +590,8 @@ public class MountService : IDisposable
                     await conn.Client.GetListing(_serverConfig.Connection.RootPath, statsCts.Token);
                     var reply = conn.Client.LastReply;
                     var body = (reply.InfoMessages ?? string.Empty) + "\n" + (reply.Message ?? string.Empty);
-                    Log.Information("LIST trailer for {Server} bodyLen={Len} body={Body}",
-                        _serverConfig.Name, body.Length, body.Length > 600 ? body[..600] + "...(truncated)" : body);
+                    Log.Debug("LIST trailer for {Server} bodyLen={Len}",
+                        _serverConfig.Name, body.Length);
                     var trailer = SiteStatsCollector.Parse(body);
                     if (trailer.Credits != null || trailer.Ratio != null)
                     {
@@ -632,7 +632,7 @@ public class MountService : IDisposable
             }
 
             Stats = best;
-            Log.Information("SITE STATS result for {Server}: credits={Credits} ratio={Ratio}",
+            Log.Debug("SITE STATS result for {Server}: credits={Credits} ratio={Ratio}",
                 _serverConfig.Name, best?.Credits ?? "(null)", best?.Ratio ?? "(null)");
             StatsChanged?.Invoke();
         }

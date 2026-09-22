@@ -40,9 +40,10 @@ public static class SiteStatsCollector
         var reply = await client.Execute(command, ct);
         // FluentFTP gives us the multi-line response in InfoMessages; fall back to ErrorMessage.
         var body = (reply.InfoMessages ?? string.Empty) + "\n" + (reply.Message ?? string.Empty);
-        Log.Information("SiteStatsCollector: cmd={Cmd} success={Success} bodyLen={Len} body={Body}",
-            command, reply.Success, body.Length,
-            body.Length > 600 ? body[..600] + "...(truncated)" : body);
+        // SITE USER bodies include account details. Parsing needs the response,
+        // but diagnostics only need command status and length, even at Debug.
+        Log.Debug("SiteStatsCollector: cmd={Cmd} success={Success} bodyLen={Len}",
+            command, reply.Success, body.Length);
         return Parse(body);
     }
 
@@ -51,7 +52,7 @@ public static class SiteStatsCollector
         // glftpd ACL denial — let the candidate chain keep trying.
         if (AccessDeniedRe.IsMatch(body))
         {
-            Log.Information("SiteStatsCollector: ACL-denied response, skipping candidate");
+            Log.Debug("SiteStatsCollector: ACL-denied response, skipping candidate");
             return new SiteStats(null, null, DateTime.UtcNow);
         }
 
@@ -79,7 +80,7 @@ public static class SiteStatsCollector
             }
         }
 
-        Log.Information("SiteStatsCollector: parsed credits={Credits} ratio={Ratio}",
+        Log.Debug("SiteStatsCollector: parsed credits={Credits} ratio={Ratio}",
             credits ?? "(null)", ratio ?? "(null)");
 
         return new SiteStats(credits, ratio, DateTime.UtcNow);

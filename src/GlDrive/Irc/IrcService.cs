@@ -694,8 +694,11 @@ public class IrcService : IDisposable
                     if (decrypted != null && bestQ >= FishCipher.FailedDecryptQualityThreshold)
                     {
                         // Diagnostics must never contain key material, including partial keys.
-                        Log.Information("FiSH PM {Target}: prefix={Prefix} cipherLen={CL} winKey={Idx} decrypted={Stats}",
-                            effectiveTarget, prefix, text.Length, winIdx, TextStats(decrypted));
+                        if (Log.IsEnabled(Serilog.Events.LogEventLevel.Debug))
+                        {
+                            Log.Debug("FiSH PM {Target}: prefix={Prefix} cipherLen={CL} winKey={Idx} decrypted={Stats}",
+                                effectiveTarget, prefix, text.Length, winIdx, TextStats(decrypted));
+                        }
 
                         // If a non-primary key won, swap so future encrypts/decrypts use it primary.
                         if (winIdx > 0)
