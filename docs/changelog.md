@@ -12,6 +12,11 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.127 — stale race listings no longer revoke completed transfers (2026-09-21)
+
+- A destination LIST snapshotted before a transfer completed, but applied after it, made the ownership prune treat the just-delivered file as deleted; the race re-selected it and re-sent it into a dupe-skip (55 times on 2026-09-21, every one matching this ordering). Completions now stamp an ownership epoch that each listing captures before it runs, and a listing can no longer revoke — by absence or by a partial mid-upload size — ownership confirmed after it started.
+- 3 new regression tests (1,374 total), 4/4 compiling mutants caught. See the [release report](releases/v3.10.127.md).
+
 ## v3.10.126 — preserve healthy FTPS sessions (2026-09-21)
 
 - Disable FluentFTP's transaction-count session recycling alongside its automatic reconnect policy. Healthy sessions no longer fail at the default TLS transaction limit, interrupt CPSV sequences, or churn pooled logins.

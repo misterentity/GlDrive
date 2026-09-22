@@ -106,6 +106,41 @@ public sealed class SourceListingPruneTests
         Assert.Single(state.Infos);
     }
 
+    [Fact]
+    public void Listing_taken_before_a_transfer_completed_cannot_revoke_it()
+    {
+        // v3.10.127 — 2026-09-21 14:07: zephyr's LIST returned at :06.338 without r65,
+        // r65's FXP completed at :09.772 (ownership recorded), and the listing was
+        // APPLIED at :11.288. Prune read the pre-completion snapshot as "deleted",
+        // the file was re-selected and re-sent into a dupe-skip — 55 times that day.
+        var state = new OwnershipState();
+        state.Observe("source", File("a.rar", 100), File("b.rar", 100));
+        state.Observe("dest", File("a.rar", 100));
+        state.RecordTransfer("dest", "b.rar"); // completion after the LIST snapshot
+
+        var dropped = state.Prune("dest", confirmedAfterListing: n => n == "b.rar", File("a.rar", 100));
+
+        Assert.Empty(dropped);
+        Assert.Contains("dest", state.Ownership["b.rar"]);
+        Assert.Equal(2, state.Counts["dest"]);
+    }
+
+    [Fact]
+    public void Protection_covers_only_the_names_confirmed_after_the_listing()
+    {
+        var state = new OwnershipState();
+        state.Observe("source", File("a.rar", 100), File("b.rar", 100), File("c.rar", 100));
+        state.Observe("dest", File("a.rar", 100), File("c.rar", 100));
+        state.RecordTransfer("dest", "b.rar");
+
+        // c.rar was genuinely deleted from dest; b.rar just landed after the snapshot.
+        state.Prune("dest", confirmedAfterListing: n => n == "b.rar", File("a.rar", 100));
+
+        Assert.Contains("dest", state.Ownership["b.rar"]);
+        Assert.DoesNotContain("dest", state.Ownership["c.rar"]);
+        Assert.Equal(2, state.Counts["dest"]);
+    }
+
     private static SpreadFileInfo File(string name, long size) => new()
     {
         Name = name,
@@ -131,5 +166,18 @@ public sealed class SourceListingPruneTests
 
         internal List<string> Prune(string serverId, params SpreadFileInfo[] listing) =>
             FileOwnershipReconciler.Prune(serverId, listing, Ownership, Infos, ObservedSizes, Counts);
+
+        internal List<string> Prune(string serverId, Func<string, bool> confirmedAfterListing,
+            params SpreadFileInfo[] listing) =>
+            FileOwnershipReconciler.Prune(serverId, listing, Ownership, Infos, ObservedSizes, Counts,
+                confirmedAfterListing);
+
+        // Mirrors SpreadJob's transfer-completion bookkeeping.
+        internal void RecordTransfer(string serverId, string name)
+        {
+            ObservedSizes[(name, serverId)] = Infos[name].Size;
+            if (Ownership[name].Add(serverId))
+                Counts[serverId] = Counts.GetValueOrDefault(serverId) + 1;
+        }
     }
 }

@@ -12,7 +12,7 @@ namespace GlDrive.Tests;
 public sealed class SourceListingPruneWiringTests
 {
     private const string Call =
-        "FileOwnershipReconciler.Prune(serverId, files, _fileOwnership, _fileInfos, _observedFileSizes, _serverFileCount)";
+        "FileOwnershipReconciler.Prune(serverId, files, _fileOwnership, _fileInfos, _observedFileSizes, _serverFileCount, ConfirmedAfterListing)";
 
     private static readonly string Source = ReadSpreadJob();
 
@@ -40,6 +40,34 @@ public sealed class SourceListingPruneWiringTests
         var prune = Source.IndexOf(Call, StringComparison.Ordinal);
         var remove = Source.IndexOf("_fileActions.Remove(", prune, StringComparison.Ordinal);
         Assert.True(remove > prune && remove - prune < 600, "Dropped names must also be removed from _fileActions.");
+    }
+
+    [Fact]
+    public void Transfer_completion_stamps_the_epoch_a_listing_is_compared_against()
+    {
+        // v3.10.127: a LIST snapshot applied after a completion must not revoke it.
+        // Stamp on the success path, capture before the LIST, compare in ProcessFiles.
+        Assert.Equal(1, Count("_transferConfirmedEpoch[(file.Name, dstId)] = ++_ownershipEpoch;"));
+        Assert.Equal(1, Count("lock (_ownershipLock) listingEpoch = _ownershipEpoch;"));
+        Assert.Equal(1, Count("ProcessFiles(serverId, files, listingEpoch);"));
+        Assert.Equal(1, Count("epoch > listingEpoch"));
+
+        var capture = Source.IndexOf("listingEpoch = _ownershipEpoch;", StringComparison.Ordinal);
+        var list = Source.IndexOf("await ScanDirectoryRecursive(mainPool", StringComparison.Ordinal);
+        Assert.True(capture > 0 && capture < list, "The epoch must be captured BEFORE the LIST runs.");
+
+        var observe = Source.IndexOf("FileOwnershipReconciler.Observe(", StringComparison.Ordinal);
+        var guard = Source.IndexOf("|| ConfirmedAfterListing(file.Name)", observe, StringComparison.Ordinal);
+        Assert.True(observe > 0 && guard > observe && guard - observe < 300,
+            "Observe must treat a post-listing completion like in-flight (a mid-upload snapshot shows a partial size).");
+    }
+
+    private static int Count(string needle)
+    {
+        var n = 0;
+        for (var i = Source.IndexOf(needle, StringComparison.Ordinal); i >= 0;
+             i = Source.IndexOf(needle, i + needle.Length, StringComparison.Ordinal)) n++;
+        return n;
     }
 
     private static string ReadSpreadJob()
