@@ -12,6 +12,12 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.128 — preserve useful diagnostic history (2026-09-22)
+
+- Move routine race scan, successful FiSH decryption, and stats polling diagnostics to Debug. Scan details alone accounted for over 80% of Information events in the reviewed log. Transfer outcomes and failure diagnostics keep their existing visibility.
+- Stop logging raw account-stat and LIST trailer response bodies. Parsing and dashboard behavior are unchanged.
+- All 1,374 regression tests, the Release build, 22 native FTPS/WinFsp checks and 15 WPF renders passed. SYN's unreachable FTP endpoint and the absent T: download drive remain external issues. See the [release report](releases/v3.10.128.md).
+
 ## v3.10.127 — stale race listings no longer revoke completed transfers (2026-09-21)
 
 - A destination LIST snapshotted before a transfer completed, but applied after it, made the ownership prune treat the just-delivered file as deleted; the race re-selected it and re-sent it into a dupe-skip (55 times on 2026-09-21, every one matching this ordering). Completions now stamp an ownership epoch that each listing captures before it runs, and a listing can no longer revoke — by absence or by a partial mid-upload size — ownership confirmed after it started.
