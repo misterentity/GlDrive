@@ -18,6 +18,16 @@ public class FtpSearchService : IDisposable
         ".", "..", ".banner", ".message"
     };
 
+    // Zipscript status entries can be advertised as directories even though LIST
+    // rejects them. Require both bracket decoration and a standalone status word:
+    // real releases such as Show.S01.COMPLETE and [Group] Show remain searchable.
+    private static readonly Regex StatusDirectory = new(
+        @"(?:^|[\s(\-])(?:in[\s_\-]*)?complete(?:$|[\s)\]\-])",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
+
+    private static bool SkipDirectory(string name) => SkipDirs.Contains(name) ||
+        (name.StartsWith('[') && name.EndsWith(']') && StatusDirectory.IsMatch(name));
+
     // SITE SEARCH support: null = not probed yet, true/false = probed
     private bool? _siteSearchSupported;
 
@@ -349,7 +359,7 @@ public class FtpSearchService : IDisposable
         {
             ct.ThrowIfCancellationRequested();
             if (item.Type != FtpObjectType.Directory) continue;
-            if (SkipDirs.Contains(item.Name)) continue;
+            if (SkipDirectory(item.Name)) continue;
 
             var category = ExtractCategory(searchRoot, item.FullName);
 
@@ -467,7 +477,7 @@ public class FtpSearchService : IDisposable
 
         try
         {
-            await SearchRecursive(rootPath, keyword, 0, _searchConfig.MaxDepth, results, progress, ct);
+            await SearchRecursive(ListForLiveSearch, rootPath, keyword, 0, _searchConfig.MaxDepth, results, progress, ct);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
@@ -478,8 +488,16 @@ public class FtpSearchService : IDisposable
         return results;
     }
 
-    private async Task SearchRecursive(
-        string path, string keyword,
+    private async Task<FtpListItem[]> ListForLiveSearch(string path, CancellationToken ct)
+    {
+        using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        borrowCts.CancelAfter(BorrowTimeout);
+        await using var conn = await _pool.Borrow(borrowCts.Token);
+        return await ListDirect(conn.Client, path, ct);
+    }
+
+    internal static async Task SearchRecursive(
+        DirectoryLister list, string path, string keyword,
         int depth, int maxDepth, List<SearchResult> results,
         IProgress<string>? progress, CancellationToken ct)
     {
@@ -488,20 +506,14 @@ public class FtpSearchService : IDisposable
         progress?.Report($"Scanning {path}...");
 
         // Borrow per-listing so we don't hold a connection for the entire crawl
-        FtpListItem[] items;
-        using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        borrowCts.CancelAfter(BorrowTimeout);
-        await using (var conn = await _pool.Borrow(borrowCts.Token))
-        {
-            items = await ListDirect(conn.Client, path, ct);
-        }
+        var items = await list(path, ct);
 
         foreach (var item in items)
         {
             ct.ThrowIfCancellationRequested();
             if (results.Count >= MaxResults) return;
             if (item.Type != FtpObjectType.Directory) continue;
-            if (SkipDirs.Contains(item.Name)) continue;
+            if (SkipDirectory(item.Name)) continue;
 
             if (Normalize(item.Name).Contains(keyword, StringComparison.OrdinalIgnoreCase))
             {
@@ -517,7 +529,7 @@ public class FtpSearchService : IDisposable
             }
 
             if (depth < maxDepth)
-                await SearchRecursive(item.FullName, keyword, depth + 1, maxDepth, results, progress, ct);
+                await SearchRecursive(list, item.FullName, keyword, depth + 1, maxDepth, results, progress, ct);
         }
     }
 

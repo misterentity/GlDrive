@@ -12,6 +12,11 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.130 — keep server status directories out of search (2026-09-23)
+
+- Cached and live search skip bracketed zipscript completion/progress directories before indexing or listing them. This removes recurring `550 Bad directory components` failures and prevents those markers aborting live search before later releases are visited. Real COMPLETE release names and bracket-prefixed releases remain searchable.
+- Release build, 1,379 regression tests, 24 native FTPS/WinFsp checks, 15 WPF renders and eight baseline API checks passed. SYN and T: remain unavailable external dependencies. See the [release report](releases/v3.10.130.md).
+
 ## v3.10.129 — one AI self-tuning run per daily slot (2026-09-22)
 
 - The agent's missed-run check asked "has it been 23 hours?" instead of "did a scheduled slot pass without a run?". Any reschedule (clock sync, resume, restart) in the hour before 04:00 read yesterday's 04:04 run as missed, caught up, and then ran the 04:00 slot again minutes later — two LLM calls, two change budgets and two `DryRunsRemaining` decrements (2026-09-13, 09-14, 09-22). A late catch-up was likewise followed by the regular slot five hours later (09-20/21). Scheduling is now slot-based: a run within 12 hours before a slot serves it.
