@@ -12,6 +12,11 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.129 — one AI self-tuning run per daily slot (2026-09-22)
+
+- The agent's missed-run check asked "has it been 23 hours?" instead of "did a scheduled slot pass without a run?". Any reschedule (clock sync, resume, restart) in the hour before 04:00 read yesterday's 04:04 run as missed, caught up, and then ran the 04:00 slot again minutes later — two LLM calls, two change budgets and two `DryRunsRemaining` decrements (2026-09-13, 09-14, 09-22). A late catch-up was likewise followed by the regular slot five hours later (09-20/21). Scheduling is now slot-based: a run within 12 hours before a slot serves it.
+- 1,377 regression tests, the Release build and 22 native FTPS/WinFsp checks passed; three mutants of the new schedule were all killed. See the [release report](releases/v3.10.129.md).
+
 ## v3.10.128 — preserve useful diagnostic history (2026-09-22)
 
 - Move routine race scan, successful FiSH decryption, and stats polling diagnostics to Debug. Scan details alone accounted for over 80% of Information events in the reviewed log. Transfer outcomes and failure diagnostics keep their existing visibility.
