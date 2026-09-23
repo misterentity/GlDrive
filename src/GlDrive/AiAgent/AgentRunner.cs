@@ -111,9 +111,8 @@ public sealed class AgentRunner : IDisposable
         var cfg = _getConfig().Agent;
         if (!cfg.Enabled) return;
 
-        var now = DateTime.Now;
-        var needCatchUp = NeedsCatchUp(_lastRunUtc, DateTime.UtcNow);
-        if (needCatchUp || _consecutiveFailedRuns > 0)
+        var plan = PlanSchedule(_lastRunUtc, DateTime.UtcNow, cfg.RunHourLocal, TimeZoneInfo.Local);
+        if (plan.CatchUp || _consecutiveFailedRuns > 0)
         {
             // Catch up a missed run, or retry a transiently-failed one, with
             // exponential backoff: 1, 2, 4 ... 64 min cap. Retrying keeps a failed
@@ -123,15 +122,53 @@ public sealed class AgentRunner : IDisposable
             _timer = new Timer(_ => _ = RunOnceAsync(), null,
                 TimeSpan.FromMinutes(minutes), Timeout.InfiniteTimeSpan);
             Log.Information("AgentRunner {Kind} scheduled in {Minutes} min (consecutive failures: {Failures})",
-                needCatchUp ? "catch-up" : "retry", minutes, _consecutiveFailedRuns);
+                plan.CatchUp ? "catch-up" : "retry", minutes, _consecutiveFailedRuns);
             return;
         }
 
-        var nextRun = new DateTime(now.Year, now.Month, now.Day, cfg.RunHourLocal, 0, 0, DateTimeKind.Local);
-        if (nextRun <= now) nextRun = nextRun.AddDays(1);
-        var delay = nextRun - now;
+        var delay = plan.NextRunUtc - DateTime.UtcNow;
+        if (delay < TimeSpan.Zero) delay = TimeSpan.Zero;
         _timer = new Timer(_ => _ = RunOnceAsync(), null, delay, Timeout.InfiniteTimeSpan);
         Log.Information("AgentRunner next run in {Delay}", delay);
+    }
+
+    /// <summary>A run within this long before a slot already serves that slot.</summary>
+    internal static readonly TimeSpan SlotServedWindow = TimeSpan.FromHours(12);
+
+    internal readonly record struct SchedulePlan(bool CatchUp, DateTime NextRunUtc);
+
+    /// <summary>
+    /// Decides whether a daily slot was missed and when the next one is due. Both instants are UTC.
+    ///
+    /// A slot is SERVED by any run in the <see cref="SlotServedWindow"/> before it (or after it).
+    /// The old predicate — "&gt;= 23h since the last run" — asked about elapsed time instead of
+    /// slots, so any ScheduleNext call (TimeChanged, Resume, restart) in the hour before 04:00
+    /// read a 04:04 run from yesterday as a miss, caught up, then ran the 04:00 slot again
+    /// minutes later: double runs on 2026-09-13, 09-14 and 09-22. And a legitimate late catch-up
+    /// (23:04) was followed by the 04:00 slot five hours later over the same digest.
+    /// </summary>
+    internal static SchedulePlan PlanSchedule(DateTime lastRunUtc, DateTime nowUtc, int runHourLocal, TimeZoneInfo tz)
+    {
+        var localNow = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, tz);
+        var mostRecentSlotLocal = localNow.Date.AddHours(runHourLocal);
+        if (mostRecentSlotLocal > localNow) mostRecentSlotLocal = mostRecentSlotLocal.AddDays(-1);
+
+        bool Served(DateTime slotLocal) =>
+            lastRunUtc != DateTime.MinValue && lastRunUtc >= SlotUtc(slotLocal, tz) - SlotServedWindow;
+
+        var catchUp = lastRunUtc != DateTime.MinValue && !Served(mostRecentSlotLocal);
+
+        var next = mostRecentSlotLocal.AddDays(1);
+        if (Served(next)) next = next.AddDays(1);
+        return new SchedulePlan(catchUp, SlotUtc(next, tz));
+    }
+
+    private static DateTime SlotUtc(DateTime slotLocal, TimeZoneInfo tz)
+    {
+        var unspecified = DateTime.SpecifyKind(slotLocal, DateTimeKind.Unspecified);
+        // A slot inside a spring-forward gap does not exist; run at the first valid minute after it.
+        while (tz.IsInvalidTime(unspecified)) unspecified = unspecified.AddMinutes(30);
+        return TimeZoneInfo.ConvertTimeToUtc(unspecified, tz);
     }
 
     private async Task RunOnceAsync(bool manualTrigger = false)
@@ -318,7 +355,7 @@ public sealed class AgentRunner : IDisposable
     /// <c>DateTime.UtcNow</c> — mixing a local wall-clock reading with a UTC one and inflating
     /// the elapsed time by the whole UTC offset (7h on this box).
     ///
-    /// Effect: every process restart re-read the stamp 7h "older" than it was, so the >=23h
+    /// Effect: every process restart re-read the stamp 7h "older" than it was, so the old >=23h
     /// catch-up predicate fired on a gap of only ~22h and the agent ran a second, unwanted time
     /// at ~02:00 — burning an extra LLM call, an extra change budget and an extra DryRunsRemaining
     /// decrement. Observed 2026-08-25..28: exactly one run/day at 04:00 while the process was
@@ -340,13 +377,6 @@ public sealed class AgentRunner : IDisposable
         utc = parsed.ToUniversalTime();
         return true;
     }
-
-    /// <summary>
-    /// Whether a scheduled run was missed and should be caught up. Both arguments must be UTC;
-    /// see <see cref="TryParseLastRunUtc"/> for why that is not a formality.
-    /// </summary>
-    internal static bool NeedsCatchUp(DateTime lastRunUtc, DateTime nowUtc) =>
-        lastRunUtc != DateTime.MinValue && (nowUtc - lastRunUtc).TotalHours >= 23;
 
     private void LoadLastRun()
     {

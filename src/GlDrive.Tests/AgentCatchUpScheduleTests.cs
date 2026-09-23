@@ -58,6 +58,13 @@ public class AgentCatchUpScheduleTests
         Assert.Equal(canonical, legacy);
     }
 
+    // Pacific time, the zone every production timestamp in these tests was recorded in.
+    private static readonly TimeZoneInfo Pacific = TimeZoneInfo.FindSystemTimeZoneById("Pacific Standard Time");
+    private const int RunHour = 4;
+
+    private static DateTime PacificUtc(int y, int mo, int d, int h, int mi) =>
+        TimeZoneInfo.ConvertTimeToUtc(new DateTime(y, mo, d, h, mi, 0, DateTimeKind.Unspecified), Pacific);
+
     /// <summary>The production scenario end to end: parse the real stamp, then ask the real
     /// predicate. A ~22.1h gap is NOT a missed run and must not schedule a catch-up.</summary>
     [Fact]
@@ -66,22 +73,76 @@ public class AgentCatchUpScheduleTests
         Assert.True(AgentRunner.TryParseLastRunUtc(PersistedStamp, out var lastRun));
         var gapHours = (NextMorningUtc - lastRun).TotalHours;
         Assert.InRange(gapHours, 22.0, 22.2);
-        Assert.False(AgentRunner.NeedsCatchUp(lastRun, NextMorningUtc));
+        Assert.False(AgentRunner.PlanSchedule(lastRun, NextMorningUtc, RunHour, Pacific).CatchUp);
     }
 
-    /// <summary>The guard must still do its job: a genuinely missed run is caught up.</summary>
+    /// <summary>
+    /// 2026-09-22: the 09-21 run finished 04:04:19 PT; at 03:52:30 PT SystemEvents.TimeChanged
+    /// re-ran ScheduleNext. 23.8h had elapsed, so the old ">= 23h" predicate called it a missed
+    /// run, caught up at 03:53, then the regular 04:00 slot ran again — two LLM runs, two change
+    /// budgets and two DryRunsRemaining decrements in 7 minutes. Same shape on 09-13 and 09-14.
+    /// Nothing was missed: yesterday's slot was served. The next run is today's 04:00.
+    /// </summary>
     [Fact]
-    public void GenuinelyMissedRun_StillTriggersCatchUp()
+    public void TwentyThreePointEightHoursAfterServedSlot_IsNotAMissedRun()
     {
-        Assert.True(AgentRunner.TryParseLastRunUtc(PersistedStamp, out var lastRun));
-        Assert.True(AgentRunner.NeedsCatchUp(lastRun, lastRun.AddHours(23)));
-        Assert.True(AgentRunner.NeedsCatchUp(lastRun, lastRun.AddHours(30)));
+        var lastRun = PacificUtc(2026, 9, 21, 4, 4);
+        var now = PacificUtc(2026, 9, 22, 3, 52);
+
+        var plan = AgentRunner.PlanSchedule(lastRun, now, RunHour, Pacific);
+
+        Assert.False(plan.CatchUp);
+        Assert.Equal(PacificUtc(2026, 9, 22, 4, 0), plan.NextRunUtc);
+    }
+
+    /// <summary>
+    /// 2026-09-20 23:04 PT a genuine catch-up ran (the box missed the 09-19 and 09-20 slots), then
+    /// the 09-21 04:00 slot ran again 5h later over an essentially identical digest. A run that
+    /// recent already serves the next slot; skip to the following one.
+    /// </summary>
+    [Fact]
+    public void SlotAlreadyServedByRecentCatchUp_IsSkipped()
+    {
+        var lastRun = PacificUtc(2026, 9, 20, 23, 4);
+        var now = PacificUtc(2026, 9, 20, 23, 5);
+
+        var plan = AgentRunner.PlanSchedule(lastRun, now, RunHour, Pacific);
+
+        Assert.False(plan.CatchUp);
+        Assert.Equal(PacificUtc(2026, 9, 22, 4, 0), plan.NextRunUtc);
+    }
+
+    /// <summary>The guard must still do its job: a slot that passed with no run after it is caught up.</summary>
+    [Fact]
+    public void GenuinelyMissedSlot_StillTriggersCatchUp()
+    {
+        var lastRun = PacificUtc(2026, 9, 18, 4, 1);
+
+        Assert.True(AgentRunner.PlanSchedule(lastRun, PacificUtc(2026, 9, 19, 10, 0), RunHour, Pacific).CatchUp);
+        Assert.True(AgentRunner.PlanSchedule(lastRun, PacificUtc(2026, 9, 20, 23, 0), RunHour, Pacific).CatchUp);
+    }
+
+    /// <summary>The ordinary daily cadence: right after the 04:00 run, the next run is tomorrow's 04:00.</summary>
+    [Fact]
+    public void AfterScheduledRun_NextRunIsTomorrowsSlot()
+    {
+        var lastRun = PacificUtc(2026, 9, 22, 4, 1);
+
+        var plan = AgentRunner.PlanSchedule(lastRun, lastRun.AddSeconds(1), RunHour, Pacific);
+
+        Assert.False(plan.CatchUp);
+        Assert.Equal(PacificUtc(2026, 9, 23, 4, 0), plan.NextRunUtc);
     }
 
     [Fact]
-    public void NeverRun_DoesNotTriggerCatchUp()
+    public void NeverRun_DoesNotTriggerCatchUp_AndWaitsForTheSlot()
     {
-        Assert.False(AgentRunner.NeedsCatchUp(DateTime.MinValue, NextMorningUtc));
+        var now = PacificUtc(2026, 9, 22, 10, 0);
+
+        var plan = AgentRunner.PlanSchedule(DateTime.MinValue, now, RunHour, Pacific);
+
+        Assert.False(plan.CatchUp);
+        Assert.Equal(PacificUtc(2026, 9, 23, 4, 0), plan.NextRunUtc);
     }
 
     [Fact]
@@ -105,6 +166,6 @@ public class AgentCatchUpScheduleTests
         Assert.True(AgentRunner.TryParseLastRunUtc(json["utc"]!.ToString(), out var readBack));
         Assert.Equal(DateTimeKind.Utc, readBack.Kind);
         Assert.Equal(written, readBack);
-        Assert.False(AgentRunner.NeedsCatchUp(readBack, written.AddHours(22.1)));
+        Assert.False(AgentRunner.PlanSchedule(readBack, written.AddHours(22.1), RunHour, Pacific).CatchUp);
     }
 }
