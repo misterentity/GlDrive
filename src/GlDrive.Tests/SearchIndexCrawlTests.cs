@@ -85,4 +85,46 @@ public sealed class SearchIndexCrawlTests
         Assert.DoesNotContain("Log.Debug(ex, \"Index crawl failed", body);
         Assert.Contains("report.Failed", body);
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Status_directories_are_neither_results_nor_crawl_targets(bool live)
+    {
+        string[] markers = [
+            "[Z] - ( 1591M 17F - COMPLETE ) - [Z]",
+            "[###:::::::::::] - 27% Complete - [site]",
+            "[ Incomplete ]", "[site] - ( IN-COMPLETE ) - [site]"
+        ];
+        string[] real = ["Show.S01.COMPLETE.1080p-GRP", "[Group] Show.S01", "Complete", "Sample", "Subs"];
+        var tree = new Dictionary<string, FtpListItem[]>
+        {
+            ["/TV"] = markers.Concat(real).Select(n => Dir("/TV/" + n)).ToArray()
+        };
+        var visited = new List<string>();
+        FtpSearchService.DirectoryLister list = (path, _) =>
+        {
+            visited.Add(path);
+            if (markers.Any(n => path == "/TV/" + n))
+                throw new IOException("LIST failed: 550 Bad directory components");
+            return Task.FromResult(tree.TryGetValue(path, out var items) ? items : []);
+        };
+        string[] found;
+        if (live)
+        {
+            var results = new List<SearchResult>();
+            await FtpSearchService.SearchRecursive(list, "/TV", "", 0, 2, results, null, CancellationToken.None);
+            found = results.Select(r => r.ReleaseName).ToArray();
+        }
+        else
+        {
+            var entries = new List<FtpSearchService.IndexEntry>();
+            var report = new FtpSearchService.IndexCrawlReport();
+            await FtpSearchService.CrawlForIndex(list, "/TV", "/TV", 0, 2, entries, report, CancellationToken.None);
+            Assert.Equal(0, report.Failed);
+            found = entries.Select(e => e.Name).ToArray();
+        }
+        Assert.Equal(real, found);
+        Assert.Equal(new[] { "/TV" }.Concat(real.Select(n => "/TV/" + n)), visited);
+    }
 }

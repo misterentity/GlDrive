@@ -9,6 +9,7 @@ using GlDrive.Ftp;
 using GlDrive.Tls;
 using GlDrive.Player;
 using GlDrive.Services;
+using GlDrive.Downloads;
 
 // This harness only connects to the disposable loopback fixture, with an isolated trust store.
 var state = JsonDocument.Parse(File.ReadAllText(args[0])).RootElement;
@@ -41,6 +42,22 @@ await using (var connection = await pool.Borrow(deadline.Token))
 }
 var remoteRoot = "/check-" + Guid.NewGuid().ToString("N");
 await ftp.CreateDirectory(remoteRoot, deadline.Token);
+var searchRoot = remoteRoot + "/search";
+await ftp.CreateDirectory(searchRoot + "/[Z] - ( 1591M 17F - COMPLETE ) - [Z]", deadline.Token);
+await ftp.CreateDirectory(searchRoot + "/Show.S01.COMPLETE.1080p-GRP", deadline.Token);
+await ftp.CreateDirectory(searchRoot + "/[Group] Show.S01", deadline.Token);
+foreach (var method in new[] { SearchMethod.CachedIndex, SearchMethod.LiveCrawl })
+{
+    using var search = new FtpSearchService(pool, new SearchConfig
+    {
+        Method = method, SearchPaths = [searchRoot], MaxDepth = 2
+    });
+    if (method == SearchMethod.CachedIndex) await search.RefreshIndex(ct: deadline.Token);
+    var results = await search.Search("", ct: deadline.Token);
+    Check(results.Count == 2 && results.Any(r => r.ReleaseName == "Show.S01.COMPLETE.1080p-GRP") &&
+        results.Any(r => r.ReleaseName == "[Group] Show.S01"),
+        $"native {method} excludes status directories and preserves real release names");
+}
 var notificationRoot = remoteRoot + "/notifications";
 await ftp.CreateDirectory(notificationRoot + "/TV/existing", deadline.Token);
 var releaseMonitor = new NewReleaseMonitor(pool,

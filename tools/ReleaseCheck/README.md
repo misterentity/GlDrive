@@ -10,4 +10,6 @@ The harness first runs 800 commands on one borrowed FTPS session, crossing Fluen
 
 It also rejects two NOOP probes through the disposable fixture: the monitor must signal connection loss, reject the first reconnect probe, and wait for a positive reply before reporting recovery. Shutdown must not emit another connection-loss event.
 
+Cached and live search are exercised against actual FTPS directories: decorated completion markers are excluded while real release names containing COMPLETE or a bracketed group prefix remain searchable.
+
 This does not exercise a remote glftpd BNC's CPSV behavior or replace an extended live-server soak.
