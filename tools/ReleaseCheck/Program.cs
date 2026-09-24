@@ -10,6 +10,7 @@ using GlDrive.Tls;
 using GlDrive.Player;
 using GlDrive.Services;
 using GlDrive.Downloads;
+using GlDrive.Spread;
 
 // This harness only connects to the disposable loopback fixture, with an isolated trust store.
 var state = JsonDocument.Parse(File.ReadAllText(args[0])).RootElement;
@@ -42,6 +43,29 @@ await using (var connection = await pool.Borrow(deadline.Token))
 }
 var remoteRoot = "/check-" + Guid.NewGuid().ToString("N");
 await ftp.CreateDirectory(remoteRoot, deadline.Token);
+// The sole upload-capable site already holds the release; the other site is
+// download-only and does not have it. Exercise real discovery and terminal state.
+const string existingRelease = "Already.Present.S01E01.1080p-GRP";
+var receiver = new ServerConfig { Id = "receiver", Name = "Receiver" };
+receiver.SpreadSite.Sections["TV"] = remoteRoot + "/receiver";
+var leech = new ServerConfig { Id = "leech", Name = "Download only" };
+leech.SpreadSite.Sections["TV"] = remoteRoot + "/leech";
+leech.SpreadSite.DownloadOnly = true;
+await ftp.CreateDirectory(receiver.SpreadSite.Sections["TV"] + "/" + existingRelease, deadline.Token);
+await ftp.CreateDirectory(leech.SpreadSite.Sections["TV"], deadline.Token);
+using (var job = new SpreadJob("TV", existingRelease, SpreadMode.Race, new SpreadConfig(),
+    new() { [receiver.Id] = pool, [leech.Id] = pool }, new(),
+    new() { [receiver.Id] = receiver, [leech.Id] = leech }, new SpeedTracker(), new SkiplistEvaluator()))
+{
+    var errors = 0;
+    job.Error += (_, _) => errors++;
+    await job.RunAsync().WaitAsync(deadline.Token);
+    Check(job.State == SpreadJobState.Completed && job.LastError == null && errors == 0,
+        "native race discovery completes without failure when the sole receiver already has the release");
+    Check(!Directory.Exists(Path.Combine(root, "data", leech.SpreadSite.Sections["TV"].TrimStart('/'), existingRelease))
+        && job.ActiveTransferList.Count == 0,
+        "no transfer is attempted to a download-only peer");
+}
 var searchRoot = remoteRoot + "/search";
 await ftp.CreateDirectory(searchRoot + "/[Z] - ( 1591M 17F - COMPLETE ) - [Z]", deadline.Token);
 await ftp.CreateDirectory(searchRoot + "/Show.S01.COMPLETE.1080p-GRP", deadline.Token);
