@@ -94,6 +94,9 @@ public static class Program
         catch { }
     }
 
+    /// <summary>Set by SpawnWatchdog before logging exists; App logs it once Serilog is up.</summary>
+    internal static JobBreakaway.LogNote? WatchdogJobNote { get; private set; }
+
     /// <summary>
     /// Spawns a background copy of ourselves in watchdog mode to monitor our PID.
     /// The watchdog is a hidden process that restarts GlDrive if it crashes.
@@ -104,6 +107,25 @@ public static class Program
         {
             var exe = Environment.ProcessPath;
             if (string.IsNullOrEmpty(exe)) return;
+
+            // The watchdog must not share a job object with us: terminating the launcher's
+            // job would kill both at once and nothing would restart the app (see JobBreakaway).
+            var jobState = JobBreakaway.CurrentState();
+            string? breakawayError = null;
+            if (JobBreakaway.ShouldAttemptBreakaway(jobState))
+            {
+                try
+                {
+                    JobBreakaway.StartBrokenAway(exe, $"--watchdog {Environment.ProcessId}");
+                    WatchdogJobNote = JobBreakaway.DescribeForLog(jobState, brokeAway: true, null);
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    breakawayError = ex.Message;
+                }
+            }
+            WatchdogJobNote = JobBreakaway.DescribeForLog(jobState, brokeAway: false, breakawayError);
 
             var psi = new ProcessStartInfo
             {
