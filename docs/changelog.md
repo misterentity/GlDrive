@@ -12,6 +12,15 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.132 — handle an already populated sole receiver (2026-09-24)
+
+- Discovery of a release on the sole receiving site now completes as a no-op when all peers are download-only. Previously the earlier two-site minimum check reported a configuration failure before reaching the existing already-present handling. Other missing or restricted destinations remain failures.
+- Six new regression cases and a native FTPS reproduction cover the correction. See the [release report](releases/v3.10.132.md) for validation, deployment and remaining external issues.
+
+## v3.10.131 — keep the watchdog outside its launcher's job (2026-09-23)
+
+- Spawn the watchdog with job breakaway where permitted so terminating an automation session cannot kill both app and watchdog. See the [release report](releases/v3.10.131.md).
+
 ## v3.10.130 — keep server status directories out of search (2026-09-23)
 
 - Cached and live search skip bracketed zipscript completion/progress directories before indexing or listing them. This removes recurring `550 Bad directory components` failures and prevents those markers aborting live search before later releases are visited. Real COMPLETE release names and bracket-prefixed releases remain searchable.

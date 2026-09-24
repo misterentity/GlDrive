@@ -757,6 +757,17 @@ public class SpreadJob : IDisposable
 
             if (sitePaths.Count < 2)
             {
+                // Discovery can find the release on the sole receiving site while
+                // every peer is download-only. This is the same no-op as finding it
+                // on every candidate below, not a broken destination configuration.
+                // Use discovery evidence, not the announce hint, and do not turn
+                // blacklisted, unmapped or never-source destinations into successes.
+                if (AllReceivingSitesAlreadyPresent(sourceServers, _serverConfigs))
+                {
+                    SetFailed("release already present on all receiving sites — remaining peers are download-only");
+                    return;
+                }
+
                 // Build a specific diagnosis instead of pretending no section
                 // exists — when most candidate dests are blacklisted from
                 // earlier MKD failures (e.g. wrong section path → 550) the
@@ -3893,6 +3904,13 @@ public class SpreadJob : IDisposable
     /// </summary>
     internal static bool IsExpectedNoWorkOutcome(string? message)
         => message?.Contains("release already present on all", StringComparison.OrdinalIgnoreCase) == true;
+
+    internal static bool AllReceivingSitesAlreadyPresent(IReadOnlySet<string> sources,
+        IReadOnlyDictionary<string, ServerConfig> servers)
+    {
+        var receivers = servers.Where(s => !s.Value.SpreadSite.DownloadOnly).ToList();
+        return receivers.Count > 0 && receivers.All(s => sources.Contains(s.Key));
+    }
 
     internal static SpreadJobState TerminalStateFor(string? message)
         => IsExpectedNoWorkOutcome(message) ? SpreadJobState.Completed : SpreadJobState.Failed;

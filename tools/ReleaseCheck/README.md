@@ -12,4 +12,6 @@ It also rejects two NOOP probes through the disposable fixture: the monitor must
 
 Cached and live search are exercised against actual FTPS directories: decorated completion markers are excluded while real release names containing COMPLETE or a bracketed group prefix remain searchable.
 
+Race discovery also checks the case where the sole receiving site already has the release and its peer is download-only: the job completes without an error event or a transfer to the excluded peer.
+
 This does not exercise a remote glftpd BNC's CPSV behavior or replace an extended live-server soak.
