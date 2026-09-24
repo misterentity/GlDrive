@@ -182,6 +182,11 @@ public partial class App
         var asmVersion = System.Reflection.Assembly.GetExecutingAssembly()
             .GetName().Version?.ToString() ?? "unknown";
         Log.Information("GlDrive starting... version={Version}", asmVersion);
+        if (Program.WatchdogJobNote is { } jobNote)
+        {
+            if (jobNote.IsWarning) Log.Warning("Watchdog: {Note}", jobNote.Text);
+            else Log.Information("Watchdog: {Note}", jobNote.Text);
+        }
 
         // Verify the private-member reflection that prevents native GnuTLS crashes
         // still resolves against the loaded FluentFTP/GnuTLS assemblies. If a package
