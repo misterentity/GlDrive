@@ -14,4 +14,6 @@ Cached and live search are exercised against actual FTPS directories: decorated 
 
 Race discovery also checks the case where the sole receiving site already has the release and its peer is download-only: the job completes without an error event or a transfer to the excluded peer.
 
+Account-stat checks inject a refused passive data endpoint, then restore a LIST trailer carrying synthetic credits and ratio. The next refresh must recover immediately, while clean replies without stats must still activate the bounded no-access cache.
+
 This does not exercise a remote glftpd BNC's CPSV behavior or replace an extended live-server soak.

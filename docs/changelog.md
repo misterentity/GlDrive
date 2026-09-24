@@ -12,6 +12,11 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.133 — recover BNC account stats (2026-09-24)
+
+- Stats fallback uses the shared CPSV-aware listing operation on the same borrowed connection, including its failure quarantine. Command or data-channel exceptions no longer become a six-hour no-access cache entry.
+- Native refusal/recovery and clean-miss regressions pass, as does a read-only probe against the live BNC. Includes v3.10.132's sole-receiver correction. See the [release report](releases/v3.10.133.md).
+
 ## v3.10.132 — handle an already populated sole receiver (2026-09-24)
 
 - Discovery of a release on the sole receiving site now completes as a no-op when all peers are download-only. Previously the earlier two-site minimum check reported a configuration failure before reaching the existing already-present handling. Other missing or restricted destinations remain failures.
