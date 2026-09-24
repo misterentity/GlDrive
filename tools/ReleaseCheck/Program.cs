@@ -26,6 +26,33 @@ await using var pool = new FtpConnectionPool(factory, 2);
 using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(90));
 await pool.Initialize(deadline.Token);
 var ftp = new FtpOperations(pool);
+// Stats must not turn an unreachable data endpoint into a six-hour ACL denial.
+// Wire only the pool/state: no mount, downloads, timers or production configuration.
+using (var statsService = new MountService(config, new DownloadConfig(), certs))
+{
+    var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+    typeof(MountService).GetField("_pool", flags)!.SetValue(statsService, pool);
+    typeof(MountService).GetField("_ftp", flags)!.SetValue(statsService, ftp);
+    typeof(MountService).GetProperty(nameof(MountService.CurrentState))!.SetValue(statsService, MountState.Connected);
+    File.WriteAllText(Path.Combine(root, "reject-passive"), "1");
+    try { await statsService.RefreshStatsAsync(); }
+    finally { File.Delete(Path.Combine(root, "reject-passive")); }
+    var unavailableUntil = (DateTime)typeof(MountService).GetField("_statsUnavailableUntil", flags)!.GetValue(statsService)!;
+    Check(unavailableUntil <= DateTime.UtcNow, "stats data-channel refusal does not cache a six-hour access denial");
+    File.WriteAllText(Path.Combine(root, "stats-trailer"), "1");
+    try
+    {
+        await statsService.RefreshStatsAsync();
+        Check(statsService.Stats is { Credits: "12.3GB", Ratio: "1:3" },
+            "stats retry immediately recovers credits and ratio from the LIST trailer");
+    }
+    finally { File.Delete(Path.Combine(root, "stats-trailer")); }
+    await statsService.RefreshStatsAsync(); // invalidate the formerly working trailer
+    await statsService.RefreshStatsAsync(); // all commands and LIST now answer cleanly without stats
+    unavailableUntil = (DateTime)typeof(MountService).GetField("_statsUnavailableUntil", flags)!.GetValue(statsService)!;
+    Check(unavailableUntil > DateTime.UtcNow && statsService.Stats is { Credits: null, Ratio: null },
+        "clean command and trailer misses still use the bounded no-access cache");
+}
 // Cross FluentFTP's default TLS transaction limit on the SAME borrowed session.
 // SelfConnectMode.Never with the default SslSessionLength rejects a healthy
 // connection here, before the command ever reaches the fixture.

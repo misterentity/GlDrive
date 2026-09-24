@@ -2,6 +2,7 @@
 import datetime
 import json
 import pathlib
+import socket
 import sys
 import tempfile
 
@@ -23,10 +24,30 @@ cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
         .public_key(key.public_key()).serial_number(x509.random_serial_number())
         .not_valid_before(now - datetime.timedelta(minutes=1))
         .not_valid_after(now + datetime.timedelta(days=1)).sign(key, hashes.SHA256()))
+blocked_data = socket.socket()
+blocked_data.bind(("127.0.0.1", 0))  # reserved but not listening: deterministic refusal
+blocked_port = blocked_data.getsockname()[1]
 pem = root / "fixture.pem"
 pem.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
                                  serialization.NoEncryption()) + cert.public_bytes(serialization.Encoding.PEM))
 class ReleaseCheckHandler(TLS_FTPHandler):
+    def ftp_EPSV(self, line):
+        if (root / "reject-passive").exists():
+            self.respond(f"229 Entering extended passive mode (|||{blocked_port}|).")
+        else:
+            super().ftp_EPSV(line)
+
+    def ftp_PASV(self, line):
+        if (root / "reject-passive").exists():
+            self.respond(f"227 Entering passive mode (127,0,0,1,{blocked_port // 256},{blocked_port % 256}).")
+        else:
+            super().ftp_PASV(line)
+
+    def respond(self, response, *args, **kwargs):
+        if response.startswith("226 ") and (root / "stats-trailer").exists():
+            response = "226 Transfer complete. Credits: 12.3 GB Ratio: 1:3"
+        super().respond(response, *args, **kwargs)
+
     def ftp_NOOP(self, line):
         reject = root / "reject-noop-once"
         if reject.exists():

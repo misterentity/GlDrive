@@ -485,7 +485,7 @@ public class MountService : IDisposable
 
     public async Task RefreshStatsAsync()
     {
-        if (_pool == null || CurrentState != MountState.Connected)
+        if (_pool == null || _ftp == null || CurrentState != MountState.Connected)
         {
             Log.Information("RefreshStatsAsync skipped for {Server}: pool={HasPool} state={State}",
                 _serverConfig.Name, _pool != null, CurrentState);
@@ -562,17 +562,12 @@ public class MountService : IDisposable
                 }
                 catch (Exception cmdEx)
                 {
-                    Log.Information("RefreshStatsAsync candidate '{Cmd}' threw for {Server}: {Msg}",
-                        cmd, _serverConfig.Name, cmdEx.Message);
-                    // If the connection died mid-command, every remaining candidate will throw
-                    // the same parser error. Poison the conn so the pool discards it on return,
-                    // then break out — don't keep hammering a broken socket.
-                    if (!conn.Client.IsConnected)
-                    {
-                        conn.Poison($"SITE stats command '{cmd}' left the connection disconnected");
-                        connDied = true;
-                        break;
-                    }
+                    // Negative SITE replies return normally. A thrown command is
+                    // inconclusive and may leave a reply pending even when IsConnected
+                    // is still true. Retry with a fresh session on the next refresh;
+                    // never turn a transport fault into a six-hour access denial.
+                    conn.Poison($"SITE stats command '{cmd}': {cmdEx.GetType().Name}");
+                    throw;
                 }
             }
 
@@ -583,27 +578,22 @@ public class MountService : IDisposable
             if (!connDied && (best == null || (best.Credits == null && best.Ratio == null)))
             {
                 Log.Debug("RefreshStatsAsync falling back to LIST trailer for {Server}", _serverConfig.Name);
-                try
+                // Honor the deadline and shared CPSV/quarantine policy. Let failures
+                // leave through the outer handler BEFORE reaching the no-access cache:
+                // a failed LIST is not a successful trailer with no account stats.
+                await _ftp.ListDirectory(conn, _serverConfig.Connection.RootPath, statsCts.Token);
+                var reply = conn.Client.LastReply;
+                var body = (reply.InfoMessages ?? string.Empty) + "\n" + (reply.Message ?? string.Empty);
+                Log.Debug("LIST trailer for {Server} bodyLen={Len}",
+                    _serverConfig.Name, body.Length);
+                var trailer = SiteStatsCollector.Parse(body);
+                if (trailer.Credits != null || trailer.Ratio != null)
                 {
-                    // Honor the 10s statsCts deadline so a slow/hung LIST can't pin this
-                    // borrowed connection (and the unmount/stats path) indefinitely.
-                    await conn.Client.GetListing(_serverConfig.Connection.RootPath, statsCts.Token);
-                    var reply = conn.Client.LastReply;
-                    var body = (reply.InfoMessages ?? string.Empty) + "\n" + (reply.Message ?? string.Empty);
-                    Log.Debug("LIST trailer for {Server} bodyLen={Len}",
-                        _serverConfig.Name, body.Length);
-                    var trailer = SiteStatsCollector.Parse(body);
-                    if (trailer.Credits != null || trailer.Ratio != null)
-                    {
-                        best = trailer;
-                        _statsViaListTrailer = true; // positive cache: skip the dead SITE chain next tick
-                    }
-                }
-                catch (Exception listEx)
-                {
-                    Log.Information("LIST trailer fallback failed for {Server}: {Msg}",
-                        _serverConfig.Name, listEx.Message);
-                    if (!conn.Client.IsConnected) conn.Poison("LIST trailer fallback left the connection disconnected");
+                    best = trailer;
+                    if (!_statsViaListTrailer)
+                        Log.Information("Stats available for {Server} via {Protocol} LIST trailer",
+                            _serverConfig.Name, _pool.UseCpsv ? "CPSV" : "standard");
+                    _statsViaListTrailer = true; // positive cache: skip the dead SITE chain next tick
                 }
             }
 

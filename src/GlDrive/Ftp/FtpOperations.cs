@@ -19,7 +19,16 @@ public class FtpOperations
 
     public async Task<FtpListItem[]> ListDirectory(string remotePath, CancellationToken ct = default)
     {
-        var conn = await _pool.Borrow(ct);
+        await using var conn = await _pool.Borrow(ct);
+        return await ListDirectory(conn, remotePath, ct);
+    }
+
+    // Some callers need the completion reply on the SAME borrowed connection
+    // (e.g. account credits in a LIST trailer). Keep protocol selection and
+    // failure quarantine identical to ordinary directory operations.
+    internal async Task<FtpListItem[]> ListDirectory(PooledConnection conn, string remotePath,
+        CancellationToken ct = default)
+    {
         try
         {
             Log.Debug("LIST {Path}", remotePath);
@@ -39,10 +48,6 @@ public class FtpOperations
             // sync, and CpsvDataHelper already cleared its pending mark.
             conn.Poison($"LIST {remotePath}: {ex.GetType().Name}");
             throw;
-        }
-        finally
-        {
-            await conn.DisposeAsync();
         }
     }
 
