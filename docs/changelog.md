@@ -12,6 +12,16 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.135 — reject removal announces and complete multipart readiness (2026-09-25)
+
+- Reject explicit IRC deletion/nuke event labels before custom or built-in new-release matching, deduplication and learning. Loose section/name rules previously queued races for releases that had just been deleted.
+- Extend extraction readiness and retry fingerprints to modern `.partNN.rar` sets; detect missing classic volumes across `.r99`/`.s00`, and accept valid SFV entries separated by spaces or tabs. All RAR inputs pass the shared sampler.
+- See the [release report](releases/v3.10.135.md) for validation, deployment and remaining dependency/storage conditions.
+
+## v3.10.134 — wait for known missing archive volumes (2026-09-24)
+
+- Reject quiet-but-incomplete classic RAR sets when gaps or SFV declarations prove volumes are missing. This prevents incomplete input from being incorrectly recorded as corrupt. Version 3.10.135 extends coverage to modern multipart naming and the classic numbering boundary.
+
 ## v3.10.133 — recover BNC account stats (2026-09-24)
 
 - Stats fallback uses the shared CPSV-aware listing operation on the same borrowed connection, including its failure quarantine. Command or data-channel exceptions no longer become a six-hour no-access cache entry.
