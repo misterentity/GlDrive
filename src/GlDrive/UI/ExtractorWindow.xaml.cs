@@ -1637,8 +1637,15 @@ public partial class ExtractorWindow : Window
         var firstVolume = await WaitForFileReady(path, ct, noProgressBudgetMs);
         if (firstVolume != ArchiveWaitOutcome.Ready) return firstVolume;
 
-        // Not an old-style multi-volume set: WaitForFileReady already covered it in full.
-        if (TryDiscoverRarVolumes(path) is not { Count: > 1 }) return ArchiveWaitOutcome.Ready;
+        // Not an old-style multi-volume set: WaitForFileReady already covered it in full —
+        // unless an SFV beside it declares volumes that have not appeared yet, in which case
+        // it is a set whose first member simply arrived first.
+        if (TryDiscoverRarVolumes(path) is not { Count: > 1 }
+            && VolumeSetReadiness.CountMissingVolumes(
+                Path.GetFileNameWithoutExtension(path),
+                [Path.GetFileName(path)],
+                VolumeSetReadiness.ReadSfvDeclaredNames(Path.GetDirectoryName(path)!)) == 0)
+            return ArchiveWaitOutcome.Ready;
 
         var previous = SampleVolumeSet(path);
         var waitedCycles = 0;
@@ -1699,8 +1706,8 @@ public partial class ExtractorWindow : Window
                     VolumeSetArrivalBudget.AbsoluteCeilingMs / 3_600_000, path, current.Count, current.TotalBytes);
             else
                 Log.Warning(
-                    "Extractor: volume set stalled — no change for {Seconds}s — {Path} ({Count} parts, {Bytes} bytes, {Locked} locked)",
-                    noProgressBudgetMs / 1000, path, current.Count, current.TotalBytes, current.LockedCount);
+                    "Extractor: volume set stalled — no change for {Seconds}s — {Path} ({Count} parts, {Bytes} bytes, {Locked} locked, {Missing} missing)",
+                    noProgressBudgetMs / 1000, path, current.Count, current.TotalBytes, current.LockedCount, current.MissingCount);
 
             return ArchiveWait.FromVerdict(verdict);
         }
@@ -1715,7 +1722,9 @@ public partial class ExtractorWindow : Window
     {
         try
         {
-            var volumes = TryDiscoverRarVolumes(firstVolumePath);
+            // A lone first volume reaches here only when an SFV says more are coming.
+            var volumes = TryDiscoverRarVolumes(firstVolumePath)
+                ?? (File.Exists(firstVolumePath) ? [new FileInfo(firstVolumePath)] : null);
             if (volumes == null || volumes.Count == 0)
                 return new VolumeSetReadiness.Snapshot(0, 0, 0);
 
@@ -1748,7 +1757,12 @@ public partial class ExtractorWindow : Window
                 }
             }
 
-            return new VolumeSetReadiness.Snapshot(volumes.Count, totalBytes, locked);
+            var missing = VolumeSetReadiness.CountMissingVolumes(
+                Path.GetFileNameWithoutExtension(firstVolumePath),
+                volumes.Where(v => v.Exists).Select(v => v.Name),
+                VolumeSetReadiness.ReadSfvDeclaredNames(Path.GetDirectoryName(firstVolumePath)!));
+
+            return new VolumeSetReadiness.Snapshot(volumes.Count, totalBytes, locked, missing);
         }
         catch (Exception ex)
         {
