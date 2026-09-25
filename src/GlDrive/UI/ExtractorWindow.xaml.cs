@@ -929,6 +929,8 @@ public partial class ExtractorWindow : Window
             // Enumerate all files in the directory once to avoid 2000+ File.Exists calls
             var candidates = new DirectoryInfo(dir)
                 .EnumerateFiles($"{baseName}.*")
+                .Where(f => Path.GetFileNameWithoutExtension(f.Name)
+                    .Equals(baseName, StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
             // .r00 – .r999 volumes, in numeric order
@@ -1637,14 +1639,10 @@ public partial class ExtractorWindow : Window
         var firstVolume = await WaitForFileReady(path, ct, noProgressBudgetMs);
         if (firstVolume != ArchiveWaitOutcome.Ready) return firstVolume;
 
-        // Not an old-style multi-volume set: WaitForFileReady already covered it in full —
-        // unless an SFV beside it declares volumes that have not appeared yet, in which case
-        // it is a set whose first member simply arrived first.
-        if (TryDiscoverRarVolumes(path) is not { Count: > 1 }
-            && VolumeSetReadiness.CountMissingVolumes(
-                Path.GetFileNameWithoutExtension(path),
-                [Path.GetFileName(path)],
-                VolumeSetReadiness.ReadSfvDeclaredNames(Path.GetDirectoryName(path)!)) == 0)
+        // Every RAR goes through the sampler, including modern .partNN.rar sets and a lone
+        // first part whose SFV declares later volumes. Old-style extraction discovery returns
+        // null for modern sets (and on an IO failure), so it cannot authorize this shortcut.
+        if (!Path.GetExtension(path).Equals(".rar", StringComparison.OrdinalIgnoreCase))
             return ArchiveWaitOutcome.Ready;
 
         var previous = SampleVolumeSet(path);
@@ -1722,11 +1720,7 @@ public partial class ExtractorWindow : Window
     {
         try
         {
-            // A lone first volume reaches here only when an SFV says more are coming.
-            var volumes = TryDiscoverRarVolumes(firstVolumePath)
-                ?? (File.Exists(firstVolumePath) ? [new FileInfo(firstVolumePath)] : null);
-            if (volumes == null || volumes.Count == 0)
-                return new VolumeSetReadiness.Snapshot(0, 0, 0);
+            var volumes = VolumeSetReadiness.DiscoverVolumes(firstVolumePath);
 
             long totalBytes = 0;
             var locked = 0;
@@ -1972,14 +1966,14 @@ public partial class ExtractorWindow : Window
     /// Identify a volume set by what a retry could actually change: how many parts are
     /// present and how many bytes they hold. A missing part arriving, or a truncated one
     /// being replaced, moves this — which is exactly when a permanent verdict should lapse.
-    /// Falls back to the single file when this isn't an old-style multi-volume set.
+    /// Covers both old-style and modern RAR sets so either can revive when another part arrives.
     /// </summary>
     private static (int VolumeCount, long TotalBytes) ComputeVolumeSetFingerprint(string path)
     {
         try
         {
-            var volumes = TryDiscoverRarVolumes(path);
-            if (volumes != null && volumes.Count > 0)
+            var volumes = VolumeSetReadiness.DiscoverVolumes(path);
+            if (volumes.Count > 0)
             {
                 // Per-volume, guarded. This used to be volumes.Sum(v => v.Length), which threw
                 // the moment ANY part was unreadable and discarded the whole measurement — and

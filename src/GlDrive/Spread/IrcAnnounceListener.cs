@@ -33,6 +33,15 @@ public class IrcAnnounceListener : IDisposable
         RegexOptions.IgnoreCase | RegexOptions.Compiled,
         TimeSpan.FromMilliseconds(200));
 
+    // A valid release name is also present in removal notices. Loose custom rules
+    // can match their section/name while skipping the event label (e.g. DELETE:
+    // -TV- Release.Name has been deleted). Only classify an explicit leading
+    // label, so titles or group names containing Delete/Nuke remain valid.
+    private static readonly Regex RemovalAnnouncePattern = new(
+        @"^\s*(?:\[\s*(?:DELETE|DELETED|DELDIR|RMDIR|DELPRE|NUKE|NUKED)\s*\]|(?:DELETE|DELETED|DELDIR|RMDIR|DELPRE|NUKE|NUKED)\s*:)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.NonBacktracking,
+        TimeSpan.FromMilliseconds(200));
+
     // Common verb / filler words that loose announce regexes accidentally capture
     // out of racing chatter (e.g. "TeRRaNoVA brings the goods", "switchback leads with 4/8F").
     // These are NEVER scene release names, so reject them before they reach StartRace.
@@ -112,6 +121,14 @@ public class IrcAnnounceListener : IDisposable
         // the no-match path below, write PM plaintext into the plaintext ai-data telemetry.
         if (!IrcLogStore.IsChannelName(target))
             return;
+
+        // IrcService has already removed IRC formatting. Reject removal events
+        // before either matcher, deduplication or announce-learning telemetry.
+        if (RemovalAnnouncePattern.IsMatch(message.Text))
+        {
+            Log.Debug("IRC announce: ignoring removal event from {Channel}", target);
+            return;
+        }
 
         // Trace first 5 messages per channel to diagnose matching issues
         if (_traceCount < 20 && target.StartsWith('#'))

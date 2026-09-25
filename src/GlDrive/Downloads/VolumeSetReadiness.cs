@@ -83,10 +83,16 @@ public static class VolumeSetReadiness
     }
 
     private static readonly Regex VolumeSuffix =
-        new(@"^\.(?<kind>[rs])(?<num>\d{2,3})$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        new(@"^\.(?<kind>[rs])(?<num>[0-9]{2,3})$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex ModernBase =
+        new(@"^(?<base>.+)\.part[0-9]+$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex PartSuffix =
+        new(@"^\.part(?<num>[0-9]+)\.rar$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex SfvEntry =
+        new(@"^(?<name>.+?)[ \t]+[0-9a-f]{8}$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     /// <summary>
-    /// How many members of an old-style set (<c>base.rar</c>, <c>base.r00…</c>, <c>base.s00…</c>)
+    /// How many members of an old-style or modern <c>base.partNN.rar</c> set
     /// are provably absent. Two independent proofs, counted once per distinct name:
     ///   * a gap in the volume numbering — a present <c>.r31</c> proves <c>.r00–.r30</c> exist;
     ///   * a set member declared by an SFV in the same folder that is not on disk — the only
@@ -97,45 +103,75 @@ public static class VolumeSetReadiness
         string baseName, IEnumerable<string> presentFileNames, IEnumerable<string>? sfvDeclaredNames)
     {
         var present = new HashSet<string>(presentFileNames, StringComparer.OrdinalIgnoreCase);
-        var missing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var modern = ModernBase.Match(baseName);
+        var setBase = modern.Success ? modern.Groups["base"].Value : baseName;
+        var members = present.Select(n => ParseMember(setBase, n, modern.Success))
+            .Where(m => m != null).Select(m => m!.Value).ToList();
+        long missing = 0;
+        var ranges = new Dictionary<char, (int First, int Last, HashSet<int> Have)>();
 
-        foreach (var kind in new[] { 'r', 's' })
+        foreach (var kind in modern.Success ? new[] { 'p' } : new[] { 'r', 's' })
         {
-            var numbers = present
-                .Select(n => ParseMember(baseName, n))
-                .Where(m => m is { } v && v.Kind == kind)
-                .Select(m => m!.Value)
-                .ToList();
-            if (numbers.Count == 0) continue;
-
-            var width = numbers.Max(m => m.Width);
-            var highest = numbers.Max(m => m.Number);
-            var have = numbers.Select(m => m.Number).ToHashSet();
-            for (var i = 0; i < highest; i++)
-                if (!have.Contains(i))
-                    missing.Add($"{baseName}.{kind}{i.ToString().PadLeft(width, '0')}");
+            var have = members.Where(m => m.Kind == kind).Select(m => m.Number).ToHashSet();
+            var first = kind == 'p' ? 1 : 0;
+            var highest = have.DefaultIfEmpty(first - 1).Max();
+            // Classic numbering crosses from .r99 to .s00; .s00 proves the entire
+            // preceding r range, even if none of those files has arrived yet.
+            if (kind == 'r' && members.Any(m => m.Kind == 's')) highest = Math.Max(99, highest);
+            ranges[kind] = (first, highest, have);
+            // Arithmetic avoids walking an arbitrarily large .partNN suffix.
+            missing += highest - first + 1 - have.Count;
         }
 
         if (sfvDeclaredNames != null)
         {
-            foreach (var declared in sfvDeclaredNames)
+            foreach (var declared in sfvDeclaredNames.Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                var isMember = declared.Equals($"{baseName}.rar", StringComparison.OrdinalIgnoreCase)
-                    || ParseMember(baseName, declared) != null;
-                if (isMember && !present.Contains(declared)) missing.Add(declared);
+                if (present.Contains(declared)) continue;
+                var member = ParseMember(setBase, declared, modern.Success);
+                if (member is { } m)
+                {
+                    var range = ranges[m.Kind];
+                    if (m.Number <= range.Last && !range.Have.Contains(m.Number)) continue;
+                    missing++;
+                }
+                else if (!modern.Success && declared.Equals($"{baseName}.rar", StringComparison.OrdinalIgnoreCase))
+                    missing++;
             }
         }
 
-        return missing.Count;
+        return (int)Math.Min(int.MaxValue, missing);
     }
 
-    private static (char Kind, int Number, int Width)? ParseMember(string baseName, string fileName)
+    private static (char Kind, int Number)? ParseMember(string baseName, string fileName, bool modern)
     {
         if (!fileName.StartsWith(baseName + ".", StringComparison.OrdinalIgnoreCase)) return null;
-        var m = VolumeSuffix.Match(fileName[baseName.Length..]);
-        if (!m.Success) return null;
-        var digits = m.Groups["num"].Value;
-        return (char.ToLowerInvariant(m.Groups["kind"].Value[0]), int.Parse(digits), digits.Length);
+        var m = (modern ? PartSuffix : VolumeSuffix).Match(fileName[baseName.Length..]);
+        if (!m.Success || !int.TryParse(m.Groups["num"].Value, out var number)
+            || (modern && number < 1)) return null;
+        return (modern ? 'p' : char.ToLowerInvariant(m.Groups["kind"].Value[0]), number);
+    }
+
+    /// <summary>
+    /// Observe both naming schemes without changing the extractor's archive-opening policy.
+    /// Discovery failures propagate so the sampler cannot mistake an unreadable set for one file.
+    /// </summary>
+    internal static List<FileInfo> DiscoverVolumes(string firstVolumePath)
+    {
+        var first = new FileInfo(firstVolumePath);
+        if (!first.Extension.Equals(".rar", StringComparison.OrdinalIgnoreCase)) return [first];
+
+        var baseName = Path.GetFileNameWithoutExtension(first.Name);
+        var modern = ModernBase.Match(baseName);
+        var setBase = modern.Success ? modern.Groups["base"].Value : baseName;
+        var result = new List<FileInfo> { first };
+        foreach (var candidate in first.Directory!.EnumerateFiles())
+        {
+            if (!candidate.Name.Equals(first.Name, StringComparison.OrdinalIgnoreCase)
+                && ParseMember(setBase, candidate.Name, modern.Success) != null)
+                result.Add(candidate);
+        }
+        return result;
     }
 
     /// <summary>
@@ -155,9 +191,8 @@ public static class VolumeSetReadiness
                     {
                         var trimmed = line.Trim();
                         if (trimmed.Length == 0 || trimmed.StartsWith(';')) continue;
-                        var lastSpace = trimmed.LastIndexOf(' ');
-                        if (lastSpace <= 0) continue;
-                        names.Add(trimmed[..lastSpace].Trim());
+                        var entry = SfvEntry.Match(trimmed);
+                        if (entry.Success) names.Add(entry.Groups["name"].Value);
                     }
                 }
                 catch (IOException) { }
