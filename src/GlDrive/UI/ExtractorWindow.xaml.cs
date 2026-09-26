@@ -50,6 +50,11 @@ public partial class ExtractorWindow : Window
     private readonly Dictionary<string, int> _watchRetryCounts = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _watchLock = new();
 
+    // Paths held because their output drive is out of room. Keyed on the drive's free space,
+    // not the volume-set fingerprint — freeing space never changes the fingerprint, so a full
+    // disk parked in _watchAbandoned could only ever be revived by a restart.
+    private readonly ExtractSpaceParking _spaceParked = new();
+
     /// <summary>
     /// How often abandoned paths are re-fingerprinted. Long enough that a multi-GB copy has
     /// moved measurably between sweeps, short enough that a release landing from outside
@@ -1505,6 +1510,7 @@ public partial class ExtractorWindow : Window
         // operation itself is what actually ends it. Every route into extraction passes
         // through this method, so this is the only placement that cannot be bypassed.
         if (SkipIfAbandoned(item.FilePath)) return;
+        if (_spaceParked.IsParked(item.FilePath)) return;
 
         // The SECOND invariant this chokepoint owes every route, and it was missing until
         // v3.10.120. WaitForVolumeSetReady shipped in v3.10.62/.63 wired into exactly one
@@ -1567,6 +1573,15 @@ public partial class ExtractorWindow : Window
             deleteAfter = ChkDeleteAfter.IsChecked == true;
         });
 
+        // Scene sets are stored (m0), so the volume bytes are the unpacked size. A compressed
+        // archive can need more; that case still ends in the disk-full catch below and parks.
+        var (_, requiredBytes) = ComputeVolumeSetFingerprint(item.FilePath);
+        if (!_spaceParked.Fits(outputDir, requiredBytes, out var freeBytes))
+        {
+            ParkForSpace(item.FilePath, outputDir, requiredBytes, freeBytes);
+            return;
+        }
+
         Log.Information(
             "Extractor: auto-extract starting — {File} → {Dir} (deleteAfter={Delete})",
             item.FileName, outputDir, deleteAfter);
@@ -1600,10 +1615,19 @@ public partial class ExtractorWindow : Window
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "Auto-extract failed: {File}", item.FileName);
             item.Status = "Error";
             item.ErrorMessage = ex.Message;
-            ScheduleWatchRetry(item.FilePath, ex);
+            if (ExtractSpaceParking.IsDiskFull(ex))
+            {
+                Log.Warning("Auto-extract failed: {File} — output drive is full", item.FileName);
+                ParkForSpace(item.FilePath, outputDir, requiredBytes,
+                    ExtractSpaceParking.DefaultFreeSpace(ExtractSpaceParking.RootOf(outputDir)));
+            }
+            else
+            {
+                Log.Warning(ex, "Auto-extract failed: {File}", item.FileName);
+                ScheduleWatchRetry(item.FilePath, ex);
+            }
         }
         finally
         {
@@ -1873,6 +1897,28 @@ public partial class ExtractorWindow : Window
         return Path.Combine(Path.GetDirectoryName(path) ?? "", $"{match.Groups["base"].Value}{first}.rar");
     }
 
+    /// <summary>
+    /// Hold an archive until its output drive has room. Consumes no retry and records no
+    /// abandon verdict: a full disk says nothing about the archive, and only the sweep's
+    /// free-space check can release it.
+    /// </summary>
+    private void ParkForSpace(string path, string outputDir, long requiredBytes, long? freeBytes)
+    {
+        var first = _spaceParked.Park(path, outputDir, requiredBytes);
+        lock (_watchLock)
+        {
+            _watchProcessed.Add(path);
+            _watchRetryCounts.Remove(path);
+        }
+        StartAbandonSweep();
+
+        if (first)
+            Log.Warning(
+                "Extractor: waiting for disk space — {Path} needs {Need} on {Root} but only {Free} is free ({Headroom} kept in reserve). It will extract automatically once space frees.",
+                path, FormatSize(requiredBytes), ExtractSpaceParking.RootOf(outputDir),
+                freeBytes is { } f ? FormatSize(f) : "an unknown amount", FormatSize(_spaceParked.Headroom));
+    }
+
     private void ScheduleWatchRetry(string path, Exception? failure = null)
     {
         // A failure that a retry cannot fix (notably an incomplete multi-volume set whose
@@ -2068,6 +2114,20 @@ public partial class ExtractorWindow : Window
                         "Extractor: sweep found abandoned archive changed ({Count} parts, {Bytes} bytes) — retrying {Path}",
                         volumes, bytes, path);
 
+                    await HandleWatchedFileAsync(path);
+                }
+
+                foreach (var path in _spaceParked.TakeReady())
+                {
+                    if (_lifetimeCts.IsCancellationRequested) return;
+
+                    lock (_watchLock)
+                    {
+                        _watchProcessed.Remove(path);
+                        _watchRetryCounts.Remove(path);
+                    }
+
+                    Log.Information("Extractor: disk space available again — retrying {Path}", path);
                     await HandleWatchedFileAsync(path);
                 }
             }
