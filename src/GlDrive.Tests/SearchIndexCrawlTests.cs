@@ -94,9 +94,11 @@ public sealed class SearchIndexCrawlTests
         string[] markers = [
             "[Z] - ( 1591M 17F - COMPLETE ) - [Z]",
             "[###:::::::::::] - 27% Complete - [site]",
-            "[ Incomplete ]", "[site] - ( IN-COMPLETE ) - [site]"
+            "[ Incomplete ]", "[site] - ( IN-COMPLETE ) - [site]",
+            "[NUKED]-Show.S01E02.1080p-GRP", "[ nuked ] - Show.S01E03-GRP", "[ NUKED ]"
         ];
-        string[] real = ["Show.S01.COMPLETE.1080p-GRP", "[Group] Show.S01", "Complete", "Sample", "Subs"];
+        string[] real = ["Show.S01.COMPLETE.1080p-GRP", "[Group] Show.S01", "Complete", "Sample", "Subs",
+            "Nuked.2026.1080p-GRP", "Show.NUKED.S01-GRP", "[NUKEDGroup]-Show.S01-GRP"];
         var tree = new Dictionary<string, FtpListItem[]>
         {
             ["/TV"] = markers.Concat(real).Select(n => Dir("/TV/" + n)).ToArray()
@@ -126,5 +128,18 @@ public sealed class SearchIndexCrawlTests
         }
         Assert.Equal(real, found);
         Assert.Equal(new[] { "/TV" }.Concat(real.Select(n => "/TV/" + n)), visited);
+    }
+
+    [Fact]
+    public void Site_search_excludes_nuked_status_paths_but_preserves_real_titles()
+    {
+        const string response = "200-/TV/[NUKED]-Show.S01E02-GRP (3F/1G/1h)\n" +
+            "200-/TV/Nuked.2026.1080p-GRP (3F/1G/1h)\n" +
+            "200-/TV/[NUKEDGroup]-Show.S01-GRP (3F/1G/1h)";
+
+        var results = FtpSearchService.ParseSiteSearchResponse(response);
+
+        Assert.Equal(["Nuked.2026.1080p-GRP", "[NUKEDGroup]-Show.S01-GRP"],
+            results.Select(result => result.ReleaseName));
     }
 }
