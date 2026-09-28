@@ -17,8 +17,8 @@ public class SpreadManager : IDisposable
     private readonly Queue<PendingRace> _raceQueue = new();
     private readonly SpeedTracker _speedTracker = new();
     private readonly SkiplistEvaluator _skiplist = new();
-    private readonly RaceHistoryStore _history = new(RaceHistoryStore.DefaultFilePath);
-    private readonly SectionBlacklistStore _blacklist = new();
+    private readonly RaceHistoryStore _history;
+    private readonly SectionBlacklistStore _blacklist;
     private readonly MetadataFilterService _metadataFilter;
     private readonly Lock _lock = new();
     private readonly SpreadPoolRecoveryLoop _poolRecovery = new();
@@ -120,14 +120,25 @@ public class SpreadManager : IDisposable
     public event Action<SpreadJob>? JobCompleted;
     public event Action<SpreadJob>? JobProgressChanged;
 
-    public SpreadManager(AppConfig config)
+    public SpreadManager(AppConfig config) : this(config, ConfigManager.AppDataPath)
+    {
+    }
+
+    // The state-directory seam keeps lifecycle regression tests away from live stores.
+    internal SpreadManager(AppConfig config, string stateDirectory)
     {
         _config = config;
+        _history = new RaceHistoryStore(Path.Combine(stateDirectory, "race-history.json"));
+        _blacklist = new SectionBlacklistStore(Path.Combine(stateDirectory, "section-blacklist.json"));
         _metadataFilter = new MetadataFilterService(config);
         _history.Load();
         _blacklist.Load();
-        _speedTracker.EnablePersistence(
-            Path.Combine(ConfigManager.AppDataPath, "spread-speed-history.json"));
+        // Screenshot rendering constructs and disposes demo managers while the real
+        // app may keep recording transfers. Enabling persistence here lets Dispose()
+        // overwrite its newer speed history with the renderer's stale snapshot.
+        if (!ConfigManager.ReadOnly)
+            _speedTracker.EnablePersistence(
+                Path.Combine(stateDirectory, "spread-speed-history.json"));
     }
 
     public async Task InitializePool(string serverId, FtpClientFactory factory, CancellationToken ct)

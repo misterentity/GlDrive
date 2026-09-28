@@ -95,8 +95,10 @@ using (var job = new SpreadJob("TV", existingRelease, SpreadMode.Race, new Sprea
 }
 var searchRoot = remoteRoot + "/search";
 await ftp.CreateDirectory(searchRoot + "/[Z] - ( 1591M 17F - COMPLETE ) - [Z]", deadline.Token);
+await ftp.CreateDirectory(searchRoot + "/[NUKED]-Show.S01E02.1080p-GRP", deadline.Token);
 await ftp.CreateDirectory(searchRoot + "/Show.S01.COMPLETE.1080p-GRP", deadline.Token);
 await ftp.CreateDirectory(searchRoot + "/[Group] Show.S01", deadline.Token);
+await ftp.CreateDirectory(searchRoot + "/Nuked.2026.1080p-GRP", deadline.Token);
 foreach (var method in new[] { SearchMethod.CachedIndex, SearchMethod.LiveCrawl })
 {
     using var search = new FtpSearchService(pool, new SearchConfig
@@ -105,9 +107,10 @@ foreach (var method in new[] { SearchMethod.CachedIndex, SearchMethod.LiveCrawl 
     });
     if (method == SearchMethod.CachedIndex) await search.RefreshIndex(ct: deadline.Token);
     var results = await search.Search("", ct: deadline.Token);
-    Check(results.Count == 2 && results.Any(r => r.ReleaseName == "Show.S01.COMPLETE.1080p-GRP") &&
-        results.Any(r => r.ReleaseName == "[Group] Show.S01"),
-        $"native {method} excludes status directories and preserves real release names");
+    Check(results.Count == 3 && results.Any(r => r.ReleaseName == "Show.S01.COMPLETE.1080p-GRP") &&
+        results.Any(r => r.ReleaseName == "[Group] Show.S01") &&
+        results.Any(r => r.ReleaseName == "Nuked.2026.1080p-GRP"),
+        $"native {method} excludes status and explicit nuke directories and preserves real release names");
 }
 var notificationRoot = remoteRoot + "/notifications";
 await ftp.CreateDirectory(notificationRoot + "/TV/existing", deadline.Token);

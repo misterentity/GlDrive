@@ -25,7 +25,15 @@ public class FtpSearchService : IDisposable
         @"(?:^|[\s(\-])(?:in[\s_\-]*)?complete(?:$|[\s)\]\-])",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
 
+    // Nuked releases may remain in the parent listing while access to their
+    // contents is revoked. Recognize the site's explicit status prefix, not
+    // ordinary titles containing NUKED or bracketed release-group names.
+    private static readonly Regex NukedDirectory = new(
+        @"^\[\s*NUKED\s*\](?:\s*-|\s*$)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
+
     private static bool SkipDirectory(string name) => SkipDirs.Contains(name) ||
+        NukedDirectory.IsMatch(name) ||
         (name.StartsWith('[') && name.EndsWith(']') && StatusDirectory.IsMatch(name));
 
     // SITE SEARCH support: null = not probed yet, true/false = probed
@@ -200,6 +208,7 @@ public class FtpSearchService : IDisposable
 
             var path = match.Groups["path"].Value;
             var name = path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
+            if (SkipDirectory(name)) continue;
             var category = ExtractCategoryFromFullPath(path);
 
             var sizeVal = double.TryParse(match.Groups["size"].Value, out var sv) ? sv : 0;

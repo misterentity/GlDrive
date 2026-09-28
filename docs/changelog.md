@@ -12,6 +12,17 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.137 — recover nuke polling and exclude unavailable search entries (2026-09-28)
+
+- Nuke polling skips disconnected mounts, bounds the entire operation, quarantines interrupted protocol sessions and retries after a circuit-breaker cooldown. Shutdown cancels polling and overlapping runs are suppressed.
+- Cached, live and SITE SEARCH results exclude explicit `[NUKED]-` status entries while preserving real titles and group names containing NUKED.
+- Read-only screenshot rendering leaves production transfer-speed history unchanged.
+- See the [release report](releases/v3.10.137.md) for log findings, tests, deployment and remaining external conditions.
+
+## v3.10.136 — park archives until extraction space is available (2026-09-25)
+
+- Check available output space before automatic extraction, park disk-full failures without consuming retries, and recheck parked paths during the watch sweep. See the [release report](releases/v3.10.136.md).
+
 ## v3.10.135 — reject removal announces and complete multipart readiness (2026-09-25)
 
 - Reject explicit IRC deletion/nuke event labels before custom or built-in new-release matching, deduplication and learning. Loose section/name rules previously queued races for releases that had just been deleted.
