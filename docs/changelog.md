@@ -12,6 +12,13 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.138 — attribute FXP transfer deadlines and release their tracking (2026-09-29)
+
+- A transfer that hits its per-transfer ceiling while the race continues is now logged as a timeout (file, route, elapsed, bytes moved), poisons its mid-command sessions and counts against the file/route retry limit. It was previously reported as "FXP job cancelled mid-transfer" and never counted.
+- The active-transfer entry is released on every exit path. A thrown transfer used to leave a phantom that stalled the race's end-of-job drain for 60 s, masked stale-slot detection and showed a transfer on the dashboard that no longer existed.
+- Cancelled and timed-out transfers now write a telemetry row (`abortReason: "cancelled"`). Aborted rows are excluded from the AI digest's throughput matrix.
+- See the [release report](releases/v3.10.138.md).
+
 ## v3.10.137 — recover nuke polling and exclude unavailable search entries (2026-09-28)
 
 - Nuke polling skips disconnected mounts, bounds the entire operation, quarantines interrupted protocol sessions and retries after a circuit-breaker cooldown. Shutdown cancels polling and overlapping runs are suppressed.

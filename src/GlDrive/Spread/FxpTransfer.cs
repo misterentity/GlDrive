@@ -163,6 +163,7 @@ public class FxpTransfer
         var pasvSw = Stopwatch.StartNew();
         bool ok;
         string? abortReason = null;
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo? cancellation = null;
 
         try
         {
@@ -256,6 +257,15 @@ public class FxpTransfer
             else
                 Log.Warning(ex, "FXP transfer failed: {Src} -> {Dst}", srcPath, dstPath);
         }
+        catch (OperationCanceledException oce)
+        {
+            // Still emit the telemetry row below, then rethrow for the caller's
+            // attribution. A cancelled/timed-out transfer used to leave no row at all,
+            // so ceiling hits were invisible to the digests and the AI agent.
+            cancellation = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(oce);
+            abortReason = "cancelled";
+            ok = false;
+        }
 
         totalSw.Stop();
 
@@ -280,6 +290,7 @@ public class FxpTransfer
             Log.Debug(ex, "FXP telemetry emit failed (non-fatal)");
         }
 
+        cancellation?.Throw();
         return ok;
     }
 

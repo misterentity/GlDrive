@@ -321,6 +321,31 @@ public class SpreadJob : IDisposable
         get { lock (_progressLock) return _activeTransfers.Values.ToList(); }
     }
 
+    /// <summary>
+    /// Registers an in-flight transfer; disposing (idempotent) removes it. Holding the
+    /// entry in a scope makes it impossible for an exception path to leak it.
+    /// </summary>
+    internal IDisposable TrackActiveTransfer(string key, ActiveTransferInfo info)
+    {
+        lock (_progressLock) _activeTransfers[key] = info;
+        var released = 0;
+        return new ActionDisposable(() =>
+        {
+            if (Interlocked.Exchange(ref released, 1) != 0) return;
+            lock (_progressLock)
+            {
+                // Only remove OUR entry — a retry of the same key may have re-registered.
+                if (_activeTransfers.TryGetValue(key, out var current) && ReferenceEquals(current, info))
+                    _activeTransfers.Remove(key);
+            }
+        });
+    }
+
+    private sealed class ActionDisposable(Action onDispose) : IDisposable
+    {
+        public void Dispose() => onDispose();
+    }
+
     public event Action<SpreadJob>? ProgressChanged;
     public event Action<SpreadJob>? Completed;
     public event Action<SpreadJob, string>? Error;
@@ -1189,11 +1214,8 @@ public class SpreadJob : IDisposable
                     _ = Task.Run(async () =>
                     {
                         using var xferTimeout = CancellationTokenSource.CreateLinkedTokenSource(token);
-                        xferTimeout.CancelAfter(TimeSpan.FromSeconds(
-                            _spreadConfig.TransferTimeoutSeconds > 0
-                                ? _spreadConfig.TransferTimeoutSeconds * 3  // 3x the normal timeout
-                                : 180));
-                        await ExecuteTransfer(file, srcId, dstId, sitePaths[dstId], xferTimeout.Token);
+                        xferTimeout.CancelAfter(FxpFailurePolicy.TransferCeiling(_spreadConfig.TransferTimeoutSeconds));
+                        await ExecuteTransfer(file, srcId, dstId, sitePaths[dstId], xferTimeout.Token, token);
                     }, token);
                 }
 
@@ -2341,7 +2363,7 @@ public class SpreadJob : IDisposable
             p.IsInLoginGateBackoff, p.IsHostUnreachable);
 
     private async Task ExecuteTransfer(SpreadFileInfo file, string srcId, string dstId,
-        string dstBasePath, CancellationToken ct)
+        string dstBasePath, CancellationToken ct, CancellationToken jobToken)
     {
         var pools = _pools; // read volatile field once to avoid torn reads from UpdatePools
         var srcPool = pools[srcId];
@@ -2353,7 +2375,10 @@ public class SpreadJob : IDisposable
         PooledConnection? srcConn = null;
         PooledConnection? dstConn = null;
         IAsyncDisposable? gates = null;
+        IDisposable? tracked = null;
+        ActiveTransferInfo? info = null;
         var transferProtocolStarted = false;
+        var startTime = DateTime.UtcNow;
 
         try
         {
@@ -2423,18 +2448,19 @@ public class SpreadJob : IDisposable
                 await EnsureDirectoryExists(dstClient, dstId, dstBasePath, fileName, storeCt);
                 lock (_ownershipLock) _dirsCreated.Add(dstId);
             };
-            var startTime = DateTime.UtcNow;
-            var transferKey = $"{file.Name}|{srcId}->{dstId}";
-
-            var info = new ActiveTransferInfo
+            startTime = DateTime.UtcNow;
+            var progressInfo = info = new ActiveTransferInfo
             {
                 FileName = file.Name,
                 FileSize = file.Size,
                 SourceName = _serverConfigs[srcId].Name,
                 DestName = _serverConfigs[dstId].Name
             };
-
-            lock (_progressLock) _activeTransfers[transferKey] = info;
+            // Released in finally: a transfer that THROWS (ceiling hit, TLS fault) used to
+            // leave this entry behind, so the race's end-of-job drain waited its full 60s,
+            // stale-slot detection saw a phantom tracked transfer, and the dashboard showed
+            // a transfer that no longer existed.
+            tracked = TrackActiveTransfer($"{file.Name}|{srcId}->{dstId}", progressInfo);
 
             long lastReportedBytes = 0;
             transfer.BytesTransferred += totalBytes =>
@@ -2448,8 +2474,8 @@ public class SpreadJob : IDisposable
                     _siteProgress[dstId].BytesTransferred += delta;
                     if (elapsed > 0)
                         _siteProgress[dstId].SpeedBps = totalBytes / elapsed;
-                    info.BytesTransferred = totalBytes;
-                    info.SpeedBps = elapsed > 0 ? totalBytes / elapsed : 0;
+                    progressInfo.BytesTransferred = totalBytes;
+                    progressInfo.SpeedBps = elapsed > 0 ? totalBytes / elapsed : 0;
                 }
                 // Fire event outside lock
                 ProgressChanged?.Invoke(this);
@@ -2464,7 +2490,7 @@ public class SpreadJob : IDisposable
                 raceId: Id, srcServerId: srcId, dstServerId: dstId,
                 fileSizeBytes: file.Size);
 
-            lock (_progressLock) _activeTransfers.Remove(transferKey);
+            tracked.Dispose();
 
             if (ok)
             {
@@ -2617,11 +2643,50 @@ public class SpreadJob : IDisposable
                 }
             }
         }
+        catch (OperationCanceledException) when (FxpFailurePolicy.ClassifyCancellation(
+            jobToken.IsCancellationRequested, ct.IsCancellationRequested, transferProtocolStarted)
+            == FxpCancellation.JobCancelled)
+        {
+            // Race stopped — don't log as error
+            if (FxpFailurePolicy.ShouldPoisonPeers(transferProtocolStarted))
+            {
+                if (srcConn != null) srcConn.Poison("FXP job cancelled mid-transfer");
+                if (dstConn != null) dstConn.Poison("FXP job cancelled mid-transfer");
+            }
+        }
+        catch (OperationCanceledException) when (transferProtocolStarted)
+        {
+            // The transfer's OWN deadline fired mid-command (the per-transfer ceiling or
+            // FxpTransfer's relay timeout) while the race kept going. Both sessions are
+            // mid-command, and the file genuinely failed on this pair — count it so the
+            // per-pair retry limit applies instead of re-picking it forever at two logins
+            // per attempt.
+            if (srcConn != null) srcConn.Poison("FXP transfer deadline hit mid-transfer");
+            if (dstConn != null) dstConn.Poison("FXP transfer deadline hit mid-transfer");
+            int attempts;
+            lock (_failureLock)
+            {
+                var failKey = (file.Name, srcId, dstId);
+                _failureCounts.TryGetValue(failKey, out var count);
+                _failureCounts[failKey] = attempts = count + 1;
+            }
+            // Only Relay pipes bytes through us; server-to-server modes report no progress,
+            // so "0 bytes" there would assert a stall we cannot observe.
+            string moved;
+            lock (_progressLock)
+                moved = mode == FxpMode.Relay ? $"{info?.BytesTransferred ?? 0}" : "unmeasured";
+            Log.Warning("FXP transfer timed out: {File} ({Src} -> {Dst}) after {Elapsed:F0}s, " +
+                "bytes moved {Moved} of {Size} ({Mode}, ceiling {Ceiling:F0}s, attempt {Attempt} on this pair)",
+                file.Name, _serverConfigs[srcId].Name, _serverConfigs[dstId].Name,
+                (DateTime.UtcNow - startTime).TotalSeconds, moved, file.Size, mode,
+                FxpFailurePolicy.TransferCeiling(_spreadConfig.TransferTimeoutSeconds).TotalSeconds, attempts);
+        }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            // Job cancelled — don't log as error
-            if (srcConn != null) srcConn.Poison("FXP job cancelled mid-transfer");
-            if (dstConn != null) dstConn.Poison("FXP job cancelled mid-transfer");
+            // Per-transfer ceiling fired while still queued on gates/borrow. No command was
+            // issued, so any borrowed peer is pristine and the file is simply rescored.
+            Log.Information("FXP setup deferred: {File} ({Src} -> {Dst}) — transfer ceiling reached before the pair was ready",
+                file.Name, _serverConfigs[srcId].Name, _serverConfigs[dstId].Name);
         }
         catch (OperationCanceledException)
         {
@@ -2699,6 +2764,7 @@ public class SpreadJob : IDisposable
         }
         finally
         {
+            tracked?.Dispose();
             if (srcConn != null) await srcConn.DisposeAsync();
             if (dstConn != null) await dstConn.DisposeAsync();
 
