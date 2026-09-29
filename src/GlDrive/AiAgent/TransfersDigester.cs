@@ -6,7 +6,11 @@ public sealed class TransfersDigester
     {
         var list = events.ToList();
         var d = new TransfersDigest();
-        foreach (var g in list.GroupBy(e => $"{e.SrcServer}->{e.DstServer}"))
+        // Throughput comes from completed transfers only: an aborted row carries the
+        // file's EXPECTED size (non-relay modes can't measure bytes) over however long
+        // it took to fail, which is not a speed.
+        foreach (var g in list.Where(e => string.IsNullOrEmpty(e.AbortReason))
+                              .GroupBy(e => $"{e.SrcServer}->{e.DstServer}"))
         {
             var bytes = g.Sum(e => e.Bytes);
             var ms = g.Sum(e => e.ElapsedMs);
