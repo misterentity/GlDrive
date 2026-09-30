@@ -132,6 +132,29 @@ public sealed class AgentRunner : IDisposable
         Log.Information("AgentRunner next run in {Delay}", delay);
     }
 
+    internal const int MaxRejectionLinesPerRun = 8;
+
+    /// <summary>
+    /// Per-run applied/rejected counts for the last three runs, plus each rejected change and its
+    /// reason. Counts alone let the model write "raised maxConcurrentRaces to 2" into its memo after
+    /// the validator had refused it, then re-propose it the next day — for 50 days.
+    /// </summary>
+    internal static List<string> SummarizeRecentRuns(IEnumerable<AuditRow> rows)
+    {
+        var lines = new List<string>();
+        foreach (var g in rows.Reverse().GroupBy(r => r.RunId).Take(3))
+        {
+            lines.Add($"run {g.Key[..Math.Min(8, g.Key.Length)]}: applied={g.Count(r => r.Applied)} rejected={g.Count(r => !r.Applied)}");
+            foreach (var r in g.Where(r => !r.Applied).Take(MaxRejectionLinesPerRun))
+            {
+                var after = r.After is null ? "null" : JsonSerializer.Serialize(r.After);
+                if (after.Length > 80) after = after[..80] + "…";
+                lines.Add($"  rejected {r.Category} {r.Target} -> {after}: {r.RejectionReason}");
+            }
+        }
+        return lines;
+    }
+
     /// <summary>A run within this long before a slot already serves that slot.</summary>
     internal static readonly TimeSpan SlotServedWindow = TimeSpan.FromHours(12);
 
@@ -236,11 +259,7 @@ public sealed class AgentRunner : IDisposable
 
             var redacted = AgentPrompt.RedactFrozen(configNode, frozenPaths);
 
-            var lastSummaries = _audit.ReadAll().Reverse()
-                .GroupBy(r => r.RunId)
-                .Take(3)
-                .Select(g => $"run {g.Key[..Math.Min(8, g.Key.Length)]}: applied={g.Count(r => r.Applied)} rejected={g.Count(r => !r.Applied)}")
-                .ToList();
+            var lastSummaries = SummarizeRecentRuns(_audit.ReadAll());
 
             var composer = new AgentPrompt();
             var userPrompt = composer.Compose(digest, memoText, frozenPaths, redacted, lastSummaries);

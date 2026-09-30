@@ -18,7 +18,7 @@ public sealed class SkiplistValidator : IChangeValidator
         SkiplistRule? newRule = null;
         if (change.After is not null)
         {
-            try { newRule = JsonSerializer.Deserialize<SkiplistRule>(JsonSerializer.Serialize(change.After)); }
+            try { newRule = ChangeValueJson.Read<SkiplistRule>(change.After); }
             catch { return new(false, "after-parse-failed", null); }
             if (newRule is null) return new(false, "after-null", null);
             if (!PatternCompiles(newRule.Pattern ?? "", newRule.IsRegex)) return new(false, "pattern-bad", null);
