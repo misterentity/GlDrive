@@ -394,6 +394,8 @@ public class TrayViewModel : INotifyPropertyChanged
         var rows = App.AuditTrail.ReadAll()
             .Where(r => r.RunId == runId && r.Applied && !r.Undone)
             .Reverse().ToList();
+        var failures = new List<string>();
+        var reverted = 0;
         foreach (var r in rows)
         {
             var inverse = new GlDrive.AiAgent.AgentChange
@@ -406,11 +408,23 @@ public class TrayViewModel : INotifyPropertyChanged
                 EvidenceRef = "panic-revert",
                 Confidence = 1.0
             };
-            App.ChangeApplier.Apply(new[] { inverse }, _config, _config.Agent,
-                "panic-" + Guid.NewGuid().ToString()[..8], dryRun: false);
-            App.AuditTrail.MarkUndone(r.RunId, r.Target, "panic-revert");
+            try
+            {
+                var report = AgentUndoCompletion.ApplyInverse(r,
+                    () => App.ChangeApplier.Apply(new[] { inverse }, _config, _config.Agent,
+                        "panic-" + Guid.NewGuid().ToString()[..8], dryRun: false));
+                if (AgentUndoCompletion.TryComplete(report,
+                    () => GlDrive.Config.ConfigManager.Save(_config),
+                    () => App.AuditTrail.MarkUndone(r.RunId, r.Target, "panic-revert"),
+                    null, out var failure))
+                    reverted++;
+                else failures.Add(failure);
+            }
+            catch (Exception ex) { failures.Add("Undo failed: " + ex.Message); }
         }
-        GlDrive.Config.ConfigManager.Save(_config);
+        if (failures.Count > 0)
+            System.Windows.MessageBox.Show($"Reverted {reverted} change(s); {failures.Count} could not be reverted.\n\n" +
+                string.Join("\n", failures.Distinct()), "Revert incomplete");
     }
 
     // ── end AI Agent tray commands ─────────────────────────────────────────

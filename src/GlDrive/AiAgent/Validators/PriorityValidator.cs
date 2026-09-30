@@ -18,7 +18,10 @@ public sealed class PriorityValidator : IChangeValidator
         var afterStr = change.After?.ToString() ?? "";
         // JsonElement may stringify with quotes — strip them
         afterStr = afterStr.Trim('"').Trim();
-        if (!TierOrder.Contains(afterStr)) return new(false, "bad-tier-value", null);
+        // Audit snapshots use the config's numeric enum representation, including for undo.
+        if (!Enum.TryParse<SitePriority>(afterStr, out var afterTier) || !Enum.IsDefined(afterTier))
+            return new(false, "bad-tier-value", null);
+        afterStr = afterTier.ToString();
         if (afterStr == "VeryHigh") return new(false, "veryhigh-is-manual-only", null);
 
         return new(true, null, cfg =>

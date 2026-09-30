@@ -228,6 +228,8 @@ public class SettingsViewModel : INotifyPropertyChanged
 
         var runs = App.AuditTrail.ReadAll().Where(r => r.Applied && !r.Undone)
             .GroupBy(r => r.RunId).Select(g => g.Key).ToList();
+        var failures = new List<string>();
+        var reverted = 0;
         foreach (var runId in runs)
         {
             var rows = App.AuditTrail.ReadAll()
@@ -244,13 +246,26 @@ public class SettingsViewModel : INotifyPropertyChanged
                     EvidenceRef = "panic-all",
                     Confidence = 1.0
                 };
-                App.ChangeApplier.Apply(new[] { inverse }, _config, _config.Agent,
-                    "panic-" + Guid.NewGuid().ToString()[..8], dryRun: false);
-                App.AuditTrail.MarkUndone(r.RunId, r.Target, "panic-all");
+                try
+                {
+                    var report = AgentUndoCompletion.ApplyInverse(r,
+                        () => App.ChangeApplier.Apply(new[] { inverse }, _config, _config.Agent,
+                            "panic-" + Guid.NewGuid().ToString()[..8], dryRun: false));
+                    if (AgentUndoCompletion.TryComplete(report,
+                        () => GlDrive.Config.ConfigManager.Save(_config),
+                        () => App.AuditTrail.MarkUndone(r.RunId, r.Target, "panic-all"),
+                        null, out var failure))
+                        reverted++;
+                    else failures.Add(failure);
+                }
+                catch (Exception ex) { failures.Add("Undo failed: " + ex.Message); }
             }
         }
-        GlDrive.Config.ConfigManager.Save(_config);
-        System.Windows.MessageBox.Show($"Reverted {runs.Count} runs.");
+        System.Windows.MessageBox.Show(failures.Count == 0
+            ? $"Reverted {reverted} change(s)."
+            : $"Reverted {reverted} change(s); {failures.Count} could not be reverted.\n\n" +
+                string.Join("\n", failures.Distinct()),
+            failures.Count == 0 ? "Revert complete" : "Revert incomplete");
     });
 
     public ICommand RestoreFromSnapshotCommand => new RelayCommand(() =>

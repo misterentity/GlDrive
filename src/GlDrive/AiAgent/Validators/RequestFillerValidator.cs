@@ -21,9 +21,9 @@ public sealed class RequestFillerValidator : IChangeValidator
 
         return trailing switch
         {
-            "/enabled" => ValidateEnabled(change, resolver),
-            "/pattern" => ValidatePattern(change, resolver),
-            "/channel" => ValidateChannel(change, resolver),
+            "enabled" => ValidateEnabled(change, resolver),
+            "pattern" => ValidatePattern(change, resolver),
+            "channel" => ValidateChannel(change, resolver),
             _ => new(false, "target-shape-unsupported", null),
         };
     }
