@@ -12,7 +12,7 @@ public sealed class PoolSizingValidator : IChangeValidator
         var afterStr = change.After.ToString()?.Trim('"') ?? "";
         if (!int.TryParse(afterStr, out var after))
             return new(false, "after-not-int", null);
-        after = Math.Clamp(after, 2, 32);
+        after = Math.Clamp(after, change.Target == "/spread/maxConcurrentRaces" ? 1 : 2, 32);
 
         // Global spread pool size: /spread/spreadPoolSize
         if (change.Target == "/spread/spreadPoolSize")

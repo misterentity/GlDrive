@@ -12,6 +12,18 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.140 — enforce AI change targets and audit actual values (2026-09-30)
+
+- Resolve server IDs, array indexes and validator aliases against real configuration fields for stale-value checks and frozen settings.
+- Record actual before/after values when applying clamped changes; permit a safe single concurrent race, validate request-filler subfields, and reject malformed server paths and null skiplist appends.
+- Report rejected undo accurately and block list inverses that could overwrite a neighboring rule; preserve the original audit entry for manual recovery.
+- See the [release report](releases/v3.10.140.md) for findings, validation, deployment and external conditions.
+
+## v3.10.139 — align AI proposals with validators (2026-09-30)
+
+- Recognize real configuration field names and camelCase proposal objects, support section trigger patches, reject no-effect mutations and explain rejected changes in the next AI prompt.
+- Released from `ceaf6a2`; v3.10.140 completes stale-value, freeze-path and applied-value handling.
+
 ## v3.10.138 — attribute FXP transfer deadlines and release their tracking (2026-09-29)
 
 - A transfer that hits its per-transfer ceiling while the race continues is now logged as a timeout (file, route, elapsed, bytes moved), poisons its mid-command sessions and counts against the file/route retry limit. It was previously reported as "FXP job cancelled mid-transfer" and never counted.

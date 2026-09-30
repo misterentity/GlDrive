@@ -27,7 +27,10 @@ public sealed class SkiplistValidator : IChangeValidator
         }
 
         if (trailing == "-")
+        {
+            if (newRule is null) return new(false, "after-null", null);
             return new(true, null, cfg => { var s = resolver(cfg); s?.SpreadSite.Skiplist.Add(newRule!); });
+        }
 
         if (int.TryParse(trailing, out var idx))
             return new(true, null, cfg =>
@@ -61,8 +64,8 @@ public sealed class SkiplistValidator : IChangeValidator
         if (slash <= 0) return false;
         var serverId = rest[..slash];
         var afterId = rest[slash..];  // e.g. "/spread/skiplistRules/-"
-        if (!afterId.StartsWith(expectedSuffix)) return false;
-        trailing = afterId[expectedSuffix.Length..].TrimStart('/');
+        if (afterId != expectedSuffix && !afterId.StartsWith(expectedSuffix + "/", StringComparison.Ordinal)) return false;
+        trailing = afterId.Length == expectedSuffix.Length ? "" : afterId[(expectedSuffix.Length + 1)..];
         serverResolver = cfg => cfg.Servers.FirstOrDefault(s => s.Id == serverId);
         return true;
     }

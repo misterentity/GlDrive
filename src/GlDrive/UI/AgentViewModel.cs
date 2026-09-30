@@ -131,18 +131,20 @@ public sealed class AgentViewModel : INotifyPropertyChanged
             };
             var cfg = GlDrive.Config.ConfigManager.Load();
             var undoRunId = "undo-" + Guid.NewGuid().ToString()[..8];
-            App.ChangeApplier?.Apply(new[] { inverse }, cfg, cfg.Agent, undoRunId, dryRun: false);
-            GlDrive.Config.ConfigManager.Save(cfg);
-            App.AuditTrail?.MarkUndone(row.RunId, row.Target, "user-click");
+            var report = AgentUndoCompletion.ApplyInverse(row,
+                () => App.ChangeApplier?.Apply(new[] { inverse }, cfg, cfg.Agent, undoRunId, dryRun: false));
+            if (!AgentUndoCompletion.TryComplete(report,
+                () => GlDrive.Config.ConfigManager.Save(cfg),
+                () => App.AuditTrail?.MarkUndone(row.RunId, row.Target, "user-click"),
+                () => App.TelemetryRecorder?.Record(TelemetryStream.Overrides, new ConfigOverrideEvent
+                {
+                    JsonPointer = row.Target,
+                    BeforeValue = ConfigSecretPointers.MaskValue(row.Target, row.After?.ToString()),
+                    AfterValue = ConfigSecretPointers.MaskValue(row.Target, row.Before?.ToString()),
+                    AiAuditRef = row.RunId
+                }), out var failure))
+                MessageBox.Show(failure, "Undo not applied");
             RefreshAudit();
-
-            App.TelemetryRecorder?.Record(TelemetryStream.Overrides, new ConfigOverrideEvent
-            {
-                JsonPointer = row.Target,
-                BeforeValue = ConfigSecretPointers.MaskValue(row.Target, row.After?.ToString()),
-                AfterValue = ConfigSecretPointers.MaskValue(row.Target, row.Before?.ToString()),
-                AiAuditRef = row.RunId
-            });
         }
         catch (Exception ex) { MessageBox.Show("Undo failed: " + ex.Message); }
     }
@@ -176,5 +178,50 @@ public sealed class AgentViewModel : INotifyPropertyChanged
     {
         App.AuditTrail?.MarkUndone(row.RunId, row.Target, "user-dismiss");
         RefreshSuggestions();
+    }
+}
+
+// Shared by single-row and batch undo: rejected inverses must not erase undo history,
+// persist a failed proposal, or emit an override event claiming the value changed.
+internal static class AgentUndoCompletion
+{
+    internal static ChangeApplier.RunReport? ApplyInverse(AuditRow row,
+        Func<ChangeApplier.RunReport?> apply)
+    {
+        string? rejection = null;
+        if (row.Target.EndsWith("/-", StringComparison.Ordinal))
+            rejection = "appended entries require manual removal or a configuration snapshot restore";
+        else if (row.Category == AgentCategories.Skiplist
+            && (row.After is null || row.After is System.Text.Json.JsonElement
+                { ValueKind: System.Text.Json.JsonValueKind.Null })
+            && int.TryParse(row.Target.Split('/').LastOrDefault(), out var index) && index >= 0)
+            rejection = "removed rules require manual restoration or a configuration snapshot restore; " +
+                "their former position may now contain another rule";
+
+        if (rejection is null) return apply();
+        var report = new ChangeApplier.RunReport { Rejected = 1 };
+        report.RejectionByReason[rejection] = 1;
+        return report;
+    }
+
+    internal static bool TryComplete(ChangeApplier.RunReport? report, Action saveConfig,
+        Action markUndone, Action? recordOverride, out string failure)
+    {
+        if (report is not { Applied: 1, Rejected: 0 })
+        {
+            var reasons = report?.RejectionByReason.Keys.ToArray() ?? Array.Empty<string>();
+            failure = report is null ? "The AI change service is unavailable."
+                : "The change could not be reverted: " +
+                    (reasons.Length > 0 ? string.Join(", ", reasons) : "no change was applied") +
+                    ". The original audit entry remains available.";
+            return false;
+        }
+
+        // Persist first. A failed save must leave the original entry eligible for retry.
+        saveConfig();
+        markUndone();
+        recordOverride?.Invoke();
+        failure = "";
+        return true;
     }
 }
