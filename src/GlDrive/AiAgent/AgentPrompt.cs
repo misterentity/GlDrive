@@ -24,7 +24,12 @@ public sealed class AgentPrompt
         - announceRule: add rule or patch existing; new pattern must compile AND match >=3 nomatch samples.
         - excludedCategories: add section key to a server's excluded notifications.
         - wishlistPrune: soft-mark "dead" or hard-remove wishlist item per invariants.
-        - poolSizing: tweak SpreadPoolSize, maxSlots, maxConcurrentRaces (±25%, absolute [2,32]).
+        - poolSizing: ONLY these targets (±25% per run): /spread/spreadPoolSize [2,32],
+          /servers/{id}/spread/maxUploadSlots, /servers/{id}/spread/maxDownloadSlots [2,32], and
+          /spread/maxConcurrentRaces. maxConcurrentRaces can never exceed
+          min over servers of (pool.loginCap - pool.loginHeadroom) - 1 (floor 1): every race holds a
+          login on the shared source. A value of 1 at that ceiling is CORRECT, not a misconfiguration —
+          do not propose raising it. Per-server pool.poolSize is not tunable.
         - affils: add group to site affils (never remove).
         - errorReport: INFORMATIONAL ONLY — emits a Markdown issue report, never mutates config.
         - downloadOnly: flip /servers/{id}/spread/downloadOnly bool. Use HIGH confidence — prefer
@@ -42,6 +47,13 @@ public sealed class AgentPrompt
         - `target` must be a JSON Pointer (RFC 6901) to a field in the current config.
         - `before` must match the current value at `target` (the Applier cross-checks).
         - For list appends, use `"/path/-"` as target and include `after` as the new element only.
+        - Server targets use the server's `id`, never its array index: /servers/{id}/... . Under a
+          server, /spread/... and the config's own /spreadSite/... spellings are equivalent.
+        - sectionMapping trigger patch: target /servers/{id}/spread/sectionMappings/{index}/triggerRegex
+          with `after` = the regex string. Append: /servers/{id}/spread/sectionMappings/- with a
+          full mapping object.
+        - wishlistPrune: target /wishlist/items/{itemId}; `after` = {"dead": true} to soft-mark or
+          null to remove.
 
         FROZEN PATHS list is provided below. Producing any change whose target is frozen (or a descendant
         of a frozen path) is a bug — such changes will be rejected with reason "frozen".
@@ -97,6 +109,9 @@ public sealed class AgentPrompt
     /// </summary>
     public const int MaxFieldChars = 512;
 
+    /// <summary>3 runs × (1 count line + <see cref="AgentRunner.MaxRejectionLinesPerRun"/> rejections).</summary>
+    public const int MaxAuditSummaryLines = 3 * (1 + AgentRunner.MaxRejectionLinesPerRun);
+
     /// <summary>
     /// Appended wherever content was cut, so the model never reasons over a silently mangled value.
     /// Deliberately pure ASCII: System.Text.Json escapes non-ASCII by default, so a "…" here would
@@ -124,8 +139,9 @@ public sealed class AgentPrompt
         sb.AppendLine("\n=== FROZEN PATHS (do NOT touch these or any descendants) ===");
         foreach (var p in frozenPaths.Take(500)) sb.AppendLine(Fit(p, MaxFieldChars));
 
-        sb.AppendLine("\n=== LAST 3 RUNS (audit summary) ===");
-        foreach (var s in lastAuditSummaries.Take(3)) sb.AppendLine(Fit(s, MaxFieldChars));
+        sb.AppendLine("\n=== LAST 3 RUNS (audit summary — rejected changes did NOT take effect; do not record them as done in memo_update) ===");
+        // Line cap, not run cap: each run is a count line followed by its rejected changes.
+        foreach (var s in lastAuditSummaries.Take(MaxAuditSummaryLines)) sb.AppendLine(Fit(s, MaxFieldChars));
 
         const string trailer = "\nEmit STRICT JSON: { memo_update, changes[], suggestions[], brief_markdown }.";
 

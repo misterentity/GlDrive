@@ -15,7 +15,7 @@ public sealed class AnnounceRuleValidator : IChangeValidator
         if (change.After is null) return new(false, "after-null", null);
 
         IrcAnnounceRule? after;
-        try { after = JsonSerializer.Deserialize<IrcAnnounceRule>(JsonSerializer.Serialize(change.After)); }
+        try { after = ChangeValueJson.Read<IrcAnnounceRule>(change.After); }
         catch { return new(false, "after-parse-failed", null); }
         if (after is null || string.IsNullOrWhiteSpace(after.Pattern))
             return new(false, "after-null-or-empty-pattern", null);

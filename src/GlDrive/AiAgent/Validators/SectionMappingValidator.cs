@@ -14,8 +14,15 @@ public sealed class SectionMappingValidator : IChangeValidator
             return new(false, "target-shape-unsupported", null);
         if (change.After is null) return new(false, "after-null", null);
 
+        // Field-level trigger patch: .../sectionMappings/{i}/triggerRegex with a string. This is the
+        // natural JSON Pointer for "tighten this trigger", and it used to fail after-parse-failed
+        // because the string was deserialized as a whole SectionMapping.
+        var fieldParts = trailing.Split('/');
+        if (fieldParts.Length == 2 && fieldParts[1] == "triggerRegex" && int.TryParse(fieldParts[0], out var fieldIdx))
+            return ValidateTriggerPatch(change, config, resolver, fieldIdx);
+
         SectionMapping? after;
-        try { after = JsonSerializer.Deserialize<SectionMapping>(JsonSerializer.Serialize(change.After)); }
+        try { after = ChangeValueJson.Read<SectionMapping>(change.After); }
         catch { return new(false, "after-parse-failed", null); }
         if (after is null) return new(false, "after-null", null);
 
@@ -57,8 +64,7 @@ public sealed class SectionMappingValidator : IChangeValidator
                 var s = resolver(cfg); if (s is null) return;
                 if (idx < 0 || idx >= s.SpreadSite.SectionMappings.Count) return;
                 var cur = s.SpreadSite.SectionMappings[idx];
-                var isDefault = string.IsNullOrEmpty(cur.TriggerRegex) || cur.TriggerRegex == ".*";
-                if (!isDefault) return;  // preserve user-edited triggers
+                if (!IsDefaultTrigger(cur.TriggerRegex)) return;  // preserve user-edited triggers
                 cur.TriggerRegex = after.TriggerRegex ?? ".*";
                 if (!string.IsNullOrEmpty(after.IrcSection)) cur.IrcSection = after.IrcSection;
                 if (!string.IsNullOrEmpty(after.RemoteSection)) cur.RemoteSection = after.RemoteSection;
@@ -67,6 +73,36 @@ public sealed class SectionMappingValidator : IChangeValidator
 
         return new(false, "target-shape-unsupported", null);
     }
+
+    private static ValidationResult ValidateTriggerPatch(AgentChange change, AppConfig config,
+        Func<AppConfig, ServerConfig?> resolver, int idx)
+    {
+        var trigger = change.After is JsonElement { ValueKind: JsonValueKind.String } el
+            ? el.GetString() ?? ""
+            : change.After?.ToString() ?? "";
+        if (string.IsNullOrWhiteSpace(trigger)) return new(false, "after-null", null);
+        try { _ = new Regex(trigger); }
+        catch { return new(false, "trigger-bad-regex", null); }
+
+        var site = resolver(config);
+        if (site is not null)
+        {
+            if (idx < 0 || idx >= site.SpreadSite.SectionMappings.Count) return new(false, "index-out-of-range", null);
+            if (!IsDefaultTrigger(site.SpreadSite.SectionMappings[idx].TriggerRegex))
+                return new(false, "trigger-user-edited", null);
+        }
+
+        return new(true, null, cfg =>
+        {
+            var s = resolver(cfg); if (s is null) return;
+            if (idx < 0 || idx >= s.SpreadSite.SectionMappings.Count) return;
+            var cur = s.SpreadSite.SectionMappings[idx];
+            if (!IsDefaultTrigger(cur.TriggerRegex)) return;  // preserve user-edited triggers
+            cur.TriggerRegex = trigger;
+        });
+    }
+
+    private static bool IsDefaultTrigger(string? trigger) => string.IsNullOrEmpty(trigger) || trigger == ".*";
 
     // A mapping is routable only if its RemoteSection matches a configured section key
     // (case-insensitive). Sections is the authoritative folder map; SectionMapper.Resolve keys off it.

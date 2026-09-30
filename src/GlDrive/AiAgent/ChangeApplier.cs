@@ -49,6 +49,9 @@ public sealed class ChangeApplier
             // here so a sloppy AI response can't NRE the whole run.
             change.Target ??= "";
             change.Category ??= "";
+            // Before the freeze check: freezes are stored in the canonical form, so a real-path
+            // proposal must not slip past one.
+            change.Target = CanonicalizeTarget(change.Target, config);
 
             string? reject = null;
 
@@ -122,11 +125,21 @@ public sealed class ChangeApplier
                     bool mutationOk = true;
                     if (!dryRun)
                     {
+                        // Validators clamp and guard INSIDE their mutations (login ceiling, ±1 tier,
+                        // user-edited triggers), so an accepted change can still write nothing.
+                        // Recording that as applied told the model its change had landed:
+                        // maxConcurrentRaces 1→2 was "applied" 50 days running while config stayed 1.
+                        var beforeJson = MutatesConfig(change.Category) ? SerializeConfig(config) : null;
                         try { vr.Mutate?.Invoke(config); }
                         catch (Exception ex)
                         {
                             Log.Warning(ex, "ChangeApplier mutation threw for {Category} {Target}", change.Category, change.Target);
                             reject = "mutation-threw:" + ex.GetType().Name;
+                            mutationOk = false;
+                        }
+                        if (mutationOk && beforeJson is not null && beforeJson == SerializeConfig(config))
+                        {
+                            reject = "no-effect";
                             mutationOk = false;
                         }
                     }
@@ -172,6 +185,55 @@ public sealed class ChangeApplier
             report.RejectionByReason[reject!] = report.RejectionByReason.GetValueOrDefault(reject!) + 1;
         }
         return report;
+    }
+
+    // wishlistPrune writes the wishlist store and errorReport writes a Markdown file; neither
+    // touches AppConfig, so a config diff cannot tell whether they took effect.
+    private static bool MutatesConfig(string category) =>
+        category is not (AgentCategories.WishlistPrune or AgentCategories.ErrorReport);
+
+    private static string? SerializeConfig(GlDrive.Config.AppConfig config)
+    {
+        try
+        {
+            return JsonSerializer.Serialize(config,
+                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "ChangeApplier: config serialize failed; skipping no-effect check");
+            return null;
+        }
+    }
+
+    // The validators address server fields through a stable alias (/servers/{id}/spread/...), which
+    // is also the form freezes are stored in. The model reads the real config and uses its keys
+    // (/servers/{id}/spreadSite/skiplist, .../priority) and sometimes an array index instead of the
+    // id. Map both onto the alias so every validator and the freeze check see one spelling.
+    private static readonly Dictionary<string, string> SpreadFieldAliases = new(StringComparer.Ordinal)
+    {
+        ["skiplist"] = "skiplistRules",
+        ["priority"] = "sitePriority",
+    };
+
+    internal static string CanonicalizeTarget(string target, GlDrive.Config.AppConfig config)
+    {
+        const string prefix = "/servers/";
+        if (!target.StartsWith(prefix, StringComparison.Ordinal)) return target;
+        var parts = target[prefix.Length..].Split('/');
+        if (parts.Length < 2) return target;
+
+        if (int.TryParse(parts[0], out var idx) && idx >= 0 && idx < config.Servers.Count
+            && !config.Servers.Any(s => s.Id == parts[0]))
+            parts[0] = config.Servers[idx].Id;
+
+        if (parts[1] is "spreadSite" or "spread")
+        {
+            parts[1] = "spread";
+            if (parts.Length > 2 && SpreadFieldAliases.TryGetValue(parts[2], out var alias))
+                parts[2] = alias;
+        }
+        return prefix + string.Join('/', parts);
     }
 
     /// <summary>

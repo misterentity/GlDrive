@@ -34,7 +34,13 @@ public sealed class PoolSizingValidator : IChangeValidator
             // exhausted" warnings, scan failures, and FXP borrow timeouts. Clamp to
             // the smallest spread-usable login budget across servers.
             int ceiling = MaxConcurrentRaceCeiling(config);
-            if (after > ceiling) after = ceiling;
+            // The clamp can land exactly where the config already is. Say so by name: a silent
+            // no-op read as success to the model, which re-proposed the raise every day.
+            if (after > ceiling)
+            {
+                if (ceiling == before) return new(false, "at-login-ceiling", null);
+                after = ceiling;
+            }
             var applied = after;
             return new(true, null, cfg => { if (cfg.Spread != null) cfg.Spread.MaxConcurrentRaces = applied; });
         }
