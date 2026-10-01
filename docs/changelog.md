@@ -12,6 +12,12 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.141 — distinguish CPSV data-channel stalls from cancellation (2026-10-01)
+
+- Report the data connection or TLS handshake's own deadline as a transport failure. Preserve genuine caller cancellation, let downloads use their retry path, and let failed direct FXP probes fall back to relay.
+- Record the actual transport cause in transfer logs and telemetry instead of attributing a ten-second setup stall to the 180-second transfer ceiling.
+- See the [release report](releases/v3.10.141.md) for the original deployment and the October 1 build, regression, runtime, package-integrity and production-health revalidation.
+
 ## v3.10.140 — enforce AI change targets and audit actual values (2026-09-30)
 
 - Resolve server IDs, array indexes and validator aliases against real configuration fields for stale-value checks and frozen settings.
