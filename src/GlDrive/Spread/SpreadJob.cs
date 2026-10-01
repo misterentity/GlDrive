@@ -1862,10 +1862,11 @@ public class SpreadJob : IDisposable
             }
             catch (OperationCanceledException ex)
             {
-                // NOT our token: a deadline inside the LIST itself (10s data TCP connect,
-                // 10s data TLS in CpsvDataHelper). A login was borrowed and is now spent —
+                // NOT our token, yet the LIST was cancelled after a login was borrowed —
                 // the opposite of a borrow timeout, which the caller and
                 // ScanFailureClassifier would otherwise read this as (v3.10.116).
+                // CpsvDataHelper's own data-channel deadlines arrive as
+                // DataChannelTimeoutException (IOException) on the branch below.
                 conn.Poison($"scan LIST {currentPath}: data-channel deadline");
                 throw new ScanListingFailedException(currentPath, ex);
             }
@@ -2657,7 +2658,10 @@ public class SpreadJob : IDisposable
         catch (OperationCanceledException) when (transferProtocolStarted)
         {
             // The transfer's OWN deadline fired mid-command (the per-transfer ceiling or
-            // FxpTransfer's relay timeout) while the race kept going. Both sessions are
+            // FxpTransfer's relay timeout) while the race kept going. A stalled data
+            // channel is NOT this: CpsvDataHelper throws DataChannelTimeoutException for
+            // it, which FxpTransfer reports as an ordinary failure (v3.10.141 — an 11s TLS
+            // stall was logged here as hitting the 180s ceiling). Both sessions are
             // mid-command, and the file genuinely failed on this pair — count it so the
             // per-pair retry limit applies instead of re-picking it forever at two logins
             // per attempt.

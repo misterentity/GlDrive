@@ -194,9 +194,8 @@ public static class CpsvDataHelper
         var tcp = new TcpClient();
         try
         {
-            using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            connectCts.CancelAfter(TimeSpan.FromSeconds(10));
-            await tcp.ConnectAsync(cpsvIp, port, connectCts.Token);
+            await WithDataDeadline(async t => { await tcp.ConnectAsync(cpsvIp, port, t); return true; },
+                "data connection", DataSetupDeadline, ct);
             Log.Debug("Data connection established");
             return tcp;
         }
@@ -240,21 +239,57 @@ public static class CpsvDataHelper
     /// The glftpd server/BNC does SSL_connect (TLS client) on data channels after the
     /// data command is sent, so we must SSL_accept (TLS server).
     /// </summary>
-    internal static async Task<SslStream> NegotiateDataTls(NetworkStream networkStream, CancellationToken ct)
+    internal static async Task<SslStream> NegotiateDataTls(NetworkStream networkStream, CancellationToken ct,
+        TimeSpan? deadline = null)
     {
         // We are the TLS server; glftpd connects to us as TLS client.
         // ClientCertificateRequired is false, so remote cert callback is not security-relevant here.
         var ssl = new SslStream(networkStream, true, (_, _, _, _) => true);
-        using var tlsCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        tlsCts.CancelAfter(TimeSpan.FromSeconds(10));
-        await ssl.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
+        try
         {
-            ServerCertificate = SelfSignedCert.Value,
-            ClientCertificateRequired = false,
-            EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13
-        }, tlsCts.Token);
+            await WithDataDeadline(async t =>
+            {
+                await ssl.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
+                {
+                    ServerCertificate = SelfSignedCert.Value,
+                    ClientCertificateRequired = false,
+                    EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13
+                }, t);
+                return true;
+            }, "data channel TLS handshake", deadline ?? DataSetupDeadline, ct);
+        }
+        catch
+        {
+            ssl.Dispose();
+            throw;
+        }
         Log.Debug("Data TLS: server mode ({Protocol}, {Cipher})", ssl.SslProtocol, ssl.NegotiatedCipherSuite);
         return ssl;
+    }
+
+    internal static readonly TimeSpan DataSetupDeadline = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Runs one data-channel setup step under its own deadline. That deadline expiring is a
+    /// TRANSPORT failure, so it is thrown as <see cref="DataChannelTimeoutException"/>
+    /// (an IOException); only <paramref name="ct"/> produces an OperationCanceledException.
+    /// A bare linked-token timeout used to leak out as a cancellation, which every caller
+    /// read as "the caller stopped me": SpreadJob called it the 180s transfer ceiling,
+    /// FxpTransfer's telemetry said "cancelled", DownloadManager marked the item Cancelled.
+    /// </summary>
+    internal static async Task<T> WithDataDeadline<T>(Func<CancellationToken, Task<T>> step,
+        string phase, TimeSpan deadline, CancellationToken ct)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(deadline);
+        try
+        {
+            return await step(cts.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new DataChannelTimeoutException(phase, deadline);
+        }
     }
 
     public static async Task<FtpListItem[]> ListDirectory(
