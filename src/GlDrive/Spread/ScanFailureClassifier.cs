@@ -35,7 +35,7 @@ internal static class ScanFailureClassifier
         if (ex == null) return false;
 
         // A LIST that failed AFTER a connection was borrowed spent a login. It wraps a
-        // cancellation (the data-channel deadline) or an IOException, so it must be
+        // cancellation or an IOException (incl. DataChannelTimeoutException), so it must be
         // recognised before either of those is read as "never got a connection".
         if (ex is ScanListingFailedException) return false;
 
