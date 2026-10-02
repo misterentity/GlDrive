@@ -173,6 +173,7 @@ public class TrayViewModel : INotifyPropertyChanged
 
         ExitCommand = new RelayCommand(() =>
         {
+            App.MarkExiting("tray Exit");
             _updateChecker.StopPeriodicCheck();
 
             // Unmount with a hard timeout — don't let hung FTP connections prevent exit

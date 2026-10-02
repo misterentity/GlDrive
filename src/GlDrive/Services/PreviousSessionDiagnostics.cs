@@ -4,14 +4,16 @@ using Serilog;
 namespace GlDrive.Services;
 
 /// <summary>Capture before replacing the marker; report after logging is configured.</summary>
-internal sealed record PreviousSessionDiagnostics(bool? HadRunningMarker, string? WatchdogTime)
+internal sealed record PreviousSessionDiagnostics(bool? HadRunningMarker, string? WatchdogTime, string? IntendedExit = null)
 {
     internal static PreviousSessionDiagnostics Capture(string markerPath)
     {
         try
         {
             var marker = File.ReadAllText(markerPath).Trim();
-            return new(true, marker.StartsWith("CRASH:", StringComparison.Ordinal) ? marker[6..] : null);
+            if (ExitMarker.TryParseExiting(marker, out var since, out var reason))
+                return new(true, null, $"{reason}, began {since}");
+            return new(true, marker.StartsWith(ExitMarker.CrashPrefix, StringComparison.Ordinal) ? marker[6..] : null);
         }
         catch (FileNotFoundException) { return new(false, null); }
         catch (DirectoryNotFoundException) { return new(false, null); }
@@ -21,7 +23,13 @@ internal sealed record PreviousSessionDiagnostics(bool? HadRunningMarker, string
     /// <returns>Whether an unclean-exit notification is supported by the marker.</returns>
     internal bool Report(ILogger logger, HeartbeatCheckResult heartbeat)
     {
-        if (WatchdogTime != null)
+        // The previous session had chosen to exit and was ended mid-teardown (typically by a
+        // Windows restart). That is not an unclean exit and warrants no warning or balloon.
+        var unclean = HadRunningMarker == true && IntendedExit == null;
+        if (IntendedExit != null)
+            logger.Information("GlDrive: previous session was shutting down ({IntendedExit}) and ended " +
+                "before teardown finished — not a crash", IntendedExit);
+        else if (WatchdogTime != null)
             logger.Warning("GlDrive: restarted by watchdog after unclean exit at {ExitTime}; " +
                 "see watchdog logs for the observed cause", WatchdogTime);
         else if (HadRunningMarker == true)
@@ -37,6 +45,6 @@ internal sealed record PreviousSessionDiagnostics(bool? HadRunningMarker, string
         else
             logger.Information("No readable previous heartbeat found");
 
-        return HadRunningMarker == true;
+        return unclean;
     }
 }

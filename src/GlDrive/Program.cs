@@ -233,9 +233,31 @@ public static class Program
             try { File.Delete(updateMarker); } catch { }
         }
 
-        if (!File.Exists(crashMarker))
+        string? markerContent = null;
+        var markerExists = File.Exists(crashMarker);
+        if (markerExists)
+        {
+            try { markerContent = File.ReadAllText(crashMarker); } catch { }
+        }
+        var verdict = ExitMarker.ClassifyForWatchdog(markerExists, markerContent);
+        if (verdict == WatchdogExitVerdict.Clean)
         {
             // Clean exit — marker was deleted by OnExit. Nothing to do.
+            return 0;
+        }
+        if (verdict == WatchdogExitVerdict.IntendedExit)
+        {
+            // The app had begun an exit it chose (tray Exit, Windows restart/logoff) and died
+            // before teardown finished. Restarting would undo the user's exit or launch into a
+            // shutting-down OS. Leave the marker for startup diagnostics: if the OS kills this
+            // watchdog too, the next session still reads the same evidence.
+            ExitMarker.TryParseExiting(markerContent, out var since, out var why);
+            string crash;
+            try { crash = GetCrashReason(targetPid); } catch { crash = UnknownCrashReason; }
+            AppendWatchdogEvent(appData, crash != UnknownCrashReason ? "WRN" : "INF",
+                $"Process {targetPid} ended during its own shutdown ({why}, began {since}) before teardown " +
+                "finished" + (crash != UnknownCrashReason ? $"; teardown crashed — {crash}" : "") +
+                ". Not restarting.");
             return 0;
         }
 

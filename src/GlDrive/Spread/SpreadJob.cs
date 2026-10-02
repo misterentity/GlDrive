@@ -1213,9 +1213,12 @@ public class SpreadJob : IDisposable
                     // Wrap with per-transfer hard timeout to prevent indefinite hangs
                     _ = Task.Run(async () =>
                     {
+                        // Armed here it bounds the gate/borrow wait; ExecuteTransfer re-arms it
+                        // when protocol begins so the transfer gets its full ceiling.
+                        var ceiling = FxpFailurePolicy.TransferCeiling(_spreadConfig.TransferTimeoutSeconds);
                         using var xferTimeout = CancellationTokenSource.CreateLinkedTokenSource(token);
-                        xferTimeout.CancelAfter(FxpFailurePolicy.TransferCeiling(_spreadConfig.TransferTimeoutSeconds));
-                        await ExecuteTransfer(file, srcId, dstId, sitePaths[dstId], xferTimeout.Token, token);
+                        xferTimeout.CancelAfter(ceiling);
+                        await ExecuteTransfer(file, srcId, dstId, sitePaths[dstId], xferTimeout.Token, token, () => xferTimeout.CancelAfter(ceiling));
                     }, token);
                 }
 
@@ -2364,7 +2367,7 @@ public class SpreadJob : IDisposable
             p.IsInLoginGateBackoff, p.IsHostUnreachable);
 
     private async Task ExecuteTransfer(SpreadFileInfo file, string srcId, string dstId,
-        string dstBasePath, CancellationToken ct, CancellationToken jobToken)
+        string dstBasePath, CancellationToken ct, CancellationToken jobToken, Action? armTransferCeiling = null)
     {
         var pools = _pools; // read volatile field once to avoid torn reads from UpdatePools
         var srcPool = pools[srcId];
@@ -2449,7 +2452,11 @@ public class SpreadJob : IDisposable
                 await EnsureDirectoryExists(dstClient, dstId, dstBasePath, fileName, storeCt);
                 lock (_ownershipLock) _dirsCreated.Add(dstId);
             };
+            // The ceiling clock and the elapsed clock start together. Gates (45s each) and the
+            // borrow (30s) are bounded separately; charging their queue time to this file let
+            // a predecessor's runtime eat its budget (2026-10-01: "after 133s ... ceiling 180s").
             startTime = DateTime.UtcNow;
+            armTransferCeiling?.Invoke();
             var progressInfo = info = new ActiveTransferInfo
             {
                 FileName = file.Name,

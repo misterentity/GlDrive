@@ -544,8 +544,36 @@ public partial class App
         }
     }
 
+    private int _exitMarked;
+
+    /// <summary>
+    /// Record that this session is exiting ON PURPOSE before teardown begins. Teardown takes
+    /// seconds; Windows restart/logoff and the tray Exit's 3s Environment.Exit fallback can
+    /// end the process first, and a marker still reading "running" made the watchdog call
+    /// that an unclean exit and relaunch GlDrive (2026-10-01 17:07, during a Windows restart).
+    /// </summary>
+    internal static void MarkExiting(string reason)
+    {
+        if (Current is not App app || !app._ownsCrashMarker) return;
+        if (Interlocked.Exchange(ref app._exitMarked, 1) != 0) return;
+        try
+        {
+            File.WriteAllText(Path.Combine(ConfigManager.AppDataPath, ".running"),
+                GlDrive.Services.ExitMarker.Exiting(DateTime.UtcNow, reason));
+        }
+        catch (Exception ex) { Log.Warning(ex, "Could not record intended exit in the running marker"); }
+    }
+
+    protected override void OnSessionEnding(SessionEndingCancelEventArgs e)
+    {
+        MarkExiting($"Windows session ending ({e.ReasonSessionEnding})");
+        Log.Information("Windows session ending ({Reason}) — shutting down", e.ReasonSessionEnding);
+        base.OnSessionEnding(e);
+    }
+
     protected override void OnExit(ExitEventArgs e)
     {
+        MarkExiting("application exit");
         Log.Information("GlDrive shutting down...");
         _heartbeat?.Dispose();
         _heartbeat = null;

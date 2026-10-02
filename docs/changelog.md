@@ -12,6 +12,12 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.142 — intended exits are not crashes; full FXP ceiling for queued files (2026-10-02)
+
+- Record an intended exit (`EXITING:` in `.running`) before teardown starts: in `OnExit`, on Windows restart/logoff (`OnSessionEnding`) and on tray Exit. The watchdog no longer relaunches GlDrive into a shutting-down OS or after the user quits, and the next start no longer warns or shows a "did not complete" balloon.
+- Re-arm the per-transfer FXP ceiling when the protocol starts, so time spent queued for server gates and the pool borrow no longer eats a file's 180-second budget.
+- See the [release report](releases/v3.10.142.md).
+
 ## v3.10.141 — distinguish CPSV data-channel stalls from cancellation (2026-10-01)
 
 - Report the data connection or TLS handshake's own deadline as a transport failure. Preserve genuine caller cancellation, let downloads use their retry path, and let failed direct FXP probes fall back to relay.
