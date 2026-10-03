@@ -14,7 +14,10 @@ public class SpreadManager : IDisposable
     private readonly Dictionary<string, FtpConnectionPool> _spreadPools = new();
     private readonly Dictionary<string, FtpClientFactory> _factories = new();
     private readonly List<SpreadJob> _activeJobs = new();
-    private readonly Queue<PendingRace> _raceQueue = new();
+    private readonly List<PersistedRace> _raceQueue = new();
+    // The request behind each running job, so an in-flight race is persisted with the queue.
+    private readonly Dictionary<SpreadJob, PersistedRace> _activeRequests = new();
+    private readonly RaceQueueStore? _queueStore;
     private readonly SpeedTracker _speedTracker = new();
     private readonly SkiplistEvaluator _skiplist = new();
     private readonly RaceHistoryStore _history;
@@ -133,6 +136,12 @@ public class SpreadManager : IDisposable
         _metadataFilter = new MetadataFilterService(config);
         _history.Load();
         _blacklist.Load();
+        // Read-only (screenshot) managers must not overwrite the live app's queue.
+        if (!ConfigManager.ReadOnly)
+        {
+            _queueStore = new RaceQueueStore(Path.Combine(stateDirectory, "race-queue.json"));
+            RestoreQueue();
+        }
         // Screenshot rendering constructs and disposes demo managers while the real
         // app may keep recording transfers. Enabling persistence here lets Dispose()
         // overwrite its newer speed history with the renderer's stale snapshot.
@@ -257,6 +266,8 @@ public class SpreadManager : IDisposable
             GetOrCreateGate(serverId);
             Log.Information("Spread pool initialized for {ServerId} (size={Size}, gate={Gate})",
                 serverId, poolSize, DefaultPerServerConcurrentTransfers);
+            // Races restored at startup, or held while this pool was down, can start now.
+            DequeueNextRace();
             return true;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -350,6 +361,7 @@ public class SpreadManager : IDisposable
         serverIds = serverIds.Distinct().ToList();
 
         var maxRaces = Math.Max(_config.Spread.MaxConcurrentRaces, 1);
+        var queued = true;
         lock (_lock)
         {
             // Dedup: skip if this release is already racing or queued.
@@ -376,10 +388,16 @@ public class SpreadManager : IDisposable
 
             if (_activeJobs.Count >= maxRaces)
             {
-                _raceQueue.Enqueue(new PendingRace(section, releaseName, serverIds.ToList(), mode, knownSourceServerId, knownSourcePath));
+                _raceQueue.Add(new PersistedRace(section, releaseName, serverIds.ToList(), mode,
+                    knownSourceServerId, knownSourcePath, DateTime.UtcNow));
                 Log.Information("Race queued (max concurrent {Max}): {Release}", maxRaces, releaseName);
-                return null;
             }
+            else queued = false;
+        }
+        if (queued)
+        {
+            PersistQueue();
+            return null;
         }
 
         return StartRaceInternal(section, releaseName, serverIds, mode,
@@ -388,7 +406,8 @@ public class SpreadManager : IDisposable
 
     private SpreadJob StartRaceInternal(string section, string releaseName,
         IReadOnlyList<string> serverIds, SpreadMode mode,
-        string? knownSourceServerId = null, string? knownSourcePath = null)
+        string? knownSourceServerId = null, string? knownSourcePath = null,
+        PersistedRace? request = null)
     {
         Dictionary<string, FtpConnectionPool> pools;
         Dictionary<string, ServerConfig> configs;
@@ -469,7 +488,10 @@ public class SpreadManager : IDisposable
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             _activeJobs.Add(job);
+            _activeRequests[job] = request ?? new PersistedRace(section, releaseName, serverIds.ToList(), mode,
+                knownSourceServerId, knownSourcePath, DateTime.UtcNow);
         }
+        PersistQueue();
         JobStarted?.Invoke(job);
 
         var sids = serverIds;
@@ -520,7 +542,12 @@ public class SpreadManager : IDisposable
                 // Error/Completed, which left zombie jobs in _activeJobs and
                 // permanently blocked the queue.
                 bool wasActive;
-                lock (_lock) wasActive = _activeJobs.Remove(job);
+                lock (_lock)
+                {
+                    wasActive = _activeJobs.Remove(job);
+                    _activeRequests.Remove(job);
+                }
+                PersistQueue();
                 if (wasActive)
                 {
                     RecordHistory(job);
@@ -673,26 +700,90 @@ public class SpreadManager : IDisposable
         }
     }
 
+    /// <summary>
+    /// Starts queued races while there is capacity. Takes the first race whose servers
+    /// have at least two connected pools; the rest wait for <see cref="TryInitializePool"/>
+    /// to drain them. Dequeuing blindly threw "Need at least 2 connected spread pools"
+    /// and dropped the race whenever a pool was briefly down - and a restored queue is
+    /// always ahead of the pools at startup.
+    /// </summary>
     private void DequeueNextRace()
     {
-        PendingRace? next;
-        lock (_lock)
+        while (true)
         {
-            var maxRaces = Math.Max(_config.Spread.MaxConcurrentRaces, 1);
-            if (_raceQueue.Count == 0 || _activeJobs.Count >= maxRaces)
-                return;
-            next = _raceQueue.Dequeue();
-        }
+            PersistedRace? next = null;
+            var expired = new List<PersistedRace>();
+            lock (_lock)
+            {
+                if (_disposed) return;
+                var maxRaces = Math.Max(_config.Spread.MaxConcurrentRaces, 1);
+                if (_raceQueue.Count == 0 || _activeJobs.Count >= maxRaces)
+                    return;
 
-        try
-        {
-            StartRaceInternal(next.Section, next.ReleaseName, next.ServerIds, next.Mode,
-                next.KnownSourceServerId, next.KnownSourcePath);
+                var now = DateTime.UtcNow;
+                expired.AddRange(_raceQueue.Where(r => now - r.QueuedAtUtc > RaceQueueStore.MaxAge));
+                _raceQueue.RemoveAll(r => now - r.QueuedAtUtc > RaceQueueStore.MaxAge);
+
+                var index = _raceQueue.FindIndex(r => r.ServerIds.Count(_spreadPools.ContainsKey) >= 2);
+                if (index >= 0)
+                {
+                    next = _raceQueue[index];
+                    _raceQueue.RemoveAt(index);
+                }
+            }
+
+            foreach (var r in expired)
+                Log.Warning("Queued race expired after {Hours:F0}h without a start: {Release}",
+                    (DateTime.UtcNow - r.QueuedAtUtc).TotalHours, r.ReleaseName);
+            if (next == null)
+            {
+                if (expired.Count > 0) PersistQueue();
+                return;
+            }
+
+            try
+            {
+                StartRaceInternal(next.Section, next.ReleaseName, next.ServerIds, next.Mode,
+                    next.KnownSourceServerId, next.KnownSourcePath, next);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to start queued race: {Release}", next.ReleaseName);
+                PersistQueue();
+                return;
+            }
         }
-        catch (Exception ex)
+    }
+
+    private void RestoreQueue()
+    {
+        var restore = RaceQueueStore.Restore(_queueStore!.Load(), DateTime.UtcNow);
+        lock (_lock) _raceQueue.AddRange(restore.Races);
+        if (restore.Races.Count + restore.DroppedStale + restore.DroppedResumeCap > 0)
+            Log.Information(
+                "Race queue restored: {Count} race(s), {Resumed} were in flight; dropped {Stale} older than {Hours}h and {Capped} at the {Max}-resume cap",
+                restore.Races.Count, restore.Resumed, restore.DroppedStale, (int)RaceQueueStore.MaxAge.TotalHours,
+                restore.DroppedResumeCap, RaceQueueStore.MaxResumes);
+        PersistQueue();
+    }
+
+    /// <summary>
+    /// Snapshot of running + queued requests. Never called under <see cref="_lock"/>.
+    /// Skipped once disposed so shutdown (which stops every job) can't erase the
+    /// in-flight races it is about to interrupt.
+    /// </summary>
+    private void PersistQueue()
+    {
+        _queueStore?.Save(() =>
         {
-            Log.Warning(ex, "Failed to start queued race: {Release}", next.ReleaseName);
-        }
+            lock (_lock)
+            {
+                if (_disposed) return null;
+                return _activeRequests.Values.Select(r => r with { WasActive = true })
+                    .Concat(_raceQueue)
+                    .ToList();
+            }
+        });
     }
 
     /// <summary>
@@ -1444,6 +1535,4 @@ public class SpreadManager : IDisposable
         return null;
     }
 
-    private record PendingRace(string Section, string ReleaseName, List<string> ServerIds, SpreadMode Mode,
-        string? KnownSourceServerId = null, string? KnownSourcePath = null);
 }
