@@ -117,18 +117,15 @@ public class TorrentStreamService : IDisposable
         Action<string>? onStatus,
         CancellationToken ct)
     {
-        // DownloadMetadataAsync never completes on its own — its only exit is the token — so a
-        // deadline is mandatory, not defensive.
-        using var metaCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        metaCts.CancelAfter(metadataTimeout);
-
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var reporter = ReportMetadataWaitAsync(sw, metadataTimeout, onStatus, metaCts.Token);
 
         ReadOnlyMemory<byte> raw;
         try
         {
-            raw = await _engine.DownloadMetadataAsync(magnet, metaCts.Token);
+            raw = await FetchMetadataWithReporterAsync(
+                token => _engine.DownloadMetadataAsync(magnet, token),
+                token => ReportMetadataWaitAsync(sw, metadataTimeout, onStatus, token),
+                metadataTimeout, ct);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -140,11 +137,6 @@ public class TorrentStreamService : IDisposable
         {
             return new ScreeningResult(null, [], "Cancelled");
         }
-        finally
-        {
-            await reporter;
-        }
-
         if (raw.IsEmpty || !Torrent.TryLoad(raw.Span, out var torrent))
             return new ScreeningResult(null, [], "Torrent metadata was unreadable");
 
@@ -159,6 +151,29 @@ public class TorrentStreamService : IDisposable
             sw.Elapsed.TotalSeconds, torrent.Name, decisions.Count, decisions.Count(d => d.IsBlocked));
 
         return new ScreeningResult(torrent, decisions, null);
+    }
+
+    internal static async Task<ReadOnlyMemory<byte>> FetchMetadataWithReporterAsync(
+        Func<CancellationToken, Task<ReadOnlyMemory<byte>>> fetch,
+        Func<CancellationToken, Task> report,
+        TimeSpan timeout,
+        CancellationToken ct)
+    {
+        using var metadata = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        metadata.CancelAfter(timeout);
+        var reporter = report(metadata.Token);
+        try
+        {
+            return await fetch(metadata.Token);
+        }
+        finally
+        {
+            // The status loop otherwise lives until the full metadata deadline,
+            // delaying even an already-successful fetch by five minutes.
+            // This linked source stops only our work, never the caller's token.
+            metadata.Cancel();
+            await reporter;
+        }
     }
 
     /// <summary>

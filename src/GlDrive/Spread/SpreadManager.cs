@@ -15,6 +15,9 @@ public class SpreadManager : IDisposable
     private readonly Dictionary<string, FtpClientFactory> _factories = new();
     private readonly List<SpreadJob> _activeJobs = new();
     private readonly List<PersistedRace> _raceQueue = new();
+    // Admission runs callbacks outside _lock. Reserve its request before leaving
+    // the lock so capacity, deduplication and durable snapshots see it throughout.
+    private readonly List<PersistedRace> _startingRequests = new();
     // The request behind each running job, so an in-flight race is persisted with the queue.
     private readonly Dictionary<SpreadJob, PersistedRace> _activeRequests = new();
     private readonly RaceQueueStore? _queueStore;
@@ -361,11 +364,15 @@ public class SpreadManager : IDisposable
         serverIds = serverIds.Distinct().ToList();
 
         var maxRaces = Math.Max(_config.Spread.MaxConcurrentRaces, 1);
+        var request = new PersistedRace(section, releaseName, serverIds.ToList(), mode,
+            knownSourceServerId, knownSourcePath, DateTime.UtcNow);
         var queued = true;
         lock (_lock)
         {
+            if (_disposed) return null;
             // Dedup: skip if this release is already racing or queued.
-            if (_activeJobs.Any(j => IsSameRace(j.Section, j.ReleaseName, section, releaseName)))
+            if (_activeJobs.Any(j => IsSameRace(j.Section, j.ReleaseName, section, releaseName)) ||
+                _startingRequests.Any(r => IsSameRace(r.Section, r.ReleaseName, section, releaseName)))
             {
                 Log.Information("Race already active, skipping duplicate: {Release}", releaseName);
                 return null;
@@ -386,13 +393,16 @@ public class SpreadManager : IDisposable
                 return null;
             }
 
-            if (_activeJobs.Count >= maxRaces)
+            if (_activeJobs.Count + _startingRequests.Count >= maxRaces)
             {
-                _raceQueue.Add(new PersistedRace(section, releaseName, serverIds.ToList(), mode,
-                    knownSourceServerId, knownSourcePath, DateTime.UtcNow));
+                _raceQueue.Add(request);
                 Log.Information("Race queued (max concurrent {Max}): {Release}", maxRaces, releaseName);
             }
-            else queued = false;
+            else
+            {
+                _startingRequests.Add(request);
+                queued = false;
+            }
         }
         if (queued)
         {
@@ -400,15 +410,32 @@ public class SpreadManager : IDisposable
             return null;
         }
 
-        return StartRaceInternal(section, releaseName, serverIds, mode,
-            knownSourceServerId, knownSourcePath);
+        return StartReservedRace(request);
     }
 
-    private SpreadJob StartRaceInternal(string section, string releaseName,
-        IReadOnlyList<string> serverIds, SpreadMode mode,
-        string? knownSourceServerId = null, string? knownSourcePath = null,
-        PersistedRace? request = null)
+    private SpreadJob StartReservedRace(PersistedRace request, bool retainOnFailure = false)
     {
+        // Persist before invoking external callbacks. A restart during admission
+        // restores this as queued, without spending an in-flight resume attempt.
+        PersistQueue();
+        try { return StartRaceInternal(request); }
+        catch
+        {
+            lock (_lock)
+            {
+                // Previously queued work retains its age, source hint and resume
+                // count for a later drain. A rejected direct call stays rejected.
+                if (_startingRequests.Remove(request) && retainOnFailure && !_disposed)
+                    _raceQueue.Insert(0, request);
+            }
+            PersistQueue();
+            throw;
+        }
+    }
+
+    private SpreadJob StartRaceInternal(PersistedRace request)
+    {
+        var (section, releaseName, serverIds, mode, knownSourceServerId, knownSourcePath, _, _, _) = request;
         Dictionary<string, FtpConnectionPool> pools;
         Dictionary<string, ServerConfig> configs;
 
@@ -421,13 +448,13 @@ public class SpreadManager : IDisposable
             configs = serverIds
                 .Where(id => _config.Servers.Any(s => s.Id == id))
                 .ToDictionary(id => id, id => _config.Servers.First(s => s.Id == id));
-        }
 
-        if (pools.Count < 2)
-            throw new InvalidOperationException(
-                $"Need at least 2 connected spread pools (have {pools.Count}). " +
-                $"Connected pools: [{string.Join(", ", _spreadPools.Keys)}], " +
-                $"requested: [{string.Join(", ", serverIds)}]");
+            if (pools.Count < 2)
+                throw new InvalidOperationException(
+                    $"Need at least 2 connected spread pools (have {pools.Count}). " +
+                    $"Connected pools: [{string.Join(", ", _spreadPools.Keys)}], " +
+                    $"requested: [{string.Join(", ", serverIds)}]");
+        }
 
         // Collect main server pools for scanning (spread pools are for FXP only)
         var mainPools = new Dictionary<string, FtpConnectionPool>();
@@ -484,19 +511,31 @@ public class SpreadManager : IDisposable
         };
         job.ServerConfigResolver = id => _config.Servers.FirstOrDefault(s => s.Id == id);
 
-        lock (_lock)
+        try
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            _activeJobs.Add(job);
-            _activeRequests[job] = request ?? new PersistedRace(section, releaseName, serverIds.ToList(), mode,
-                knownSourceServerId, knownSourcePath, DateTime.UtcNow);
+            lock (_lock)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                // A pool can disappear while the main-pool callback runs. Reject
+                // registration; the caller decides whether to retain the request.
+                var currentPools = serverIds.Where(_spreadPools.ContainsKey)
+                    .ToDictionary(id => id, id => _spreadPools[id]);
+                if (currentPools.Count < 2)
+                    throw new InvalidOperationException("Spread pools changed during race admission");
+                job.UpdatePools(currentPools);
+                _startingRequests.Remove(request);
+                _activeJobs.Add(job);
+                _activeRequests[job] = request;
+            }
         }
+        catch { job.Dispose(); throw; }
         PersistQueue();
         JobStarted?.Invoke(job);
 
         var sids = serverIds;
         _workers.TryRun(async () =>
         {
+            var deferredForPools = false;
             try
             {
                 // Re-initialize dead spread pools before running.
@@ -519,9 +558,10 @@ public class SpreadManager : IDisposable
                 if (fresh.Count < 2)
                 {
                     // A participating server was unmounted between StartRace() and here —
-                    // not enough pools to race. Fail the job cleanly instead of running
-                    // with stale references.
-                    Log.Warning("Spread job {Release}: only {Count} pools available after reinit, aborting",
+                    // not enough pools to race. Keep the durable request queued
+                    // for reconnection instead of dropping it before RunAsync.
+                    deferredForPools = true;
+                    Log.Information("Spread job {Release}: only {Count} pools available after reinit; waiting for reconnect",
                         job.ReleaseName, fresh.Count);
                     return;
                 }
@@ -546,11 +586,13 @@ public class SpreadManager : IDisposable
                 {
                     wasActive = _activeJobs.Remove(job);
                     _activeRequests.Remove(job);
+                    if (wasActive && deferredForPools && !_disposed)
+                        _raceQueue.Insert(0, request);
                 }
                 PersistQueue();
                 if (wasActive)
                 {
-                    RecordHistory(job);
+                    if (!deferredForPools) RecordHistory(job);
                     if (job.State == SpreadJobState.Stopped)
                         Log.Information("Spread job stopped: {Release} [{Section}]",
                             job.ReleaseName, job.Section);
@@ -717,7 +759,7 @@ public class SpreadManager : IDisposable
             {
                 if (_disposed) return;
                 var maxRaces = Math.Max(_config.Spread.MaxConcurrentRaces, 1);
-                if (_raceQueue.Count == 0 || _activeJobs.Count >= maxRaces)
+                if (_raceQueue.Count == 0 || _activeJobs.Count + _startingRequests.Count >= maxRaces)
                     return;
 
                 var now = DateTime.UtcNow;
@@ -729,6 +771,7 @@ public class SpreadManager : IDisposable
                 {
                     next = _raceQueue[index];
                     _raceQueue.RemoveAt(index);
+                    _startingRequests.Add(next);
                 }
             }
 
@@ -743,13 +786,12 @@ public class SpreadManager : IDisposable
 
             try
             {
-                StartRaceInternal(next.Section, next.ReleaseName, next.ServerIds, next.Mode,
-                    next.KnownSourceServerId, next.KnownSourcePath, next);
+                StartReservedRace(next, retainOnFailure: true);
             }
+            catch (ObjectDisposedException) when (_disposed) { return; }
             catch (Exception ex)
             {
-                Log.Warning(ex, "Failed to start queued race: {Release}", next.ReleaseName);
-                PersistQueue();
+                Log.Warning(ex, "Failed to start queued race; request retained: {Release}", next.ReleaseName);
                 return;
             }
         }
@@ -780,6 +822,7 @@ public class SpreadManager : IDisposable
             {
                 if (_disposed) return null;
                 return _activeRequests.Values.Select(r => r with { WasActive = true })
+                    .Concat(_startingRequests)
                     .Concat(_raceQueue)
                     .ToList();
             }
@@ -1411,6 +1454,7 @@ public class SpreadManager : IDisposable
             _disposed = true;
             jobs = _activeJobs.ToList();
             _raceQueue.Clear();
+            _startingRequests.Clear();
         }
         _poolRecovery.Dispose();
         foreach (var job in jobs) job.Stop();

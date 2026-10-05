@@ -1260,6 +1260,12 @@ public class SpreadJob : IDisposable
                 await Task.Delay(1000);
             }
 
+            // A final transfer can settle after the last LIST. Completion and
+            // cleanup use authoritative ownership, but history and telemetry
+            // consume SiteProgress: refresh it before either records the outcome.
+            // Otherwise a complete race can be persisted as 23/24 and not clean.
+            ReconcileProgressFromOwnership();
+
             // Clean up any destination directory we created where the release
             // didn't finish (either zero files or partial). SITE WIPE -r removes
             // the directory WITHOUT deducting user credits — glftpd's whole
@@ -1744,28 +1750,36 @@ public class SpreadJob : IDisposable
         // later. Without this pass, the first-processed site could flip to
         // IsComplete=true just because its own tiny file set matched the
         // partial _fileInfos snapshot.
-        int finalTotal;
-        Dictionary<string, int> finalOwned;
-        lock (_ownershipLock)
-        {
-            finalTotal = ResolveFileTotal(_expectedFileCount, _fileInfos.Count);
-            finalOwned = new Dictionary<string, int>(_serverFileCount);
-        }
-        lock (_progressLock)
-        {
-            foreach (var progress in _siteProgress.Values)
-            {
-                progress.FilesOwned = finalOwned.GetValueOrDefault(progress.ServerId);
-                progress.FilesTotal = finalTotal;
-                progress.IsComplete = progress.FilesOwned >= finalTotal && finalTotal > 0;
-            }
-        }
+        var finalTotal = ReconcileProgressFromOwnership();
         if (_spreadConfig.WaitForDestinationComplete)
             EvaluateDestCompletion(finalTotal);
         ProgressChanged?.Invoke(this);
 
         foreach (var sourceId in suspectedSourceMigrations)
             _ = HandleSourceMigration(sourceId, _cts.Token);
+    }
+
+    /// <summary>
+    /// Refresh display/outcome counters from the same ownership used to decide
+    /// completion. Keep the snapshot and application under the ownership lock so
+    /// an older scan cannot overwrite a newer terminal reconciliation.
+    /// </summary>
+    internal int ReconcileProgressFromOwnership()
+    {
+        lock (_ownershipLock)
+        {
+            var total = ResolveFileTotal(_expectedFileCount, _fileInfos.Count);
+            lock (_progressLock)
+            {
+                foreach (var progress in _siteProgress.Values)
+                {
+                    progress.FilesOwned = _serverFileCount.GetValueOrDefault(progress.ServerId);
+                    progress.FilesTotal = total;
+                    progress.IsComplete = progress.FilesOwned >= total && total > 0;
+                }
+            }
+            return total;
+        }
     }
 
     /// <summary>
@@ -2498,8 +2512,6 @@ public class SpreadJob : IDisposable
                 raceId: Id, srcServerId: srcId, dstServerId: dstId,
                 fileSizeBytes: file.Size);
 
-            tracked.Dispose();
-
             if (ok)
             {
                 var duration = DateTime.UtcNow - startTime;
@@ -2775,6 +2787,8 @@ public class SpreadJob : IDisposable
         }
         finally
         {
+            // Keep the drain entry until success/failure ownership bookkeeping
+            // finishes; final outcome snapshots must not race that publication.
             tracked?.Dispose();
             if (srcConn != null) await srcConn.DisposeAsync();
             if (dstConn != null) await dstConn.DisposeAsync();

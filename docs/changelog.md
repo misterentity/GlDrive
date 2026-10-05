@@ -12,6 +12,18 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.144 — reliable race admission, final counts and metadata completion (2026-10-05)
+
+- Keep race requests represented while moving from the queue into active work, and reserve capacity and duplicate identity during startup.
+- Reconcile final delivery counts before history and telemetry are recorded; completed races could previously report one file short of their actual delivery.
+- Stop torrent metadata progress reporting when the fetch completes, removing an artificial five-minute wait after successful screening.
+- See the [release report](releases/v3.10.144.md) for root causes, regression and smoke tests, deployment verification and remaining external conditions.
+
+## v3.10.143 — persist the spread race queue across restarts (2026-10-03)
+
+- Save queued and in-flight races, restore interrupted work with age/resume limits, and retain queued requests while their pools are unavailable.
+- See the [release report](releases/v3.10.143.md). Version 3.10.144 closes gaps during concurrent admission.
+
 ## v3.10.142 — intended exits are not crashes; full FXP ceiling for queued files (2026-10-02)
 
 - Record an intended exit (`EXITING:` in `.running`) before teardown starts: in `OnExit`, on Windows restart/logoff (`OnSessionEnding`) and on tray Exit. The watchdog no longer relaunches GlDrive into a shutting-down OS or after the user quits, and the next start no longer warns or shows a "did not complete" balloon.
