@@ -25,6 +25,9 @@ public sealed class RacesDigest
 {
     [JsonPropertyName("totalRaces")] public int TotalRaces { get; set; }
     [JsonPropertyName("winRateByServer")] public Dictionary<string, double> WinRateByServer { get; set; } = new();
+    [JsonPropertyName("knownWinnerSamplesByServer")] public Dictionary<string, int> KnownWinnerSamplesByServer { get; set; } = new();
+    [JsonPropertyName("destinationRacesWithFilesByServer")] public Dictionary<string, int> DestinationRacesWithFilesByServer { get; set; } = new();
+    [JsonPropertyName("destinationFilesObservedByServer")] public Dictionary<string, long> DestinationFilesObservedByServer { get; set; } = new();
     [JsonPropertyName("kbpsByRoute")] public Dictionary<string, double> KbpsByRoute { get; set; } = new(); // "src->dst"
     [JsonPropertyName("abortReasonHistogram")] public Dictionary<string, int> AbortReasonHistogram { get; set; } = new();
     [JsonPropertyName("completionRateBySection")] public Dictionary<string, double> CompletionRateBySection { get; set; } = new();
@@ -119,7 +122,8 @@ public sealed class SectionActivityDigest
         [JsonPropertyName("section")]  public string Section { get; set; } = "";
         [JsonPropertyName("filesIn")]  public int FilesIn { get; set; }
         [JsonPropertyName("ourRaces")] public int OurRaces { get; set; }
-        [JsonPropertyName("ourWinRate")] public double OurWinRate { get; set; }
+        [JsonPropertyName("knownWinnerRaces")] public int KnownWinnerRaces { get; set; }
+        [JsonPropertyName("ourWinRate")] public double? OurWinRate { get; set; }
     }
 }
 

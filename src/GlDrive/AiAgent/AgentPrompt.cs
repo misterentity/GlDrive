@@ -32,9 +32,11 @@ public sealed class AgentPrompt
           do not propose raising it. Per-server pool.poolSize is not tunable.
         - affils: add group to site affils (never remove).
         - errorReport: INFORMATIONAL ONLY — emits a Markdown issue report, never mutates config.
-        - downloadOnly: flip /servers/{id}/spread/downloadOnly bool. Use HIGH confidence — prefer
-          true when site shows consistent upload-side failures (>80% MKD-denied or 530s); prefer
-          false ONLY when the user has been manually trying to upload to a flagged-download-only site.
+        - downloadOnly: SUGGESTIONS ONLY for explicit manual review; automatic role changes are
+          rejected. Target /servers/{id}/spread/downloadOnly bool. Cite actual upload-denial evidence
+          before suggesting true, and explicit user upload intent before suggesting false.
+          Missing/zero win-rate is NEVER evidence of upload failure. A role change can disable the
+          only reachable destination or violate a deliberately download-only site's policy.
         - requestFiller: tweak /servers/{id}/irc/requestFiller/{enabled|pattern|channel}. Pattern
           must compile AND contain (?<release>...) capture group. Channel may be empty (=any).
 
@@ -64,6 +66,12 @@ public sealed class AgentPrompt
         remote folders. Use it to propose discriminating sectionMapping triggers (per the sectionMapping
         category rule above): high announceCount + a clear observedRemoteSection for a specific
         parsedType/quality is the signal to tighten a default ".*" trigger or add a targeted row.
+
+        WINNER AVAILABILITY: winRateByServer omits servers with zero knownWinnerSamplesByServer;
+        sectionActivity.ourWinRate is null when knownWinnerRaces is zero. Unknown winners mean
+        unavailable measurement, not losses. destinationRacesWithFilesByServer and
+        destinationFilesObservedByServer report final destination ownership, including files from
+        other racers; they do not establish a winner or prove upload failures.
 
         OUTPUT CONTRACT (non-negotiable):
         - Your ENTIRE response must be a single JSON object. Nothing else.

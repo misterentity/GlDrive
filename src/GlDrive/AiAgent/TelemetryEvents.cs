@@ -146,6 +146,9 @@ public record SectionActivityEvent : TelemetryEnvelope
     [JsonPropertyName("bytesIn")]   public long BytesIn { get; init; }
     [JsonPropertyName("ourRaces")]  public int OurRaces { get; init; }
     [JsonPropertyName("ourWins")]   public int OurWins { get; init; }
+    // Historical rows lack the measured-winner denominator. Their OurRaces
+    // count includes unknown winners and cannot be used as known losses.
+    [JsonPropertyName("knownWinnerRaces")] public int? KnownWinnerRaces { get; init; }
     [JsonPropertyName("dayOfWeek")] public int DayOfWeek { get; init; }
 }
 

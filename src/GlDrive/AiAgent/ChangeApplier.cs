@@ -60,7 +60,9 @@ public sealed class ChangeApplier
                         || RemovalShiftsFrozenRule(change, frozen);
                 }))
                 reject = "frozen";
-            else if (configOnly && !dryRun && change.Category is AgentCategories.WishlistPrune or AgentCategories.ErrorReport)
+            // Role changes alter routing. Confidence and a cited filename are
+            // not verified evidence: use the existing explicit review flow.
+            else if (configOnly && !dryRun && change.Category is AgentCategories.WishlistPrune or AgentCategories.ErrorReport or AgentCategories.DownloadOnly)
                 reject = "requires-manual-action";
             else if (!_validators.TryGetValue(change.Category, out var v))
                 reject = "unknown-category";
