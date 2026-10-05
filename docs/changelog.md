@@ -14,7 +14,7 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 
 ## v3.10.145 — require review for upload roles and report unknown win rates (2026-10-05)
 
-- Treat missing winner observations as unavailable, not losses, in race and section activity digests; report destination delivery separately.
+- Treat missing winner observations as unavailable, not losses, in race and section activity digests; report destination file ownership separately.
 - Require explicit review for AI `downloadOnly` changes, preventing unsupported autonomous changes to upload eligibility.
 - See the [release report](releases/v3.10.145.md) for the persisted configuration incident exposed by restart, recovery, validation and deployment.
 
