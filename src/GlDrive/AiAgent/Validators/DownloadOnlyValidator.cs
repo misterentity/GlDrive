@@ -7,8 +7,8 @@ namespace GlDrive.AiAgent;
 /// Both directions allowed (true ↔ false) — the agent may detect consistent
 /// upload-side failures and propose marking a site download-only, or detect
 /// a previously-misclassified site that should now allow uploads. The
-/// confidence threshold + per-category budget in ChangeApplier prevent the
-/// agent from flapping the flag.
+/// ChangeApplier permits mutations only through explicit manual review;
+/// scheduled runs may suggest changes but cannot change site roles.
 /// </summary>
 public sealed class DownloadOnlyValidator : IChangeValidator
 {

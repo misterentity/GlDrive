@@ -8,14 +8,26 @@ public sealed class RacesDigester
         var d = new RacesDigest { TotalRaces = list.Count };
         if (list.Count == 0) return d;
 
-        // Win rate per server: how often this server was the winner out of the races it participated in.
+        // Missing winners are unavailable observations, not losses. Reporting
+        // fabricated 0% rates caused the agent to disable a healthy destination.
         var serverParticipation = list
-            .SelectMany(r => r.Participants.Select(p => (p.ServerId, won: r.Winner == p.ServerId)))
+            .SelectMany(r => r.Participants.Select(p => (p.ServerId,
+                known: HasObservedWinner(r), won: r.Winner == p.ServerId)))
             .GroupBy(x => x.ServerId);
         foreach (var g in serverParticipation)
         {
-            var items = g.ToList();
-            d.WinRateByServer[g.Key] = items.Count == 0 ? 0 : (double)items.Count(x => x.won) / items.Count;
+            var observed = g.Where(x => x.known).ToList();
+            d.KnownWinnerSamplesByServer[g.Key] = observed.Count;
+            if (observed.Count > 0)
+                d.WinRateByServer[g.Key] = (double)observed.Count(x => x.won) / observed.Count;
+        }
+
+        // Final ownership includes contributions from other racers; it shows
+        // destination payloads, not a winner or exact bytes uploaded by us.
+        foreach (var g in list.SelectMany(r => r.Participants).Where(p => p.Role == "dst").GroupBy(p => p.ServerId))
+        {
+            d.DestinationRacesWithFilesByServer[g.Key] = g.Count(p => p.Files > 0);
+            d.DestinationFilesObservedByServer[g.Key] = g.Sum(p => (long)Math.Max(0, p.Files));
         }
 
         // Per-route kbps average (src->dst pairs)
@@ -50,4 +62,8 @@ public sealed class RacesDigester
 
         return d;
     }
+
+    internal static bool HasObservedWinner(RaceOutcomeEvent race)
+        => !string.IsNullOrWhiteSpace(race.Winner)
+           && race.Participants.Any(p => p.ServerId == race.Winner);
 }

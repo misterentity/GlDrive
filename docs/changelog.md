@@ -12,6 +12,12 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.145 — require review for upload roles and report unknown win rates (2026-10-05)
+
+- Treat missing winner observations as unavailable, not losses, in race and section activity digests; report destination delivery separately.
+- Require explicit review for AI `downloadOnly` changes, preventing unsupported autonomous changes to upload eligibility.
+- See the [release report](releases/v3.10.145.md) for the persisted configuration incident exposed by restart, recovery, validation and deployment.
+
 ## v3.10.144 — reliable race admission, final counts and metadata completion (2026-10-05)
 
 - Keep race requests represented while moving from the queue into active work, and reserve capacity and duplicate identity during startup.

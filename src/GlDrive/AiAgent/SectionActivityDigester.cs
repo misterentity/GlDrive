@@ -9,14 +9,19 @@ public sealed class SectionActivityDigester
         {
             var filesIn = g.Sum(e => e.FilesIn);
             var races = g.Sum(e => e.OurRaces);
-            var wins = g.Sum(e => e.OurWins);
+            // Legacy rollups have no measured denominator. Exclude their wins
+            // too, rather than dividing old wins by only newer known races.
+            var observed = g.Where(e => e.KnownWinnerRaces.HasValue).ToList();
+            var knownRaces = observed.Sum(e => e.KnownWinnerRaces.GetValueOrDefault());
+            var wins = observed.Sum(e => e.OurWins);
             d.PerServerSection.Add(new SectionActivityDigest.Row
             {
                 ServerId = g.Key.ServerId,
                 Section = g.Key.Section,
                 FilesIn = filesIn,
                 OurRaces = races,
-                OurWinRate = races == 0 ? 0 : (double)wins / races
+                KnownWinnerRaces = knownRaces,
+                OurWinRate = knownRaces == 0 ? null : (double)wins / knownRaces
             });
         }
         return d;

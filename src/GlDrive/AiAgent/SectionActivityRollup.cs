@@ -63,6 +63,7 @@ public sealed class SectionActivityRollup : IDisposable
                         {
                             ServerId = p.ServerId,
                             Section = r.Section,
+                            KnownWinnerRaces = 0,
                             DayOfWeek = (int)forDate.DayOfWeek
                         };
                     }
@@ -71,7 +72,8 @@ public sealed class SectionActivityRollup : IDisposable
                         FilesIn  = cur.FilesIn  + p.Files,
                         BytesIn  = cur.BytesIn  + p.Bytes,
                         OurRaces = cur.OurRaces + 1,
-                        OurWins  = cur.OurWins  + (r.Winner == p.ServerId ? 1 : 0)
+                        KnownWinnerRaces = cur.KnownWinnerRaces.GetValueOrDefault() + (RacesDigester.HasObservedWinner(r) ? 1 : 0),
+                        OurWins  = cur.OurWins  + (RacesDigester.HasObservedWinner(r) && r.Winner == p.ServerId ? 1 : 0)
                     };
                     agg[key] = cur;
                 }
