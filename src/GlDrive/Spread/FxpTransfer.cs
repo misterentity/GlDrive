@@ -178,7 +178,7 @@ public class FxpTransfer
                 {
                     // Route already known to fail direct CPSV-PASV — go straight to
                     // Relay and keep both connections reusable.
-                    ok = await ExecuteRelay(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct, pasvSw);
+                    ok = await ExecuteRelay(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, fileSizeBytes, ct, pasvSw);
                 }
                 else
                 {
@@ -214,7 +214,7 @@ public class FxpTransfer
                         // so any subsequent Relay failure attributes to the Relay outcome.
                         FaultSide = FxpFaultSide.None;
                         pasvSw.Restart();
-                        ok = await ExecuteRelay(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct, pasvSw);
+                        ok = await ExecuteRelay(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, fileSizeBytes, ct, pasvSw);
                     }
                 }
             }
@@ -225,7 +225,7 @@ public class FxpTransfer
                     FxpMode.PasvPasv => await ExecutePasvPasv(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct, pasvSw),
                     FxpMode.CpsvPasv => await ExecuteCpsvPasv(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct, pasvSw),
                     FxpMode.PasvCpsv => await ExecutePasvCpsv(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct, pasvSw),
-                    FxpMode.Relay    => await ExecuteRelay(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct, pasvSw),
+                    FxpMode.Relay    => await ExecuteRelay(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, fileSizeBytes, ct, pasvSw),
                     _ => throw new ArgumentOutOfRangeException(nameof(mode))
                 };
             }
@@ -540,7 +540,7 @@ public class FxpTransfer
     private async Task<bool> ExecuteRelay(
         AsyncFtpClient src, AsyncFtpClient dst,
         string srcPath, string dstPath,
-        int timeoutSec, CancellationToken ct,
+        int timeoutSec, long expectedBytes, CancellationToken ct,
         Stopwatch pasvSw)
     {
         // Both CPSV — neither backend IP is routable. Relay through local memory.
@@ -662,9 +662,9 @@ public class FxpTransfer
             // "No connection to the server exists" at GetReply. That was the #1
             // failure on 2026-05-21 (80 of 175), and every one of them had
             // already transferred the file — they were getting needlessly
-            // re-raced. When we actually relayed bytes, treat a completion-reply
-            // failure as success; the next scan + SFV verifies the dest copy and
-            // re-races only if it's genuinely short.
+            // re-raced. When the full listed size was relayed, treat a completion-reply
+            // failure as success. An EOF short of the listed size is a source-side
+            // abort (2026-10-05: 81.8 MB of 400 MB, reply timed out) — not delivery.
             try
             {
                 // CompleteDataSequence, not a raw GetReply: OpenDataTcp marked both
@@ -680,11 +680,18 @@ public class FxpTransfer
                 var dstComplete = await CpsvDataHelper.CompleteDataSequence(dst, ct, validate: false);
                 Log.Debug("Relay complete: src={SrcCode}, dst={DstCode}", srcComplete.Code, dstComplete.Code);
             }
-            catch (Exception replyEx) when (totalRelayed > 0)
+            catch (Exception replyEx) when (RelayDeliveredInFull(totalRelayed, expectedBytes))
             {
                 Log.Information("Relay: {Bytes} bytes delivered but completion reply failed ({Err}) — " +
                     "counting as delivered; next scan verifies the dest copy",
                     totalRelayed, replyEx.Message);
+            }
+            catch (Exception replyEx) when (replyEx is not OperationCanceledException)
+            {
+                // Both completion replies may still be unread: FaultSide.None poisons both.
+                throw new IOException(
+                    $"Relay source closed after {totalRelayed} of {expectedBytes} bytes; completion reply failed ({replyEx.Message})",
+                    replyEx);
             }
 
             TotalBytes = totalRelayed;
@@ -699,6 +706,13 @@ public class FxpTransfer
             dstTcp?.Dispose();
         }
     }
+
+    /// <summary>
+    /// A relay that hit source EOF delivered the file only if it moved at least the listed
+    /// size. Unknown size (0) keeps the byte-count-only rule.
+    /// </summary>
+    internal static bool RelayDeliveredInFull(long relayed, long expectedBytes) =>
+        relayed > 0 && (expectedBytes <= 0 || relayed >= expectedBytes);
 
     internal void AcceptRelayRetrReply(AsyncFtpClient src, AsyncFtpClient dst, FtpReply retrReply)
     {
