@@ -654,18 +654,12 @@ public class FxpTransfer
             srcTcp.Close();
             dstTcp.Close();
 
-            // The relay loop exited on a clean EOF from the source data channel
-            // and every byte was flushed to the destination — the file is
-            // delivered. The 226 completion replies are only confirmation. BNCs
-            // under race load very frequently drop the now-idle CONTROL channel
-            // in the window between the last data byte and the 226, throwing
-            // "No connection to the server exists" at GetReply. That was the #1
-            // failure on 2026-05-21 (80 of 175), and every one of them had
-            // already transferred the file — they were getting needlessly
-            // re-raced. When the full listed size was relayed, treat a completion-reply
-            // failure as success. An EOF short of the listed size is a source-side
-            // abort (2026-10-05: 81.8 MB of 400 MB, reply timed out) — not delivery.
-            try
+            // EOF and a successful 226 can still describe a short file. Drain both
+            // replies, then verify the relayed count against the listing before
+            // crediting delivery. BNCs sometimes drop the control channel after all
+            // bytes were flushed; CompleteRelayAsync preserves that forgiveness
+            // only for a full delivery and never for cancellation.
+            return await CompleteRelayAsync(totalRelayed, expectedBytes, async () =>
             {
                 // CompleteDataSequence, not a raw GetReply: OpenDataTcp marked both
                 // control channels as owing a reply, and only reading it clears the
@@ -679,24 +673,7 @@ public class FxpTransfer
                 var srcComplete = await CpsvDataHelper.CompleteDataSequence(src, ct);
                 var dstComplete = await CpsvDataHelper.CompleteDataSequence(dst, ct, validate: false);
                 Log.Debug("Relay complete: src={SrcCode}, dst={DstCode}", srcComplete.Code, dstComplete.Code);
-            }
-            catch (Exception replyEx) when (RelayDeliveredInFull(totalRelayed, expectedBytes))
-            {
-                Log.Information("Relay: {Bytes} bytes delivered but completion reply failed ({Err}) — " +
-                    "counting as delivered; next scan verifies the dest copy",
-                    totalRelayed, replyEx.Message);
-            }
-            catch (Exception replyEx) when (replyEx is not OperationCanceledException)
-            {
-                // Both completion replies may still be unread: FaultSide.None poisons both.
-                throw new IOException(
-                    $"Relay source closed after {totalRelayed} of {expectedBytes} bytes; completion reply failed ({replyEx.Message})",
-                    replyEx);
-            }
-
-            TotalBytes = totalRelayed;
-            SetState(TransferState.Complete);
-            return true;
+            }, ct);
         }
         finally
         {
@@ -705,6 +682,41 @@ public class FxpTransfer
             srcTcp.Dispose();
             dstTcp?.Dispose();
         }
+    }
+
+    internal async Task<bool> CompleteRelayAsync(long totalRelayed, long expectedBytes,
+        Func<Task> readCompletionReplies, CancellationToken ct)
+    {
+        TotalBytes = totalRelayed;
+        ct.ThrowIfCancellationRequested();
+        try
+        {
+            await readCompletionReplies();
+        }
+        catch (Exception replyEx) when (replyEx is not OperationCanceledException)
+        {
+            // Some transports surface cancellation as an I/O failure. Preserve
+            // the caller's cancellation before considering delivery forgiveness.
+            ct.ThrowIfCancellationRequested();
+            if (!RelayDeliveredInFull(totalRelayed, expectedBytes))
+            {
+                // Both completion replies may still be unread: FaultSide.None poisons both.
+                throw new IOException(
+                    $"Relay source closed after {totalRelayed} of {expectedBytes} bytes; completion reply failed ({replyEx.Message})",
+                    replyEx);
+            }
+
+            Log.Information("Relay: {Bytes} bytes delivered but completion reply failed ({Err}) — " +
+                "counting as delivered; next scan verifies the dest copy",
+                totalRelayed, replyEx.Message);
+        }
+
+        ct.ThrowIfCancellationRequested();
+        if (expectedBytes > 0 && totalRelayed < expectedBytes)
+            throw new IOException($"Relay source closed after {totalRelayed} of {expectedBytes} bytes");
+
+        SetState(TransferState.Complete);
+        return true;
     }
 
     /// <summary>

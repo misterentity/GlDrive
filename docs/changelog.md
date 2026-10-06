@@ -12,6 +12,12 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.147 — validate every Relay completion and preserve cancellation (2026-10-06)
+
+- Reject a Relay that ends below a known source size even when the FTP completion replies report success. Previously only the failed-reply path checked the size, allowing a short file to acquire ownership and delivery credit.
+- Preserve caller cancellation while reading completion replies; a full byte count no longer turns cancellation into transfer success. Keep measured bytes available when completion fails.
+- See the [release report](releases/v3.10.147.md) for log findings, regression and smoke tests, deployment verification, and external service/storage risks.
+
 ## v3.10.146 — a truncated Relay transfer is no longer counted as delivered (2026-10-06)
 
 - Relay mode counted any source-data EOF as full delivery and forgave a failed completion reply whenever at least one byte moved. On 2026-10-05 a 400,000,000-byte volume was logged `FXP complete` after 81,821,696 bytes, inflating delivered counts, speed statistics and telemetry until a later rescan re-raced it. Completion-reply forgiveness now requires the relayed byte count to reach the listed source size; a short relay is a failed transfer and is retried normally.
