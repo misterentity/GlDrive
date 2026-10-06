@@ -12,6 +12,11 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.146 — a truncated Relay transfer is no longer counted as delivered (2026-10-06)
+
+- Relay mode counted any source-data EOF as full delivery and forgave a failed completion reply whenever at least one byte moved. On 2026-10-05 a 400,000,000-byte volume was logged `FXP complete` after 81,821,696 bytes, inflating delivered counts, speed statistics and telemetry until a later rescan re-raced it. Completion-reply forgiveness now requires the relayed byte count to reach the listed source size; a short relay is a failed transfer and is retried normally.
+- See the [release report](releases/v3.10.146.md).
+
 ## v3.10.145 — require review for upload roles and report unknown win rates (2026-10-05)
 
 - Treat missing winner observations as unavailable, not losses, in race and section activity digests; report destination file ownership separately.
