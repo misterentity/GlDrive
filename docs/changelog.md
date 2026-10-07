@@ -12,6 +12,13 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.148 — Relay transfer ceiling measures inactivity, not wall time (2026-10-07)
+
+- The 180s per-transfer ceiling was a wall clock, so Relay volumes larger than ~180s at the route's speed could never finish: all 13 "FXP transfer timed out" warnings on 2026-10-04..06 were superbnc -> zephyr relays still streaming at ~2.4 MB/s (one at 496.9 of 500 MB), each re-sent from zero. Relay progress now re-arms the ceiling, so it fires only after 180s with no bytes; total duration stays bounded by FxpTransfer's 20x relay deadline. Server-to-server modes keep the wall-clock ceiling.
+- The timeout warning now reads "no progress for 180s" when that is what fired.
+- Widened timer margins in two ceiling re-arm tests that flaked under release-build load.
+- See the [release report](releases/v3.10.148.md).
+
 ## v3.10.147 — validate every Relay completion and preserve cancellation (2026-10-06)
 
 - Reject a Relay that ends below a known source size even when the FTP completion replies report success. Previously only the failed-reply path checked the size, allowing a short file to acquire ownership and delivery credit.
