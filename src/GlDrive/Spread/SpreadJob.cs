@@ -2485,11 +2485,19 @@ public class SpreadJob : IDisposable
             tracked = TrackActiveTransfer($"{file.Name}|{srcId}->{dstId}", progressInfo);
 
             long lastReportedBytes = 0;
+            var lastCeilingRearm = startTime;
             transfer.BytesTransferred += totalBytes =>
             {
                 var delta = totalBytes - lastReportedBytes;
                 lastReportedBytes = totalBytes;
-                var elapsed = (DateTime.UtcNow - startTime).TotalSeconds;
+                var now = DateTime.UtcNow;
+                var elapsed = (now - startTime).TotalSeconds;
+                // Relay ceiling = no-progress window (see FxpFailurePolicy.CeilingTracksProgress).
+                if (FxpFailurePolicy.ShouldRearmOnProgress(lastCeilingRearm, now))
+                {
+                    lastCeilingRearm = now;
+                    armTransferCeiling?.Invoke();
+                }
 
                 lock (_progressLock)
                 {
@@ -2696,12 +2704,17 @@ public class SpreadJob : IDisposable
             // Only Relay pipes bytes through us; server-to-server modes report no progress,
             // so "0 bytes" there would assert a stall we cannot observe.
             string moved;
+            long movedBytes;
             lock (_progressLock)
-                moved = mode == FxpMode.Relay ? $"{info?.BytesTransferred ?? 0}" : "unmeasured";
+            {
+                movedBytes = info?.BytesTransferred ?? 0;
+                moved = mode == FxpMode.Relay || movedBytes > 0 ? $"{movedBytes}" : "unmeasured";
+            }
             Log.Warning("FXP transfer timed out: {File} ({Src} -> {Dst}) after {Elapsed:F0}s, " +
-                "bytes moved {Moved} of {Size} ({Mode}, ceiling {Ceiling:F0}s, attempt {Attempt} on this pair)",
+                "bytes moved {Moved} of {Size} ({Mode}, {CeilingKind} {Ceiling:F0}s, attempt {Attempt} on this pair)",
                 file.Name, _serverConfigs[srcId].Name, _serverConfigs[dstId].Name,
                 (DateTime.UtcNow - startTime).TotalSeconds, moved, file.Size, mode,
+                FxpFailurePolicy.CeilingTracksProgress(mode, movedBytes) ? "no progress for" : "ceiling",
                 FxpFailurePolicy.TransferCeiling(_spreadConfig.TransferTimeoutSeconds).TotalSeconds, attempts);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
