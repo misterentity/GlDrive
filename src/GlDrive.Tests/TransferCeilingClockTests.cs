@@ -33,12 +33,13 @@ public sealed class TransferCeilingClockTests
     {
         // The fix relies on CancelAfter rescheduling an already-armed timer.
         using var cts = new CancellationTokenSource();
-        cts.CancelAfter(TimeSpan.FromMilliseconds(150));
+        // Margins are wide: under release-build test load a 100ms delay overran a 150ms timer.
+        cts.CancelAfter(TimeSpan.FromMilliseconds(1000));
         await Task.Delay(100);
-        cts.CancelAfter(TimeSpan.FromMilliseconds(400));
-        await Task.Delay(150);
+        cts.CancelAfter(TimeSpan.FromMilliseconds(3000));
+        await Task.Delay(1500);
         Assert.False(cts.IsCancellationRequested, "re-arm must push the deadline out");
-        await Task.Delay(500);
+        await Task.Delay(2500);
         Assert.True(cts.IsCancellationRequested);
     }
 
