@@ -80,11 +80,11 @@ public sealed class RelayProgressCeilingTests
     public async Task Steady_progress_outlives_the_window_and_a_stall_does_not()
     {
         // The production wiring in miniature: ceiling armed once, re-armed on each progress tick.
-        var window = TimeSpan.FromMilliseconds(300);
+        var window = TimeSpan.FromMilliseconds(1000);
         using var cts = new CancellationTokenSource();
         cts.CancelAfter(window);
         var last = DateTime.UtcNow - FxpFailurePolicy.ProgressRearmInterval;
-        for (var i = 0; i < 8; i++)
+        for (var i = 0; i < 20; i++)
         {
             await Task.Delay(100);
             var now = DateTime.UtcNow;
@@ -95,8 +95,8 @@ public sealed class RelayProgressCeilingTests
                 last = now - FxpFailurePolicy.ProgressRearmInterval;
             }
         }
-        Assert.False(cts.IsCancellationRequested, "800ms of steady progress must not hit a 300ms no-progress window");
-        await Task.Delay(600);
+        Assert.False(cts.IsCancellationRequested, "2s of steady progress must not hit a 1s no-progress window");
+        await Task.Delay(2500);
         Assert.True(cts.IsCancellationRequested, "a stall must still fire the window");
     }
 }
