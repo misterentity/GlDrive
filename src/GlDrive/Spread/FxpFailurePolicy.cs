@@ -12,6 +12,16 @@ internal enum FxpCancellation
     BorrowTimeout,
 }
 
+/// <summary>Identifies the relay loop's own duration deadline without changing cancellation handling.</summary>
+internal sealed class RelayDurationExceededException : OperationCanceledException
+{
+    internal TimeSpan Deadline { get; }
+
+    internal RelayDurationExceededException(TimeSpan deadline, OperationCanceledException inner)
+        : base($"Relay duration deadline exceeded ({deadline.TotalSeconds:F0}s)", inner, inner.CancellationToken)
+        => Deadline = deadline;
+}
+
 /// <summary>
 /// Failure policy for the boundary between acquiring an FXP pair and issuing FTP
 /// transfer commands. A connection can only have a corrupt GnuTLS/control-channel
@@ -28,6 +38,27 @@ internal static class FxpFailurePolicy
     /// </summary>
     internal static TimeSpan TransferCeiling(int transferTimeoutSeconds)
         => TimeSpan.FromSeconds(transferTimeoutSeconds > 0 ? transferTimeoutSeconds * 3 : 180);
+
+    internal static TimeSpan RelayTransferDeadline(int transferTimeoutSeconds)
+        => TimeSpan.FromSeconds(transferTimeoutSeconds > 0 ? transferTimeoutSeconds * 20 : 1200);
+
+    /// <summary>
+    /// Progress can keep the outer inactivity timer alive until the relay's independent
+    /// duration deadline fires. Only the tagged exception proves that inner deadline;
+    /// an arbitrary transport cancellation must not be labelled as either timer.
+    /// </summary>
+    internal static string DescribeTransferDeadline(OperationCanceledException exception,
+        bool transferTokenCancelled, FxpMode mode, long bytesMoved, int transferTimeoutSeconds)
+    {
+        if (exception is RelayDurationExceededException relay)
+            return $"relay duration ceiling {relay.Deadline.TotalSeconds:F0}s";
+        if (transferTokenCancelled)
+        {
+            var kind = CeilingTracksProgress(mode, bytesMoved) ? "no progress for" : "ceiling";
+            return $"{kind} {TransferCeiling(transferTimeoutSeconds).TotalSeconds:F0}s";
+        }
+        return "unattributed cancellation";
+    }
 
     /// <summary>
     /// Relay pipes every byte through us, so its ceiling measures INACTIVITY: progress

@@ -299,19 +299,58 @@ public class FtpSearchService : IDisposable
 
         foreach (var searchPath in _searchConfig.SearchPaths)
         {
+            if (report.Aborted) break;
             var root = searchPath.TrimEnd('/');
             await CrawlForIndex(ListViaPool, root, root, 0, _searchConfig.MaxDepth, entries, report, ct);
         }
 
+        List<IndexEntry> previous;
         lock (_indexLock)
-            _index = entries;
+            previous = _index;
+        var merged = MergeAfterCrawl(entries, previous, report);
+        lock (_indexLock)
+            _index = merged;
 
-        progress?.Report($"Index built: {entries.Count} entries");
-        if (report.Failed > 0)
+        progress?.Report($"Index built: {merged.Count} entries");
+        if (report.Aborted)
+            Log.Warning("Search index crawl aborted after {Failed} consecutive listing failures, last {Path}: {Error} — " +
+                        "kept the previous index ({Count} entries) instead of publishing a partial one",
+                report.ConsecutiveFailures, report.LastFailedPath, report.LastError, merged.Count);
+        else if (report.Failed > 0)
             Log.Information("Search index built with {Count} entries — {Failed} directory listing(s) failed, first {Path}: {Error}",
-                entries.Count, report.Failed, report.FirstFailedPath, report.FirstError);
+                merged.Count, report.Failed, report.FirstFailedPath, report.FirstError);
         else
-            Log.Information("Search index built with {Count} entries", entries.Count);
+            Log.Information("Search index built with {Count} entries", merged.Count);
+    }
+
+    /// <summary>
+    /// A failed listing says nothing about what the directory holds, so the previous
+    /// index's entries under it are carried forward rather than dropped. An aborted
+    /// crawl (transport down) keeps the previous index whole. On 2026-10-07 a burst of
+    /// local ephemeral-port exhaustion failed 1151 listings in one crawl and the
+    /// published index lost ~1100 entries for an hour.
+    /// </summary>
+    internal static List<IndexEntry> MergeAfterCrawl(List<IndexEntry> fresh, List<IndexEntry> previous, IndexCrawlReport report)
+    {
+        if (report.Aborted && previous.Count > 0)
+            return previous;
+        if (report.FailedPaths.Count == 0 || previous.Count == 0)
+            return fresh;
+
+        var failed = new HashSet<string>(report.FailedPaths, StringComparer.Ordinal);
+        var present = new HashSet<string>(fresh.Select(e => e.Path), StringComparer.Ordinal);
+        var merged = new List<IndexEntry>(fresh);
+        foreach (var entry in previous)
+        {
+            if (present.Contains(entry.Path)) continue;
+            for (var cut = entry.Path.LastIndexOf('/'); cut > 0; cut = entry.Path.LastIndexOf('/', cut - 1))
+            {
+                if (!failed.Contains(entry.Path[..cut])) continue;
+                merged.Add(entry);
+                break;
+            }
+        }
+        return merged;
     }
 
     internal delegate Task<FtpListItem[]> DirectoryLister(string path, CancellationToken ct);
@@ -319,13 +358,31 @@ public class FtpSearchService : IDisposable
     /// <summary>How many listings a crawl lost, and the first one, for the build summary line.</summary>
     internal sealed class IndexCrawlReport
     {
+        /// <summary>
+        /// Consecutive failed listings that mean the transport, not a directory, is
+        /// broken. Each failed listing borrows (and may try to log in) again, so
+        /// continuing turns a local fault into a server-side login-cap refusal.
+        /// </summary>
+        public const int MaxConsecutiveFailures = 5;
+
         public int Failed { get; private set; }
+        public int ConsecutiveFailures { get; private set; }
+        public bool Aborted => ConsecutiveFailures >= MaxConsecutiveFailures;
+        public List<string> FailedPaths { get; } = [];
         public string? FirstFailedPath { get; private set; }
         public string? FirstError { get; private set; }
+        public string? LastFailedPath { get; private set; }
+        public string? LastError { get; private set; }
+
+        public void RecordSuccess() => ConsecutiveFailures = 0;
 
         public void Record(string path, Exception ex)
         {
             Failed++;
+            ConsecutiveFailures++;
+            FailedPaths.Add(path);
+            LastFailedPath = path;
+            LastError = ex.Message;
             if (FirstFailedPath != null) return;
             FirstFailedPath = path;
             FirstError = ex.Message;
@@ -352,10 +409,13 @@ public class FtpSearchService : IDisposable
         DirectoryLister list, string path, string searchRoot,
         int depth, int maxDepth, List<IndexEntry> entries, IndexCrawlReport report, CancellationToken ct)
     {
+        if (report.Aborted) return;
+
         FtpListItem[] items;
         try
         {
             items = await list(path, ct);
+            report.RecordSuccess();
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
@@ -367,6 +427,7 @@ public class FtpSearchService : IDisposable
         foreach (var item in items)
         {
             ct.ThrowIfCancellationRequested();
+            if (report.Aborted) return;
             if (item.Type != FtpObjectType.Directory) continue;
             if (SkipDirectory(item.Name)) continue;
 
