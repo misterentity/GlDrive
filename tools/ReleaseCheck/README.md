@@ -10,7 +10,7 @@ The harness first runs 800 commands on one borrowed FTPS session, crossing Fluen
 
 It also rejects two NOOP probes through the disposable fixture: the monitor must signal connection loss, reject the first reconnect probe, and wait for a positive reply before reporting recovery. Shutdown must not emit another connection-loss event.
 
-Cached and live search are exercised against actual FTPS directories: decorated completion markers are excluded while real release names containing COMPLETE or a bracketed group prefix remain searchable.
+Cached and live search are exercised against actual FTPS directories: decorated completion markers are excluded while real release names containing COMPLETE or a bracketed group prefix remain searchable. A root search also verifies that a reused session's non-root working directory cannot redirect a configured `/` listing.
 
 Race discovery also checks the case where the sole receiving site already has the release and its peer is download-only: the job completes without an error event or a transfer to the excluded peer.
 

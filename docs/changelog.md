@@ -12,6 +12,11 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.150 — preserve search results after an FTP root listing failure (2026-10-08)
+
+- Preserve the FTP root `/` during search-index refresh and retain cached entries when its listing fails. The previous recovery logic handled named subdirectories but missed the root, allowing a single transient root failure to empty the cache.
+- See the [release report](releases/v3.10.150.md) for log findings, regression and smoke tests, deployment verification, and remaining external conditions.
+
 ## v3.10.149 — Relay deadline attribution; search index survives transport failures (2026-10-08)
 
 - Report the deadline that actually cancelled an FXP transfer. A Relay reaching its independent total-duration limit could previously be reported as having made no progress for 180 seconds, even while bytes were flowing.

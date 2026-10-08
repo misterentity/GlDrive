@@ -112,6 +112,25 @@ foreach (var method in new[] { SearchMethod.CachedIndex, SearchMethod.LiveCrawl 
         results.Any(r => r.ReleaseName == "Nuked.2026.1080p-GRP"),
         $"native {method} excludes status and explicit nuke directories and preserves real release names");
 }
+// A reused session can have a non-root CWD. The configured "/" must still
+// list the filesystem root, for both cached and live search.
+await using (var rootSearchPool = new FtpConnectionPool(factory, 1))
+{
+    await rootSearchPool.Initialize(deadline.Token);
+    foreach (var method in new[] { SearchMethod.CachedIndex, SearchMethod.LiveCrawl })
+    {
+        await using (var connection = await rootSearchPool.Borrow(deadline.Token))
+            await connection.Client.SetWorkingDirectory(searchRoot, deadline.Token);
+        using var search = new FtpSearchService(rootSearchPool, new SearchConfig
+        {
+            Method = method, SearchPaths = ["/"], MaxDepth = 0
+        });
+        if (method == SearchMethod.CachedIndex) await search.RefreshIndex(ct: deadline.Token);
+        var results = await search.Search(remoteRoot.TrimStart('/'), ct: deadline.Token);
+        Check(results.Any(r => r.RemotePath == remoteRoot),
+            $"native {method} searches configured filesystem root despite non-root session CWD");
+    }
+}
 var notificationRoot = remoteRoot + "/notifications";
 await ftp.CreateDirectory(notificationRoot + "/TV/existing", deadline.Token);
 var releaseMonitor = new NewReleaseMonitor(pool,
