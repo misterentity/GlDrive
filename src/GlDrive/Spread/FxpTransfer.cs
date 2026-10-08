@@ -628,23 +628,23 @@ public class FxpTransfer
             var buf2 = new byte[256 * 1024];
             long totalRelayed = 0;
 
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec > 0 ? timeoutSec * 20 : 1200));
-
-            var rd = await srcSsl.ReadAsync(buf1, timeoutCts.Token);
-            while (rd > 0)
+            await WithRelayDeadline(async relayToken =>
             {
-                // Start next read into buf2 while writing buf1
-                var nextRead = srcSsl.ReadAsync(buf2, timeoutCts.Token);
-                await dstSsl.WriteAsync(buf1.AsMemory(0, rd), timeoutCts.Token);
-                totalRelayed += rd;
-                TotalBytes = totalRelayed;
-                BytesTransferred?.Invoke(totalRelayed);
+                var rd = await srcSsl.ReadAsync(buf1, relayToken);
+                while (rd > 0)
+                {
+                    // Start next read into buf2 while writing buf1
+                    var nextRead = srcSsl.ReadAsync(buf2, relayToken);
+                    await dstSsl.WriteAsync(buf1.AsMemory(0, rd), relayToken);
+                    totalRelayed += rd;
+                    TotalBytes = totalRelayed;
+                    BytesTransferred?.Invoke(totalRelayed);
 
-                rd = await nextRead;
-                // Swap buffers
-                (buf1, buf2) = (buf2, buf1);
-            }
+                    rd = await nextRead;
+                    // Swap buffers
+                    (buf1, buf2) = (buf2, buf1);
+                }
+            }, FxpFailurePolicy.RelayTransferDeadline(timeoutSec), ct);
 
             await dstSsl.FlushAsync(CancellationToken.None);
 
@@ -681,6 +681,23 @@ public class FxpTransfer
             dstSsl?.Dispose();
             srcTcp.Dispose();
             dstTcp?.Dispose();
+        }
+    }
+
+    internal static async Task WithRelayDeadline(Func<CancellationToken, Task> transfer,
+        TimeSpan deadline, CancellationToken ct)
+    {
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(deadline);
+        try
+        {
+            await transfer(timeoutCts.Token);
+        }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested && timeoutCts.IsCancellationRequested)
+        {
+            // Keep this an OperationCanceledException so the existing caller still
+            // records the failed attempt and quarantines the mid-command sessions.
+            throw new RelayDurationExceededException(deadline, ex);
         }
     }
 

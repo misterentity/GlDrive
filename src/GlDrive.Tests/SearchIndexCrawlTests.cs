@@ -130,6 +130,114 @@ public sealed class SearchIndexCrawlTests
         Assert.Equal(new[] { "/TV" }.Concat(real.Select(n => "/TV/" + n)), visited);
     }
 
+    private static FtpSearchService.IndexEntry Entry(string path) => new() { Name = path[(path.LastIndexOf('/') + 1)..], Path = path };
+
+    [Fact]
+    public async Task Consecutive_transport_failures_abort_the_crawl_instead_of_hammering_the_pool()
+    {
+        // 2026-10-07: local port exhaustion failed every LIST; the crawl made 1151 attempts,
+        // the pool's re-logins hit zephyr's login cap and tripped a 90s BNC cooldown.
+        var tree = new Dictionary<string, FtpListItem[]>
+        {
+            ["/TV"] = Enumerable.Range(0, 50).Select(i => Dir($"/TV/Show.{i:D2}")).ToArray()
+        };
+        var calls = 0;
+        FtpSearchService.DirectoryLister list = (path, _) =>
+        {
+            calls++;
+            if (path != "/TV") throw new IOException("Only one usage of each socket address is normally permitted.");
+            return Task.FromResult(tree[path]);
+        };
+        var entries = new List<FtpSearchService.IndexEntry>();
+        var report = new FtpSearchService.IndexCrawlReport();
+
+        await FtpSearchService.CrawlForIndex(list, "/TV", "/TV", 0, 2, entries, report, CancellationToken.None);
+
+        Assert.True(report.Aborted);
+        Assert.Equal(1 + FtpSearchService.IndexCrawlReport.MaxConsecutiveFailures, calls);
+        Assert.Equal("/TV/Show.04", report.LastFailedPath);
+    }
+
+    [Fact]
+    public async Task Sporadic_failures_separated_by_successes_do_not_abort()
+    {
+        var names = Enumerable.Range(0, 20).Select(i => $"/TV/Show.{i:D2}").ToArray();
+        var tree = new Dictionary<string, FtpListItem[]> { ["/TV"] = names.Select(Dir).ToArray() };
+        var failing = names.Where((_, i) => i % 2 == 0).ToArray();
+        var entries = new List<FtpSearchService.IndexEntry>();
+        var report = new FtpSearchService.IndexCrawlReport();
+
+        await FtpSearchService.CrawlForIndex(Lister(tree, failing), "/TV", "/TV", 0, 2, entries, report, CancellationToken.None);
+
+        Assert.False(report.Aborted);
+        Assert.Equal(10, report.Failed);
+        Assert.Equal(20, entries.Count);
+    }
+
+    [Fact]
+    public void Aborted_crawl_keeps_the_previous_index_whole()
+    {
+        var previous = new List<FtpSearchService.IndexEntry> { Entry("/TV/A"), Entry("/TV/A/Sample"), Entry("/TV/B") };
+        var report = new FtpSearchService.IndexCrawlReport();
+        for (var i = 0; i < FtpSearchService.IndexCrawlReport.MaxConsecutiveFailures; i++)
+            report.Record($"/TV/X{i}", new IOException("down"));
+
+        var merged = FtpSearchService.MergeAfterCrawl([Entry("/TV/A")], previous, report);
+
+        Assert.Same(previous, merged);
+    }
+
+    [Fact]
+    public void Aborted_first_build_still_publishes_what_it_found()
+    {
+        var report = new FtpSearchService.IndexCrawlReport();
+        for (var i = 0; i < FtpSearchService.IndexCrawlReport.MaxConsecutiveFailures; i++)
+            report.Record($"/TV/X{i}", new IOException("down"));
+        var fresh = new List<FtpSearchService.IndexEntry> { Entry("/TV/A") };
+
+        Assert.Same(fresh, FtpSearchService.MergeAfterCrawl(fresh, [], report));
+    }
+
+    [Fact]
+    public void Failed_subtree_carries_previous_descendants_forward_without_duplicates()
+    {
+        var previous = new List<FtpSearchService.IndexEntry>
+        {
+            Entry("/TV/A"), Entry("/TV/A/Sample"), Entry("/TV/A/Subs/Eng"),
+            Entry("/TV/AB/Sample"), Entry("/TV/B"), Entry("/TV/B/Sample"), Entry("/TV/Gone")
+        };
+        var fresh = new List<FtpSearchService.IndexEntry> { Entry("/TV/A"), Entry("/TV/AB"), Entry("/TV/B") };
+        var report = new FtpSearchService.IndexCrawlReport();
+        report.Record("/TV/A", new IOException("550"));
+        report.RecordSuccess();
+
+        var merged = FtpSearchService.MergeAfterCrawl(fresh, previous, report);
+
+        // /TV/AB/Sample is not under /TV/A; /TV/B/Sample was listed fresh (and is now gone);
+        // /TV/Gone vanished from a successful listing.
+        Assert.Equal(["/TV/A", "/TV/A/Sample", "/TV/A/Subs/Eng", "/TV/AB", "/TV/B"],
+            merged.Select(e => e.Path).Order().ToArray());
+    }
+
+    [Fact]
+    public void Clean_crawl_publishes_fresh_entries_only()
+    {
+        var fresh = new List<FtpSearchService.IndexEntry> { Entry("/TV/A") };
+        Assert.Same(fresh, FtpSearchService.MergeAfterCrawl(fresh, [Entry("/TV/Old")], new FtpSearchService.IndexCrawlReport()));
+    }
+
+    [Fact]
+    public void RefreshIndex_publishes_the_merged_index()
+    {
+        var source = CpsvDataCommandRejectionTests.ReadSource("Downloads", "FtpSearchService.cs");
+        var refresh = source[source.IndexOf("public async Task RefreshIndex(", StringComparison.Ordinal)..];
+        refresh = refresh[..refresh.IndexOf("internal static List<IndexEntry> MergeAfterCrawl", StringComparison.Ordinal)];
+        Assert.Contains("MergeAfterCrawl(entries, previous, report)", refresh);
+        Assert.Contains("_index = merged;", refresh);
+        Assert.DoesNotContain("_index = entries;", refresh);
+        Assert.Contains("if (report.Aborted) break;", refresh);
+    }
+
     [Fact]
     public void Site_search_excludes_nuked_status_paths_but_preserves_real_titles()
     {

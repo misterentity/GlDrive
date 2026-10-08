@@ -12,6 +12,13 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.149 — Relay deadline attribution; search index survives transport failures (2026-10-08)
+
+- Report the deadline that actually cancelled an FXP transfer. A Relay reaching its independent total-duration limit could previously be reported as having made no progress for 180 seconds, even while bytes were flowing.
+- Share the Relay duration calculation between enforcement and diagnostics, preserving existing timeout values, progress re-arming, cancellation and retry behavior.
+- Search-index crawl no longer publishes a degraded index or hammers a failing pool. On 2026-10-07 a burst of machine-wide ephemeral-port exhaustion (WSAEADDRINUSE 10048) failed 1151 zephyr listings in one crawl: the hourly index dropped ~1100 entries for an hour, and the crawl's repeated borrows re-logged in until zephyr's 6-login cap answered 530, tripping a 90s BNC cooldown that broke one NewReleaseMonitor poll and the ConnectionMonitor keepalive. The crawl now aborts after 5 consecutive listing failures and keeps the previous index; sporadic failures carry the previous index's entries under the failed directory forward.
+- See the [release report](releases/v3.10.149.md) for log findings, validation, deployment and remaining external conditions.
+
 ## v3.10.148 — Relay transfer ceiling measures inactivity, not wall time (2026-10-07)
 
 - The 180s per-transfer ceiling was a wall clock, so Relay volumes larger than ~180s at the route's speed could never finish: all 13 "FXP transfer timed out" warnings on 2026-10-04..06 were superbnc -> zephyr relays still streaming at ~2.4 MB/s (one at 496.9 of 500 MB), each re-sent from zero. Relay progress now re-arms the ceiling, so it fires only after 180s with no bytes; total duration stays bounded by FxpTransfer's 20x relay deadline. Server-to-server modes keep the wall-clock ceiling.

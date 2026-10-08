@@ -2682,7 +2682,7 @@ public class SpreadJob : IDisposable
                 if (dstConn != null) dstConn.Poison("FXP job cancelled mid-transfer");
             }
         }
-        catch (OperationCanceledException) when (transferProtocolStarted)
+        catch (OperationCanceledException ex) when (transferProtocolStarted)
         {
             // The transfer's OWN deadline fired mid-command (the per-transfer ceiling or
             // FxpTransfer's relay timeout) while the race kept going. A stalled data
@@ -2710,12 +2710,15 @@ public class SpreadJob : IDisposable
                 movedBytes = info?.BytesTransferred ?? 0;
                 moved = mode == FxpMode.Relay || movedBytes > 0 ? $"{movedBytes}" : "unmeasured";
             }
-            Log.Warning("FXP transfer timed out: {File} ({Src} -> {Dst}) after {Elapsed:F0}s, " +
-                "bytes moved {Moved} of {Size} ({Mode}, {CeilingKind} {Ceiling:F0}s, attempt {Attempt} on this pair)",
-                file.Name, _serverConfigs[srcId].Name, _serverConfigs[dstId].Name,
+            var deadline = FxpFailurePolicy.DescribeTransferDeadline(ex, ct.IsCancellationRequested,
+                mode, movedBytes, _spreadConfig.TransferTimeoutSeconds);
+            var outcome = ex is RelayDurationExceededException || ct.IsCancellationRequested
+                ? "timed out" : "cancelled";
+            Log.Warning("FXP transfer {Outcome}: {File} ({Src} -> {Dst}) after {Elapsed:F0}s, " +
+                "bytes moved {Moved} of {Size} ({Mode}, {Deadline}, attempt {Attempt} on this pair)",
+                outcome, file.Name, _serverConfigs[srcId].Name, _serverConfigs[dstId].Name,
                 (DateTime.UtcNow - startTime).TotalSeconds, moved, file.Size, mode,
-                FxpFailurePolicy.CeilingTracksProgress(mode, movedBytes) ? "no progress for" : "ceiling",
-                FxpFailurePolicy.TransferCeiling(_spreadConfig.TransferTimeoutSeconds).TotalSeconds, attempts);
+                deadline, attempts);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
