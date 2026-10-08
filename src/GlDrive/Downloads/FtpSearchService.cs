@@ -53,6 +53,12 @@ public class FtpSearchService : IDisposable
 
     private static string Normalize(string s) => s.Replace('.', ' ').Replace('_', ' ').Replace('-', ' ');
 
+    internal static string NormalizeSearchRoot(string path)
+    {
+        var root = path.TrimEnd('/');
+        return root.Length == 0 ? "/" : root;
+    }
+
     private static string SanitizeFtpInput(string input) =>
         input.Replace("\r", "").Replace("\n", "").Replace("\0", "");
 
@@ -300,7 +306,7 @@ public class FtpSearchService : IDisposable
         foreach (var searchPath in _searchConfig.SearchPaths)
         {
             if (report.Aborted) break;
-            var root = searchPath.TrimEnd('/');
+            var root = NormalizeSearchRoot(searchPath);
             await CrawlForIndex(ListViaPool, root, root, 0, _searchConfig.MaxDepth, entries, report, ct);
         }
 
@@ -338,11 +344,20 @@ public class FtpSearchService : IDisposable
             return fresh;
 
         var failed = new HashSet<string>(report.FailedPaths, StringComparer.Ordinal);
+        // Accept the literal root and its previously trimmed empty spelling.
+        // Neither appears in the named-ancestor walk below; both cover every
+        // previous index entry.
+        var rootFailed = failed.Contains("") || failed.Contains("/");
         var present = new HashSet<string>(fresh.Select(e => e.Path), StringComparer.Ordinal);
         var merged = new List<IndexEntry>(fresh);
         foreach (var entry in previous)
         {
             if (present.Contains(entry.Path)) continue;
+            if (rootFailed)
+            {
+                merged.Add(entry);
+                continue;
+            }
             for (var cut = entry.Path.LastIndexOf('/'); cut > 0; cut = entry.Path.LastIndexOf('/', cut - 1))
             {
                 if (!failed.Contains(entry.Path[..cut])) continue;
@@ -523,7 +538,7 @@ public class FtpSearchService : IDisposable
             foreach (var path in _searchConfig.SearchPaths)
             {
                 ct.ThrowIfCancellationRequested();
-                var pathResults = await SearchPath(path.TrimEnd('/'), normalizedKeyword, progress, ct);
+                var pathResults = await SearchPath(NormalizeSearchRoot(path), normalizedKeyword, progress, ct);
                 results.AddRange(pathResults);
                 if (results.Count >= MaxResults) break;
             }

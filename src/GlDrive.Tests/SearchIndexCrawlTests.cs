@@ -219,6 +219,65 @@ public sealed class SearchIndexCrawlTests
             merged.Select(e => e.Path).Order().ToArray());
     }
 
+    [Theory]
+    [InlineData("/", "/")]
+    [InlineData("///", "/")]
+    [InlineData("", "/")]
+    [InlineData("/TV/", "/TV")]
+    [InlineData("/TV", "/TV")]
+    [InlineData("/tv///", "/tv")]
+    public void Normalize_search_root_preserves_the_filesystem_root_and_path_case(string configured, string expected)
+        => Assert.Equal(expected, FtpSearchService.NormalizeSearchRoot(configured));
+
+    [Theory]
+    [InlineData("/")]
+    [InlineData("///")]
+    public async Task Failed_filesystem_root_preserves_previous_top_level_entries_and_descendants(string configuredRoot)
+    {
+        // Use the same normalization as RefreshIndex and live search. LIST must
+        // target the filesystem root, regardless of the connection's current dir.
+        var root = FtpSearchService.NormalizeSearchRoot(configuredRoot);
+        Assert.Equal("/", root);
+        var previous = new List<FtpSearchService.IndexEntry>
+        {
+            Entry("/TV"), Entry("/TV/Show.A"), Entry("/MOVIES/Film.A")
+        };
+        var fresh = new List<FtpSearchService.IndexEntry>();
+        var report = new FtpSearchService.IndexCrawlReport();
+
+        await FtpSearchService.CrawlForIndex(Lister([], root), root, root, 0, 2, fresh, report, CancellationToken.None);
+        var merged = FtpSearchService.MergeAfterCrawl(fresh, previous, report);
+
+        Assert.Equal(1, report.Failed);
+        Assert.Equal("/", report.FirstFailedPath);
+        Assert.False(report.Aborted);
+        Assert.Equal(previous.Select(e => e.Path), merged.Select(e => e.Path));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("/")]
+    public void Failed_filesystem_root_retains_fresh_entries_without_duplicates(string failedRoot)
+    {
+        var previous = new List<FtpSearchService.IndexEntry>
+        {
+            Entry("/TV"), Entry("/TV/Show.A"), Entry("/MOVIES/Film.A")
+        };
+        var current = Entry("/TV/Show.A");
+        current.Size = 123;
+        var fresh = new List<FtpSearchService.IndexEntry> { current, Entry("/TV/Show.B") };
+        var report = new FtpSearchService.IndexCrawlReport();
+        report.Record(failedRoot, new IOException("root listing unavailable"));
+
+        var merged = FtpSearchService.MergeAfterCrawl(fresh, previous, report);
+
+        Assert.Equal(4, merged.Count);
+        Assert.Same(current, Assert.Single(merged, e => e.Path == "/TV/Show.A"));
+        Assert.Contains(merged, e => e.Path == "/TV/Show.B");
+        Assert.Contains(merged, e => e.Path == "/TV");
+        Assert.Contains(merged, e => e.Path == "/MOVIES/Film.A");
+    }
+
     [Fact]
     public void Clean_crawl_publishes_fresh_entries_only()
     {
