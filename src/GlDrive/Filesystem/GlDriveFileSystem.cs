@@ -683,8 +683,11 @@ public class GlDriveFileSystem : FileSystemBase
                 Log.Debug("ReadDirectoryEntry: {Path} (pattern={Pattern}, marker={Marker})",
                     node.RemotePath, pattern, marker);
 
-            // Load directory listing on first call
-            if (node.DirEntries == null)
+            // A null marker with a fresh context starts (or restarts) enumeration.
+            // Reload through the cache so an open directory handle cannot keep deleted
+            // entries forever after invalidation. Preserve the snapshot for subsequent
+            // entries in this buffer and for marker-based continuation buffers.
+            if (node.DirEntries == null || (index == 0 && marker == null))
             {
                 var items = ListDirectoryCached(node.RemotePath);
                 node.DirEntries = items;

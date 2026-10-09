@@ -12,6 +12,17 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.152 — refresh restarted directory listings on open handles (2026-10-09)
+
+- Reload a directory handle's listing when Windows restarts enumeration. Previously the handle retained its first snapshot even after the shared cache was invalidated, so deleted files could remain visible and newly created files could stay absent until the handle closed.
+- Preserve the snapshot for paged continuations so a change between pages does not skip or duplicate entries.
+- See the [release report](releases/v3.10.152.md) for reproduction, regression and smoke tests, deployment verification, and remaining external conditions.
+
+## v3.10.151 — reject stale cache writes and clarify AI audit output (2026-10-09)
+
+- Reject directory listings fetched before a later invalidation, classify malformed AI proposals accurately, and provide an explicit heading when the model returns no brief.
+- See the [release report](releases/v3.10.151.md).
+
 ## v3.10.150 — preserve search results after an FTP root listing failure (2026-10-08)
 
 - Preserve the FTP root `/` during search-index refresh and retain cached entries when its listing fails. The previous recovery logic handled named subdirectories but missed the root, allowing a single transient root failure to empty the cache.

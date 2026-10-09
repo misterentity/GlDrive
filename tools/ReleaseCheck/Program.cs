@@ -1,4 +1,5 @@
 using System.IO;
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Reflection;
 using System.Text.Json;
@@ -12,6 +13,7 @@ using GlDrive.Services;
 using GlDrive.Downloads;
 using GlDrive.Spread;
 using Serilog;
+using Microsoft.Win32.SafeHandles;
 
 // This harness only connects to the disposable loopback fixture, with an isolated trust store.
 var state = JsonDocument.Parse(File.ReadAllText(args[0])).RootElement;
@@ -219,6 +221,34 @@ try
     Check(File.ReadAllBytes(renamed).SequenceEqual(expected), "WinFsp rename/read");
     File.Delete(renamed);
     Check(!File.Exists(renamed), "WinFsp delete");
+
+    // Keep the directory HANDLE open across real mounted mutations. Ordinary
+    // Directory.GetFiles creates a new handle and cannot detect a stale snapshot
+    // retained by an existing Explorer directory handle.
+    var enumerationPath = letter + @":\enumeration-restart";
+    Directory.CreateDirectory(enumerationPath);
+    var stableNames = Enumerable.Range(0, 5).Select(i => $"stable-{i}.txt").ToArray();
+    foreach (var name in stableNames) File.WriteAllText(Path.Combine(enumerationPath, name), name);
+    File.WriteAllText(Path.Combine(enumerationPath, "before.txt"), "before");
+    using var directoryHandle = NativeDirectory.Open(enumerationPath);
+    var baseline = NativeDirectory.Enumerate(directoryHandle);
+    Check(baseline.Names.SetEquals(stableNames.Append("before.txt")) && baseline.Pages > 1,
+        "WinFsp retained directory handle enumerates all continuation pages");
+
+    File.Move(Path.Combine(enumerationPath, "before.txt"), Path.Combine(enumerationPath, "renamed.txt"));
+    // Let the driver's configured one-second metadata cache expire so the
+    // restart reaches GlDrive's enumeration callback on this same handle.
+    await Task.Delay(1100, deadline.Token);
+    var afterRename = NativeDirectory.Enumerate(directoryHandle);
+    Check(afterRename.Names.SetEquals(stableNames.Append("renamed.txt")),
+        "WinFsp same-handle enumeration restart reflects mounted rename");
+
+    File.Delete(Path.Combine(enumerationPath, "renamed.txt"));
+    File.WriteAllText(Path.Combine(enumerationPath, "created.txt"), "created");
+    await Task.Delay(1100, deadline.Token);
+    var afterDeleteCreate = NativeDirectory.Enumerate(directoryHandle);
+    Check(afterDeleteCreate.Names.SetEquals(stableNames.Append("created.txt")),
+        "WinFsp same-handle enumeration restart reflects mounted delete and create");
 }
 finally { host.Unmount(); }
 
@@ -254,4 +284,70 @@ static void Check(bool success, string step)
 {
     if (!success) throw new InvalidOperationException("FAIL: " + step);
     Console.WriteLine("PASS: " + step);
+}
+
+internal static class NativeDirectory
+{
+    // SDK FILE_INFO_BY_HANDLE_CLASS: class 11 restarts the existing HANDLE,
+    // class 10 continues after the last returned entry. FILE_ID_BOTH_DIR_INFO
+    // has FileNameLength at byte 60 and its UTF-16 FileName at byte 104.
+    // https://learn.microsoft.com/windows/win32/api/minwinbase/ne-minwinbase-file_info_by_handle_class
+    // https://learn.microsoft.com/windows/win32/api/winbase/ns-winbase-file_id_both_dir_info
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFileW(string path, uint desiredAccess, uint shareMode,
+        IntPtr securityAttributes, uint creationDisposition, uint flagsAndAttributes, IntPtr templateFile);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetFileInformationByHandleEx(SafeFileHandle handle, int informationClass,
+        IntPtr buffer, uint bufferSize);
+
+    internal static SafeFileHandle Open(string path)
+    {
+        var handle = CreateFileW(path, 1 /* FILE_LIST_DIRECTORY */, 7 /* share read/write/delete */,
+            IntPtr.Zero, 3 /* OPEN_EXISTING */, 0x02000000 /* FILE_FLAG_BACKUP_SEMANTICS */, IntPtr.Zero);
+        if (!handle.IsInvalid) return handle;
+        var error = Marshal.GetLastWin32Error();
+        handle.Dispose();
+        throw new Win32Exception(error, "Could not open the smoke fixture directory");
+    }
+
+    internal static (HashSet<string> Names, int Pages) Enumerate(SafeFileHandle handle)
+    {
+        const int bufferSize = 512; // Deliberately small: exercise continuation, not just restart.
+        var buffer = Marshal.AllocHGlobal(bufferSize);
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        var informationClass = 11;
+        var pages = 0;
+        try
+        {
+            while (GetFileInformationByHandleEx(handle, informationClass, buffer, bufferSize))
+            {
+                if (++pages > 100) throw new InvalidOperationException("Directory enumeration did not terminate");
+                informationClass = 10;
+                var offset = 0;
+                while (true)
+                {
+                    if (offset > bufferSize - 104) throw new InvalidDataException("Directory entry exceeds its buffer");
+                    var entry = IntPtr.Add(buffer, offset);
+                    var next = Marshal.ReadInt32(entry);
+                    var nameBytes = Marshal.ReadInt32(entry, 60);
+                    if (nameBytes < 0 || (nameBytes & 1) != 0 || nameBytes > bufferSize - offset - 104)
+                        throw new InvalidDataException("Invalid directory entry name length");
+                    var name = Marshal.PtrToStringUni(IntPtr.Add(entry, 104), nameBytes / 2)!;
+                    if (name is not "." and not ".." && !names.Add(name))
+                        throw new InvalidDataException("Directory continuation returned a duplicate entry");
+                    if (next == 0) break;
+                    if (next < 104 || (next & 7) != 0 || next > bufferSize - offset)
+                        throw new InvalidDataException("Invalid directory entry continuation offset");
+                    offset += next;
+                }
+            }
+            var error = Marshal.GetLastWin32Error();
+            if (error != 18 /* ERROR_NO_MORE_FILES */)
+                throw new Win32Exception(error, "Could not enumerate the smoke fixture directory");
+            return (names, pages);
+        }
+        finally { Marshal.FreeHGlobal(buffer); }
+    }
 }

@@ -8,6 +8,8 @@ Run on Windows with .NET 10, installed WinFsp, Python, pyftpdlib and pyOpenSSL. 
 
 The harness first runs 800 commands on one borrowed FTPS session, crossing FluentFTP's default TLS transaction limit and verifying that no re-login occurs. It then checks real GnuTLS/FluentFTP transfers, mounted-file disk buffering, shared open handles, dirty rename and volume flush. It mounts an unused drive letter to exercise Windows create/write/flush/read/rename/delete through WinFsp and unmounts its own drive in `finally`.
 
+It also retains one Windows directory handle across multi-page enumeration, mounted rename, and delete/create operations. Restarting enumeration on that same handle must reflect each change; this catches stale handle snapshots that ordinary `Directory.GetFiles` calls on fresh handles miss.
+
 It also rejects two NOOP probes through the disposable fixture: the monitor must signal connection loss, reject the first reconnect probe, and wait for a positive reply before reporting recovery. Shutdown must not emit another connection-loss event.
 
 Cached and live search are exercised against actual FTPS directories: decorated completion markers are excluded while real release names containing COMPLETE or a bracketed group prefix remain searchable. A root search also verifies that a reused session's non-root working directory cannot redirect a configured `/` listing.
