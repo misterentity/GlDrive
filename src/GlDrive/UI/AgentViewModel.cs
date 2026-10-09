@@ -96,7 +96,7 @@ public sealed class AgentViewModel : INotifyPropertyChanged
         Suggestions.Clear();
         if (App.AuditTrail is null) return;
         foreach (var r in App.AuditTrail.ReadAll()
-                    .Where(r => !r.Applied && r.RejectionReason != "frozen" && !r.Undone)
+                    .Where(r => !r.Applied && r.RejectionReason is not ("frozen" or "malformed") && !r.Undone)
                     .Reverse().Take(500))
             Suggestions.Add(r);
     }

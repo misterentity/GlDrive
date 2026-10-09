@@ -14,6 +14,15 @@ public class DirectoryCache
     private readonly int _ttlSeconds;
     private readonly int _maxEntries;
 
+    // A LIST that started before a DELE/RNTO/STOR can finish after that change invalidated the
+    // directory; storing it would resurrect the old state for a whole TTL (release smoke
+    // "FAIL: WinFsp delete", 2026-10-07/09). Each invalidation stamps an epoch; Set refuses a
+    // listing fetched before the latest one. Guarded by _setLock.
+    internal const int MaxTrackedInvalidations = 4096;
+    private readonly Dictionary<string, long> _invalidatedAt = new();
+    private long _epoch;
+    private long _allInvalidatedAt;
+
     // Metrics
     private long _hits;
     private long _misses;
@@ -88,6 +97,28 @@ public class DirectoryCache
         return false;
     }
 
+    /// <summary>Call before fetching a listing; pass the result to <see cref="Set(string, FtpListItem[], long)"/>.</summary>
+    public long BeginFetch() => Interlocked.Read(ref _epoch);
+
+    internal int TrackedInvalidations { get { lock (_setLock) return _invalidatedAt.Count; } }
+
+    /// <summary>Stores a listing unless the directory was invalidated after <paramref name="fetchEpoch"/>.</summary>
+    public bool Set(string remotePath, FtpListItem[] items, long fetchEpoch)
+    {
+        var key = NormalizePath(remotePath);
+        lock (_setLock)
+        {
+            if (_allInvalidatedAt > fetchEpoch
+                || (_invalidatedAt.TryGetValue(key, out var at) && at > fetchEpoch))
+            {
+                Log.Debug("Cache: discarded listing of {Path} fetched before its invalidation", key);
+                return false;
+            }
+            Set(remotePath, items);
+            return true;
+        }
+    }
+
     public void Set(string remotePath, FtpListItem[] items)
     {
         var key = NormalizePath(remotePath);
@@ -109,7 +140,7 @@ public class DirectoryCache
     public void Invalidate(string remotePath)
     {
         var key = NormalizePath(remotePath);
-        _cache.TryRemove(key, out _);
+        InvalidateKey(key);
         Log.Debug("Cache invalidated: {Path}", key);
     }
 
@@ -117,14 +148,34 @@ public class DirectoryCache
     {
         var normalized = NormalizePath(remotePath);
         var idx = normalized.LastIndexOf('/');
-        var parent = idx <= 0 ? "/" : normalized[..idx];
-        _cache.TryRemove(parent, out _);
+        InvalidateKey(idx <= 0 ? "/" : normalized[..idx]);
     }
 
     public void Clear()
     {
-        _cache.Clear();
+        lock (_setLock)
+        {
+            _allInvalidatedAt = Interlocked.Increment(ref _epoch);
+            _invalidatedAt.Clear();
+            _cache.Clear();
+        }
         Log.Information("Directory cache cleared");
+    }
+
+    private void InvalidateKey(string key)
+    {
+        lock (_setLock)
+        {
+            var at = Interlocked.Increment(ref _epoch);
+            if (_invalidatedAt.Count >= MaxTrackedInvalidations && !_invalidatedAt.ContainsKey(key))
+            {
+                // Collapse to one global stamp: conservative, it only skips caching for fetches in flight.
+                _allInvalidatedAt = at;
+                _invalidatedAt.Clear();
+            }
+            _invalidatedAt[key] = at;
+            _cache.TryRemove(key, out _);
+        }
     }
 
     public FtpListItem? FindItem(string remotePath)

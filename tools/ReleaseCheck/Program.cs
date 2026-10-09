@@ -11,9 +11,13 @@ using GlDrive.Player;
 using GlDrive.Services;
 using GlDrive.Downloads;
 using GlDrive.Spread;
+using Serilog;
 
 // This harness only connects to the disposable loopback fixture, with an isolated trust store.
 var state = JsonDocument.Parse(File.ReadAllText(args[0])).RootElement;
+// Debug log beside the state file: a failed step must show what the app did, not just that it failed.
+Log.Logger = new LoggerConfiguration().MinimumLevel.Debug()
+    .WriteTo.File(Path.ChangeExtension(Path.GetFullPath(args[0]), ".app.log")).CreateLogger();
 var port = state.GetProperty("port").GetInt32();
 var root = state.GetProperty("root").GetString()!;
 var fingerprint = state.GetProperty("fingerprint").GetString()!;

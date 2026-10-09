@@ -81,4 +81,80 @@ public class DirectoryCacheReliabilityTests
         }
         finally { release.TrySetResult(); }
     }
+
+    // 2026-10-09 release smoke "FAIL: WinFsp delete" (also 2026-10-07): a LIST that started
+    // before DELE finished after the delete's invalidation and re-cached the deleted file, so
+    // File.Exists saw it for the whole TTL. A listing older than an invalidation must not be stored.
+    [Fact]
+    public void Listing_fetched_before_an_invalidation_is_not_stored()
+    {
+        var cache = new DirectoryCache();
+        var epoch = cache.BeginFetch();
+        var stale = new FtpListItem { Name = "deleted.bin" };
+
+        cache.InvalidateParent("/dir/deleted.bin");
+        Assert.False(cache.Set("/dir", [stale], epoch));
+
+        Assert.False(cache.TryGet("/dir", out _));
+        Assert.Null(cache.FindItem("/dir/deleted.bin"));
+    }
+
+    [Fact]
+    public void Direct_invalidation_and_clear_also_reject_older_listings()
+    {
+        var cache = new DirectoryCache();
+        var e1 = cache.BeginFetch();
+        cache.Invalidate("/dir");
+        Assert.False(cache.Set("/dir", [], e1));
+
+        var e2 = cache.BeginFetch();
+        cache.Clear();
+        Assert.False(cache.Set("/other", [], e2));
+    }
+
+    [Fact]
+    public void Listing_fetched_after_the_invalidation_is_stored()
+    {
+        var cache = new DirectoryCache();
+        cache.InvalidateParent("/dir/deleted.bin");
+        var epoch = cache.BeginFetch();
+
+        Assert.True(cache.Set("/dir", [new FtpListItem { Name = "kept.bin" }], epoch));
+        Assert.NotNull(cache.FindItem("/dir/kept.bin"));
+    }
+
+    [Fact]
+    public void Invalidation_of_a_different_directory_does_not_block_storing()
+    {
+        var cache = new DirectoryCache();
+        var epoch = cache.BeginFetch();
+        cache.InvalidateParent("/elsewhere/x.bin");
+
+        Assert.True(cache.Set("/dir", [], epoch));
+    }
+
+    [Fact]
+    public async Task Background_refresh_started_before_a_delete_does_not_resurrect_the_file()
+    {
+        var cache = new DirectoryCache(ttlSeconds: 0);
+        var fetchStarted = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        cache.BackgroundRefresh = _ => { fetchStarted.TrySetResult(cache.BeginFetch()); return Task.CompletedTask; };
+        cache.Set("/dir", [new FtpListItem { Name = "deleted.bin" }]);
+        Assert.True(cache.TryGet("/dir", out _)); // stale hit schedules a refresh
+        var refreshEpoch = await fetchStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        cache.InvalidateParent("/dir/deleted.bin");
+        Assert.False(cache.Set("/dir", [new FtpListItem { Name = "deleted.bin" }], refreshEpoch));
+    }
+
+    [Fact]
+    public void Invalidation_tracking_stays_bounded_and_conservative()
+    {
+        var cache = new DirectoryCache();
+        var epoch = cache.BeginFetch();
+        for (var i = 0; i < 10_000; i++) cache.Invalidate($"/d{i}");
+
+        Assert.InRange(cache.TrackedInvalidations, 0, DirectoryCache.MaxTrackedInvalidations);
+        Assert.False(cache.Set("/d1", [], epoch)); // pruning must never let an old listing through
+    }
 }

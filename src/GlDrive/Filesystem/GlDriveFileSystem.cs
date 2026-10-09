@@ -834,6 +834,7 @@ public override int CanDelete(
                 return cached;
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(_dirListTimeoutSeconds));
+            var fetchEpoch = _cache.BeginFetch();
             FtpListItem[] items;
             try
             {
@@ -845,7 +846,7 @@ public override int CanDelete(
                 throw new TimeoutException($"ListDirectory timed out: {remotePath}");
             }
             Log.Debug("Listed {Path}: {Count} entries", remotePath, items.Length);
-            _cache.Set(remotePath, items);
+            _cache.Set(remotePath, items, fetchEpoch);
             return items;
         }
         finally

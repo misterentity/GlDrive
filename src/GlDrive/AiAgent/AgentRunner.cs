@@ -323,7 +323,7 @@ public sealed class AgentRunner : IDisposable
                 $"\n\n---\n_Tokens: {outcome.InputTokens} in / {outcome.OutputTokens} out — est. ${outcome.EstimatedCostUsd:F3}_\n" +
                 $"_Applied: {applyReport.Applied} / Rejected: {applyReport.Rejected} ({(dryRun ? "DRY RUN" : "live")})_\n" +
                 $"_Suggestions: {suggestionReport.Applied + suggestionReport.Rejected}_\n";
-            try { File.WriteAllText(briefPath, (outcome.Result.BriefMarkdown ?? "# (no brief)") + footer); } catch { }
+            try { File.WriteAllText(briefPath, ComposeBrief(outcome.Result.BriefMarkdown, footer)); } catch { }
 
             _lastRunUtc = DateTime.UtcNow;
             _consecutiveFailedRuns = 0;
@@ -364,6 +364,13 @@ public sealed class AgentRunner : IDisposable
     }
 
     private string LastRunPath => Path.Combine(_aiDataRoot, "last-run.json");
+
+    /// <summary>BriefMarkdown defaults to "", so a model that omits it used to leave a blank
+    /// brief with no hint why (2026-10-08). Say so explicitly.</summary>
+    internal static string ComposeBrief(string? briefMarkdown, string footer)
+        => (string.IsNullOrWhiteSpace(briefMarkdown)
+            ? "# (model returned no brief)\n\nThe model's response contained no brief_markdown; see the counts below and ai-audit.jsonl."
+            : briefMarkdown) + footer;
 
     /// <summary>
     /// Parses the persisted last-run stamp back into a genuine UTC instant.

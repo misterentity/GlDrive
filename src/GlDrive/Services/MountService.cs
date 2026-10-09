@@ -128,8 +128,9 @@ public class MountService : IDisposable
             {
                 try
                 {
+                    var fetchEpoch = _cache.BeginFetch();
                     var items = await _ftp.ListDirectory(remotePath);
-                    _cache.Set(remotePath, items);
+                    _cache.Set(remotePath, items, fetchEpoch);
                 }
                 catch (Exception ex)
                 {
