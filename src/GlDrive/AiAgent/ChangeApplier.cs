@@ -52,7 +52,11 @@ public sealed class ChangeApplier
 
             string? reject = null;
 
-            if (_freeze.IsFrozen(change.Target) || _freeze.All.Any(entry =>
+            // Before the freeze check: an empty Target is the JSON Pointer root, an ancestor of
+            // every freeze, so malformed model output was audited as "frozen" (2026-10-05).
+            if (string.IsNullOrWhiteSpace(change.Category) || string.IsNullOrWhiteSpace(change.Target))
+                reject = "malformed";
+            else if (_freeze.IsFrozen(change.Target) || _freeze.All.Any(entry =>
                 {
                     var frozen = CanonicalizeTarget(entry.Path, config);
                     return JsonPointer.IsAncestorOrSelf(frozen, change.Target)

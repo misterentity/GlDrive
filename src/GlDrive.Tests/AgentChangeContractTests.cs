@@ -177,6 +177,59 @@ public class AgentChangeContractTests : IDisposable
         Assert.Equal("frozen", Assert.Single(rows).RejectionReason);
     }
 
+    // 2026-10-05: gpt-oss returned an all-empty change. An empty Target is the JSON Pointer ROOT,
+    // an ancestor of every freeze, so the audit called it "frozen" — blaming the user's freeze
+    // list for the model's malformed output.
+    [Theory]
+    [InlineData("", "")]
+    [InlineData("  ", "")]
+    [InlineData(AgentCategories.Priority, "")]
+    [InlineData("", "/servers/bb90928a/spread/sitePriority")]
+    public void Change_missing_category_or_target_is_rejected_as_malformed_not_frozen(string category, string target)
+    {
+        var cfg = Config();
+        var freeze = new FreezeStore(_dir);
+        freeze.Freeze("/servers/bb90928a/spread/sectionMappings");
+        var rows = new List<AuditRow>();
+        var applier = new ChangeApplier(new IChangeValidator[] { new PriorityValidator() }, freeze, new AuditTrail(_dir));
+
+        var report = applier.Apply(new[] { Change(category, target, "High") },
+            cfg, cfg.Agent, "run1", dryRun: false, rows.Add, configOnly: true);
+
+        Assert.Equal("malformed", Assert.Single(rows).RejectionReason);
+        Assert.Equal(1, report.RejectionByReason.GetValueOrDefault("malformed"));
+    }
+
+    [Fact]
+    public void Null_category_and_target_are_rejected_as_malformed()
+    {
+        var cfg = Config();
+        var (applier, rows) = Applier();
+
+        applier.Apply(new[] { new AgentChange { Category = null!, Target = null!, Confidence = 0.95 } },
+            cfg, cfg.Agent, "run1", dryRun: false, rows.Add, configOnly: true);
+
+        Assert.Equal("malformed", Assert.Single(rows).RejectionReason);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("  \n")]
+    public void Brief_without_model_markdown_says_so(string? markdown)
+    {
+        var brief = AgentRunner.ComposeBrief(markdown, "\n---\nfooter");
+
+        Assert.StartsWith("# (model returned no brief)", brief);
+        Assert.EndsWith("footer", brief);
+    }
+
+    [Fact]
+    public void Brief_with_model_markdown_is_kept_verbatim()
+    {
+        Assert.Equal("## Summary\n- ok\n---\nf", AgentRunner.ComposeBrief("## Summary\n- ok", "\n---\nf"));
+    }
+
     // ---- 3. A field-level trigger patch is the natural JSON Pointer shape ----
 
     [Fact]
