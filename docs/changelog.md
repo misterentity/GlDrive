@@ -12,6 +12,12 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.153 — follow a mid-race source relocation immediately (2026-10-10)
+
+- When a source moves a release mid-race (`/incoming/x` → `/recent/x`), probe the watch-path location first and reuse one connection for the probe, instead of 15 sequential section-dir probes. Measured cost before the fix: 17–19 seconds per relocation.
+- A 550 while the old directory still lists (cross-filesystem move in progress) now follows the release when it already exists at the new location, instead of being called transient and failing every remaining file until the next scan.
+- See the [release report](releases/v3.10.153.md).
+
 ## v3.10.152 — refresh restarted directory listings on open handles (2026-10-09)
 
 - Reload a directory handle's listing when Windows restarts enumeration. Previously the handle retained its first snapshot even after the shared cache was invalidated, so deleted files could remain visible and newly created files could stay absent until the handle closed.
