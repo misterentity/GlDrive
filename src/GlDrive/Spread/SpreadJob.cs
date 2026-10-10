@@ -2855,26 +2855,33 @@ public class SpreadJob : IDisposable
             var srcName = _serverConfigs.TryGetValue(srcId, out var sc0) ? sc0.Name : srcId;
 
             // 1. Confirming re-probe: does the source still have its release dir?
-            if (await SourceStillHasRelease(srcId, srcPath, ct))
-            {
-                Log.Information("Spread: source {Src} 550'd but release dir still present — transient, not migrating",
-                    srcName);
-                return;
-            }
+            var oldDirPresent = await SourceStillHasRelease(srcId, srcPath, ct);
 
             // 1b. glftpd MOVES a finished release between sections (/incoming/x -> /recent/x)
             //     without deleting it. That is a relocation, not a loss: probe the same
             //     site's other candidate dirs before writing the source off. Without this
             //     the site was excluded from the alternate search below and the race was
             //     abandoned 0/22 with the release one directory over (v3.10.100).
+            //     Probed even when the old dir still lists: a cross-filesystem move deletes
+            //     the files before the dir, so RETR 550s while DirectoryExists is still true.
+            //     Calling that "transient" kept RETRing vanished files until the next scan
+            //     saw an empty listing (Take.Charge.of.My.Heart.S01E08, 2026-10-09: 5 dead
+            //     transfers, 25s stall).
             var relocated = await FindRelocatedSourcePath(srcId, srcPath, ct);
             if (relocated != null)
             {
                 _extraSourcePaths[srcId] = relocated;    // honoured by ScanSites AND ResolveSourcePath
                 _lastSourceScanTime = DateTime.MinValue; // re-LIST the source now, not in 20s
                 _forceScan = true;
-                Log.Warning("Spread: source {Src} relocated the release to {Path} — following ({Release})",
-                    srcName, relocated, ReleaseName);
+                Log.Warning("Spread: source {Src} relocated the release to {Path}{MidMove} — following ({Release})",
+                    srcName, relocated, oldDirPresent ? " (mid-move: old dir still listed)" : "", ReleaseName);
+                return;
+            }
+
+            if (oldDirPresent)
+            {
+                Log.Information("Spread: source {Src} 550'd but release dir still present — transient, not migrating",
+                    srcName);
                 return;
             }
 
@@ -3012,22 +3019,41 @@ public class SpreadJob : IDisposable
         else if (_pools.TryGetValue(serverId, out var spreadPool)) pool = spreadPool;
         if (pool == null) return null;
 
-        foreach (var candidate in RelocationCandidatePaths(config, Section, ReleaseName, currentPath))
+        // One connection serves every candidate; a probe that throws poisons it and the
+        // next candidate borrows a fresh one.
+        PooledConnection? conn = null;
+        try
         {
-            try
+            foreach (var candidate in RelocationCandidatePaths(config, Section, ReleaseName, currentPath))
             {
-                using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                borrowCts.CancelAfter(TimeSpan.FromSeconds(15));
-                await using var conn = await pool.Borrow(borrowCts.Token);
-                if (await conn.Client.DirectoryExists(candidate, ct)) return candidate;
+                try
+                {
+                    if (conn == null)
+                    {
+                        using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                        borrowCts.CancelAfter(TimeSpan.FromSeconds(15));
+                        conn = await pool.Borrow(borrowCts.Token);
+                    }
+                    if (await conn.Client.DirectoryExists(candidate, ct)) return candidate;
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (Exception ex)
+                {
+                    Log.Debug(ex, "Spread: relocation probe failed on {Server} at {Path}", config.Name, candidate);
+                    if (conn != null)
+                    {
+                        conn.Poison($"relocation probe failed: {ex.GetType().Name}");
+                        await conn.DisposeAsync();
+                        conn = null;
+                    }
+                }
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception ex)
-            {
-                Log.Debug(ex, "Spread: relocation probe failed on {Server} at {Path}", config.Name, candidate);
-            }
+            return null;
         }
-        return null;
+        finally
+        {
+            if (conn != null) await conn.DisposeAsync();
+        }
     }
 
     /// <summary>Every base dir a site may hold a release for <paramref name="section"/>:
@@ -3048,15 +3074,21 @@ public class SpreadJob : IDisposable
         return paths.Distinct(StringComparer.Ordinal).ToList();
     }
 
-    /// <summary>Full release paths to probe for a relocation, excluding the dir already
-    /// confirmed gone.</summary>
+    /// <summary>Full release paths to probe for a relocation, excluding the dir the release
+    /// 550'd at. Watch-path candidates (/recent/&lt;section&gt;) come first: that is where a
+    /// mid-race move lands, and probing all 15 superbnc section dirs ahead of it took
+    /// ~18s per relocation (2026-10-07..09).</summary>
     internal static List<string> RelocationCandidatePaths(
         ServerConfig config, string section, string releaseName, string currentPath)
     {
         var current = currentPath.TrimEnd('/');
+        var watch = config.Notifications.WatchPath?.TrimEnd('/');
+        bool UnderWatch(string p) => !string.IsNullOrEmpty(watch) &&
+            p.StartsWith(watch + "/", StringComparison.Ordinal);
         return CandidateBasePaths(config, section)
             .Select(b => b + "/" + releaseName)
             .Where(p => !string.Equals(p, current, StringComparison.Ordinal))
+            .OrderBy(p => UnderWatch(p) ? 0 : 1) // stable: section order kept within each group
             .ToList();
     }
 

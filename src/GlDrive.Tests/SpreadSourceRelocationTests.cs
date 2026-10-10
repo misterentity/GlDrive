@@ -57,8 +57,58 @@ public sealed class SpreadSourceRelocationTests
             Site(), "tv-hd", "Some.Show.S01E12-GRP", "/incoming/tv-hd/Some.Show.S01E12-GRP");
 
         Assert.Equal(
-            new[] { "/incoming/x264/Some.Show.S01E12-GRP", "/recent/tv-hd/Some.Show.S01E12-GRP" },
+            new[] { "/recent/tv-hd/Some.Show.S01E12-GRP", "/incoming/x264/Some.Show.S01E12-GRP" },
             paths);
+    }
+
+    [Fact]
+    public void Relocation_candidates_probe_the_watch_path_before_every_section_dir()
+    {
+        // superbnc has 15 sections; with /recent/tv-hd probed last, each relocation
+        // sat ~18s behind 14 dead DirectoryExists round trips (2026-10-07..09).
+        var cfg = new ServerConfig();
+        for (var i = 0; i < 14; i++) cfg.SpreadSite.Sections[$"S{i}"] = $"/incoming/s{i}";
+        cfg.SpreadSite.Sections["TV"] = "/incoming/tv-hd";
+        cfg.Notifications.WatchPath = "/recent";
+
+        var paths = SpreadJob.RelocationCandidatePaths(
+            cfg, "tv-hd", "Rel-GRP", "/incoming/tv-hd/Rel-GRP");
+
+        Assert.Equal("/recent/tv-hd/Rel-GRP", paths[0]);
+        Assert.Equal(15, paths.Count);
+        Assert.Equal("/incoming/s0/Rel-GRP", paths[1]);
+        Assert.Equal("/incoming/s13/Rel-GRP", paths[^1]);
+    }
+
+    [Fact]
+    public void Relocation_candidates_keep_section_order_without_a_watch_path()
+    {
+        var cfg = Site();
+        cfg.Notifications.WatchPath = "";
+
+        var paths = SpreadJob.RelocationCandidatePaths(
+            cfg, "tv-hd", "Rel-GRP", "/elsewhere/Rel-GRP");
+
+        Assert.Equal(new[] { "/incoming/tv-hd/Rel-GRP", "/incoming/x264/Rel-GRP" }, paths);
+    }
+
+    [Fact]
+    public void Old_dir_still_listed_does_not_skip_the_relocation_probe()
+    {
+        // A cross-filesystem move deletes files before the dir: RETR 550 while
+        // DirectoryExists(old) is still true. The "transient" verdict must come only
+        // AFTER the relocation probe found nothing.
+        var handler = Source.IndexOf("private async Task HandleSourceMigration(", StringComparison.Ordinal);
+        var end = Source.IndexOf("private async Task<bool> SourceStillHasRelease", handler, StringComparison.Ordinal);
+        var body = Source[handler..end];
+
+        var stillHas = body.IndexOf("await SourceStillHasRelease", StringComparison.Ordinal);
+        var probe = body.IndexOf("await FindRelocatedSourcePath(srcId", StringComparison.Ordinal);
+        var transient = body.IndexOf("release dir still present — transient", StringComparison.Ordinal);
+
+        Assert.True(stillHas >= 0 && probe > stillHas, "relocation probe must follow the old-dir check");
+        Assert.True(transient > probe, "transient verdict must not short-circuit the relocation probe");
+        Assert.DoesNotContain("if (await SourceStillHasRelease", body);
     }
 
     [Theory]
