@@ -6,7 +6,11 @@ Run on Windows with .NET 10, installed WinFsp, Python, pyftpdlib and pyOpenSSL. 
 2. Run `dotnet run --project tools/ReleaseCheck -c Release -- <temporary-state-json-path>`.
 3. Stop the fixture process and remove its directory (the `root` in the state JSON) after verifying that it is under the system temporary directory.
 
-The harness first runs 800 commands on one borrowed FTPS session, crossing FluentFTP's default TLS transaction limit and verifying that no re-login occurs. It then checks real GnuTLS/FluentFTP transfers, mounted-file disk buffering, shared open handles, dirty rename and volume flush. It mounts an unused drive letter to exercise Windows create/write/flush/read/rename/delete through WinFsp and unmounts its own drive in `finally`.
+The harness first checks source relocation through real FTPS scans, directory probes and downloads. It establishes ownership, physically moves a payload while retaining the old release directory, and checks both a rejected RETR and an empty LIST. The watch path must win over a populated section decoy; the next scan must restore ownership and a file observed before the move must download intact from its new path. Missing watch and section candidates must preserve the same reusable pooled connection without a new login. To run just these checks, append `--relocation-only` to the harness command.
+
+These relocation checks seed the source role and original path normally established by race discovery, then invoke the actual scanner and migration handler. They cover the scan/relocation/download boundary, not a complete server-to-server FXP race. The same harness compiled against the published v3.10.152 application fails the retained-directory relocation assertion; v3.10.154 passes.
+
+The full harness also runs 800 commands on one borrowed FTPS session, crossing FluentFTP's default TLS transaction limit and verifying that no re-login occurs. It checks real GnuTLS/FluentFTP transfers, mounted-file disk buffering, shared open handles, dirty rename and volume flush. It mounts an unused drive letter to exercise Windows create/write/flush/read/rename/delete through WinFsp and unmounts its own drive in `finally`.
 
 It also retains one Windows directory handle across multi-page enumeration, mounted rename, and delete/create operations. Restarting enumeration on that same handle must reflect each change; this catches stale handle snapshots that ordinary `Directory.GetFiles` calls on fresh handles miss.
 
