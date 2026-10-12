@@ -32,6 +32,14 @@ await using var pool = new FtpConnectionPool(factory, 2);
 using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(90));
 await pool.Initialize(deadline.Token);
 var ftp = new FtpOperations(pool);
+var remoteRoot = "/check-" + Guid.NewGuid().ToString("N");
+await ftp.CreateDirectory(remoteRoot, deadline.Token);
+await CheckSourceRelocation(factory, root, remoteRoot, deadline.Token);
+if (args.Contains("--relocation-only", StringComparer.Ordinal))
+{
+    Console.WriteLine("PASS: local native FTPS source-relocation verification complete");
+    return;
+}
 // Stats must not turn an unreachable data endpoint into a six-hour ACL denial.
 // Wire only the pool/state: no mount, downloads, timers or production configuration.
 using (var statsService = new MountService(config, new DownloadConfig(), certs))
@@ -74,8 +82,6 @@ await using (var connection = await pool.Borrow(deadline.Token))
     Check(client.Status.ConnectCount == connectCount,
         "800 native FTPS commands survive the TLS transaction limit without re-login");
 }
-var remoteRoot = "/check-" + Guid.NewGuid().ToString("N");
-await ftp.CreateDirectory(remoteRoot, deadline.Token);
 // The sole upload-capable site already holds the release; the other site is
 // download-only and does not have it. Exercise real discovery and terminal state.
 const string existingRelease = "Already.Present.S01E01.1080p-GRP";
@@ -285,6 +291,137 @@ static void Check(bool success, string step)
     if (!success) throw new InvalidOperationException("FAIL: " + step);
     Console.WriteLine("PASS: " + step);
 }
+
+static async Task CheckSourceRelocation(FtpClientFactory factory, string fixtureRoot,
+    string remoteRoot, CancellationToken ct)
+{
+    // Drive the real scanner and migration handler at a deterministic mid-race
+    // boundary. Only the source role/path normally set by RunAsync are seeded;
+    // ownership, directory probes and payload transfer all use native FTPS.
+    // This fixture does not implement glftpd's server-to-server FXP extension.
+    await using var sourcePool = new FtpConnectionPool(factory, 1);
+    await sourcePool.Initialize(ct);
+    var sourceFtp = new FtpOperations(sourcePool);
+    FluentFTP.AsyncFtpClient originalClient;
+    int connectCount;
+    await using (var connection = await sourcePool.Borrow(ct))
+    {
+        originalClient = connection.Client;
+        connectCount = originalClient.Status.ConnectCount;
+    }
+
+    const string fileName = "payload.bin";
+    var payload = new byte[8192];
+    new Random(153).NextBytes(payload);
+    foreach (var trigger in new[] { "retr", "empty-list" })
+    {
+        var releaseName = $"Relocated.{trigger}.S01E01.1080p-GRP";
+        var source = new ServerConfig { Id = "relocation-source", Name = "Relocating source" };
+        var basePath = remoteRoot + "/relocation-" + trigger;
+        source.SpreadSite.Sections["TV_HD"] = basePath + "/incoming";
+        source.SpreadSite.Sections["ARCHIVE"] = basePath + "/archive";
+        source.Notifications.WatchPath = basePath + "/recent";
+        var oldPath = source.SpreadSite.Sections["TV_HD"] + "/" + releaseName;
+        var newPath = source.Notifications.WatchPath + "/tv-hd/" + releaseName;
+        var decoyPath = source.SpreadSite.Sections["ARCHIVE"] + "/" + releaseName;
+        await sourceFtp.CreateDirectory(oldPath, ct);
+        await sourceFtp.CreateDirectory(newPath, ct);
+        await sourceFtp.CreateDirectory(decoyPath, ct);
+        await sourceFtp.UploadFile(oldPath + "/" + fileName, payload, ct);
+        await sourceFtp.UploadFile(decoyPath + "/" + fileName, [99, 98, 97], ct);
+
+        using var job = new SpreadJob("TV_HD", releaseName, SpreadMode.Race, new SpreadConfig(),
+            new() { [source.Id] = sourcePool }, new() { [source.Id] = sourcePool },
+            new() { [source.Id] = source }, new SpeedTracker(), new SkiplistEvaluator());
+        var paths = new Dictionary<string, string> { [source.Id] = oldPath };
+        typeof(SpreadJob).GetField("_sitePathsRef", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(job, paths);
+        JobField<HashSet<string>>(job, "_sourceServersField").Add(source.Id);
+        await JobTask(job, "ScanSites", paths, ct);
+        Check(job.Sites[source.Id].FilesOwned == 1, $"{trigger}: native scan establishes source ownership");
+        var observedFile = JobField<Dictionary<string, SpreadFileInfo>>(job, "_fileInfos")[fileName];
+
+        // Model a cross-filesystem glftpd move: the contents have moved, but the
+        // original release directory remains visible until its later cleanup.
+        string LocalPath(string remote) => Path.Combine(fixtureRoot, "data", remote.TrimStart('/'));
+        File.Move(LocalPath(oldPath + "/" + fileName), LocalPath(newPath + "/" + fileName));
+        await using (var connection = await sourcePool.Borrow(ct))
+        {
+            Check(await connection.Client.DirectoryExists(oldPath, ct)
+                && !await connection.Client.FileExists(oldPath + "/" + fileName, ct),
+                $"{trigger}: native FTPS sees the old directory after its payload moved");
+            if (trigger == "retr")
+            {
+                var rejection = await connection.Client.Execute("RETR " + oldPath + "/" + fileName, ct);
+                Check(rejection.Code == "550", "retr: native RETR rejects the vanished source file");
+            }
+        }
+
+        if (trigger == "retr")
+            await JobTask(job, "HandleSourceMigration", source.Id, ct);
+        else
+            await JobTask(job, "ScanSites", paths, ct); // Empty LIST must initiate the migration itself.
+
+        var overrides = JobField<System.Collections.Concurrent.ConcurrentDictionary<string, string>>(
+            job, "_extraSourcePaths");
+        // ScanSites starts the handler asynchronously. Bound the wait and observe
+        // its single-flight completion before reading the resulting job state.
+        var until = DateTime.UtcNow.AddSeconds(5);
+        while ((!overrides.ContainsKey(source.Id) || JobField<int>(job, "_failoverInFlight") != 0)
+            && DateTime.UtcNow < until)
+            await Task.Delay(20, ct);
+        Check(overrides.TryGetValue(source.Id, out var relocated) && relocated == newPath,
+            $"{trigger}: migration follows watch path ahead of a populated section decoy while old directory exists");
+        Check(!JobField<HashSet<string>>(job, "_sourceMigratedAway").Contains(source.Id)
+            && !JobField<HashSet<string>>(job, "_sourceMigrationPending").Contains(source.Id)
+            && JobField<bool>(job, "_forceScan"),
+            $"{trigger}: relocation preserves the source, clears pending state and requests an immediate scan");
+        var resolved = (string)typeof(SpreadJob).GetMethod("ResolveSourcePath", BindingFlags.Static | BindingFlags.NonPublic)!
+            .Invoke(null, [relocated, observedFile])!;
+        Check(resolved == newPath + "/" + fileName,
+            $"{trigger}: a file observed before the move resolves to the relocated RETR path");
+        await JobTask(job, "ScanSites", paths, ct);
+        Check(job.Sites[source.Id].FilesOwned == 1 && job.Sites[source.Id].FilesTotal == 1,
+            $"{trigger}: native rescan restores ownership from the relocated directory");
+        using var downloaded = new MemoryStream();
+        await sourceFtp.DownloadToStream(resolved, downloaded, ct);
+        Check(downloaded.ToArray().SequenceEqual(payload), $"{trigger}: relocated native FTPS download preserves every byte");
+    }
+
+    // Failed directory probes are normal negative replies. Search through several
+    // misses and verify the original pooled session remains usable without login.
+    var fallback = new ServerConfig { Id = "fallback-source", Name = "Fallback source" };
+    var fallbackRoot = remoteRoot + "/relocation-fallback";
+    fallback.Notifications.WatchPath = fallbackRoot + "/recent";
+    fallback.SpreadSite.Sections["TV_HD"] = fallbackRoot + "/incoming";
+    fallback.SpreadSite.Sections["MISSING_ONE"] = fallbackRoot + "/missing-one";
+    fallback.SpreadSite.Sections["MISSING_TWO"] = fallbackRoot + "/missing-two";
+    fallback.SpreadSite.Sections["ARCHIVE"] = fallbackRoot + "/archive";
+    const string fallbackRelease = "Fallback.S01E01.1080p-GRP";
+    var fallbackPath = fallback.SpreadSite.Sections["ARCHIVE"] + "/" + fallbackRelease;
+    await sourceFtp.CreateDirectory(fallbackPath, ct);
+    using (var job = new SpreadJob("TV_HD", fallbackRelease, SpreadMode.Race, new SpreadConfig(),
+        new() { [fallback.Id] = sourcePool }, new() { [fallback.Id] = sourcePool },
+        new() { [fallback.Id] = fallback }, new SpeedTracker(), new SkiplistEvaluator()))
+    {
+        var task = (Task<string?>)typeof(SpreadJob).GetMethod("FindRelocatedSourcePath", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(job, [fallback.Id, fallback.SpreadSite.Sections["TV_HD"] + "/" + fallbackRelease, ct])!;
+        Check(await task == fallbackPath, "native relocation falls back through missing watch and section directories");
+    }
+    await using (var connection = await sourcePool.Borrow(ct))
+    {
+        var reply = await connection.Client.Execute("NOOP", ct);
+        Check(ReferenceEquals(connection.Client, originalClient)
+            && connection.Client.Status.ConnectCount == connectCount && reply.Code == "200",
+            "relocation scans, negative probes and downloads preserve one reusable native FTPS session");
+    }
+}
+
+static T JobField<T>(SpreadJob job, string name) =>
+    (T)typeof(SpreadJob).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(job)!;
+
+static Task JobTask(SpreadJob job, string name, params object[] arguments) =>
+    (Task)typeof(SpreadJob).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(job, arguments)!;
 
 internal static class NativeDirectory
 {
