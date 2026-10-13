@@ -12,6 +12,12 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.155 — verify growing-source recovery and production health (2026-10-13)
+
+- Add regressions through scan-result processing, transfer selection and progress accounting for a source file that grows after an earlier delivery. A smaller destination must become eligible for transfer again and regain ownership only at the full observed size.
+- Review retained logs, validate the build and native/UI smoke tests, and verify the signed release and installed application. No new application defect was established; application behavior is unchanged apart from the release version.
+- See the [release report](releases/v3.10.155.md) for findings, validation and remaining external service/storage conditions.
+
 ## v3.10.154 — verify source relocation over native FTPS (2026-10-12)
 
 - Add native FTPS regression coverage for source relocation, including a move while the old directory remains present and fallback probing over a reused connection.
