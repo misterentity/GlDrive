@@ -435,7 +435,8 @@ public class PlayerViewModel : INotifyPropertyChanged, IDisposable
             _torrentStream = new TorrentStreamService(
                 _streamServer.LibraryPath,
                 _config.Torrent.VpnAdapterName,
-                new TorrentContentPolicy(_config.Torrent));
+                new TorrentContentPolicy(_config.Torrent),
+                TorrentStreamService.DownloadRateLimit(_config.Downloads));
 
             StartRendererDiscovery();
 
