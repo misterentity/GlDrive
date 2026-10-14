@@ -436,7 +436,22 @@ public class MountService : IDisposable
         try
         {
             using var statsCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            await using var conn = await _pool.Borrow(statsCts.Token);
+            PooledConnection borrowed;
+            try
+            {
+                borrowed = await _pool.Borrow(statsCts.Token);
+            }
+            catch (OperationCanceledException) when (statsCts.IsCancellationRequested)
+            {
+                // Background stats may wait behind downloads on the sole available login.
+                // No command has started, so retain the last snapshot/cache and try next tick.
+                // Keep this catch scoped to Borrow: a deadline during SITE or LIST can leave
+                // unread replies and must still poison the lease and report the real failure.
+                Log.Information("RefreshStatsAsync skipped for {Server}: no connection available within 10s",
+                    _serverConfig.Name);
+                return;
+            }
+            await using var conn = borrowed;
             SiteStats? best = null;
             bool connDied = false;
             // Trailer-only sites (e.g. SYN): every SITE candidate is ACL-denied but the

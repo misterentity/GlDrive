@@ -12,6 +12,17 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.11.7 — statistics refresh contention and release verification (2026-10-14)
+
+- Treat a statistics refresh's connection-borrow deadline as a normal skip,
+  preserving the last statistics and retrying later. Command and listing failures
+  still log warnings and quarantine affected connections.
+- Add loopback regressions for an occupied pool, recovery after the lease returns,
+  and genuine command timeout/transport failures.
+- Audit production logs and validate the recent pool-remount, missing-drive and
+  updater-backup fixes. See the [release report](releases/v3.11.7.md) for build,
+  regression, smoke, signed deployment and production-health evidence.
+
 ## v3.11.1 — STREAM MATRIX UI for multi-stream downloads (2026-10-14)
 
 - **Features**
