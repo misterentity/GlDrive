@@ -12,6 +12,15 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.11.8 — watched archive recovery after restart (2026-10-14)
+
+- Register persisted skipped archives with the live recovery ledger, so newly
+  arriving or resized volumes clear stale duplicate/retry state after a restart.
+  Unchanged and unreadable archives stay parked.
+- Add regressions through the actual persisted-skip and watcher paths, including
+  new-volume arrival, file growth and periodic-sweep registration. See the
+  [release report](releases/v3.11.8.md) for validation and deployment results.
+
 ## v3.11.7 — statistics refresh contention and release verification (2026-10-14)
 
 - Treat a statistics refresh's connection-borrow deadline as a normal skip,
