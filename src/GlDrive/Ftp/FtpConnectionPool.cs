@@ -481,6 +481,7 @@ public class FtpConnectionPool : IAsyncDisposable
     /// </summary>
     private async Task<AsyncFtpClient?> WaitForReturnedConnectionAsync(bool parked, long freedGeneration, CancellationToken ct)
     {
+        Task<bool>? readable = null; // one channel waiter for the whole wait, not one per re-check
         while (true)
         {
             var freed = Volatile.Read(ref _slotFreed).Task; // snapshot BEFORE checking state
@@ -491,7 +492,7 @@ public class FtpConnectionPool : IAsyncDisposable
                     : Interlocked.Read(ref _freedGeneration) != freedGeneration && Volatile.Read(ref _created) < EffectiveMaxSize)
                 return null;
 
-            var readable = _pool.Reader.WaitToReadAsync(ct).AsTask();
+            if (readable == null || readable.IsCompleted) readable = _pool.Reader.WaitToReadAsync(ct).AsTask();
             var woke = await Task.WhenAny(readable, freed, Task.Delay(SlotRecheckInterval, ct));
             if (woke == readable && !await readable) throw new ChannelClosedException();
             ct.ThrowIfCancellationRequested();
