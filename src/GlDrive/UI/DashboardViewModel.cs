@@ -1539,6 +1539,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                 vm.ProgressText = string.IsNullOrEmpty(fileName)
                     ? $"{pctInt}%"
                     : $"{pctInt}% — {fileName}";
+                vm.StreamsText = GlDrive.Downloads.Segmented.LaneSummary.Format(progress.Lanes);
             }
         });
     }
@@ -2727,6 +2728,20 @@ public class DownloadItemVm : INotifyPropertyChanged
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SpeedDisplay)));
         }
     }
+
+    private string _streamsText = "";
+    public string StreamsText
+    {
+        get => _streamsText;
+        set
+        {
+            if (_streamsText == value) return;
+            _streamsText = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StreamsText)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasStreams)));
+        }
+    }
+    public bool HasStreams => !string.IsNullOrEmpty(_streamsText);
 
     public event PropertyChangedEventHandler? PropertyChanged;
 }

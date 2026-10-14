@@ -341,6 +341,27 @@ public class TrayViewModel : INotifyPropertyChanged
 
     public ICommand ToggleAgentEnabledCommand => new RelayCommand(() => AgentEnabled = !AgentEnabled);
 
+    // ── Downloads slow mode ───────────────────────────────────────────────
+
+    public bool SlowMode
+    {
+        get => _config.Downloads.MultiStream.SlowMode;
+        set
+        {
+            _config.Downloads.MultiStream.SlowMode = value;
+            GlDrive.Config.ConfigManager.Save(_config);
+            Log.Information("Downloads slow mode {State}", value ? "on" : "off");
+            OnPropertyChanged();
+        }
+    }
+
+    public string SlowModeHeader => $"Slow mode ({FormatKbps(_config.Downloads.MultiStream.SlowModeKbps)})";
+
+    public ICommand ToggleSlowModeCommand => new RelayCommand(() => SlowMode = !SlowMode);
+
+    internal static string FormatKbps(int kbps) =>
+        kbps >= 1024 ? $"{kbps / 1024.0:0.#} MB/s" : $"{kbps} KB/s";
+
     public ICommand AgentRunNowCommand => new RelayCommand(async () =>
     {
         if (App.AgentRunner != null) await App.AgentRunner.RunNowAsync();

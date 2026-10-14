@@ -12,6 +12,8 @@ namespace GlDrive.UI;
 
 public static class TrayIconSetup
 {
+    private const string SlowModeTag = "SlowMode";
+
     public static void Configure(TaskbarIcon taskbarIcon, TrayViewModel vm)
     {
         var version = UpdateChecker.CurrentVersion;
@@ -22,6 +24,17 @@ public static class TrayIconSetup
         var menu = new ContextMenu();
         BuildMenu(menu, vm);
         taskbarIcon.ContextMenu = menu;
+
+        // Settings can change slow mode or its cap without rebuilding the menu.
+        menu.Opened += (_, _) =>
+        {
+            foreach (var item in menu.Items.OfType<MenuItem>())
+            {
+                if (!Equals(item.Tag, SlowModeTag)) continue;
+                item.Header = vm.SlowModeHeader;
+                item.IsChecked = vm.SlowMode;
+            }
+        };
 
         // Left-click opens dashboard
         taskbarIcon.TrayLeftMouseDown += (_, _) => vm.DashboardCommand.Execute(null);
@@ -218,6 +231,16 @@ public static class TrayIconSetup
         dashboard.Click += (_, _) => vm.DashboardCommand.Execute(null);
         dashboard.IsEnabled = vm.ServerManager.GetMountedServers().Any(s => s.CurrentState == MountState.Connected);
         menu.Items.Add(dashboard);
+
+        var slowMode = new MenuItem
+        {
+            Header = vm.SlowModeHeader,
+            IsCheckable = true,
+            IsChecked = vm.SlowMode,
+            Tag = SlowModeTag
+        };
+        slowMode.Click += (_, __) => vm.ToggleSlowModeCommand.Execute(null);
+        menu.Items.Add(slowMode);
 
         menu.Items.Add(new Separator());
 
