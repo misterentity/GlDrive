@@ -35,6 +35,7 @@ public sealed class ControlRequest
     private readonly CancellationToken _ct;
 
     public string Path { get; }
+    public CancellationToken Cancellation => _ct;
 
     private ControlRequest(HttpListenerContext? ctx, string path,
         IReadOnlyDictionary<string, string> parameters, NameValueCollection query, CancellationToken ct = default)

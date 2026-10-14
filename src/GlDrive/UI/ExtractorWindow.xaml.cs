@@ -411,6 +411,9 @@ public partial class ExtractorWindow : Window
     // ── Extraction ──
 
     private async void Extract_Click(object sender, RoutedEventArgs e)
+        => await ExtractAllAsync();
+
+    private async Task ExtractAllAsync()
     {
         if (_extracting)
         {
@@ -1187,7 +1190,7 @@ public partial class ExtractorWindow : Window
         }
     }
 
-    private void SaveSettings()
+    private void SaveSettings(bool throwOnError = false)
     {
         try
         {
@@ -1218,6 +1221,7 @@ public partial class ExtractorWindow : Window
         catch (Exception ex)
         {
             Log.Warning(ex, "Failed to save extractor settings");
+            if (throwOnError) throw;
         }
     }
 

@@ -450,6 +450,19 @@ public class ServerManager : IDisposable
         return service;
     }
 
+    /// <summary>Start IRC independently of an FTP mount, using the normal announce wiring.</summary>
+    public Task StartIrc(string serverId)
+    {
+        var server = _config.Servers.FirstOrDefault(s => s.Id == serverId)
+            ?? throw new KeyNotFoundException($"Unknown server: {serverId}");
+        if (!server.Enabled || !server.Irc.Enabled || string.IsNullOrWhiteSpace(server.Irc.Host))
+            throw new InvalidOperationException("Enable the server and configure IRC before starting it.");
+        return StartIrcService(server);
+    }
+
+    /// <summary>Stop IRC and dispose announce listeners and encrypted PM persistence.</summary>
+    public Task StopIrc(string serverId) => StopIrcService(serverId);
+
     public IDictionary<string, IrcService> GetIrcServices() => _ircServices;
 
     private string ComputeRuntimeConfigFingerprint(ServerConfig server)

@@ -295,6 +295,8 @@ public partial class SettingsWindow : Window
 
         ConfigManager.Save(_config);
 
+        if (Application.Current is App app) app.RefreshControlApi(_config);
+
         // Apply log level change at runtime
         SerilogSetup.SetLevel(_config.Logging.Level);
 

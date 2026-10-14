@@ -6,6 +6,7 @@ using GlDrive.Config;
 using GlDrive.Downloads;
 using GlDrive.Logging;
 using GlDrive.Services;
+using GlDrive.Services.Automation;
 using GlDrive.Tls;
 using GlDrive.UI;
 using Serilog;
@@ -23,6 +24,7 @@ public partial class App
     private H.NotifyIcon.TaskbarIcon? _taskbarIcon;
     private GlDrive.Services.HeartbeatMonitor? _heartbeat;
     private GlDrive.Services.ControlApi? _controlApi;
+    private AutomationRegistry? _automation;
     private bool _ownsCrashMarker;
 
     public static GlDrive.AiAgent.TelemetryRecorder? TelemetryRecorder { get; private set; }
@@ -37,6 +39,20 @@ public partial class App
     public static GlDrive.AiAgent.ChangeApplier? ChangeApplier { get; private set; }
     public static GlDrive.AiAgent.LogDigester? LogDigester { get; private set; }
     public static GlDrive.AiAgent.AgentRunner? AgentRunner { get; private set; }
+
+    internal void RefreshControlApi(AppConfig config)
+    {
+        Dispatcher.VerifyAccess();
+        if (_automation == null) return;
+        _controlApi?.Dispose();
+        _controlApi = null;
+        if (!config.ControlApi.Enabled) return;
+        if (ControlApi.EnsureToken(config)) ConfigManager.Save(config);
+        _controlApi = new ControlApi(config,
+            () => _serverManager?.Spread,
+            () => _serverManager?.Spread?.GetConnectedServerIds() ?? [], _automation);
+        _controlApi.Start();
+    }
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -320,14 +336,24 @@ public partial class App
 
         // Loopback control API — lets scripts start/inspect races without driving the WPF
         // UI (tray automation is unreliable). Off unless explicitly enabled in config.
-        if (config.ControlApi.Enabled)
-        {
-            if (ControlApi.EnsureToken(config)) ConfigManager.Save(config); // first-run token
-            _controlApi = new ControlApi(config,
-                () => _serverManager?.Spread,
-                () => _serverManager?.Spread?.GetConnectedServerIds() ?? []);
-            _controlApi.Start();
-        }
+        _automation = new AutomationRegistry(
+            new AutomationService(config, _serverManager, notificationStore),
+            new ConfigurationAutomation(config),
+            new DiagnosticAutomation(config),
+            new AgentAutomation(config, () => AgentRunner, () => FreezeStore, () => AuditTrail, () => ChangeApplier),
+            new UiAutomation(() =>
+            {
+                var existing = Windows.OfType<DashboardWindow>().FirstOrDefault();
+                if (existing != null) return existing;
+                _trayViewModel!.DashboardCommand.Execute(null);
+                return Windows.OfType<DashboardWindow>().First();
+            }),
+            new ExtractorAutomation(),
+            new PlexAutomation(config),
+            new ApplicationAutomation(() => _trayViewModel!.AutomationUpdater),
+            new MaintenanceAutomation(config, certManager),
+            new InstallerAutomation());
+        RefreshControlApi(config);
 
         // Init tray
         _trayViewModel = new TrayViewModel(_serverManager, config, notificationStore);
@@ -591,6 +617,7 @@ public partial class App
         SectionActivityRollup = null;
         TelemetryRetention?.Dispose();
         TelemetryRetention = null;
+        _automation?.Dispose();
         _controlApi?.Dispose();
         _controlApi = null;
         _serverManager?.Dispose();
