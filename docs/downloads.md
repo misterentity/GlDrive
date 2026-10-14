@@ -84,6 +84,7 @@ Plan: `docs/superpowers/plans/2026-10-14-multistream-downloads.md` (modelled on 
 - **HTTP** — `SegmentedHttpDownloader` (`src/GlDrive/Downloads/Segmented/SegmentedHttpDownloader.cs:15`): one-byte range probe, then N ranged lanes per network (403/429/503 back off without counting as failures). Used for update zips (`src/GlDrive/Services/UpdateChecker.cs:418`) with the single-GET path as fallback.
 - **Torrents** — speed caps only; MonoTorrent 3.0.2 cannot bind outgoing peers (see `VpnBinding`).
 - **Sleep** — `KeepAwake` holds `ES_SYSTEM_REQUIRED` while any transfer runs.
+- **UI** — Dashboard → Downloads shows the **STREAM MATRIX** for the selected download (`src/GlDrive/UI/StreamMatrix/`): a segment grid coloured by the lane that fetched each block (fed by the read-only `TransferMap` snapshot on `TransferProgress`), a lane table and a 60 s throughput sparkline. Download rows show per-lane chips. All options live on Settings → **STREAMS & UPLINKS** (`src/GlDrive/UI/StreamsSettingsPanel.xaml`), including per-network usage bars with reset; the tray has a Slow mode toggle.
 
 ## Post-download: SFV + extraction
 
