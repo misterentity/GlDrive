@@ -289,8 +289,8 @@ public class UpdateChecker : IDisposable
                 tag, CurrentVersion, failures[tag], MaxFailedInstallAttempts);
             if (failures[tag] >= MaxFailedInstallAttempts)
                 Log.Error("Auto-install of {Tag} has failed {Count} times — giving up. " +
-                          "Install manually from the GitHub release; see %TEMP%\\gldrive-update.log for the cause.",
-                    tag, failures[tag]);
+                          "Install manually from the GitHub release; see {InstallLog} for the cause.",
+                    tag, failures[tag], UpdateInstallLogPath);
         }
         catch (Exception ex)
         {
@@ -1137,6 +1137,74 @@ public class UpdateChecker : IDisposable
         return Version.TryParse(assetName[prefix.Length..^suffix.Length], out var version) ? version : null;
     }
 
+    internal static int BackUpInstalledFiles(
+        string installDir, ICollection<(string Original, string Backup)> backups)
+    {
+        // A still-running MCP process can retain DLLs from an earlier update. Never reuse or
+        // overwrite those backups: Windows can allow the current DLL to be renamed while
+        // denying deletion of its old mapped image. Keep the .old suffix for normal cleanup.
+        var suffix = $".{Guid.NewGuid():N}.old";
+        var renamed = 0;
+        foreach (var file in Directory.EnumerateFiles(installDir, "*", SearchOption.AllDirectories))
+        {
+            if (file.EndsWith(".old", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            try
+            {
+                var backup = file + suffix;
+                File.Move(file, backup, overwrite: false);
+                // Record each successful move immediately, so a later failure can restore only
+                // this attempt's files without touching any earlier, possibly locked backup.
+                backups.Add((file, backup));
+                renamed++;
+            }
+            catch (Exception ex)
+            {
+                throw new IOException($"Could not back up {file}: {ex.Message}", ex);
+            }
+        }
+        return renamed;
+    }
+
+    internal static void RollBackUpdateFiles(
+        IEnumerable<string> copiedDestinations,
+        IEnumerable<(string Original, string Backup)> backups,
+        Action<string> log)
+    {
+        foreach (var copied in copiedDestinations.Reverse())
+        {
+            try { File.Delete(copied); }
+            catch (Exception ex) { log($"  Could not remove {copied}: {ex.Message}"); }
+        }
+        foreach (var (original, backup) in backups.Reverse())
+        {
+            try
+            {
+                if (File.Exists(backup)) File.Move(backup, original, overwrite: true);
+            }
+            catch (Exception ex) { log($"  Could not restore {original}: {ex.Message}"); }
+        }
+    }
+
+    internal static string UpdateInstallLogPath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+        "GlDrive", "update-install.log");
+
+    internal static void WriteUpdateLog(string message, string tempLogPath, string sharedLogPath)
+    {
+        var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}";
+        foreach (var path in new[] { tempLogPath, sharedLogPath })
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.AppendAllText(path, line);
+            }
+            catch { } // One inaccessible sink must not suppress the other or fail the update.
+        }
+    }
+
     private static Process? LaunchViaDesktopShell(string executable)
     {
         var startInfo = new ProcessStartInfo
@@ -1160,11 +1228,8 @@ public class UpdateChecker : IDisposable
         bool viaScheduledTask = false)
     {
         var logPath = Path.Combine(Path.GetTempPath(), "gldrive-update.log");
-        void LogUpdate(string msg)
-        {
-            var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {msg}";
-            try { File.AppendAllText(logPath, line + Environment.NewLine); } catch { }
-        }
+        var sharedLogPath = UpdateInstallLogPath;
+        void LogUpdate(string msg) => WriteUpdateLog(msg, logPath, sharedLogPath);
         var backups = new List<(string Original, string Backup)>();
         var copiedDestinations = new List<string>();
         string? validatedInstallDir = null;
@@ -1304,24 +1369,7 @@ public class UpdateChecker : IDisposable
 
             // Rename existing files to .old
             LogUpdate("Renaming existing files to .old");
-            var renamed = 0;
-            foreach (var file in Directory.EnumerateFiles(installDir, "*", SearchOption.AllDirectories))
-            {
-                if (file.EndsWith(".old", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                try
-                {
-                    var backup = file + ".old";
-                    File.Move(file, backup, overwrite: true);
-                    backups.Add((file, backup));
-                    renamed++;
-                }
-                catch (Exception ex)
-                {
-                    throw new IOException($"Could not back up {file}: {ex.Message}", ex);
-                }
-            }
+            var renamed = BackUpInstalledFiles(installDir, backups);
             LogUpdate($"Renamed {renamed} files");
 
             var copied = 0;
@@ -1410,19 +1458,7 @@ public class UpdateChecker : IDisposable
         {
             LogUpdate($"Update FAILED: {ex}");
             LogUpdate("Rolling back partial update");
-            foreach (var copied in copiedDestinations.AsEnumerable().Reverse())
-            {
-                try { File.Delete(copied); }
-                catch (Exception rollbackEx) { LogUpdate($"  Could not remove {copied}: {rollbackEx.Message}"); }
-            }
-            foreach (var (original, backup) in backups.AsEnumerable().Reverse())
-            {
-                try
-                {
-                    if (File.Exists(backup)) File.Move(backup, original, overwrite: true);
-                }
-                catch (Exception rollbackEx) { LogUpdate($"  Could not restore {original}: {rollbackEx.Message}"); }
-            }
+            RollBackUpdateFiles(copiedDestinations, backups, LogUpdate);
 
             var appData = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GlDrive");
