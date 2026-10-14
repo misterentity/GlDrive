@@ -40,6 +40,9 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private string _activeDownloadSummary = "";
     private bool _hasActiveDownload;
     private readonly Dictionary<string, (string name, double speed, double pct)> _activeDownloads = new();
+    // Live STREAM MATRIX state per active download id; survives RefreshDownloads rebuilding the row VMs.
+    private readonly Dictionary<string, GlDrive.UI.StreamMatrix.StreamMatrixViewModel> _streamMatrices = new();
+    private GlDrive.UI.StreamMatrix.StreamMatrixViewModel? _streamMatrix;
     private UpcomingTvEpisodeVm? _selectedTvEpisode;
     private UpcomingMovieVm? _selectedUpcomingMovie;
     private string _upcomingQualityText = "1080p";
@@ -639,7 +642,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     public DownloadItemVm? SelectedDownloadItem
     {
         get => _selectedDownloadItem;
-        set { _selectedDownloadItem = value; OnPropertyChanged(); }
+        set { _selectedDownloadItem = value; OnPropertyChanged(); FocusStreamMatrix(); }
     }
 
     public SearchResultVm? SelectedSearchResult
@@ -887,6 +890,30 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     {
         get => _hasActiveDownload;
         set { _hasActiveDownload = value; OnPropertyChanged(); }
+    }
+
+    /// <summary>The download shown in the STREAM MATRIX panel: the selected one if active, else the latest active.</summary>
+    public GlDrive.UI.StreamMatrix.StreamMatrixViewModel? StreamMatrix
+    {
+        get => _streamMatrix;
+        private set
+        {
+            if (ReferenceEquals(_streamMatrix, value)) return;
+            _streamMatrix = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasStreamMatrix));
+        }
+    }
+
+    public bool HasStreamMatrix => _streamMatrix is { HasMap: true };
+
+    private void FocusStreamMatrix(GlDrive.UI.StreamMatrix.StreamMatrixViewModel? updated = null)
+    {
+        if (SelectedDownloadItem != null && _streamMatrices.TryGetValue(SelectedDownloadItem.Id, out var selected))
+            StreamMatrix = selected;
+        else if (_streamMatrix == null || !_streamMatrices.ContainsValue(_streamMatrix))
+            StreamMatrix = updated ?? _streamMatrices.Values.LastOrDefault();
+        OnPropertyChanged(nameof(HasStreamMatrix));
     }
 
     // Mounts-tab actions (per-card OPEN / FLUSH / MOUNT / UNMOUNT).
@@ -1541,6 +1568,15 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                     : $"{pctInt}% — {fileName}";
                 vm.StreamsText = GlDrive.Downloads.Segmented.LaneSummary.Format(progress.Lanes);
             }
+
+            if (progress.Map != null || progress.Lanes is { Count: > 0 })
+            {
+                if (!_streamMatrices.TryGetValue(item.Id, out var matrix))
+                    _streamMatrices[item.Id] = matrix = new GlDrive.UI.StreamMatrix.StreamMatrixViewModel(item.ReleaseName);
+                matrix.Update(progress);
+                if (vm != null) vm.Matrix = matrix;
+                FocusStreamMatrix(matrix);
+            }
         });
     }
 
@@ -1554,6 +1590,8 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
         Application.Current?.Dispatcher.InvokeAsync(() =>
         {
+            if (item.Status != DownloadStatus.Downloading && _streamMatrices.Remove(item.Id))
+                FocusStreamMatrix();
             RefreshDownloads();
             HasActiveDownload = _activeDownloads.Count > 0;
             UpdateActiveDownloadSummary();
@@ -2215,7 +2253,8 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                     },
                     LocalPath = item.LocalPath,
                     ServerId = server.ServerId,
-                    ServerName = server.ServerName
+                    ServerName = server.ServerName,
+                    Matrix = _streamMatrices.GetValueOrDefault(item.Id)
                 };
                 DownloadItems.Add(vm);
                 _downloadItemById[item.Id] = vm;
@@ -2742,6 +2781,19 @@ public class DownloadItemVm : INotifyPropertyChanged
         }
     }
     public bool HasStreams => !string.IsNullOrEmpty(_streamsText);
+
+    private GlDrive.UI.StreamMatrix.StreamMatrixViewModel? _matrix;
+    /// <summary>Live lane state (chips + STREAM MATRIX) while this download runs; null otherwise.</summary>
+    public GlDrive.UI.StreamMatrix.StreamMatrixViewModel? Matrix
+    {
+        get => _matrix;
+        set
+        {
+            if (ReferenceEquals(_matrix, value)) return;
+            _matrix = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Matrix)));
+        }
+    }
 
     public event PropertyChangedEventHandler? PropertyChanged;
 }

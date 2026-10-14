@@ -355,7 +355,7 @@ public class TrayViewModel : INotifyPropertyChanged
         }
     }
 
-    public string SlowModeHeader => $"Slow mode ({FormatKbps(_config.Downloads.MultiStream.SlowModeKbps)})";
+    public string SlowModeHeader => $"⚡ Slow mode ({FormatKbps(_config.Downloads.MultiStream.SlowModeKbps)})";
 
     public ICommand ToggleSlowModeCommand => new RelayCommand(() => SlowMode = !SlowMode);
 

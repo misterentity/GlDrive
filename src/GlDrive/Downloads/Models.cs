@@ -68,7 +68,8 @@ public record ParsedRelease(
     string? Source = null);
 
 public record DownloadProgress(long DownloadedBytes, long TotalBytes, double BytesPerSecond, string? CurrentFileName = null,
-    IReadOnlyList<GlDrive.Downloads.Segmented.LaneStats>? Lanes = null);
+    IReadOnlyList<GlDrive.Downloads.Segmented.LaneStats>? Lanes = null,
+    GlDrive.Downloads.Segmented.TransferMap? Map = null);
 
 /// <summary>
 /// Sanitizes a string for use as a Windows path segment (file or folder name).
