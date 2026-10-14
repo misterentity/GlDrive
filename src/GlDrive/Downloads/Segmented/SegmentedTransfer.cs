@@ -33,6 +33,7 @@ public sealed class SegmentedTransfer
     private sealed class LaneRun(ISegmentLane lane)
     {
         public ISegmentLane Lane { get; } = lane;
+        public LaneTag Tag { get; } = new(lane.Label, lane.NetworkId);
         public long Bytes;
         public long BytesAtLastReport;
         public double Speed;
@@ -166,7 +167,8 @@ public sealed class SegmentedTransfer
                 _files.Sum(f => Math.Max(0, f.Size)),
                 overallSpeed,
                 current >= 0 ? Path.GetFileName(_files[current].LocalPath) : null,
-                stats));
+                stats,
+                BuildMap(run.Scheduler)));
         }
 
         while (true)
@@ -219,6 +221,15 @@ public sealed class SegmentedTransfer
         run.Fatal?.Throw();
     }
 
+    private TransferMap BuildMap(RangeScheduler scheduler)
+    {
+        var (done, inFlight) = scheduler.Snapshot();
+        var files = new FileMap[_files.Count];
+        for (int i = 0; i < files.Length; i++)
+            files[i] = new FileMap(Path.GetFileName(_files[i].LocalPath), _files[i].Size, done[i]);
+        return new TransferMap(files, inFlight);
+    }
+
     private static double Smooth(double previous, double sample, bool first) =>
         first ? sample : previous * 0.7 + sample * 0.3;
 
@@ -243,9 +254,9 @@ public sealed class SegmentedTransfer
                 if (lane.ShouldYield) { lr.State = LaneState.Yielded; return; }
 
                 var signal = run.WorkSignal;
-                var a = run.Scheduler.Take(lane.CanStopEarly);
+                var a = run.Scheduler.Take(lane.CanStopEarly, tag: lr.Tag);
                 if (a == null && !lane.CanStopEarly && run.Scheduler.InFlightCount == 0 && !run.AnyLiveStopEarlyLane())
-                    a = run.Scheduler.Take(false, allowRedownload: true);
+                    a = run.Scheduler.Take(false, allowRedownload: true, tag: lr.Tag);
                 if (a == null)
                 {
                     lr.State = LaneState.Idle;

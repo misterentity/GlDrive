@@ -511,6 +511,13 @@ public partial class DashboardWindow : Window
         _playerVm?.LoadLibrary();
     }
 
+    private async void StreamMatrix_ConfigRequested(object? sender, EventArgs e)
+    {
+        var window = new SettingsWindow(_config, _serverManager, initialTab: SettingsWindow.StreamsTab) { Owner = this };
+        if (window.ShowDialog() == true)
+            await _serverManager.SyncAfterConfigChange();
+    }
+
         private async void Settings_Click(object sender, RoutedEventArgs e)
     {
         var window = new SettingsWindow(_config, _serverManager);
