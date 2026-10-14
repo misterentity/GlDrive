@@ -32,8 +32,8 @@ The live catalog is authoritative for exact fields, IDs, available actions, and 
 ## Enable the app connection
 
 1. Install a GlDrive build with MCP support.
-2. Open **Settings → Diagnostics** and turn on **Enable MCP / local control API**. The default port is `8756`.
-3. Save settings. The app starts the local API and generates a token when needed.
+2. Open **Settings → MCP** and turn on **Enable MCP / local control API**. The default port is `8756`. On v3.11.0 and v3.11.1, the toggle is under **Settings → Diagnostics**.
+3. Click **Apply MCP settings** (or **Save** in older builds). The app starts the local API and generates a token when needed. The MCP panel checks the applied connection and reports the available tool count or an actionable error.
 4. Keep GlDrive running while using MCP.
 
 For an installation without the settings control, exit GlDrive first, preserve the existing settings in `%APPDATA%\GlDrive\appsettings.json`, set `ControlApi.Enabled` to `true`, then restart the app. Preserve an existing token; a missing token is generated at startup.
@@ -41,6 +41,10 @@ For an installation without the settings control, exit GlDrive first, preserve t
 The bridge automatically reads `ControlApi.Port` and `ControlApi.Token` from that file. **Do not paste the token into Claude/Codex configuration.** The app and client should run as the same Windows user. The bridge connects only to `http://127.0.0.1`; it cannot be used as a remote HTTP MCP endpoint.
 
 The installed executable is `<GlDrive installation folder>\mcp\GlDrive.Mcp.exe`. Substitute its actual absolute path in the examples below. The packaged bridge includes its .NET runtime.
+
+The **MCP** panel shows this installation's adapter path and warns if the executable is missing. Choose **Claude Code**, **Codex**, or **Claude Desktop** under **Connect a client**, then copy the generated command or JSON. Commands are ready for PowerShell and already contain the actual path. Run the command, or merge the Desktop JSON into its existing configuration as described below; copying does not register the client automatically. No authentication token is included in the copied text.
+
+**Apply MCP settings** saves only the MCP toggle and port without closing Settings or saving drafts from other tabs. **Check connection** tests the applied app settings; an unsaved toggle or port stays a draft. A successful app check does not prove the client is registered. Keep the app running and reconnect the client after registration. Invalid ports are rejected instead of silently replaced.
 
 ## Claude Code
 
@@ -71,7 +75,7 @@ startup_timeout_sec = 20
 tool_timeout_sec = 150
 ```
 
-Restart or reconnect the Codex session after registration. The CLI syntax above was verified with the installed `codex mcp add --help`; local stdio clients require the bridge to run on the same machine as GlDrive.
+Restart or reconnect the Codex session after registration. The CLI syntax above was verified with the installed `codex mcp add --help` and the [official MCP setup documentation](https://learn.chatgpt.com/docs/extend/mcp?surface=cli); local stdio clients require the bridge to run on the same machine as GlDrive.
 
 ## Claude Desktop and other clients
 
@@ -109,7 +113,7 @@ The MCP process can initialize while GlDrive is stopped. In that case only `fmou
 | Problem | Action |
 | --- | --- |
 | Settings not found | Run the app under the same Windows user, or set `GLDRIVE_CONFIG_PATH`. |
-| Control API disabled | Enable MCP / local control API under Settings → Diagnostics, then save. |
+| Control API disabled | Enable MCP / local control API under Settings → MCP and apply. Older builds have the toggle under Diagnostics. |
 | Cannot reach GlDrive | Check the app is running and using the configured port. |
 | Token rejected | Remove a stale token environment override and let the bridge read the app's current configuration. |
 | No automation catalog | Update the app and bridge together. |

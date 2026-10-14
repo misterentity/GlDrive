@@ -330,6 +330,7 @@ internal static class ScreenshotCapture
             ("performance", "Performance"),
             ("downloads",   "Downloads"),
             ("diagnostics", "Diagnostics"),
+            ("mcp",         "MCP"),
         };
 
         if (tabControl != null)
@@ -340,6 +341,21 @@ internal static class ScreenshotCapture
                 settings.UpdateLayout();
                 DoEvents();
                 RenderToFile(settings, $"settings-{file}.png");
+            }
+
+            // The multiline Desktop configuration must remain usable at the minimum window size.
+            if (settings.DataContext is SettingsViewModel vm && SelectTabByHeader(tabControl, "MCP"))
+            {
+                vm.Mcp.SelectedClient = "Claude Desktop";
+                settings.Width = settings.MinWidth;
+                settings.Height = settings.MinHeight;
+                settings.UpdateLayout();
+                DoEvents();
+                RenderToFile(settings, "settings-mcp-desktop-narrow.png");
+                var panel = FindVisualChild<McpSettingsPanel>(settings);
+                if (panel != null) FindVisualChild<ScrollViewer>(panel)?.ScrollToEnd();
+                DoEvents();
+                RenderToFile(settings, "settings-mcp-desktop-narrow-scrolled.png");
             }
         }
 

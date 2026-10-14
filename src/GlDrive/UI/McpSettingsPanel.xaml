@@ -1,0 +1,56 @@
+<UserControl x:Class="GlDrive.UI.McpSettingsPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Loaded="Panel_Loaded" Unloaded="Panel_Unloaded">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="18,14,22,18">
+            <TextBlock Text="Connect your assistant" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,6"/>
+            <TextBlock Text="Let Claude or Codex read GlDrive state and perform app actions through MCP. Keep GlDrive running while you use it."
+                       TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,18"/>
+
+            <CheckBox Content="Enable MCP / local control API" IsChecked="{Binding Enabled}"
+                      IsEnabled="{Binding IsIdle}" Margin="0,0,0,10"/>
+            <WrapPanel Margin="0,0,0,8">
+                <TextBlock Text="Local port" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                <TextBox Text="{Binding Port, UpdateSourceTrigger=PropertyChanged}" Width="82" MaxLength="5"
+                         IsEnabled="{Binding IsIdle}" AutomationProperties.Name="MCP local port" Margin="0,0,14,0"/>
+                <Button Content="Apply MCP settings" Click="Apply_Click" IsEnabled="{Binding IsIdle}"
+                        Padding="12,6" Margin="0,0,8,0"/>
+                <Button Content="Check connection" Click="Check_Click" IsEnabled="{Binding IsIdle}" Padding="12,6"/>
+            </WrapPanel>
+            <TextBlock Text="{Binding PendingChangesText}" TextWrapping="Wrap"
+                       Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,12"/>
+
+            <Border Background="{DynamicResource SurfaceLightBrush}" BorderBrush="{DynamicResource BorderBrush}"
+                    BorderThickness="1" Padding="12" Margin="0,0,0,14">
+                <StackPanel>
+                    <TextBlock Text="APP CONNECTION" FontSize="11" FontWeight="SemiBold"
+                               Foreground="{DynamicResource AccentBrush}" Margin="0,0,0,5"/>
+                    <TextBlock Text="{Binding Status}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"/>
+                </StackPanel>
+            </Border>
+
+            <TextBlock Text="MCP adapter" FontWeight="SemiBold" Margin="0,0,0,5"/>
+            <TextBox Text="{Binding Setup.AdapterPath, Mode=OneWay}" IsReadOnly="True"
+                     TextWrapping="Wrap" AutomationProperties.Name="MCP adapter path"/>
+            <TextBlock Text="{Binding Setup.Status}" TextWrapping="Wrap"
+                       Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,5,0,16"/>
+
+            <TextBlock Text="Connect a client" FontSize="17" FontWeight="SemiBold" Margin="0,0,0,8"/>
+            <ComboBox ItemsSource="{Binding Clients}" SelectedItem="{Binding SelectedClient}"
+                      Width="200" HorizontalAlignment="Left" AutomationProperties.Name="MCP client" Margin="0,0,0,8"/>
+            <TextBlock Text="{Binding ClientInstructions}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+            <TextBox Text="{Binding ClientSnippet, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap"
+                     FontFamily="Consolas" FontSize="12" MinHeight="56" MaxHeight="185"
+                     VerticalScrollBarVisibility="Auto" AutomationProperties.Name="MCP client configuration"/>
+            <WrapPanel Margin="0,10,0,8">
+                <Button Content="{Binding CopyLabel}" Click="Copy_Click" Padding="12,6" Margin="0,0,8,0"/>
+                <Button Content="Setup guide" Click="Guide_Click" Padding="12,6"/>
+                <TextBlock Text="{Binding Feedback}" VerticalAlignment="Center" TextWrapping="Wrap"
+                           Margin="12,0,0,0" Foreground="{DynamicResource AccentBrush}" AutomationProperties.LiveSetting="Polite"/>
+            </WrapPanel>
+            <TextBlock Text="Authentication is automatic for the same Windows user; no token needs copying. The connection check tests GlDrive. Register the adapter in your client separately."
+                       TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}"/>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>
