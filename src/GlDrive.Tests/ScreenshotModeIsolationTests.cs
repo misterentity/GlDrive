@@ -44,7 +44,7 @@ public sealed class ScreenshotModeIsolationTests
     {
         var source = ReadSource("src/GlDrive/Config/CredentialStore.cs");
 
-        Assert.Equal(13, source.Split("if (AccessDisabled)", StringSplitOptions.None).Length - 1);
+        Assert.Equal(14, source.Split("if (AccessDisabled)", StringSplitOptions.None).Length - 1);
 
         CredentialStore.AccessDisabled = true;
         try
@@ -54,6 +54,7 @@ public sealed class ScreenshotModeIsolationTests
             Assert.Null(CredentialStore.GetIrcPassword("unused.invalid", 1, "unused"));
             Assert.Null(CredentialStore.GetSshPassword("unused.invalid", 1, "unused"));
             Assert.Null(CredentialStore.GetApiKey("unused-screenshot-test"));
+            CredentialStore.DeleteProxyPassword("unused.invalid", 1, "unused");
         }
         finally
         {

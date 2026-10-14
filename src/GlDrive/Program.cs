@@ -10,6 +10,17 @@ public static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        // A requested restart waits for the current app to release its single-instance
+        // mutex before constructing WPF or starting a watchdog. Never terminate the old app.
+        if (args.Length == 2 && args[0] == "--restart-after" && int.TryParse(args[1], out var restartPid))
+        {
+            try
+            {
+                using var previous = Process.GetProcessById(restartPid);
+                if (!previous.WaitForExit(60000)) return 1;
+            }
+            catch (ArgumentException) { /* Previous process already exited. */ }
+        }
         // Updater modes must run before constructing the WPF Application. The scheduled task
         // runs as SYSTEM in a non-interactive session, where WPF startup can terminate before
         // App.OnStartup is reached. Dispatching here keeps the updater headless and makes the

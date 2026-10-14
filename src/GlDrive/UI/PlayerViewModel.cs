@@ -15,7 +15,7 @@ using Serilog;
 
 namespace GlDrive.UI;
 
-public class PlayerViewModel : INotifyPropertyChanged, IDisposable
+public partial class PlayerViewModel : INotifyPropertyChanged, IDisposable
 {
     private readonly ServerManager _serverManager;
     private readonly AppConfig _config;

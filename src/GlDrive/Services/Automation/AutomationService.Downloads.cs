@@ -1,0 +1,185 @@
+using System.IO;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using GlDrive.Downloads;
+
+namespace GlDrive.Services.Automation;
+
+public sealed partial class AutomationService
+{
+    private object Downloads(string op, JsonElement a)
+    {
+        if (op == "downloads.list")
+        {
+            var filter = Optional(a, "serverId", 128);
+            if (filter != null) Server(filter);
+            var status = Optional(a, "status", 32);
+            var selected = status == null ? (DownloadStatus?)null : EnumValue(a, "status", DownloadStatus.Queued);
+            var all = _servers.GetMountedServers().Where(s => filter == null || s.ServerId == filter)
+                .SelectMany(s => s.Downloads?.Store.Items ?? Array.Empty<DownloadItem>())
+                .Where(d => selected == null || d.Status == selected).OrderByDescending(d => d.QueuedAt).ToArray();
+            return Page(all, a);
+        }
+        var serverId = Required(a, "serverId", 128);
+        var server = Server(serverId);
+        var manager = Mounted(serverId).Downloads ?? throw new InvalidOperationException("Download service unavailable.");
+        if (op == "downloads.enqueue")
+        {
+            var path = RemotePath(a, allowRoot: false);
+            var name = Line(Optional(a, "releaseName", 512) ?? path.Split('/').Last(), "releaseName");
+            var category = Line(Optional(a, "category", 128) ?? "", "category");
+            var destination = Optional(a, "localPath") ?? Path.Combine(_config.Downloads.GetPathForCategory(category), PathSanitizer.Sanitize(name));
+            if (!Path.IsPathFullyQualified(destination)) throw new ArgumentException("'localPath' must be an absolute local directory path.");
+            var wishlistId = Optional(a, "wishlistItemId", 128);
+            if (wishlistId != null && _wishlist.GetById(wishlistId) == null)
+                throw new KeyNotFoundException($"Unknown wishlist item: {wishlistId}");
+            var item = new DownloadItem
+            {
+                RemotePath = path, ReleaseName = name, Category = category, LocalPath = Path.GetFullPath(destination),
+                ServerId = serverId, ServerName = server.Name, WishlistItemId = wishlistId
+            };
+            if (!manager.Enqueue(item)) throw new InvalidOperationException("Download was not queued: it is already active or its destination directory already exists.");
+            return item;
+        }
+        if (op == "downloads.clear_finished")
+        {
+            switch (Optional(a, "status", 32) ?? "all")
+            {
+                case "all": manager.RemoveFinished(); break;
+                case "Completed": manager.RemoveCompleted(); break;
+                case "Failed": manager.RemoveFailed(); break;
+                case "Cancelled": manager.RemoveCancelled(); break;
+                default: throw new ArgumentException("'status' must be Completed, Failed, Cancelled or all.");
+            }
+            return new { cleared = true };
+        }
+        var id = Required(a, "id", 128);
+        var existing = manager.Store.GetById(id) ?? throw new KeyNotFoundException($"Unknown download: {id}");
+        switch (op)
+        {
+            case "downloads.cancel":
+                if (existing.Status is DownloadStatus.Completed or DownloadStatus.Failed or DownloadStatus.Cancelled)
+                    throw new InvalidOperationException("This download is already finished.");
+                manager.Cancel(id);
+                break;
+            case "downloads.retry":
+                if (existing.Status is not (DownloadStatus.Failed or DownloadStatus.Cancelled))
+                    throw new InvalidOperationException("Only failed or cancelled downloads can be retried.");
+                manager.Retry(id);
+                break;
+            case "downloads.remove":
+                if (existing.Status is not (DownloadStatus.Completed or DownloadStatus.Failed or DownloadStatus.Cancelled))
+                    throw new InvalidOperationException("Cancel an active download before removing its history.");
+                manager.Store.Remove(id);
+                return new { removed = id };
+            case "downloads.reorder":
+                if (existing.Status != DownloadStatus.Queued) throw new InvalidOperationException("Only queued downloads can be reordered.");
+                switch (Required(a, "direction", 8))
+                {
+                    case "up": manager.MoveUp(id); break;
+                    case "down": manager.MoveDown(id); break;
+                    default: throw new ArgumentException("'direction' must be up or down.");
+                }
+                break;
+            default: throw new ArgumentException($"Unknown operation: {op}");
+        }
+        return existing;
+    }
+
+    private async Task<object?> SearchAsync(string op, JsonElement a, CancellationToken ct)
+    {
+        if (op == "search.refresh")
+        {
+            var id = Required(a, "serverId", 128);
+            await (Mounted(id).Search ?? throw new InvalidOperationException("Search service unavailable.")).RefreshIndex(ct: ct);
+            return new { refreshed = id };
+        }
+        if (op != "search.query") throw new ArgumentException($"Unknown operation: {op}");
+        var query = Line(Required(a, "query", 512), "query");
+        var filter = Optional(a, "serverId", 128);
+        var limit = Integer(a, "limit", 200, 1, 2000);
+        var services = filter == null ? _servers.GetMountedServers() : [Mounted(filter)];
+        var results = new List<SearchResult>();
+        var errors = new List<object>();
+        foreach (var service in services)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (service.Search == null) continue;
+            try
+            {
+                foreach (var result in await service.Search.Search(query, ct: ct))
+                {
+                    result.ServerId = service.ServerId;
+                    result.ServerName = service.ServerName;
+                    results.Add(result);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                errors.Add(new { serverId = service.ServerId, message = ex.Message });
+            }
+        }
+        return new { results = results.Take(limit).ToArray(), total = results.Count, errors };
+    }
+
+    private object Wishlist(string op, JsonElement a)
+    {
+        switch (op)
+        {
+            case "wishlist.list": return Page(_wishlist.Items.ToArray(), a);
+            case "wishlist.remove":
+            {
+                var id = Required(a, "id", 128);
+                if (_wishlist.GetById(id) == null) throw new KeyNotFoundException($"Unknown wishlist item: {id}");
+                _wishlist.Remove(id);
+                return new { removed = id };
+            }
+            case "wishlist.upsert":
+            {
+                if (!a.TryGetProperty("item", out var input) || input.ValueKind != JsonValueKind.Object)
+                    throw new ArgumentException("'item' must be an object.");
+                var id = Optional(input, "id", 128);
+                var existing = id == null ? null : _wishlist.GetById(id);
+                var node = JsonSerializer.SerializeToNode(existing ?? new WishlistItem(), Json)!.AsObject();
+                foreach (var property in input.EnumerateObject())
+                {
+                    if (!node.ContainsKey(property.Name)) throw new ArgumentException($"Unknown wishlist field: {property.Name}");
+                    node[property.Name] = JsonNode.Parse(property.Value.GetRawText());
+                }
+                var item = node.Deserialize<WishlistItem>(Json) ?? throw new ArgumentException("Invalid wishlist item.");
+                if (string.IsNullOrWhiteSpace(item.Id) || string.IsNullOrWhiteSpace(item.Title) || item.Title.Length > 512)
+                    throw new ArgumentException("Wishlist items require a nonempty id and a title of at most 512 characters.");
+                if (!Enum.IsDefined(item.Type) || !Enum.IsDefined(item.Quality) || !Enum.IsDefined(item.Status))
+                    throw new ArgumentException("Invalid wishlist type, quality or status.");
+                if (item.GrabbedReleases == null) throw new ArgumentException("grabbedReleases cannot be null.");
+                if (existing == null) _wishlist.Add(item); else _wishlist.Update(item);
+                return item;
+            }
+            case "wishlist.match":
+            {
+                var service = Mounted(Required(a, "serverId", 128));
+                var matcher = service.Matcher ?? throw new InvalidOperationException("Wishlist matcher unavailable.");
+                matcher.OnNewRelease(Line(Required(a, "category", 128), "category"),
+                    Line(Required(a, "releaseName", 512), "releaseName"), RemotePath(a, allowRoot: false));
+                return new { submitted = true };
+            }
+            default: throw new ArgumentException($"Unknown operation: {op}");
+        }
+    }
+
+    private object Notifications(string op, JsonElement a)
+    {
+        if (op == "notifications.clear") { _notifications.Clear(); return new { cleared = true }; }
+        if (op != "notifications.list") throw new ArgumentException($"Unknown operation: {op}");
+        var serverId = Optional(a, "serverId", 128);
+        if (serverId != null) Server(serverId);
+        return Page(_notifications.Items.Where(n => serverId == null || n.ServerId == serverId).ToArray(), a);
+    }
+
+    private static object Page<T>(IReadOnlyList<T> items, JsonElement a)
+    {
+        var offset = Integer(a, "offset", 0, 0, int.MaxValue);
+        var limit = Integer(a, "limit", 200, 1, 2000);
+        return new { items = items.Skip(offset).Take(limit).ToArray(), total = items.Count, offset, limit };
+    }
+}

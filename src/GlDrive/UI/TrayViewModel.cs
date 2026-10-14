@@ -19,6 +19,7 @@ public class TrayViewModel : INotifyPropertyChanged
     private readonly AppConfig _config;
     private readonly NotificationStore _notificationStore;
     private readonly UpdateChecker _updateChecker;
+    internal UpdateChecker AutomationUpdater => _updateChecker;
     private string _statusText = "No servers";
     private DashboardWindow? _dashboardWindow;
     private GitHubRelease? _availableUpdate;
@@ -559,7 +560,12 @@ public class TrayViewModel : INotifyPropertyChanged
     }
 }
 
-public class RelayCommand : ICommand
+public interface IAsyncRelayCommand : ICommand
+{
+    Task ExecuteAsync(object? parameter);
+}
+
+public class RelayCommand : IAsyncRelayCommand
 {
     private readonly Func<Task>? _asyncExecute;
     private readonly Action? _syncExecute;
@@ -575,6 +581,9 @@ public class RelayCommand : ICommand
     public bool CanExecute(object? parameter) => true;
 
     public async void Execute(object? parameter)
+        => await ExecuteAsync(parameter);
+
+    public async Task ExecuteAsync(object? parameter)
     {
         if (_asyncExecute != null)
             await _asyncExecute();
@@ -583,7 +592,7 @@ public class RelayCommand : ICommand
     }
 }
 
-public class RelayCommand<T> : ICommand
+public class RelayCommand<T> : IAsyncRelayCommand
 {
     private readonly Func<T, Task>? _asyncExecute;
     private readonly Action<T>? _syncExecute;
@@ -599,6 +608,9 @@ public class RelayCommand<T> : ICommand
     public bool CanExecute(object? parameter) => true;
 
     public async void Execute(object? parameter)
+        => await ExecuteAsync(parameter);
+
+    public async Task ExecuteAsync(object? parameter)
     {
         var value = parameter is T typed ? typed : default;
         if (value == null) return;

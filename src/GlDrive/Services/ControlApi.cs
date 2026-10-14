@@ -52,7 +52,8 @@ public sealed class ControlApi : IDisposable
     internal int ActiveRequestCount => _requests.Count;
 
     public ControlApi(AppConfig config, Func<SpreadManager?> getSpread,
-        Func<IReadOnlyList<string>> getConnectedServerIds)
+        Func<IReadOnlyList<string>> getConnectedServerIds,
+        GlDrive.Services.Automation.AutomationRegistry? automation = null)
     {
         _config = config;
         _getSpread = getSpread;
@@ -63,6 +64,7 @@ public sealed class ControlApi : IDisposable
         _statusEndpoints = new StatusEndpoints(_config, _getSpread, _getConnectedServerIds);
         _statusEndpoints.Register(_routes);
         new SpreadEndpoints(_config, _getSpread).Register(_routes);
+        if (automation != null) new AutomationEndpoints(automation).Register(_routes);
     }
 
     /// <summary>Generates and persists a token the first time the API is switched on.</summary>
