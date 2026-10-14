@@ -805,12 +805,30 @@ public class GlDriveFileSystem : FileSystemBase
         return STATUS_SUCCESS;
     }
 
-public override int CanDelete(
+    public override int CanDelete(
         object fileNode0,
         object fileDesc0,
         string fileName)
     {
-        return STATUS_SUCCESS; // Allow delete attempts; actual errors surface in Cleanup
+        var node = (FileNode)fileNode0;
+        using var nodeLock = new NodeLock(node);
+        if (!node.IsDirectory) return STATUS_SUCCESS;
+
+        try
+        {
+            // Deletion needs a current listing: a cached empty directory may
+            // already contain a new upload. Cleanup still uses nonrecursive RMD
+            // to protect anything created between this check and deletion.
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(_dirListTimeoutSeconds));
+            var entries = _ftp.ListDirectory(node.RemotePath, cts.Token).GetAwaiter().GetResult();
+            return entries.Any(entry => entry.Name is not ("." or ".."))
+                ? STATUS_DIRECTORY_NOT_EMPTY : STATUS_SUCCESS;
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "CanDelete failed: {Path}", node.RemotePath);
+            return NtStatusMapper.MapException(ex);
+        }
     }
 
     // Helper: List directory with caching and timeout

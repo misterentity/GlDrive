@@ -167,7 +167,7 @@ public sealed class AgentAutomation : IAutomationModule
         {
             var row = audit.ReadAll().LastOrDefault(r => r.RunId == runId && r.Target == target)
                 ?? throw new ArgumentException("Audit row was not found");
-            if (row.Undone || (action == "undo" && !row.Applied) || (action == "apply" && row.Applied))
+            if (row.Undone || (action == "undo" && !row.WasApplied) || (action == "apply" && row.WasApplied))
                 throw new ArgumentException("The audit row is not eligible for this action");
             if (row.Category is AgentCategories.WishlistPrune or AgentCategories.ErrorReport)
                 throw new ArgumentException("Use the dedicated wishlist/diagnostics tools for this action");
@@ -194,6 +194,7 @@ public sealed class AgentAutomation : IAutomationModule
             AgentConfigCommit.Commit(ConfigManager.ConfigPath, expected, candidate, pending, _root, ConfigManager.Save, audit);
             ConfigurationAutomation.Reconcile(_config, candidate);
             if (action == "undo") audit.MarkUndone(row.RunId, row.Target, "mcp-undo");
+            else audit.Dismiss(row, "mcp-apply");
             result = new { applied = true, restartRequired = true, runId = newRunId };
         });
         return result!;

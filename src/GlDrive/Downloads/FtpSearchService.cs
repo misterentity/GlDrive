@@ -32,7 +32,7 @@ public class FtpSearchService : IDisposable
         @"^\[\s*NUKED\s*\](?:\s*-|\s*$)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
 
-    private static bool SkipDirectory(string name) => SkipDirs.Contains(name) ||
+    internal static bool SkipDirectory(string name) => SkipDirs.Contains(name) ||
         NukedDirectory.IsMatch(name) ||
         (name.StartsWith('[') && name.EndsWith(']') && StatusDirectory.IsMatch(name));
 
@@ -529,6 +529,7 @@ public class FtpSearchService : IDisposable
     {
         var results = new List<SearchResult>();
         var normalizedKeyword = Normalize(keyword);
+        var report = new IndexCrawlReport();
 
         progress?.Report("Live searching...");
 
@@ -538,31 +539,36 @@ public class FtpSearchService : IDisposable
             foreach (var path in _searchConfig.SearchPaths)
             {
                 ct.ThrowIfCancellationRequested();
-                var pathResults = await SearchPath(NormalizeSearchRoot(path), normalizedKeyword, progress, ct);
+                var pathResults = await SearchPath(NormalizeSearchRoot(path), normalizedKeyword, progress, report, ct);
                 results.AddRange(pathResults);
-                if (results.Count >= MaxResults) break;
+                if (results.Count >= MaxResults || report.Aborted) break;
             }
 
             if (results.Count > MaxResults)
                 results.RemoveRange(MaxResults, results.Count - MaxResults);
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             Log.Error(ex, "FTP search failed for: {Keyword}", keyword);
         }
 
-        progress?.Report($"{results.Count} result(s) from live crawl");
+        if (report.Failed > 0)
+            Log.Warning("Live search returned partial results: {Failed} listing(s) failed; last {Path}: {Error}",
+                report.Failed, report.LastFailedPath, report.LastError);
+        progress?.Report($"{results.Count} result(s) from live crawl" +
+            (report.Failed > 0 ? $" ({report.Failed} directory listing(s) failed)" : ""));
         return results;
     }
 
-    private async Task<List<SearchResult>> SearchPath(string rootPath, string keyword, IProgress<string>? progress, CancellationToken ct)
+    private async Task<List<SearchResult>> SearchPath(string rootPath, string keyword, IProgress<string>? progress,
+        IndexCrawlReport report, CancellationToken ct)
     {
         var results = new List<SearchResult>();
 
         try
         {
-            await SearchRecursive(ListForLiveSearch, rootPath, keyword, 0, _searchConfig.MaxDepth, results, progress, ct);
+            await SearchRecursive(ListForLiveSearch, rootPath, keyword, 0, _searchConfig.MaxDepth, results, progress, ct, report);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
@@ -584,25 +590,40 @@ public class FtpSearchService : IDisposable
     internal static async Task SearchRecursive(
         DirectoryLister list, string path, string keyword,
         int depth, int maxDepth, List<SearchResult> results,
-        IProgress<string>? progress, CancellationToken ct)
+        IProgress<string>? progress, CancellationToken ct,
+        IndexCrawlReport? report = null, string? searchRoot = null)
     {
-        if (results.Count >= MaxResults) return;
+        ct.ThrowIfCancellationRequested();
+        report ??= new IndexCrawlReport();
+        searchRoot ??= path;
+        if (results.Count >= MaxResults || report.Aborted) return;
 
         progress?.Report($"Scanning {path}...");
 
         // Borrow per-listing so we don't hold a connection for the entire crawl
-        var items = await list(path, ct);
+        FtpListItem[] items;
+        try
+        {
+            items = await list(path, ct);
+            report.RecordSuccess();
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            report.Record(path, ex);
+            return;
+        }
 
         foreach (var item in items)
         {
             ct.ThrowIfCancellationRequested();
-            if (results.Count >= MaxResults) return;
+            if (results.Count >= MaxResults || report.Aborted) return;
             if (item.Type != FtpObjectType.Directory) continue;
             if (SkipDirectory(item.Name)) continue;
 
             if (Normalize(item.Name).Contains(keyword, StringComparison.OrdinalIgnoreCase))
             {
-                var category = ExtractCategory(path, item.FullName);
+                var category = ExtractCategory(searchRoot, item.FullName);
                 results.Add(new SearchResult
                 {
                     ReleaseName = item.Name,
@@ -614,7 +635,7 @@ public class FtpSearchService : IDisposable
             }
 
             if (depth < maxDepth)
-                await SearchRecursive(list, item.FullName, keyword, depth + 1, maxDepth, results, progress, ct);
+                await SearchRecursive(list, item.FullName, keyword, depth + 1, maxDepth, results, progress, ct, report, searchRoot);
         }
     }
 

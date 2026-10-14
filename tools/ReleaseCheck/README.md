@@ -22,4 +22,10 @@ Race discovery also checks the case where the sole receiving site already has th
 
 Account-stat checks inject a refused passive data endpoint, then restore a LIST trailer carrying synthetic credits and ratio. The next refresh must recover immediately, while clean replies without stats must still activate the bounded no-access cache.
 
+Manual folder FXP enumeration also traverses nested folders using a pool with exactly one connection and verifies that every listing reused the same session. The download planner and actual segmented FTP downloader then copy a tree containing a root NFO, two different payloads with identical basenames in CD1/CD2, a deeper sample, and an empty folder. All local payloads and the network-usage ledger remain inside the disposable fixture directory.
+
+Download failure checks make the fixture advertise 1,000 bytes but send ten, then separately send the complete payload followed by FTP `426`. Both downloads must fail after bounded retries, retain their staging files, and leave the final filenames absent. Restoring valid data and completion replies must make a subsequent retry publish the exact expected bytes. Append `--downloads-only` to run certificate, relocation, enumeration and download checks without mounting WinFsp.
+
+The full WinFsp checks also verify that nonrecursive deletion rejects a populated folder, removes an empty folder, and preserves a file that arrives after the deletion preflight. The certificate preamble applies the connection-test validation callback to a changed pin and verifies rejection before any FTP authentication command.
+
 This does not exercise a remote glftpd BNC's CPSV behavior or replace an extended live-server soak.

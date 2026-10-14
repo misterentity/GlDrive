@@ -24,6 +24,15 @@ public class AuditRow
     public bool Undone { get; set; }
     public string? UndoneAt { get; set; }
     public string? UndoneReason { get; set; }
+
+    // Legacy previews have Applied=true: this meant validation succeeded, not that
+    // the mutation ran. Keep reading those rows without offering a destructive undo.
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool WasApplied => Applied && !DryRun;
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool IsSuggestion => !WasApplied && !Undone && RejectionReason is not ("frozen" or "malformed");
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string Status => Undone ? "Resolved" : WasApplied ? "Applied" : Applied ? "Preview" : "Rejected";
 }
 
 public class AuditTrail
@@ -61,6 +70,7 @@ public class AuditTrail
 
     public virtual void Append(AuditRow row)
     {
+        row.Id ??= Guid.NewGuid().ToString("N");
         try
         {
             lock (_lock)
@@ -119,6 +129,15 @@ public class AuditTrail
     /// a rewrite never reserializes untouched history.
     /// </summary>
     public void MarkUndone(string runId, string target, string reason)
+        => MarkResolved(row => row.RunId == runId && row.Target == target && row.WasApplied, reason);
+
+    public void Dismiss(AuditRow suggestion, string reason = "user-dismiss")
+        => MarkResolved(row => !row.WasApplied && (suggestion.Id is { } id
+            ? row.Id == id
+            : row.Id == null && row.RunId == suggestion.RunId && row.Target == suggestion.Target
+                && row.Category == suggestion.Category && row.Ts == suggestion.Ts), reason);
+
+    private void MarkResolved(Func<AuditRow, bool> matches, string reason)
     {
         lock (_lock)
         {
@@ -135,8 +154,7 @@ public class AuditTrail
                 try { row = JsonSerializer.Deserialize<AuditRow>(line, JsonOpts); }
                 catch { /* fall through — preserved verbatim below */ }
 
-                if (row is not null && row.RunId == runId && row.Target == target
-                    && row.Applied && !row.Undone)
+                if (row is not null && matches(row) && !row.Undone)
                 {
                     row.Undone = true;
                     row.UndoneAt = DateTime.UtcNow.ToString("O");

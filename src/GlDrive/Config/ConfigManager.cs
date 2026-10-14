@@ -54,8 +54,15 @@ public class ConfigManager
 
             var result = JsonSerializer.Deserialize<AppConfig>(json, JsonOptions) ?? new AppConfig();
             MigrateApiKeys(json, result);
-            MigrateSectionsToMappings(result);
+            var mappingsMigrated = MigrateSectionsToMappings(result);
             MigrateThemeToCyberpunk(result);
+            if (mappingsMigrated)
+            {
+                // Keep the persisted baseline aligned with the live graph even
+                // when the independent theme migration has already run.
+                try { Save(result); }
+                catch (Exception ex) { Log.Warning(ex, "Section mapping migration could not be persisted"); }
+            }
             return result;
         }
         catch (Exception ex)
@@ -185,8 +192,9 @@ public class ConfigManager
     /// it from SectionMappings) so SpreadJob / SpreadManager / DashboardViewModel
     /// continue to work unchanged.
     /// </summary>
-    private static void MigrateSectionsToMappings(AppConfig config)
+    internal static bool MigrateSectionsToMappings(AppConfig config)
     {
+        var migrated = false;
         foreach (var server in config.Servers)
         {
             if (server.SpreadSite.SectionMappings.Count > 0) continue;
@@ -205,7 +213,9 @@ public class ConfigManager
             }
             Log.Information("Migrated {Count} sections to SectionMappings on server {Name}",
                 server.SpreadSite.Sections.Count, server.Name);
+            migrated = true;
         }
+        return migrated;
     }
 
     private static void MigrateApiKeys(string json, AppConfig config)

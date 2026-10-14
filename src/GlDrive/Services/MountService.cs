@@ -1,5 +1,4 @@
 using System.IO;
-using Microsoft.Win32;
 using Fsp;
 using GlDrive.Config;
 using GlDrive.Downloads;
@@ -31,9 +30,6 @@ public class MountService : IDisposable
     private FtpSearchService? _searchService;
     private WishlistMatcher? _wishlistMatcher;
     private bool _mounted;
-    private static string? _launchctlPath;
-    private static readonly string NetExePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "net.exe");
-    private static readonly string MountvExePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "mountvol.exe");
 
     public event Action<MountState>? StateChanged;
     public event Action<string, string, string>? NewReleaseDetected; // category, release, remotePath
@@ -85,6 +81,11 @@ public class MountService : IDisposable
 
         try
         {
+            // An occupied letter may belong to a local disk, an SMB share, or a
+            // different server. Never disconnect it as speculative stale cleanup.
+            if (_serverConfig.Mount.MountDrive)
+                MountPointGuard.EnsureAvailable(_serverConfig.Mount.DriveLetter, Directory.GetLogicalDrives());
+
             _factory = new FtpClientFactory(_serverConfig, _certManager);
             // If spread is configured, reduce main pool to leave room for spread connections
             // within the server's login limit (typically 4 simultaneous logins)
@@ -145,8 +146,6 @@ public class MountService : IDisposable
             // Mount WinFsp drive if enabled
             if (_serverConfig.Mount.MountDrive)
             {
-                CleanStaleMounts();
-
                 _fileSystem = new GlDriveFileSystem(
                     _ftp, _cache,
                     _serverConfig.Connection.RootPath,
@@ -388,95 +387,6 @@ public class MountService : IDisposable
                 TaskContinuationOptions.OnlyOnFaulted);
 
         _factory = null;
-    }
-
-    private void CleanStaleMounts()
-    {
-        var driveLetter = _serverConfig.Mount.DriveLetter;
-        var mountPoint = driveLetter + ":\\";
-        try
-        {
-            if (Directory.Exists(mountPoint))
-            {
-                Log.Warning("Stale mount detected at {MountPoint}, attempting cleanup...", mountPoint);
-
-                // Try WinFsp launchctl stop first (most reliable for WinFsp mounts)
-                try
-                {
-                    var launchctl = ResolveLaunchctlPath();
-                    if (launchctl != null)
-                    {
-                        var psi = new System.Diagnostics.ProcessStartInfo(
-                            launchctl, $"stop GlDrive\\{_serverConfig.Id}")
-                        {
-                            CreateNoWindow = true,
-                            UseShellExecute = false,
-                            RedirectStandardOutput = true,
-                            RedirectStandardError = true
-                        };
-                        using var proc = System.Diagnostics.Process.Start(psi);
-                        proc?.WaitForExit(3000);
-                    }
-                }
-                // Best-effort: launchctl stop is one of three fallback cleanup attempts; failure
-                // is expected (no WinFsp launchctl, not our mount) and we fall through to net use.
-                catch (Exception ex) { Log.Debug(ex, "WinFsp launchctl stop failed for {MountPoint}", mountPoint); }
-
-                // Try net use delete
-                if (Directory.Exists(mountPoint))
-                {
-                    var psi = new System.Diagnostics.ProcessStartInfo(NetExePath, $"use {driveLetter}: /delete /y")
-                    {
-                        CreateNoWindow = true,
-                        UseShellExecute = false,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true
-                    };
-                    using var proc = System.Diagnostics.Process.Start(psi);
-                    proc?.WaitForExit(3000);
-                }
-
-                // Last resort: use mountvol to remove the mount point
-                if (Directory.Exists(mountPoint))
-                {
-                    Log.Warning("Stale mount still present after net use, trying mountvol...");
-                    var psi = new System.Diagnostics.ProcessStartInfo(MountvExePath, $"{driveLetter}: /P")
-                    {
-                        CreateNoWindow = true,
-                        UseShellExecute = false,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true
-                    };
-                    using var proc = System.Diagnostics.Process.Start(psi);
-                    proc?.WaitForExit(3000);
-                }
-
-                if (!Directory.Exists(mountPoint))
-                    Log.Information("Stale mount at {MountPoint} cleaned up successfully", mountPoint);
-                else
-                    Log.Warning("Stale mount at {MountPoint} could not be fully cleaned — mounting may fail", mountPoint);
-            }
-        }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "Stale mount cleanup failed — continuing anyway");
-        }
-    }
-
-    private static string? ResolveLaunchctlPath()
-    {
-        if (_launchctlPath != null) return _launchctlPath;
-        var regDir = Registry.LocalMachine.OpenSubKey(@"Software\WinFsp")?.GetValue("InstallDir") as string;
-        var candidate = regDir != null
-            ? Path.Combine(regDir, "bin", "launchctl-x64.exe")
-            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WinFsp", "bin", "launchctl-x64.exe");
-        if (!File.Exists(candidate))
-        {
-            Log.Warning("launchctl-x64.exe not found at {Path}", candidate);
-            return null;
-        }
-        _launchctlPath = candidate;
-        return _launchctlPath;
     }
 
     private void SetState(MountState state)
