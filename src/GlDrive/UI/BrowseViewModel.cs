@@ -14,6 +14,8 @@ public class BrowseViewModel : INotifyPropertyChanged, IDisposable
 {
     private readonly ServerManager _serverManager;
     private readonly AppConfig _config;
+    private readonly Action<string, string, MountState> _serverStateHandler;
+    private bool _disposed;
     private string _leftServer = "";
     private string _leftPath = "/";
     private string _rightServer = "";
@@ -100,8 +102,12 @@ public class BrowseViewModel : INotifyPropertyChanged, IDisposable
         _initializing = false;
 
         // Update server list when servers connect/disconnect
-        _serverManager.ServerStateChanged += (_, _, _) =>
-            System.Windows.Application.Current?.Dispatcher.InvokeAsync(RefreshServerList);
+        _serverStateHandler = (_, _, _) =>
+            System.Windows.Application.Current?.Dispatcher.InvokeAsync(() =>
+            {
+                if (!_disposed) RefreshServerList();
+            });
+        _serverManager.ServerStateChanged += _serverStateHandler;
 
         // Fire both initial loads in parallel
         _ = LoadBothAsync();
@@ -332,6 +338,9 @@ public class BrowseViewModel : INotifyPropertyChanged, IDisposable
 
     public void Dispose()
     {
+        if (_disposed) return;
+        _disposed = true;
+        _serverManager.ServerStateChanged -= _serverStateHandler;
         _leftCts?.Cancel();
         _rightCts?.Cancel();
         _fxpCts?.Cancel();

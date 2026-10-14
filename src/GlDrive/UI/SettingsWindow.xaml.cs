@@ -82,11 +82,23 @@ public partial class SettingsWindow : Window
         var serverIndex = _config.Servers.FindIndex(s => s.Id == selected.Id);
         if (serverIndex < 0) return;
         var serverConfig = _config.Servers[serverIndex];
+        var baseline = System.Text.Json.JsonSerializer.Deserialize<ServerConfig>(
+            System.Text.Json.JsonSerializer.Serialize(serverConfig))!;
 
         var dialog = new ServerEditDialog(serverConfig, _serverManager) { Owner = this };
         if (dialog.ShowDialog() == true)
         {
-            _config.Servers[serverIndex] = dialog.Result;
+            try
+            {
+                var current = _config.Servers.FirstOrDefault(s => s.Id == selected.Id)
+                    ?? throw new InvalidOperationException("This server was removed while its editor was open.");
+                var merged = ConfigEditMerge.Merge(baseline, dialog.Result, current);
+                ConfigReconciler.Apply(current, merged);
+            }
+            catch (InvalidOperationException ex)
+            {
+                MessageBox.Show(ex.Message, "Settings changed", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
             RefreshServerList();
         }
     }

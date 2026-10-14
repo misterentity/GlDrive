@@ -11,6 +11,7 @@ using GlDrive.Tls;
 using GlDrive.Player;
 using GlDrive.Services;
 using GlDrive.Downloads;
+using GlDrive.Downloads.Segmented;
 using GlDrive.Spread;
 using Serilog;
 using Microsoft.Win32.SafeHandles;
@@ -28,8 +29,36 @@ var certs = new CertificateManager(Path.Combine(root, "trusted.json"));
 certs.TrustCertificate($"127.0.0.1:{port}", fingerprint);
 certs.CertificatePrompt += (_, _) => Task.FromResult(false);
 var factory = new FtpClientFactory(config, certs);
+// Exercise the same certificate callback used by Settings > Test Connection.
+// A changed pin must stop the handshake before any authentication command.
+var rejectedPins = new CertificateManager(Path.Combine(root, "rejected-pins.json"));
+rejectedPins.TrustCertificate($"127.0.0.1:{port}", new string('0', 64));
+var authenticationLog = Path.Combine(root, "authentication-attempts");
+var authenticationsBefore = File.Exists(authenticationLog) ? File.ReadAllLines(authenticationLog).Length : 0;
+var probe = factory.Create();
+try
+{
+    typeof(GlDrive.UI.ServerEditDialog).GetMethod("AttachTofuValidation", BindingFlags.Static | BindingFlags.NonPublic)!
+        .Invoke(null, [probe, "127.0.0.1", port, rejectedPins]);
+    var rejected = false;
+    using var certificateDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+    try { await probe.Connect(certificateDeadline.Token); }
+    catch (Exception) when (!certificateDeadline.IsCancellationRequested) { rejected = true; }
+    Check(rejected, "connection test rejects a changed certificate pin");
+    Check((File.Exists(authenticationLog) ? File.ReadAllLines(authenticationLog).Length : 0) == authenticationsBefore,
+        "rejected certificate prevents FTP authentication");
+    Check(rejectedPins.GetTrustedCertificates()[$"127.0.0.1:{port}"].Fingerprint == new string('0', 64),
+        "connection test preserves the existing certificate pin");
+}
+finally
+{
+    var detached = (IDisposable?)typeof(FtpConnectionPool)
+        .GetMethod("NeutralizeGnuTls", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [probe]);
+    try { probe.Dispose(); }
+    finally { detached?.Dispose(); }
+}
 await using var pool = new FtpConnectionPool(factory, 2);
-using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(180));
 await pool.Initialize(deadline.Token);
 var ftp = new FtpOperations(pool);
 var remoteRoot = "/check-" + Guid.NewGuid().ToString("N");
@@ -38,6 +67,12 @@ await CheckSourceRelocation(factory, root, remoteRoot, deadline.Token);
 if (args.Contains("--relocation-only", StringComparer.Ordinal))
 {
     Console.WriteLine("PASS: local native FTPS source-relocation verification complete");
+    return;
+}
+await CheckManualEnumerationAndDownloads(factory, root, remoteRoot, deadline.Token);
+if (args.Contains("--downloads-only", StringComparer.Ordinal))
+{
+    Console.WriteLine("PASS: local native FTPS enumeration and download verification complete");
     return;
 }
 // Stats must not turn an unreachable data endpoint into a six-hour ACL denial.
@@ -228,6 +263,35 @@ try
     File.Delete(renamed);
     Check(!File.Exists(renamed), "WinFsp delete");
 
+    var populated = letter + @":\nonrecursive-delete";
+    Directory.CreateDirectory(populated);
+    var retained = Path.Combine(populated, "keep.txt");
+    File.WriteAllText(retained, "must survive a nonrecursive directory delete");
+    var deleteRejected = false;
+    try { Directory.Delete(populated, recursive: false); }
+    catch (IOException) { deleteRejected = true; }
+    Check(deleteRejected && File.ReadAllText(retained) == "must survive a nonrecursive directory delete",
+        "WinFsp nonrecursive delete rejects a populated directory and preserves its contents");
+    File.Delete(retained);
+    Directory.Delete(populated, recursive: false);
+    Check(!Directory.Exists(populated), "WinFsp nonrecursive delete removes an empty directory");
+
+    // The directory can gain a child between CanDelete and Cleanup. Cleanup must
+    // issue nonrecursive RMD even after the emptiness check has already succeeded.
+    await ftp.CreateDirectory(remoteRoot + "/delete-race", deadline.Token);
+    cache.Clear();
+    Check(fs.Open("\\delete-race", 0, 0, out var deleteNode, out var deleteDesc, out _, out _) == 0,
+        "open empty directory for delete race");
+    try
+    {
+        Check(fs.CanDelete(deleteNode, deleteDesc, "\\delete-race") == 0, "empty directory passes delete preflight");
+        await ftp.UploadFile(remoteRoot + "/delete-race/late.txt", "late arrival"u8.ToArray(), deadline.Token);
+        fs.Cleanup(deleteNode, deleteDesc, "\\delete-race", 1);
+        Check(await ftp.FileExists(remoteRoot + "/delete-race/late.txt", deadline.Token),
+            "cleanup preserves files arriving after delete preflight");
+    }
+    finally { fs.Close(deleteNode, deleteDesc); }
+
     // Keep the directory HANDLE open across real mounted mutations. Ordinary
     // Directory.GetFiles creates a new handle and cannot detect a stale snapshot
     // retained by an existing Explorer directory handle.
@@ -290,6 +354,104 @@ static void Check(bool success, string step)
 {
     if (!success) throw new InvalidOperationException("FAIL: " + step);
     Console.WriteLine("PASS: " + step);
+}
+
+static async Task CheckManualEnumerationAndDownloads(FtpClientFactory factory, string fixtureRoot,
+    string remoteRoot, CancellationToken ct)
+{
+    // Each invocation uses fresh destinations, even when reusing the server.
+    // A completed retry from a prior run would otherwise bypass the failure probe.
+    var localRoot = Path.Combine(fixtureRoot, Path.GetFileName(remoteRoot));
+    Directory.CreateDirectory(localRoot);
+    await using var singlePool = new FtpConnectionPool(factory, 1);
+    await singlePool.Initialize(ct);
+    var ftp = new FtpOperations(singlePool);
+    var tree = remoteRoot + "/manual-folder";
+    await ftp.CreateDirectory(tree + "/CD1/Deep", ct);
+    await ftp.CreateDirectory(tree + "/CD2", ct);
+    await ftp.CreateDirectory(tree + "/Empty", ct);
+    var payloads = new Dictionary<string, byte[]>
+    {
+        ["release.nfo"] = "release info"u8.ToArray(),
+        ["CD1/volume.bin"] = Enumerable.Range(0, 8192).Select(i => (byte)i).ToArray(),
+        ["CD2/volume.bin"] = Enumerable.Range(0, 5000).Select(i => (byte)(255 - i)).ToArray(),
+        ["CD1/Deep/sample.bin"] = [7, 8, 9]
+    };
+    foreach (var (relative, bytes) in payloads) await ftp.UploadFile(tree + "/" + relative, bytes, ct);
+    Check(!await ftp.DirectoryExists(tree + "/release.nfo", ct)
+        && await ftp.FileExists(tree + "/release.nfo", ct),
+        "native FTP existence probes distinguish a file from a directory");
+
+    FluentFTP.AsyncFtpClient original;
+    await using (var connection = await singlePool.Borrow(ct)) original = connection.Client;
+    var files = new List<(string relative, string full)>();
+    Func<string, CancellationToken, Task<FluentFTP.FtpListItem[]>> list = ftp.ListDirectory;
+    var enumerate = typeof(SpreadManager).GetMethod("EnumerateDirectoryRecursive", BindingFlags.Static | BindingFlags.NonPublic)!;
+    using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct))
+    {
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        await ((Task)enumerate.Invoke(null, [list, tree, tree, files, 0, timeout.Token])!).WaitAsync(timeout.Token);
+    }
+    Check(files.Select(f => f.relative).ToHashSet().SetEquals(payloads.Keys),
+        "manual FXP enumeration traverses nested folders with one pool connection");
+    await using (var connection = await singlePool.Borrow(ct))
+        Check(ReferenceEquals(original, connection.Client) && singlePool.TotalCreated == 1,
+            "manual FXP enumeration returns and reuses the original listing connection");
+
+    // Keep the app-wide ledger isolated as well as certificate trust. This process
+    // runs the real StreamingDownloader without opening the user's network ledger.
+    typeof(DownloadNetworkServices).GetField("_usage", BindingFlags.Static | BindingFlags.NonPublic)!
+        .SetValue(null, new NetworkUsageStore(Path.Combine(localRoot, "network-usage.json")));
+    var downloader = new StreamingDownloader(singlePool, "release-check", new DownloadConfig(), 0, null);
+    var local = Path.Combine(localRoot, "download-tree");
+    var planner = typeof(DownloadManager).Assembly.GetType("GlDrive.Downloads.DownloadTree")!
+        .GetMethod("BuildAsync", BindingFlags.Static | BindingFlags.NonPublic)!;
+    Func<string, CancellationToken, Task<bool>> directoryExists = ftp.DirectoryExists;
+    Func<string, CancellationToken, Task<bool>> fileExists = ftp.FileExists;
+    var planning = (Task)planner.Invoke(null, [tree, local, directoryExists, fileExists, list, ct])!;
+    await planning;
+    var plan = planning.GetType().GetProperty("Result")!.GetValue(planning)!;
+    var plannedFiles = (IReadOnlyList<FtpDownloadFile>)plan.GetType().GetProperty("Files")!.GetValue(plan)!;
+    var directories = (IReadOnlyList<string>)plan.GetType().GetProperty("Directories")!.GetValue(plan)!;
+    foreach (var directory in directories) Directory.CreateDirectory(directory);
+    await downloader.DownloadFiles(plannedFiles, null, ct);
+    Check(plannedFiles.Count == payloads.Count && payloads.All(p =>
+        File.ReadAllBytes(Path.Combine(local, p.Key)).SequenceEqual(p.Value))
+        && Directory.Exists(Path.Combine(local, "Empty")),
+        "recursive download preserves nested duplicate basenames, empty folders and every payload byte");
+
+    foreach (var shortData in new[] { true, false })
+    {
+        var name = shortData ? "short.bin" : "rejected.bin";
+        var remote = remoteRoot + "/" + name;
+        var payload = shortData ? new byte[10] : new byte[1000];
+        await ftp.UploadFile(remote, payload, ct);
+        var destination = Path.Combine(localRoot, "failed-downloads", name);
+        var marker = Path.Combine(fixtureRoot, shortData ? "short-retr-size" : "reject-retr-completion");
+        File.WriteAllText(marker, "1");
+        IOException? failure = null;
+        try
+        {
+            // -1 forces the real SIZE request, including the fixture's deliberately
+            // overstated length. Three native attempts must still fail the job.
+            await downloader.DownloadFiles([new FtpDownloadFile(remote, destination, -1)], null, ct);
+        }
+        catch (IOException ex) { failure = ex; }
+        finally { File.Delete(marker); }
+        Check(failure != null && (shortData ? failure.Message.Contains("Premature") : failure.Message.Contains("426")),
+            shortData ? "standard segmented download rejects real early FTP EOF"
+                      : "standard segmented download rejects a real FTP 426 completion");
+        Check(!File.Exists(destination) && File.Exists(destination + StagedFile.StagingSuffix),
+            $"{name}: failed native download retains staging without publishing a final file");
+
+        // Restore a valid server response (and the expected length), then retry
+        // using the same downloader. The saved partial must recover successfully.
+        if (shortData) await ftp.UploadFile(remote, new byte[1000], ct);
+        await downloader.DownloadFiles([new FtpDownloadFile(remote, destination, -1)], null, ct);
+        Check(File.ReadAllBytes(destination).SequenceEqual(new byte[1000])
+            && !File.Exists(destination + StagedFile.StagingSuffix),
+            $"{name}: native retry publishes only after complete data and a successful reply");
+    }
 }
 
 static async Task CheckSourceRelocation(FtpClientFactory factory, string fixtureRoot,

@@ -17,6 +17,7 @@ public sealed class AgentRunner : IDisposable
     private readonly SnapshotStore _snapshots;
     private readonly string _configFilePath;
     private readonly Action<AppConfig> _saveConfig;
+    private readonly Func<string, AppConfig, List<AuditRow>, Task>? _commitConfig;
     private readonly Func<AppConfig> _getConfig;
     private readonly string _aiDataRoot;
     private readonly string _briefsDir;
@@ -44,7 +45,8 @@ public sealed class AgentRunner : IDisposable
         string configFilePath,
         Action<AppConfig> saveConfig,
         Func<AppConfig> getConfig,
-        string aiDataRoot)
+        string aiDataRoot,
+        Func<string, AppConfig, List<AuditRow>, Task>? commitConfig = null)
     {
         _digester = digester;
         _memo = memo;
@@ -54,6 +56,7 @@ public sealed class AgentRunner : IDisposable
         _snapshots = snapshots;
         _configFilePath = configFilePath;
         _saveConfig = saveConfig;
+        _commitConfig = commitConfig;
         _getConfig = getConfig;
         _aiDataRoot = aiDataRoot;
         _briefsDir = Path.Combine(aiDataRoot, "ai-briefs");
@@ -95,7 +98,7 @@ public sealed class AgentRunner : IDisposable
         catch (ObjectDisposedException) { } // Run finished between capture and cancellation.
     }
 
-    public Task RunNowAsync() => RunOnceAsync(manualTrigger: true);
+    public Task RunNowAsync() => Task.Run(() => RunOnceAsync(manualTrigger: true));
 
     private void OnPower(object? _, PowerModeChangedEventArgs e)
     {
@@ -144,7 +147,7 @@ public sealed class AgentRunner : IDisposable
         var lines = new List<string>();
         foreach (var g in rows.Reverse().GroupBy(r => r.RunId).Take(3))
         {
-            lines.Add($"run {g.Key[..Math.Min(8, g.Key.Length)]}: applied={g.Count(r => r.Applied)} rejected={g.Count(r => !r.Applied)}");
+            lines.Add($"run {g.Key[..Math.Min(8, g.Key.Length)]}: applied={g.Count(r => r.WasApplied)} rejected={g.Count(r => !r.Applied)} previews={g.Count(r => r.Applied && r.DryRun)}");
             foreach (var r in g.Where(r => !r.Applied).Take(MaxRejectionLinesPerRun))
             {
                 var after = r.After is null ? "null" : JsonSerializer.Serialize(r.After);
@@ -238,7 +241,7 @@ public sealed class AgentRunner : IDisposable
                 return;
             }
 
-            var digest = _digester.Build(cfg.Agent.WindowDays);
+            var digest = await _digester.BuildAsync(cfg.Agent.WindowDays, ct).ConfigureAwait(false);
             var memoText = _memo.Load();
             var frozenPaths = _freeze.All.Select(e => e.Path).ToList();
 
@@ -316,7 +319,10 @@ public sealed class AgentRunner : IDisposable
                 auditRows.Add, configOnly: true);
             if (cfg.Agent.DryRunsRemaining > 0) cfg.Agent.DryRunsRemaining--;
             ct.ThrowIfCancellationRequested();
-            AgentConfigCommit.Commit(_configFilePath, baseline, cfg, auditRows, _aiDataRoot, _saveConfig, _audit);
+            if (_commitConfig != null)
+                await _commitConfig(baseline, cfg, auditRows).ConfigureAwait(false);
+            else
+                AgentConfigCommit.Commit(_configFilePath, baseline, cfg, auditRows, _aiDataRoot, _saveConfig, _audit);
             _memo.Save(outcome.Result.MemoUpdate);
 
             var footer =
@@ -328,6 +334,10 @@ public sealed class AgentRunner : IDisposable
             _lastRunUtc = DateTime.UtcNow;
             _consecutiveFailedRuns = 0;
             SaveLastRun();
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            status = "cancelled";
         }
         catch (Exception ex)
         {

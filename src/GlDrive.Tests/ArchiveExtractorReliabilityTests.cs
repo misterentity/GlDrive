@@ -74,6 +74,33 @@ public sealed class ArchiveExtractorReliabilityTests : IDisposable
         Assert.Empty(Directory.EnumerateFiles(_root, "*.gldrive-tmp"));
     }
 
+    [Fact]
+    public void AtomicCopy_TruncatedVideoDoesNotPublishPlayableCacheFile()
+    {
+        var destination = Path.Combine(_root, "movie.mkv");
+        using var source = new MemoryStream("truncated"u8.ToArray());
+
+        Assert.Throws<EndOfStreamException>(() => ArchiveFileOperations.CopyToFileAtomically(
+            source, destination, CancellationToken.None, expectedLength: 1000));
+
+        Assert.False(File.Exists(destination));
+        Assert.Empty(Directory.EnumerateFiles(_root));
+    }
+
+    [Fact]
+    public void AtomicCopy_CorruptVideoStreamLeavesExistingCacheUntouched()
+    {
+        var destination = Path.Combine(_root, "movie.mkv");
+        File.WriteAllText(destination, "known-good");
+        using var source = new ThrowAfterFirstReadStream(new byte[ArchiveFileOperations.BufferSize * 2]);
+
+        Assert.Throws<InvalidDataException>(() => ArchiveFileOperations.CopyToFileAtomically(
+            source, destination, CancellationToken.None, source.Length));
+
+        Assert.Equal("known-good", File.ReadAllText(destination));
+        Assert.Empty(Directory.EnumerateFiles(_root, "*.gldrive-tmp"));
+    }
+
     private string Touch(string name)
     {
         var path = Path.Combine(_root, name);
@@ -100,6 +127,15 @@ public sealed class ArchiveExtractorReliabilityTests : IDisposable
                 cts.Cancel();
             }
             return read;
+        }
+    }
+
+    private sealed class ThrowAfterFirstReadStream(byte[] data) : MemoryStream(data)
+    {
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            if (Position > 0) throw new InvalidDataException("Corrupt archive entry");
+            return base.Read(buffer, offset, Math.Min(count, ArchiveFileOperations.BufferSize));
         }
     }
 }

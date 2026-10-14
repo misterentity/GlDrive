@@ -47,6 +47,20 @@ public class TransferPacerTests
         Assert.InRange(t.Waited.TotalSeconds, 8.8, 9.2);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Buffers_larger_than_the_rate_repay_all_debt_before_the_next_chunk(bool perNetwork)
+    {
+        var t = new FakeTime();
+        const long rate = 64 * 1024;
+        var pacer = Pacer(t, () => perNetwork ? 0 : rate, _ => perNetwork ? rate : 0);
+        await Send(pacer, "eth", 1024 * 1024, chunk: 256 * 1024);
+        // The retired downloader waited at most 1s per chunk and finished in 4s.
+        // One second of token-bucket burst is allowed; all remaining debt is paid.
+        Assert.InRange(t.Waited.TotalSeconds, 14.99, 15.01);
+    }
+
     [Fact]
     public async Task Per_network_limit_applies_only_to_that_network()
     {

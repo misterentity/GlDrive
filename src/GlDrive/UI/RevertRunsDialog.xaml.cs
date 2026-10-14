@@ -23,7 +23,7 @@ public partial class RevertRunsDialog : Window
         var audit = App.AuditTrail;
         if (audit is null) return;
         var runs = audit.ReadAll()
-            .Where(r => r.Applied && !r.Undone)
+            .Where(r => r.WasApplied && !r.Undone)
             .GroupBy(r => r.RunId)
             .OrderByDescending(g => g.First().Ts)
             .Take(30)
