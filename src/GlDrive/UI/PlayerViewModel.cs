@@ -1268,9 +1268,8 @@ public partial class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
                 Log.Information("Extracting {Name} ({Size} bytes) from RAR", videoEntry.Key, videoEntry.Size);
                 using var entryStream = videoEntry.OpenEntryStream();
-                using var outStream = new FileStream(outPath, FileMode.Create, FileAccess.Write,
-                    FileShare.None, 256 * 1024, FileOptions.SequentialScan);
-                entryStream.CopyTo(outStream, 256 * 1024);
+                Downloads.ArchiveFileOperations.CopyToFileAtomically(entryStream, outPath,
+                    CancellationToken.None, videoEntry.Size);
 
                 // Clean up RAR volumes
                 foreach (var f in Directory.GetFiles(dir)
@@ -1382,9 +1381,8 @@ public partial class PlayerViewModel : INotifyPropertyChanged, IDisposable
                 if (File.Exists(outPath)) return outPath;
 
                 using var entryStream = videoEntry.OpenEntryStream();
-                using var outStream = new FileStream(outPath, FileMode.Create, FileAccess.Write,
-                    FileShare.None, 256 * 1024, FileOptions.SequentialScan);
-                entryStream.CopyTo(outStream, 256 * 1024);
+                Downloads.ArchiveFileOperations.CopyToFileAtomically(entryStream, outPath,
+                    CancellationToken.None, videoEntry.Size);
 
                 // Clean up RAR volumes
                 foreach (var f in Directory.GetFiles(dir)

@@ -118,7 +118,7 @@ internal sealed class FtpLane : ISegmentLane
                 // server can't resume mid-file.
                 throw new RangeNotSupportedException($"REST {offset} refused: {ex.CompletionCode} {ex.Message}");
             }
-            return new StandardReader(client, stream);
+            return new StandardReader(stream, client.GetReply);
         }
 
         // Each CPSV RETR is one complete data sequence; OpenDataTcp marks the control channel
@@ -242,7 +242,7 @@ internal sealed class FtpLane : ISegmentLane
         }
     }
 
-    private sealed class StandardReader(AsyncFtpClient client, Stream stream) : ISegmentReader
+    internal sealed class StandardReader(Stream stream, Func<CancellationToken, Task<FtpReply>> getReply) : ISegmentReader
     {
         public ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct) => stream.ReadAsync(buffer, ct);
 
@@ -254,9 +254,8 @@ internal sealed class FtpLane : ISegmentLane
             if (await stream.ReadAsync(probe, ct) != 0)
                 throw new IOException("server sent more bytes than the file size");
             stream.Close();
-            var reply = await client.GetReply(ct);
-            if (!reply.Success)
-                throw new IOException($"RETR did not complete: {reply.Code} {reply.Message}");
+            var reply = await getReply(ct);
+            CpsvDataHelper.ValidateCompletion(reply);
         }
 
         public async ValueTask DisposeAsync() => await stream.DisposeAsync();

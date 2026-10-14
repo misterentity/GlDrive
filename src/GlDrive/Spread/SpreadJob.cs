@@ -1036,10 +1036,8 @@ public class SpreadJob : IDisposable
                     // not idle — the retry is scheduled. Hard-cap the total
                     // time we'll wait on backoffs (3min, above the 2min tier
                     // of the ladder) so a permanently-dropped dest can't
-                    // pin the race forever, but otherwise keep lastActivity
-                    // fresh. Without this, a 30s backoff fires its retry
+                    // pin the race forever. Without this, a 30s backoff fires its retry
                     // only AFTER the 15s idle timer has killed the race.
-                    var idleSeconds = (DateTime.UtcNow - lastActivity).TotalSeconds;
                     var nextBackoff = NextBackoffExpiry();
                     // A server in a BNC cooldown is pending work too — its 90s
                     // window will expire and candidates resume. Treat it like an
@@ -1062,12 +1060,8 @@ public class SpreadJob : IDisposable
                     // at 180s hands the stall to the completion sweep, whose pool
                     // reinit + forced rescan actually unblocks the transfer attempt.
                     var pendingWork = (nextBackoff is { } bAt && bAt > DateTime.UtcNow) || anyCooldown;
-                    if ((pendingWork && idleSeconds < 180)
-                        || (awaitingCompletion && idleSeconds < awaitCapSeconds))
-                    {
-                        lastActivity = DateTime.UtcNow;
-                        idleSeconds = 0;
-                    }
+                    var idleSeconds = EffectiveIdleSeconds(lastActivity, DateTime.UtcNow,
+                        pendingWork, awaitingCompletion, awaitCapSeconds);
 
                     // cbftp's race-level inactivity timeout is 60s (MAX_CHECKS_BEFORE_TIMEOUT * tick).
                     // Previous 15s killed races that were just waiting on a slow LIST,
@@ -1340,6 +1334,17 @@ public class SpreadJob : IDisposable
         {
             Log.Debug(ex, "EmitRaceOutcome failed for race {RaceId}", Id);
         }
+    }
+
+    internal static double EffectiveIdleSeconds(DateTime lastActivity, DateTime now,
+        bool pendingWork, bool awaitingCompletion, double awaitCapSeconds)
+    {
+        var elapsed = (now - lastActivity).TotalSeconds;
+        // Suppress the idle verdict for this iteration only. Moving lastActivity
+        // here would renew the allowance on every poll and make its cap unreachable.
+        if ((pendingWork && elapsed < 180)
+            || (awaitingCompletion && elapsed < awaitCapSeconds)) return 0;
+        return elapsed;
     }
 
     /// <summary>

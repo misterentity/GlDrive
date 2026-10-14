@@ -42,6 +42,8 @@ public class SettingsViewModel : INotifyPropertyChanged
     private string _spreadTransferTimeout;
     private string _spreadHardTimeout;
     private string _spreadMaxConcurrent;
+    private readonly string _initialSpreadPoolSize;
+    private readonly string _initialSpreadMaxConcurrent;
     private bool _spreadAutoRace;
     private bool _spreadNotifyComplete;
     private bool _spreadDebugMode;
@@ -85,9 +87,11 @@ public class SettingsViewModel : INotifyPropertyChanged
         _playSoundOnComplete = config.Downloads.PlaySoundOnComplete;
         _theme = config.Downloads.Theme;
         _spreadPoolSize = config.Spread.SpreadPoolSize.ToString();
+        _initialSpreadPoolSize = _spreadPoolSize;
         _spreadTransferTimeout = config.Spread.TransferTimeoutSeconds.ToString();
         _spreadHardTimeout = config.Spread.HardTimeoutSeconds.ToString();
         _spreadMaxConcurrent = config.Spread.MaxConcurrentRaces.ToString();
+        _initialSpreadMaxConcurrent = _spreadMaxConcurrent;
         _spreadAutoRace = config.Spread.AutoRaceOnNotification;
         _spreadNotifyComplete = config.Spread.NotifyOnRaceComplete;
         _spreadDebugMode = config.Spread.DebugMode;
@@ -267,14 +271,14 @@ public class SettingsViewModel : INotifyPropertyChanged
             System.Windows.MessageBoxImage.Warning) != System.Windows.MessageBoxResult.Yes) return;
         if (App.AuditTrail is null || App.ChangeApplier is null) return;
 
-        var runs = App.AuditTrail.ReadAll().Where(r => r.Applied && !r.Undone)
+        var runs = App.AuditTrail.ReadAll().Where(r => r.WasApplied && !r.Undone)
             .GroupBy(r => r.RunId).Select(g => g.Key).ToList();
         var failures = new List<string>();
         var reverted = 0;
         foreach (var runId in runs)
         {
             var rows = App.AuditTrail.ReadAll()
-                .Where(r => r.RunId == runId && r.Applied && !r.Undone).Reverse().ToList();
+                .Where(r => r.RunId == runId && r.WasApplied && !r.Undone).Reverse().ToList();
             foreach (var r in rows)
             {
                 var inverse = new GlDrive.AiAgent.AgentChange
@@ -362,10 +366,9 @@ public class SettingsViewModel : INotifyPropertyChanged
         config.Downloads.PlaySoundOnComplete = PlaySoundOnComplete;
         config.Downloads.Theme = Theme;
 
-        config.Spread.SpreadPoolSize = int.TryParse(SpreadPoolSize, out var sps) ? Math.Clamp(sps, 1, 10) : 3;
+        ApplyAgentTunableSpreadSettings(config);
         config.Spread.TransferTimeoutSeconds = int.TryParse(SpreadTransferTimeout, out var stt) ? Math.Clamp(stt, 10, 600) : 60;
         config.Spread.HardTimeoutSeconds = int.TryParse(SpreadHardTimeout, out var sht) ? Math.Clamp(sht, 60, 7200) : 1200;
-        config.Spread.MaxConcurrentRaces = int.TryParse(SpreadMaxConcurrent, out var smc) ? Math.Clamp(smc, 1, 10) : 3;
         config.Spread.AutoRaceOnNotification = SpreadAutoRace;
         config.Spread.NotifyOnRaceComplete = SpreadNotifyComplete;
         config.Spread.DebugMode = SpreadDebugMode;
@@ -409,6 +412,16 @@ public class SettingsViewModel : INotifyPropertyChanged
         TrustedCertsInfo = certs.Count == 0
             ? "No trusted certificates."
             : $"{certs.Count} trusted certificate(s).";
+    }
+
+    internal void ApplyAgentTunableSpreadSettings(AppConfig config)
+    {
+        // An open Settings window may predate an AI commit. Untouched editor
+        // fields must not write their cached values over the published settings.
+        if (SpreadPoolSize != _initialSpreadPoolSize)
+            config.Spread.SpreadPoolSize = int.TryParse(SpreadPoolSize, out var pool) ? Math.Clamp(pool, 1, 32) : 3;
+        if (SpreadMaxConcurrent != _initialSpreadMaxConcurrent)
+            config.Spread.MaxConcurrentRaces = int.TryParse(SpreadMaxConcurrent, out var races) ? Math.Clamp(races, 1, 32) : 3;
     }
 
     private static string GetCertsInfo()

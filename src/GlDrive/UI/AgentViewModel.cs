@@ -5,6 +5,8 @@ using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Input;
 using GlDrive.AiAgent;
+using GlDrive.Config;
+using System.Text.Json;
 
 namespace GlDrive.UI;
 
@@ -87,7 +89,7 @@ public sealed class AgentViewModel : INotifyPropertyChanged
     {
         AuditRows.Clear();
         if (App.AuditTrail is null) return;
-        foreach (var r in App.AuditTrail.ReadAll().Where(r => r.Applied).Reverse().Take(500))
+        foreach (var r in App.AuditTrail.ReadAll().Where(r => r.WasApplied).Reverse().Take(500))
             AuditRows.Add(r);
     }
 
@@ -96,7 +98,7 @@ public sealed class AgentViewModel : INotifyPropertyChanged
         Suggestions.Clear();
         if (App.AuditTrail is null) return;
         foreach (var r in App.AuditTrail.ReadAll()
-                    .Where(r => !r.Applied && r.RejectionReason is not ("frozen" or "malformed") && !r.Undone)
+                    .Where(r => r.IsSuggestion)
                     .Reverse().Take(500))
             Suggestions.Add(r);
     }
@@ -114,9 +116,9 @@ public sealed class AgentViewModel : INotifyPropertyChanged
         Memo = App.AgentMemo.Load();
     }
 
-    private void UndoRow(AuditRow row)
+    private async Task UndoRow(AuditRow row)
     {
-        if (!row.Applied || row.Undone) return;
+        if (!row.WasApplied || row.Undone) return;
         try
         {
             var inverse = new AgentChange
@@ -129,12 +131,17 @@ public sealed class AgentViewModel : INotifyPropertyChanged
                 EvidenceRef = "user-undo",
                 Confidence = 1.0
             };
-            var cfg = GlDrive.Config.ConfigManager.Load();
+            var (baseline, cfg) = ReadCandidate();
+            var pending = new List<AuditRow>();
             var undoRunId = "undo-" + Guid.NewGuid().ToString()[..8];
             var report = AgentUndoCompletion.ApplyInverse(row,
-                () => App.ChangeApplier?.Apply(new[] { inverse }, cfg, cfg.Agent, undoRunId, dryRun: false));
+                () => App.ChangeApplier?.Apply(new[] { inverse }, cfg, cfg.Agent, undoRunId, dryRun: false, pending.Add));
+            if (report is { Applied: 1, Rejected: 0 })
+                await CommitChanges(baseline, cfg, pending);
+            else
+                foreach (var rejected in pending) App.AuditTrail?.Append(rejected);
             if (!AgentUndoCompletion.TryComplete(report,
-                () => GlDrive.Config.ConfigManager.Save(cfg),
+                () => { }, // already persisted and published before marking the original
                 () => App.AuditTrail?.MarkUndone(row.RunId, row.Target, "user-click"),
                 () => App.TelemetryRecorder?.Record(TelemetryStream.Overrides, new ConfigOverrideEvent
                 {
@@ -149,9 +156,9 @@ public sealed class AgentViewModel : INotifyPropertyChanged
         catch (Exception ex) { MessageBox.Show("Undo failed: " + ex.Message); }
     }
 
-    private void ApplyAnyway(AuditRow row)
+    private async Task ApplyAnyway(AuditRow row)
     {
-        if (row.Applied) return;
+        if (!row.IsSuggestion) return;
         try
         {
             var change = new AgentChange
@@ -164,10 +171,21 @@ public sealed class AgentViewModel : INotifyPropertyChanged
                 EvidenceRef = row.EvidenceRef,
                 Confidence = 1.0  // force through confidence gate
             };
-            var cfg = GlDrive.Config.ConfigManager.Load();
-            App.ChangeApplier?.Apply(new[] { change }, cfg, cfg.Agent,
-                "manual-" + Guid.NewGuid().ToString()[..8], dryRun: false);
-            GlDrive.Config.ConfigManager.Save(cfg);
+            var (baseline, cfg) = ReadCandidate();
+            var pending = new List<AuditRow>();
+            var report = App.ChangeApplier?.Apply(new[] { change }, cfg, cfg.Agent,
+                "manual-" + Guid.NewGuid().ToString()[..8], dryRun: false, pending.Add);
+            if (report is { Applied: 1, Rejected: 0 })
+            {
+                await CommitChanges(baseline, cfg, pending);
+                App.AuditTrail?.Dismiss(row, "applied-manually");
+            }
+            else
+            {
+                foreach (var rejected in pending) App.AuditTrail?.Append(rejected);
+                MessageBox.Show(report == null ? "The AI change service is unavailable."
+                    : "The change was not applied: " + string.Join(", ", report.RejectionByReason.Keys), "Change not applied");
+            }
             RefreshAudit();
             RefreshSuggestions();
         }
@@ -176,9 +194,22 @@ public sealed class AgentViewModel : INotifyPropertyChanged
 
     private void Dismiss(AuditRow row)
     {
-        App.AuditTrail?.MarkUndone(row.RunId, row.Target, "user-dismiss");
+        App.AuditTrail?.Dismiss(row);
         RefreshSuggestions();
     }
+
+    private static (string Baseline, AppConfig Candidate) ReadCandidate()
+    {
+        var baseline = File.ReadAllText(ConfigManager.ConfigPath);
+        var candidate = JsonSerializer.Deserialize<AppConfig>(baseline,
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })
+            ?? throw new IOException("Configuration is null");
+        return (baseline, candidate);
+    }
+
+    private static Task CommitChanges(string baseline, AppConfig candidate, List<AuditRow> rows)
+        => Application.Current is App app ? app.CommitAgentChangesAsync(baseline, candidate, rows)
+            : throw new InvalidOperationException("The running application is unavailable.");
 }
 
 // Shared by single-row and batch undo: rejected inverses must not erase undo history,
@@ -189,7 +220,9 @@ internal static class AgentUndoCompletion
         Func<ChangeApplier.RunReport?> apply)
     {
         string? rejection = null;
-        if (row.Target.EndsWith("/-", StringComparison.Ordinal))
+        if (!row.WasApplied || row.Undone)
+            rejection = "only applied changes can be undone; previews did not change settings";
+        else if (row.Target.EndsWith("/-", StringComparison.Ordinal))
             rejection = "appended entries require manual removal or a configuration snapshot restore";
         else if (row.Category == AgentCategories.Skiplist
             && (row.After is null || row.After is System.Text.Json.JsonElement

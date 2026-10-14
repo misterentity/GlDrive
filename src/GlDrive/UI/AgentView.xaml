@@ -60,6 +60,7 @@ supported field to Freeze), confidence threshold, kill switch in tray.
             <DataGridTextColumn Header="Time" Binding="{Binding Ts}" Width="140"/>
             <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="120"/>
             <DataGridTextColumn Header="Target" Binding="{Binding Target}" Width="280"/>
+            <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="80"/>
             <DataGridTextColumn Header="Reason" Binding="{Binding RejectionReason}" Width="180"/>
             <DataGridTextColumn Header="Confidence" Binding="{Binding Confidence}" Width="80"/>
             <DataGridTemplateColumn Header="Action" Width="180">

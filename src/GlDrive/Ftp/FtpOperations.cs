@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text.RegularExpressions;
 using FluentFTP;
+using FluentFTP.Exceptions;
 using Serilog;
 
 namespace GlDrive.Ftp;
@@ -206,7 +207,11 @@ public class FtpOperations
     {
         await using var conn = await _pool.Borrow(ct);
         Log.Debug("RMD {Path}", remotePath);
-        await conn.Client.DeleteDirectory(remotePath, ct);
+        // A filesystem directory deletion is nonrecursive. FluentFTP's
+        // DeleteDirectory deletes its contents too, including files created after
+        // CanDelete checked the listing. Let the server atomically reject those.
+        var reply = await conn.Client.Execute($"RMD {CpsvDataHelper.SanitizeFtpPath(remotePath)}", ct);
+        if (!reply.Success) throw new FtpCommandException(reply);
     }
 
     public async Task Rename(string fromPath, string toPath, CancellationToken ct = default)

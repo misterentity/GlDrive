@@ -13,6 +13,19 @@ internal static class AgentConfigCommit
     internal sealed record Pending(string BeforeHash, string AfterHash, List<AuditRow> Rows);
     private static string Hash(string text) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
 
+    // Called on the dispatcher, before taking the file lock: readers/savers on
+    // that dispatcher cannot observe the gap between disk commit and publication.
+    internal static void CommitAndPublish(string configPath, string expected, AppConfig candidate,
+        List<AuditRow> rows, string root, Action<AppConfig> save, AuditTrail audit, AppConfig live)
+    {
+        var baseline = JsonSerializer.Deserialize<AppConfig>(expected, Options)
+            ?? throw new IOException("Configuration is null");
+        if (JsonSerializer.Serialize(live, Options) != JsonSerializer.Serialize(baseline, Options))
+            throw new IOException("Settings have unsaved changes; AI proposals were discarded to preserve your edits.");
+        Commit(configPath, expected, candidate, rows, root, save, audit,
+            value => ConfigReconciler.Apply(live, value));
+    }
+
     internal static void Recover(string configPath, string root, AuditTrail audit)
     {
         SecureFile.WithPathLock(configPath, () =>
@@ -30,7 +43,8 @@ internal static class AgentConfigCommit
     }
 
     internal static void Commit(string configPath, string expected, AppConfig candidate,
-        List<AuditRow> rows, string root, Action<AppConfig> save, AuditTrail audit)
+        List<AuditRow> rows, string root, Action<AppConfig> save, AuditTrail audit,
+        Action<AppConfig>? publish = null)
     {
         SecureFile.WithPathLock(configPath, () =>
         {
@@ -44,6 +58,7 @@ internal static class AgentConfigCommit
             save(candidate);
             if (Hash(File.ReadAllText(configPath)) != Hash(next))
                 throw new IOException("AI settings were not persisted; commit evidence retained.");
+            publish?.Invoke(candidate);
             audit.AppendBatchRequired(rows);
             File.Delete(journal);
         });

@@ -118,7 +118,9 @@ public class CertificateManager
         {
             try
             {
-                using var cert2 = certificate as X509Certificate2 ?? new X509Certificate2(certificate);
+                // The validation callback owns its certificate. Dispose only our
+                // copy, including when the supplied instance is already a cert2.
+                using var cert2 = new X509Certificate2(certificate);
                 subject = cert2.Subject;
                 issuer = cert2.Issuer;
                 notAfter = cert2.NotAfter;

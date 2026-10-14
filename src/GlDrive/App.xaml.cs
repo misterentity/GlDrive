@@ -25,6 +25,7 @@ public partial class App
     private GlDrive.Services.HeartbeatMonitor? _heartbeat;
     private GlDrive.Services.ControlApi? _controlApi;
     private AutomationRegistry? _automation;
+    private AppConfig? _runtimeConfig;
     private bool _ownsCrashMarker;
 
     public static GlDrive.AiAgent.TelemetryRecorder? TelemetryRecorder { get; private set; }
@@ -39,6 +40,23 @@ public partial class App
     public static GlDrive.AiAgent.ChangeApplier? ChangeApplier { get; private set; }
     public static GlDrive.AiAgent.LogDigester? LogDigester { get; private set; }
     public static GlDrive.AiAgent.AgentRunner? AgentRunner { get; private set; }
+
+    internal async Task CommitAgentChangesAsync(string baseline, AppConfig candidate,
+        List<GlDrive.AiAgent.AuditRow> rows)
+    {
+        await Dispatcher.InvokeAsync(() => GlDrive.AiAgent.AgentConfigCommit.CommitAndPublish(
+            ConfigManager.ConfigPath, baseline, candidate, rows,
+            Path.Combine(ConfigManager.AppDataPath, "ai-data"), ConfigManager.Save,
+            AuditTrail ?? throw new InvalidOperationException("Audit trail is unavailable"),
+            _runtimeConfig ?? throw new InvalidOperationException("Runtime settings are unavailable")));
+        if (_serverManager != null)
+        {
+            // Refresh listeners/pools that cache compiled rules or sizing. The
+            // configuration itself is already published even if reconnection fails.
+            try { await (await Dispatcher.InvokeAsync(() => _serverManager.SyncAfterConfigChange())); }
+            catch (Exception ex) { Log.Warning(ex, "AI settings saved; runtime service refresh failed"); }
+        }
+    }
 
     internal void RefreshControlApi(AppConfig config)
     {
@@ -192,6 +210,7 @@ public partial class App
 
         // Load config
         var config = ConfigManager.Load();
+        _runtimeConfig = config;
         GlDrive.Downloads.Segmented.DownloadNetworkServices.Initialize(config.Downloads);
 
         // Init logging
@@ -266,7 +285,7 @@ public partial class App
             ConfigManager.ConfigPath,
             cfg => ConfigManager.Save(cfg),
             () => ConfigManager.Load(),
-            System.IO.Path.Combine(ConfigManager.AppDataPath, "ai-data"));
+            System.IO.Path.Combine(ConfigManager.AppDataPath, "ai-data"), CommitAgentChangesAsync);
         AgentRunner.Start();
 
         // Check first run
@@ -282,6 +301,7 @@ public partial class App
                 return;
             }
             config = ConfigManager.Load(); // Reload after wizard saves
+            _runtimeConfig = config;
             GlDrive.Downloads.Segmented.DownloadNetworkServices.Initialize(config.Downloads);
         }
 

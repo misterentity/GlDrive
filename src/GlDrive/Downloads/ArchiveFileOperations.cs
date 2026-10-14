@@ -8,7 +8,8 @@ internal static class ArchiveFileOperations
 {
     internal const int BufferSize = 256 * 1024;
 
-    internal static void CopyToFileAtomically(Stream source, string destination, CancellationToken ct)
+    internal static void CopyToFileAtomically(Stream source, string destination, CancellationToken ct,
+        long? expectedLength = null)
     {
         var directory = Path.GetDirectoryName(destination)
             ?? throw new IOException($"Destination has no parent directory: {destination}");
@@ -30,6 +31,8 @@ internal static class ArchiveFileOperations
                     output.Write(buffer, 0, read);
                 }
                 ct.ThrowIfCancellationRequested();
+                if (expectedLength.HasValue && output.Length != expectedLength.Value)
+                    throw new EndOfStreamException($"Extracted file length {output.Length} differs from expected {expectedLength.Value}.");
                 output.Flush(flushToDisk: true);
             }
             ct.ThrowIfCancellationRequested();

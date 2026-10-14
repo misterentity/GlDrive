@@ -476,11 +476,12 @@ public class ServerManager : IDisposable
                 : "",
             CredentialStore.GetIrcPassword(server.Irc.Host, server.Irc.Port, server.Irc.Nick) ?? "");
         var credentialFingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(secrets)));
-        return JsonSerializer.Serialize(new RuntimeConfigSnapshot(server, _config.Downloads, credentialFingerprint));
+        return JsonSerializer.Serialize(new RuntimeConfigSnapshot(server, _config.Downloads, credentialFingerprint,
+            _config.Spread.SpreadPoolSize));
     }
 
     private sealed record RuntimeConfigSnapshot(
-        ServerConfig Server, DownloadConfig Downloads, string CredentialFingerprint);
+        ServerConfig Server, DownloadConfig Downloads, string CredentialFingerprint, int SpreadPoolSize);
 
     /// <summary>
     /// Analyze buffered IRC messages for a server and return detected announce patterns.

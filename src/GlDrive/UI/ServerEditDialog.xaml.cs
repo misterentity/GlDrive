@@ -219,9 +219,10 @@ public partial class ServerEditDialog : Window
     // and persists to the global store. Clear the SynchronizationContext so the
     // blocking .GetResult() can't deadlock when the callback fires on the WPF
     // dispatcher (mirrors FtpClientFactory.Create).
-    private static void AttachTofuValidation(AsyncFtpClient client, string host, int port)
+    internal static void AttachTofuValidation(AsyncFtpClient client, string host, int port,
+        Tls.CertificateManager? certificateManager = null)
     {
-        var certMgr = new Tls.CertificateManager();
+        var certMgr = certificateManager ?? new Tls.CertificateManager();
         client.ValidateCertificate += (control, e) =>
         {
             var prevCtx = SynchronizationContext.Current;
@@ -241,6 +242,8 @@ public partial class ServerEditDialog : Window
     private async void TestConnection_Click(object sender, RoutedEventArgs e)
     {
         TestResultText.Text = "Testing connection...";
+        AsyncFtpClient? client = null;
+        var receiveCompleted = false;
         try
         {
             var host = HostBox.Text;
@@ -249,8 +252,6 @@ public partial class ServerEditDialog : Window
             var password = PasswordBox.Password;
             if (string.IsNullOrEmpty(password))
                 password = CredentialStore.GetPassword(host, port, username) ?? "";
-
-            AsyncFtpClient client;
 
             if (ProxyEnabledBox.IsChecked == true && !string.IsNullOrWhiteSpace(ProxyHostBox.Text))
             {
@@ -278,39 +279,20 @@ public partial class ServerEditDialog : Window
 
             client.Config.EncryptionMode = FtpEncryptionMode.Explicit;
             client.Config.DataConnectionEncryption = true;
-            client.Config.CustomStream = typeof(GnuTlsStream);
+            client.Config.CustomStream = typeof(SerializedGnuTlsStream);
+            FtpClientFactory.ApplyOwnerExclusiveConfig(client.Config);
+            client.Config.StaleDataCheck = false;
             var gnuConfig = new GnuConfig { SecuritySuite = GnuSuite.Secure128 };
             if (PreferTls12Box.IsChecked == true)
                 gnuConfig.AdvancedOptions = [GnuAdvanced.NoTickets];
             client.Config.CustomStreamConfig = gnuConfig;
-            string? certFingerprint = null;
-            client.ValidateCertificate += (control, e) =>
-            {
-                e.Accept = true;
-                if (e.Certificate != null)
-                {
-                    using var cert2 = new System.Security.Cryptography.X509Certificates.X509Certificate2(e.Certificate);
-                    certFingerprint = Convert.ToHexString(
-                        cert2.GetCertHash(System.Security.Cryptography.HashAlgorithmName.SHA256));
-                }
-            };
+            // Validate during the TLS handshake, before USER/PASS. A changed
+            // existing pin is rejected; replacing it requires Clear Certificate.
+            AttachTofuValidation(client, host, port);
 
             await client.Connect();
             var listing = await client.GetListing("/");
-            await client.Disconnect();
-
-            // Auto-trust the certificate so subsequent connects succeed.
-            // This is the deliberate Test-Connection TOFU UX (accept-then-pin), but
-            // surface the SHA-256 fingerprint first so a first-connect MitM cert is
-            // visible in the log before it's written to the trusted store.
-            if (certFingerprint != null)
-            {
-                Log.Information("Test connection: pinning certificate for {Host}:{Port} fingerprint {Fingerprint}",
-                    host, port, certFingerprint);
-                var certMgr = new Tls.CertificateManager();
-                certMgr.TrustCertificate($"{host}:{port}", certFingerprint);
-            }
-            client.Dispose();
+            receiveCompleted = true;
 
             var via = ProxyEnabledBox.IsChecked == true ? " (via SOCKS5 proxy)" : "";
             TestResultText.Text = $"Success! Connected{via} and listed {listing.Length} items in root.";
@@ -319,6 +301,23 @@ public partial class ServerEditDialog : Window
         {
             TestResultText.Text = $"Failed: {ex.Message}";
             Log.Warning(ex, "Test connection failed");
+        }
+        finally
+        {
+            if (client != null)
+            {
+                // A failed managed await can leave a native recv draining. Keep
+                // the client alive and defer even socket closure past CommTimeout.
+                _ = Task.Run(async () =>
+                {
+                    if (!receiveCompleted)
+                        await Task.Delay(FtpConnectionPool.AbandonedReclaimDelay).ConfigureAwait(false);
+                    var detached = FtpConnectionPool.NeutralizeGnuTls(client);
+                    try { client.Dispose(); }
+                    catch (Exception ex) { Log.Debug(ex, "Connection test cleanup failed"); }
+                    finally { FtpConnectionPool.FreeDetachedGnuTls(detached, "connection test"); }
+                });
+            }
         }
     }
 

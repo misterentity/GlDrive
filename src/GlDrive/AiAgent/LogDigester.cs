@@ -8,9 +8,16 @@ namespace GlDrive.AiAgent;
 public sealed class LogDigester
 {
     private readonly string _aiDataRoot;
+    private readonly Func<string, Stream> _openRead;
     private int _parseSkips;
 
-    public LogDigester(string aiDataRoot) { _aiDataRoot = aiDataRoot; }
+    public LogDigester(string aiDataRoot) : this(aiDataRoot, File.OpenRead) { }
+
+    internal LogDigester(string aiDataRoot, Func<string, Stream> openRead)
+    {
+        _aiDataRoot = aiDataRoot;
+        _openRead = openRead;
+    }
 
     /// <summary>
     /// Telemetry rows dropped because they would not deserialize, counted across every stream read
@@ -20,8 +27,12 @@ public sealed class LogDigester
     /// </summary>
     public int ParseSkips => _parseSkips;
 
-    public DigestBundle Build(int windowDays, DateTime? nowOverride = null)
+    public Task<DigestBundle> BuildAsync(int windowDays, CancellationToken cancellationToken = default)
+        => Task.Run(() => Build(windowDays, cancellationToken: cancellationToken), cancellationToken);
+
+    public DigestBundle Build(int windowDays, DateTime? nowOverride = null, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var now = nowOverride ?? DateTime.Now;
         var windowStart = now.AddDays(-windowDays).Date;
         _parseSkips = 0;
@@ -31,18 +42,18 @@ public sealed class LogDigester
             WindowEnd = now.ToString("O")
         };
 
-        bundle.Races           = new RacesDigester().Build(ReadStream<RaceOutcomeEvent>("races", windowStart, now));
-        bundle.Nukes           = new NukesDigester().Build(ReadStream<NukeDetectedEvent>("nukes", windowStart, now));
-        bundle.SiteHealth      = new SiteHealthDigester().Build(ReadStream<SiteHealthEvent>("site-health", windowStart, now));
-        bundle.Announces       = new AnnouncesDigester().Build(ReadStream<AnnounceNoMatchEvent>("announces-nomatch", windowStart, now));
-        bundle.Wishlist        = new WishlistDigester().Build(ReadStream<WishlistAttemptEvent>("wishlist-attempts", windowStart, now));
-        bundle.Overrides       = new OverridesDigester().Build(ReadStream<ConfigOverrideEvent>("overrides", windowStart, now));
-        bundle.Downloads       = new DownloadsDigester().Build(ReadStream<DownloadOutcomeEvent>("downloads", windowStart, now));
-        bundle.Transfers       = new TransfersDigester().Build(ReadStream<FileTransferEvent>("transfers", windowStart, now));
-        bundle.SectionActivity = new SectionActivityDigester().Build(ReadStream<SectionActivityEvent>("section-activity", windowStart, now));
+        bundle.Races           = new RacesDigester().Build(ReadStream<RaceOutcomeEvent>("races", windowStart, now, cancellationToken));
+        bundle.Nukes           = new NukesDigester().Build(ReadStream<NukeDetectedEvent>("nukes", windowStart, now, cancellationToken));
+        bundle.SiteHealth      = new SiteHealthDigester().Build(ReadStream<SiteHealthEvent>("site-health", windowStart, now, cancellationToken));
+        bundle.Announces       = new AnnouncesDigester().Build(ReadStream<AnnounceNoMatchEvent>("announces-nomatch", windowStart, now, cancellationToken));
+        bundle.Wishlist        = new WishlistDigester().Build(ReadStream<WishlistAttemptEvent>("wishlist-attempts", windowStart, now, cancellationToken));
+        bundle.Overrides       = new OverridesDigester().Build(ReadStream<ConfigOverrideEvent>("overrides", windowStart, now, cancellationToken));
+        bundle.Downloads       = new DownloadsDigester().Build(ReadStream<DownloadOutcomeEvent>("downloads", windowStart, now, cancellationToken));
+        bundle.Transfers       = new TransfersDigester().Build(ReadStream<FileTransferEvent>("transfers", windowStart, now, cancellationToken), cancellationToken);
+        bundle.SectionActivity = new SectionActivityDigester().Build(ReadStream<SectionActivityEvent>("section-activity", windowStart, now, cancellationToken));
         // section→folder learning: correlate matched announces with race destinations (re-reading "races" yields a fresh enumerable)
-        bundle.SectionFolder   = new SectionFolderDigester().Build(ReadStream<MatchedAnnounceEvent>("matched-announces", windowStart, now), ReadStream<RaceOutcomeEvent>("races", windowStart, now));
-        bundle.Errors          = new ErrorsDigester().Build(ReadStream<ErrorSignatureEvent>("errors", windowStart, now));
+        bundle.SectionFolder   = new SectionFolderDigester().Build(ReadStream<MatchedAnnounceEvent>("matched-announces", windowStart, now, cancellationToken), ReadStream<RaceOutcomeEvent>("races", windowStart, now, cancellationToken));
+        bundle.Errors          = new ErrorsDigester().Build(ReadStream<ErrorSignatureEvent>("errors", windowStart, now, cancellationToken), windowStart, now);
 
         bundle.EvidencePointers = new Dictionary<string, string>
         {
@@ -66,25 +77,27 @@ public sealed class LogDigester
     /// Reads all records of type T from {prefix}-{date}.jsonl[.gz] files for each day
     /// in the window [fromInclusive, toInclusive]. Used by per-stream digesters.
     /// </summary>
-    public IEnumerable<T> ReadStream<T>(string prefix, DateTime fromInclusive, DateTime toInclusive)
+    public IEnumerable<T> ReadStream<T>(string prefix, DateTime fromInclusive, DateTime toInclusive,
+        CancellationToken cancellationToken = default)
     {
         for (var d = fromInclusive.Date; d <= toInclusive.Date; d = d.AddDays(1))
         {
-            foreach (var ev in ReadFile<T>(Path.Combine(_aiDataRoot, $"{prefix}-{d:yyyyMMdd}.jsonl")))
+            cancellationToken.ThrowIfCancellationRequested();
+            foreach (var ev in ReadFile<T>(Path.Combine(_aiDataRoot, $"{prefix}-{d:yyyyMMdd}.jsonl"), cancellationToken))
                 yield return ev;
-            foreach (var ev in ReadFile<T>(Path.Combine(_aiDataRoot, $"{prefix}-{d:yyyyMMdd}.jsonl.gz")))
+            foreach (var ev in ReadFile<T>(Path.Combine(_aiDataRoot, $"{prefix}-{d:yyyyMMdd}.jsonl.gz"), cancellationToken))
                 yield return ev;
         }
     }
 
-    private IEnumerable<T> ReadFile<T>(string path)
+    private IEnumerable<T> ReadFile<T>(string path, CancellationToken cancellationToken)
     {
         if (!File.Exists(path)) yield break;
         Stream? raw = null;
         StreamReader? reader = null;
         try
         {
-            raw = File.OpenRead(path);
+            raw = _openRead(path);
             Stream stream = path.EndsWith(".gz", StringComparison.OrdinalIgnoreCase)
                 ? new GZipStream(raw, CompressionMode.Decompress)
                 : raw;
@@ -92,6 +105,7 @@ public sealed class LogDigester
             string? line;
             while ((line = reader.ReadLine()) != null)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 T? v;
                 try { v = JsonSerializer.Deserialize<T>(line); }
