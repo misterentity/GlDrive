@@ -47,20 +47,13 @@ public sealed class SegmentedTransfer
         public required RangeScheduler Scheduler;
         public required CancellationTokenSource Cts;
         public readonly int[] Committed;
-        // Readers open on each file. A file is only committed once none are, so a lane whose
-        // completion check (226, EOF) is still pending can still invalidate it.
-        public readonly int[] OpenReaders;
         public readonly List<LaneRun> Lanes = new();
         public readonly object Gate = new();
         public ExceptionDispatchInfo? LastLaneError;
         public ExceptionDispatchInfo? Fatal;
         private TaskCompletionSource _workSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Run(int fileCount)
-        {
-            Committed = new int[fileCount];
-            OpenReaders = new int[fileCount];
-        }
+        public Run(int fileCount) => Committed = new int[fileCount];
 
         public void PulseWork()
         {
@@ -354,12 +347,15 @@ public sealed class SegmentedTransfer
                 lane.Fault(token.IsCancellationRequested ? new OperationCanceledException(token) : ex);
                 throw;
             }
-            Interlocked.Increment(ref run.OpenReaders[a.FileIndex]);
             lr.State = LaneState.Active;
 
             if (lane.CanStopEarly)
                 watcher = WatchAsync();
 
+            // A file's LAST bytes only count as done once the server has confirmed end of file
+            // (no extra bytes, 226). Until then the file can't look complete, so it is never
+            // published unconfirmed — whether the confirmation fails, is cancelled, or the lane
+            // yields first — and a resume refetches just the tail.
             while (true)
             {
                 if (Volatile.Read(ref interrupt) == 1 || lane.ShouldYield)
@@ -368,9 +364,10 @@ public sealed class SegmentedTransfer
                 long remaining = a.End - a.Position;
                 if (remaining <= 0)
                 {
-                    bool eof = !unknownSize && a.Position >= file.Size;
+                    // A split boundary short of EOF (the final chunk returns below).
                     run.Scheduler.Release(a);
-                    await FinishAsync(eof);
+                    await reader.FinishAsync(false, token);
+                    finished = true;
                     return RangeOutcome.Finished;
                 }
 
@@ -389,17 +386,18 @@ public sealed class SegmentedTransfer
                 {
                     if (!unknownSize)
                         throw new IOException($"Premature end of data at {a.Position} of {file.Key} (expected {a.End})");
+                    await ConfirmEofAsync();
                     run.Scheduler.CompleteUnknown(a);
                     run.Scheduler.Release(a);
-                    await FinishAsync(true);
                     return RangeOutcome.Finished;
                 }
                 Volatile.Write(ref lastActivity, Environment.TickCount64);
 
                 long allowed = run.Scheduler.Reserve(a, n);
+                long offset = a.Position;
+                bool finalChunk = allowed > 0 && !unknownSize && offset + allowed >= file.Size;
                 if (allowed > 0)
                 {
-                    long offset = a.Position;
                     try
                     {
                         await staged.WriteAsync(offset, buffer.AsMemory(0, (int)allowed), token);
@@ -408,9 +406,7 @@ public sealed class SegmentedTransfer
                     {
                         throw new DiskFailure(ex);
                     }
-                    run.Scheduler.Advance(a, allowed);
-                    try { staged.MarkDone(new ByteRange(offset, offset + allowed)); }
-                    catch (Exception ex) { throw new DiskFailure(ex); }
+                    if (!finalChunk) MarkWritten(offset, allowed);
                 }
 
                 Interlocked.Add(ref lr.Bytes, n);
@@ -429,6 +425,14 @@ public sealed class SegmentedTransfer
                     finally { Volatile.Write(ref pacing, 0); }
                 }
                 Volatile.Write(ref lastActivity, Environment.TickCount64);
+
+                if (finalChunk)
+                {
+                    await ConfirmEofAsync();
+                    MarkWritten(offset, allowed);
+                    run.Scheduler.Release(a);
+                    return RangeOutcome.Finished;
+                }
             }
         }
         catch (Exception ex) when (reader != null && !finished)
@@ -447,7 +451,6 @@ public sealed class SegmentedTransfer
             {
                 try { await reader.DisposeAsync(); }
                 catch (Exception ex) { Log.Debug(ex, "Download reader dispose failed on lane {Label}", lane.Label); }
-                Interlocked.Decrement(ref run.OpenReaders[a.FileIndex]);
             }
             await CommitReadyFilesAsync(run);
         }
@@ -462,16 +465,33 @@ public sealed class SegmentedTransfer
             return RangeOutcome.Yielded;
         }
 
-        async Task FinishAsync(bool eof)
+        void MarkWritten(long offset, long length)
+        {
+            run.Scheduler.Advance(a, length);
+            try { staged.MarkDone(new ByteRange(offset, offset + length)); }
+            catch (Exception ex) { throw new DiskFailure(ex); }
+        }
+
+        async Task ConfirmEofAsync()
         {
             try
             {
-                await reader!.FinishAsync(eof, token);
+                // The EOF probe is a managed data read on stoppable lanes, so yield/stall can
+                // interrupt it like any other read.
+                await reader!.FinishAsync(true, readToken);
             }
-            catch (Exception) when (eof && !token.IsCancellationRequested)
+            catch (OperationCanceledException) when (!token.IsCancellationRequested && Volatile.Read(ref interrupt) != 0)
+            {
+                // Interrupted before the server confirmed: the control channel still owes its
+                // reply, so this is a lane failure (the lane is poisoned); the tail is refetched.
+                throw new IOException(Volatile.Read(ref interrupt) == 1
+                    ? $"Yielded before the server confirmed the end of {file.Key}"
+                    : $"No end-of-file confirmation for {_options.StallTimeout.TotalSeconds:0}s on {file.Key}");
+            }
+            catch (Exception) when (!token.IsCancellationRequested)
             {
                 // Every byte arrived but the server would not confirm the file (extra bytes, no
-                // 226): don't publish it — fetch it again.
+                // 226): the remote file may not be what we fetched — fetch all of it again.
                 Log.Warning("Download of {File} was not confirmed by the server — refetching it", file.LocalPath);
                 InvalidateFile(run, a.FileIndex, sequential: false);
                 throw;
@@ -517,12 +537,12 @@ public sealed class SegmentedTransfer
     {
         for (int i = 0; i < _files.Count; i++)
         {
-            if (Volatile.Read(ref run.Committed[i]) != 0 || Volatile.Read(ref run.OpenReaders[i]) != 0
-                || !run.Scheduler.IsFileComplete(i)) continue;
+            if (Volatile.Read(ref run.Committed[i]) != 0 || !run.Scheduler.IsFileComplete(i)) continue;
             if (Interlocked.Exchange(ref run.Committed[i], 1) != 0) continue;
             try
             {
-                await run.Staged[i].CommitAsync();
+                // An unknown-size file may have been refetched shorter than an earlier attempt.
+                await run.Staged[i].CommitAsync(run.Scheduler.IsSizeUnknown(i) ? run.Scheduler.SizeOf(i) : null);
             }
             catch (Exception ex)
             {

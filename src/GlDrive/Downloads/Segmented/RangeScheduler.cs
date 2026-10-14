@@ -270,6 +270,12 @@ public sealed class RangeScheduler
 
     public bool IsSizeUnknown(int fileIndex) => _sizeUnknown[fileIndex];
 
+    /// <summary>Current size of a file (an unknown size becomes known when its download reaches EOF).</summary>
+    public long SizeOf(int fileIndex)
+    {
+        lock (_lock) return _sizes[fileIndex];
+    }
+
     /// <summary>
     /// Forget a file's done bytes so it is fetched again. In-flight assignments keep running
     /// and re-add what they write. <paramref name="sequential"/>: from now on the file is only
