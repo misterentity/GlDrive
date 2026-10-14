@@ -68,7 +68,9 @@ public sealed class StreamMatrixViewModel : INotifyPropertyChanged
         HeaderLinks = links == 1 ? "1 LINK" : $"{links} LINKS";
         HeaderAgg = FormatRate(p.BytesPerSecond);
         HeaderEta = p.BytesPerSecond > 0 && p.TotalBytes > p.DownloadedBytes
-            ? FormatEta(TimeSpan.FromSeconds((p.TotalBytes - p.DownloadedBytes) / p.BytesPerSecond))
+            // Clamp BEFORE building the TimeSpan: a stall decays the smoothed rate toward zero and
+            // the raw quotient overflows TimeSpan (FormatEta shows anything >= 100h as 99:59:59).
+            ? FormatEta(TimeSpan.FromSeconds(Math.Min((p.TotalBytes - p.DownloadedBytes) / p.BytesPerSecond, 360_000)))
             : p.TotalBytes > 0 && p.DownloadedBytes >= p.TotalBytes ? "00:00:00" : "--:--:--";
         OnPropertyChanged(nameof(HeaderText));
         Percent = p.TotalBytes > 0 ? 100.0 * p.DownloadedBytes / p.TotalBytes : 0;

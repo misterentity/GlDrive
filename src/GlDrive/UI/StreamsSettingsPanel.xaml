@@ -179,15 +179,15 @@
                     <!-- Column headers -->
                     <Grid Margin="0,0,0,4">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="18"/>
-                            <ColumnDefinition Width="34"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="128"/>
-                            <ColumnDefinition Width="72"/>
-                            <ColumnDefinition Width="72"/>
-                            <ColumnDefinition Width="112"/>
-                            <ColumnDefinition Width="190"/>
+                            <ColumnDefinition Width="14"/>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*" MinWidth="150"/>
+                            <ColumnDefinition Width="110"/>
                             <ColumnDefinition Width="64"/>
+                            <ColumnDefinition Width="60"/>
+                            <ColumnDefinition Width="100"/>
+                            <ColumnDefinition Width="170"/>
+                            <ColumnDefinition Width="60"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="1" Text="USE" Style="{StaticResource ColHeader}"/>
                         <TextBlock Grid.Column="2" Text="ADAPTER // IPV4" Style="{StaticResource ColHeader}"/>
@@ -204,15 +204,15 @@
                             <DataTemplate DataType="{x:Type ui:NetworkRowViewModel}">
                                 <Grid Margin="0,3">
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="18"/>
-                                        <ColumnDefinition Width="34"/>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="128"/>
-                                        <ColumnDefinition Width="72"/>
-                                        <ColumnDefinition Width="72"/>
-                                        <ColumnDefinition Width="112"/>
-                                        <ColumnDefinition Width="190"/>
+                                        <ColumnDefinition Width="14"/>
+                                        <ColumnDefinition Width="28"/>
+                                        <ColumnDefinition Width="*" MinWidth="150"/>
+                                        <ColumnDefinition Width="110"/>
                                         <ColumnDefinition Width="64"/>
+                                        <ColumnDefinition Width="60"/>
+                                        <ColumnDefinition Width="100"/>
+                                        <ColumnDefinition Width="170"/>
+                                        <ColumnDefinition Width="60"/>
                                     </Grid.ColumnDefinitions>
 
                                     <!-- Status LED -->

@@ -208,4 +208,16 @@ public sealed class StreamMatrixModelTests : IDisposable
         now = now.AddMilliseconds(250);
         Assert.True(vm.Update(new DownloadProgress(0, total, 0, null, lanes, map)));
     }
+
+    [Fact]
+    public void Eta_DuringAStall_ClampsInsteadOfOverflowing()
+    {
+        // A stall decays the smoothed rate toward zero; 1 GiB left at a few bytes/s used to
+        // overflow TimeSpan and abort every matrix update (Codex UI review).
+        var vm = new StreamMatrixViewModel("Some.Release-GRP");
+        var ok = vm.Update(new DownloadProgress(0, 1L << 30, 1e-9), force: true);
+
+        Assert.True(ok);
+        Assert.Contains("99:59:59", vm.HeaderText);
+    }
 }
