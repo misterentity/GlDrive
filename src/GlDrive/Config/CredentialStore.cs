@@ -66,6 +66,13 @@ public static class CredentialStore
         }
     }
 
+    public static void DeleteProxyPassword(string host, int port, string username)
+    {
+        if (AccessDisabled) return;
+        try { CredentialManager.DeleteCredential(GetProxyTargetName(host, port, username)); }
+        catch (Exception ex) { Log.Warning(ex, "Failed to delete proxy credential"); }
+    }
+
     public static void SavePassword(string host, int port, string username, string password)
     {
         if (AccessDisabled) return;

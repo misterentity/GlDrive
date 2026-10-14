@@ -61,6 +61,8 @@ Write-Host "`n=== Running tests ===" -ForegroundColor Cyan
 if ($LASTEXITCODE -ne 0) { exit 1 }
 
 Write-Host "`n=== Running build.ps1 ===" -ForegroundColor Cyan
+& dotnet test (Join-Path $Root 'src\GlDrive.Mcp.Tests\GlDrive.Mcp.Tests.csproj') -c Release '-warnaserror:NU1901,NU1902,NU1903,NU1904'
+if ($LASTEXITCODE -ne 0) { exit 1 }
 & "$InstallerDir\build.ps1"
 if ($LASTEXITCODE -ne 0) { exit 1 }
 
@@ -130,7 +132,12 @@ class S {
 }
 '@
 $SignerProj = Join-Path $env:TEMP "gldrive-checksum-signer"
-if (Test-Path $SignerProj) { Remove-Item -Recurse -Force $SignerProj }
+if (Test-Path $SignerProj) {
+    $ResolvedSigner = [System.IO.Path]::GetFullPath($SignerProj)
+    $ExpectedSigner = [System.IO.Path]::GetFullPath((Join-Path $env:TEMP 'gldrive-checksum-signer'))
+    if ($ResolvedSigner -ne $ExpectedSigner) { throw 'Refusing to delete unexpected signing-helper path' }
+    Remove-Item -LiteralPath $ResolvedSigner -Recurse -Force
+}
 New-Item -ItemType Directory -Path $SignerProj | Out-Null
 $signerScript | Set-Content -Path (Join-Path $SignerProj 'Program.cs')
 '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>' |

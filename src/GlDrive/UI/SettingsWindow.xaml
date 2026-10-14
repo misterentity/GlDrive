@@ -406,6 +406,12 @@
 
                     <Button Content="Open Log Folder" Click="OpenLogs_Click"
                             HorizontalAlignment="Left" Padding="16,6"/>
+                    <CheckBox Content="Enable MCP / local control API" IsChecked="{Binding ControlApiEnabled}" Margin="0,18,0,6"/>
+                    <TextBlock Text="Allow Claude and Codex to read and change GlDrive through the local MCP adapter. Changes apply when you save." TextWrapping="Wrap" Margin="0,0,0,8"/>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="Local port:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBox Text="{Binding ControlApiPort}" Width="80"/>
+                    </StackPanel>
                 </StackPanel>
             </TabItem>
                     </TabControl>

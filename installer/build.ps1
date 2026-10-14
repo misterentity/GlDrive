@@ -39,7 +39,10 @@ if (-not $SkipPublish) {
     Write-Host "`n=== Publishing GlDrive (self-contained) ===" -ForegroundColor Cyan
 
     if (Test-Path $PublishDir) {
-        Remove-Item $PublishDir -Recurse -Force
+        $ResolvedPublish = [System.IO.Path]::GetFullPath($PublishDir)
+        $ExpectedPublish = [System.IO.Path]::GetFullPath((Join-Path $Root 'installer\publish'))
+        if ($ResolvedPublish -ne $ExpectedPublish) { throw 'Refusing to delete unexpected publish path' }
+        Remove-Item -LiteralPath $ResolvedPublish -Recurse -Force
     }
 
     dotnet publish $CsprojPath `
@@ -51,6 +54,12 @@ if (-not $SkipPublish) {
         Write-Error "dotnet publish failed with exit code $LASTEXITCODE"
         exit 1
     }
+
+    Write-Host "Publishing MCP adapter..." -ForegroundColor Cyan
+    dotnet publish (Join-Path $Root 'src\GlDrive.Mcp\GlDrive.Mcp.csproj') `
+        -c Release -r win-x64 --self-contained -o (Join-Path $PublishDir 'mcp')
+    if ($LASTEXITCODE -ne 0) { throw 'MCP adapter publish failed' }
+    Copy-Item -LiteralPath (Join-Path $Root 'docs\mcp.md') -Destination (Join-Path $PublishDir 'mcp\README.md')
 
     $fileCount = (Get-ChildItem $PublishDir -Recurse -File).Count
     $sizeMB = [math]::Round((Get-ChildItem $PublishDir -Recurse -File | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
