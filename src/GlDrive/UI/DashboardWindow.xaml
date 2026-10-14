@@ -981,6 +981,11 @@
                                             <TextBlock Text=" · " Foreground="{DynamicResource TextFaintBrush}"/>
                                             <TextBlock Text="{Binding ProgressText}" Style="{DynamicResource MicroTextStyle}"/>
                                         </StackPanel>
+                                        <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Text="{Binding StreamsText}"
+                                                   HorizontalAlignment="Right" Margin="0,0,8,0"
+                                                   TextTrimming="CharacterEllipsis" ToolTip="{Binding StreamsText}"
+                                                   Style="{DynamicResource MicroTextStyle}"
+                                                   Visibility="{Binding HasStreams, Converter={StaticResource BoolToVisibility}}"/>
                                         <TextBlock Grid.Row="1" Grid.Column="3" Text="{Binding SpeedDisplay}"
                                                    HorizontalAlignment="Right"
                                                    Style="{DynamicResource AccentTextStyle}" FontSize="11"/>

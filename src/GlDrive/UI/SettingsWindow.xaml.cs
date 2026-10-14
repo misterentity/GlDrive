@@ -282,6 +282,7 @@ public partial class SettingsWindow : Window
 
     private void Save_Click(object sender, RoutedEventArgs e)
     {
+        NetworksGrid.CommitEdit(System.Windows.Controls.DataGridEditingUnit.Row, true);
         _vm.ApplyTo(_config);
 
         // Save category paths
