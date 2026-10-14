@@ -18,7 +18,25 @@ public sealed record PersistedRace(
     string? KnownSourcePath,
     DateTime QueuedAtUtc,
     int Resumes = 0,
-    bool WasActive = false);
+    bool WasActive = false)
+{
+    public DateTime? NextProbeAtUtc { get; init; }
+    public string? WaitReason { get; init; }
+    public int WaitAttempts { get; init; }
+    public bool KeepUntilAvailable { get; init; }
+
+    internal bool IsExpired(DateTime nowUtc) => !KeepUntilAvailable && nowUtc - QueuedAtUtc > RaceQueueStore.MaxAge;
+    internal bool IsDue(DateTime nowUtc) => NextProbeAtUtc is not { } at || at <= nowUtc;
+
+    internal PersistedRace Defer(DateTime nowUtc, string reason, bool incomplete, bool madeProgress) => this with
+    {
+        WasActive = false,
+        NextProbeAtUtc = nowUtc.AddSeconds(Math.Min(300, 30 * Math.Pow(2, madeProgress ? 0 : Math.Min(WaitAttempts, 4)))),
+        WaitReason = reason,
+        WaitAttempts = madeProgress ? 1 : Math.Min(WaitAttempts + 1, 5),
+        KeepUntilAvailable = KeepUntilAvailable || incomplete
+    };
+}
 
 public readonly record struct RaceQueueRestore(
     List<PersistedRace> Races, int Resumed, int DroppedStale, int DroppedResumeCap);
@@ -105,10 +123,13 @@ public sealed class RaceQueueStore
         foreach (var race in persisted.Where(r => r.WasActive).Concat(persisted.Where(r => !r.WasActive)))
         {
             if (string.IsNullOrWhiteSpace(race.ReleaseName) || !seen.Add(race.ReleaseName)) continue;
-            if (nowUtc - race.QueuedAtUtc > MaxAge) { stale++; continue; }
+            if (race.IsExpired(nowUtc)) { stale++; continue; }
 
             var next = race with { WasActive = false };
-            if (race.WasActive)
+            // A known incomplete release periodically takes a short probe turn.
+            // Restarting during that turn is still resuming a wait, not evidence
+            // that a fresh transfer repeatedly crashed the process.
+            if (race.WasActive && !race.KeepUntilAvailable)
             {
                 if (race.Resumes >= MaxResumes) { capped++; continue; }
                 next = next with { Resumes = race.Resumes + 1 };

@@ -26,6 +26,12 @@ Manual folder FXP enumeration also traverses nested folders using a pool with ex
 
 Download failure checks make the fixture advertise 1,000 bytes but send ten, then separately send the complete payload followed by FTP `426`. Both downloads must fail after bounded retries, retain their staging files, and leave the final filenames absent. Restoring valid data and completion replies must make a subsequent retry publish the exact expected bytes. Append `--downloads-only` to run certificate, relocation, enumeration and download checks without mounting WinFsp.
 
+An arriving-release check starts with one valid local part and a remote SFV whose other part is still missing. The real download manager must park without consuming retries, release its sole transfer slot for an unrelated download, and persist the wait across a manager restart. After the fixture supplies the missing part, the scheduled rescan must complete and verify both parts without downloading placeholder files.
+
+Race arrival checks inspect two existing partial release directories through FTPS, verify that they wait without deleting landed files, then add the missing inventory and check that a resumed probe completes. They exercise discovery and completion; the fixture does not implement glftpd's FXP extensions.
+
+Append `--search-only` to exercise query word matching, cached results with the sole connection occupied, newly arrived releases beyond an old index, empty or unfamiliar SITE SEARCH replies, partial results from denied roots, and a busy live search whose connection becomes available after the first borrow deadline. These checks also run in the full harness.
+
 The full WinFsp checks also verify that nonrecursive deletion rejects a populated folder, removes an empty folder, and preserves a file that arrives after the deletion preflight. The certificate preamble applies the connection-test validation callback to a changed pin and verifies rejection before any FTP authentication command.
 
 This does not exercise a remote glftpd BNC's CPSV behavior or replace an extended live-server soak.

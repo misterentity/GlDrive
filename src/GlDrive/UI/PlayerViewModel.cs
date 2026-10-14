@@ -42,6 +42,7 @@ public partial class PlayerViewModel : INotifyPropertyChanged, IDisposable
     private double _position;
     private string _timeDisplay = "00:00 / 00:00";
     private string _searchText = "";
+    private readonly SearchRequestCoordinator _discoverySearch = new();
     private string _currentReleaseName = "";
     private bool _showLibrary;
     private int _audioTrackIndex;
@@ -489,106 +490,87 @@ public partial class PlayerViewModel : INotifyPropertyChanged, IDisposable
     private async Task SearchTmdb()
     {
         if (string.IsNullOrWhiteSpace(_searchText)) return;
-        if (string.IsNullOrEmpty(_config.Downloads.ResolveTmdbKey()))
-        {
-            // No TMDB key — search FTP and torrent directly
-            var ftpTask = SearchFtpDirect(_searchText);
-            var torrentTask = SearchTorrent(_searchText);
-            await Task.WhenAll(ftpTask, torrentTask);
-            return;
-        }
-
+        using var request = _discoverySearch.Begin(SanitizeSearchQuery(_searchText));
         IsLoading = true;
         SearchResults.Clear();
-        PlayerStatus = $"Searching for \"{_searchText}\"...";
+        OnPropertyChanged(nameof(HasSearchResults));
+        PlayerStatus = $"Searching for \"{request.Query}\"...";
 
         // Search TMDB, FTP, and torrent in parallel
-        var torrentBg = SearchTorrent(_searchText);
-        var ftpBg = SearchFtpDirect(_searchText);
+        var torrentBg = SearchTorrent(request.Query, () => _discoverySearch.CanPublish(request), request.Token);
+        var ftpBg = SearchFtpDirect(request);
 
         try
         {
-            using var tmdb = new TmdbClient(_config.Downloads.ResolveTmdbKey());
-            var results = await tmdb.SearchMulti(_searchText);
-
-            foreach (var r in results.Take(20))
+            var key = _config.Downloads.ResolveTmdbKey();
+            if (!string.IsNullOrEmpty(key))
             {
-                SearchResults.Add(new MediaCardVm
+                try
                 {
-                    Title = r.DisplayTitle,
-                    Year = r.YearParsed?.ToString() ?? "",
-                    PosterUrl = r.PosterUrl,
-                    Plot = r.Overview ?? "",
-                    VoteAverage = r.VoteAverage,
-                    SearchTitle = r.DisplayTitle,
-                    MediaType = r.MediaType == "tv" ? "TV" : "Movie",
-                    TmdbId = r.Id
-                });
+                    using var tmdb = new TmdbClient(key);
+                    var results = await tmdb.SearchMulti(request.Query, request.Token);
+                    if (_discoverySearch.CanPublish(request))
+                    {
+                        foreach (var r in results.Take(20))
+                            SearchResults.Add(new MediaCardVm
+                            {
+                                Title = r.DisplayTitle,
+                                Year = r.YearParsed?.ToString() ?? "",
+                                PosterUrl = r.PosterUrl,
+                                Plot = r.Overview ?? "",
+                                VoteAverage = r.VoteAverage,
+                                SearchTitle = r.DisplayTitle,
+                                MediaType = r.MediaType == "tv" ? "TV" : "Movie",
+                                TmdbId = r.Id
+                            });
+                        OnPropertyChanged(nameof(HasSearchResults));
+                    }
+                }
+                catch (OperationCanceledException) when (request.Token.IsCancellationRequested) { }
+                catch (Exception ex) { Log.Warning(ex, "TMDb search failed"); }
             }
-
-            OnPropertyChanged(nameof(HasSearchResults));
+            await Task.WhenAll(ftpBg, torrentBg);
+            if (_discoverySearch.CanPublish(request))
+                PlayerStatus = SearchRequestCoordinator.DescribeMedia(SearchResults.Count, TorrentResults.Count, await ftpBg);
         }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "TMDb search failed");
-        }
-
-        // Await FTP + torrent to finish
-        await Task.WhenAll(ftpBg, torrentBg);
-
-        var parts = new List<string>();
-        if (SearchResults.Count > 0) parts.Add($"{SearchResults.Count} TMDb");
-        if (FtpResults.Count > 0) parts.Add($"{FtpResults.Count} FTP");
-        if (TorrentResults.Count > 0) parts.Add($"{TorrentResults.Count} torrent");
-        PlayerStatus = parts.Count > 0
-            ? string.Join(" + ", parts) + " result(s)"
-            : $"No results for \"{_searchText}\"";
-
-        IsLoading = false;
+        finally { if (_discoverySearch.IsCurrent(request)) IsLoading = false; }
     }
 
-    private async Task SearchFtpDirect(string query)
+    private async Task<string> SearchFtpDirect(SearchRequest request)
     {
-        query = SanitizeSearchQuery(query);
-
         var mounted = _serverManager.GetMountedServers()
             .Where(s => s.Search != null && s.CurrentState == MountState.Connected)
             .ToList();
 
-        if (mounted.Count == 0) { PlayerStatus = "No connected servers"; return; }
-
-        IsLoading = true;
         FtpResults.Clear();
+        SelectedFtpResult = null;
         OnPropertyChanged(nameof(HasFtpResults));
-        PlayerStatus = $"Searching FTP for \"{query}\"...";
-
-        try
+        if (mounted.Count == 0) return "No connected FTP servers";
+        PlayerStatus = $"Searching FTP for \"{request.Query}\"...";
+        var searched = new List<SearchSiteResult>();
+        var tasks = mounted.Select(async server =>
         {
-            var tasks = mounted.Select(server => Task.Run(async () =>
+            var result = await SearchRequestCoordinator.SearchSiteAsync(request, server.ServerName, server.Search!.SearchDetailed);
+            if (!_discoverySearch.CanPublish(request)) return;
+            searched.Add(result);
+            if (result.Outcome is { } outcome)
             {
-                var results = await server.Search!.Search(query);
-                return results.Select(r => new PlayerSearchResultVm
-                {
-                    ReleaseName = r.ReleaseName, Category = r.Category,
-                    RemotePath = r.RemotePath, Size = r.Size,
-                    SizeText = FormatSize(r.Size), ServerId = server.ServerId,
-                    ServerName = server.ServerName
-                });
-            }));
-
-            var allResults = await Task.WhenAll(tasks);
-            foreach (var sr in allResults)
-                foreach (var r in sr) FtpResults.Add(r);
-
-            OnPropertyChanged(nameof(HasFtpResults));
-            PlayerStatus = FtpResults.Count > 0
-                ? $"{FtpResults.Count} FTP result(s) found"
-                : "Searching torrents...";
-
-            if (FtpResults.Count > 0) SelectedFtpResult = FtpResults[0];
-        }
-        catch (Exception ex) { Log.Warning(ex, "FTP search failed"); PlayerStatus = "Search failed"; }
-        finally { IsLoading = false; }
+                foreach (var r in outcome.Results)
+                    FtpResults.Add(new PlayerSearchResultVm
+                    {
+                        ReleaseName = r.ReleaseName, Category = r.Category,
+                        RemotePath = r.RemotePath, Size = r.Size,
+                        SizeText = FormatSize(r.Size), ServerId = server.ServerId,
+                        ServerName = server.ServerName
+                    });
+                OnPropertyChanged(nameof(HasFtpResults));
+                if (SelectedFtpResult == null && FtpResults.Count > 0)
+                    SelectedFtpResult = FtpResults[0];
+            }
+            PlayerStatus = "FTP: " + SearchRequestCoordinator.Describe(searched, mounted.Count, DateTime.UtcNow);
+        });
+        await Task.WhenAll(tasks);
+        return SearchRequestCoordinator.Describe(searched, mounted.Count, DateTime.UtcNow, request.Token.IsCancellationRequested);
     }
 
     // ── TV episode picker ──
@@ -655,14 +637,21 @@ public partial class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
         var query = episode.SearchQuery(_selectedTvName, _selectedSeason.SeasonNumber);
         SearchText = query;
-        await SearchFtpDirect(query);
-
-        // Auto-play first result
-        if (FtpResults.Count > 0)
+        using var request = _discoverySearch.Begin(SanitizeSearchQuery(query));
+        IsLoading = true;
+        try
         {
-            SelectedFtpResult = FtpResults[0];
-            await PlaySelectedResult();
+            var summary = await SearchFtpDirect(request);
+            if (!_discoverySearch.CanPublish(request)) return;
+            PlayerStatus = "FTP: " + summary;
+            // Auto-play only a result from this episode's completed search.
+            if (FtpResults.Count > 0)
+            {
+                SelectedFtpResult = FtpResults[0];
+                await PlaySelectedResult();
+            }
         }
+        finally { if (_discoverySearch.IsCurrent(request)) IsLoading = false; }
     }
 
     private async Task PlayNextEpisode()
@@ -793,9 +782,17 @@ public partial class PlayerViewModel : INotifyPropertyChanged, IDisposable
         if (media == null) return;
 
         // Search both FTP and torrent in parallel
-        var ftpTask = SearchFtpDirect(media.SearchTitle);
-        var torrentTask = SearchTorrent(media.SearchTitle);
-        await Task.WhenAll(ftpTask, torrentTask);
+        using var request = _discoverySearch.Begin(SanitizeSearchQuery(media.SearchTitle));
+        IsLoading = true;
+        try
+        {
+            var ftpTask = SearchFtpDirect(request);
+            var torrentTask = SearchTorrent(request.Query, () => _discoverySearch.CanPublish(request), request.Token);
+            await Task.WhenAll(ftpTask, torrentTask);
+            if (_discoverySearch.CanPublish(request))
+                PlayerStatus = SearchRequestCoordinator.DescribeMedia(0, TorrentResults.Count, await ftpTask);
+        }
+        finally { if (_discoverySearch.IsCurrent(request)) IsLoading = false; }
     }
 
     // ── Torrent search ──
@@ -807,17 +804,18 @@ public partial class PlayerViewModel : INotifyPropertyChanged, IDisposable
         return SearchTorrent(query);
     }
 
-    private async Task SearchTorrent(string query)
+    private async Task SearchTorrent(string query, Func<bool>? canPublish = null, CancellationToken ct = default)
     {
         query = SanitizeSearchQuery(query);
-        if (_torrentSearch == null || string.IsNullOrWhiteSpace(query)) return;
+        if (_torrentSearch == null || string.IsNullOrWhiteSpace(query) || canPublish?.Invoke() == false) return;
 
         TorrentResults.Clear();
         OnPropertyChanged(nameof(HasTorrentResults));
 
         try
         {
-            var results = await _torrentSearch.SearchAsync(query);
+            var results = await _torrentSearch.SearchAsync(query, ct);
+            if (ct.IsCancellationRequested || canPublish?.Invoke() == false) return;
 
             foreach (var r in results.Take(20))
             {
@@ -837,16 +835,20 @@ public partial class PlayerViewModel : INotifyPropertyChanged, IDisposable
             if (TorrentResults.Count > 0)
             {
                 SelectedTorrentResult = TorrentResults[0];
-                var parts = new List<string>();
-                if (FtpResults.Count > 0) parts.Add($"{FtpResults.Count} FTP");
-                parts.Add($"{TorrentResults.Count} torrent");
-                PlayerStatus = string.Join(" + ", parts) + " result(s)";
+                if (canPublish == null)
+                {
+                    var parts = new List<string>();
+                    if (FtpResults.Count > 0) parts.Add($"{FtpResults.Count} FTP");
+                    parts.Add($"{TorrentResults.Count} torrent");
+                    PlayerStatus = string.Join(" + ", parts) + " result(s)";
+                }
             }
-            else if (FtpResults.Count == 0)
+            else if (FtpResults.Count == 0 && canPublish == null)
             {
                 PlayerStatus = $"No results for \"{query}\"";
             }
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (Exception ex)
         {
             Log.Warning(ex, "Torrent search failed for \"{Query}\"", query);
@@ -1610,6 +1612,7 @@ public partial class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
     public void Dispose()
     {
+        _discoverySearch.Dispose();
         SaveCurrentPosition();
         foreach (var d in _rendererDiscoverers)
             try { d.Stop(); } catch { }

@@ -8,11 +8,14 @@ namespace GlDrive.Downloads;
 
 public class DownloadStore
 {
+    private static readonly object RegistryLock = new();
+    private static readonly List<WeakReference<DownloadStore>> OpenStores = [];
     private readonly string _filePath;
     private volatile bool _savePending;
     private readonly Timer _debounceTimer;
     private readonly object _saveLock = new();
-    private bool _closed;
+    private volatile bool _closed;
+    private volatile bool _loaded;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -30,6 +33,26 @@ public class DownloadStore
         _filePath = Path.Combine(ConfigManager.AppDataPath, $"downloads-{serverId}.json");
         // Debounced save: coalesces rapid updates into a single disk write
         _debounceTimer = new Timer(_ => FlushSave(), null, Timeout.Infinite, Timeout.Infinite);
+        lock (RegistryLock) OpenStores.Add(new WeakReference<DownloadStore>(this));
+    }
+
+    internal static IReadOnlyList<(string Path, IReadOnlyList<DownloadItem> Items)> OpenSnapshots()
+    {
+        var snapshots = new List<(string, IReadOnlyList<DownloadItem>)>();
+        lock (RegistryLock)
+        {
+            for (var i = OpenStores.Count - 1; i >= 0; i--)
+            {
+                if (!OpenStores[i].TryGetTarget(out var store) || store._closed)
+                {
+                    OpenStores.RemoveAt(i);
+                    continue;
+                }
+                // Before Load finishes, the persisted queue remains authoritative.
+                if (store._loaded) snapshots.Add((store._filePath, store.Items));
+            }
+        }
+        return snapshots;
     }
 
     public void Load()
@@ -37,6 +60,7 @@ public class DownloadStore
         if (!File.Exists(_filePath))
         {
             _items = [];
+            _loaded = true;
             return;
         }
 
@@ -56,6 +80,7 @@ public class DownloadStore
             Log.Warning(ex, "Failed to load downloads, starting empty");
             _items = [];
         }
+        _loaded = true;
     }
 
     /// <summary>Schedule a debounced save (writes to disk after 2s of inactivity).</summary>
@@ -106,6 +131,7 @@ public class DownloadStore
     public void Add(DownloadItem item)
     {
         lock (_lock) _items.Add(item);
+        _loaded = true;
         Save(); // Immediate — new item must persist
     }
 

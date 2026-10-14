@@ -37,7 +37,7 @@ public class FtpOperations
             if (_pool.UseCpsv)
                 return await CpsvDataHelper.ListDirectory(conn.Client, remotePath, _pool.ControlHost, ct);
 
-            return await conn.Client.GetListing(remotePath, FtpListOption.AllFiles, ct);
+            return await FtpListing.GetListing(conn.Client, remotePath, ct);
         }
         catch (Exception ex) when (!FtpCommandRejection.IsClean(ex))
         {

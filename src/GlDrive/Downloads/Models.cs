@@ -43,6 +43,8 @@ public class DownloadItem
     public string ServerId { get; set; } = "";
     public string ServerName { get; set; } = "";
     public int RetryCount { get; set; }
+    /// <summary>Positive incomplete-source evidence survives restarts until verified.</summary>
+    public bool SourceCompletionPending { get; set; }
 }
 
 public class SearchResult

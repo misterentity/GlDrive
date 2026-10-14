@@ -1,10 +1,21 @@
+using System.IO;
 using System.Text.RegularExpressions;
 using FluentFTP;
+using FluentFTP.Exceptions;
 using GlDrive.Config;
 using GlDrive.Ftp;
 using Serilog;
 
 namespace GlDrive.Downloads;
+
+public sealed record SearchListingFailure(string Path, string Message);
+
+public sealed record SearchOutcome(
+    IReadOnlyList<SearchResult> Results, string Method, DateTime? IndexBuiltAtUtc,
+    bool IsPartial, bool TimedOut, bool Truncated, IReadOnlyList<SearchListingFailure> Failures)
+{
+    public int FailedListings => Failures.Count;
+}
 
 public class FtpSearchService : IDisposable
 {
@@ -12,6 +23,10 @@ public class FtpSearchService : IDisposable
     private readonly SearchConfig _searchConfig;
     private const int MaxResults = 200;
     private static readonly TimeSpan BorrowTimeout = TimeSpan.FromSeconds(15);
+    private readonly TimeSpan _searchDeadline = TimeSpan.FromSeconds(90);
+    private readonly TimeSpan _listingRetryDelay = TimeSpan.FromMilliseconds(500);
+    private readonly DirectoryLister? _listOverride;
+    private readonly Func<string, CancellationToken, Task<FtpReply>>? _siteSearchOverride;
 
     private static readonly HashSet<string> SkipDirs = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -41,6 +56,8 @@ public class FtpSearchService : IDisposable
 
     // Cached index
     private List<IndexEntry> _index = [];
+    private DateTime? _indexBuiltAtUtc;
+    private List<SearchListingFailure> _indexFailures = [];
     private readonly Lock _indexLock = new();
     private CancellationTokenSource? _indexerCts;
     private Task? _indexerTask;
@@ -51,7 +68,45 @@ public class FtpSearchService : IDisposable
         _searchConfig = searchConfig;
     }
 
+    internal FtpSearchService(FtpConnectionPool pool, SearchConfig searchConfig, DirectoryLister list,
+        Func<string, CancellationToken, Task<FtpReply>> siteSearch,
+        TimeSpan? deadline = null, TimeSpan? retryDelay = null) : this(pool, searchConfig)
+    {
+        _listOverride = list;
+        _siteSearchOverride = siteSearch;
+        _searchDeadline = deadline ?? _searchDeadline;
+        _listingRetryDelay = retryDelay ?? _listingRetryDelay;
+    }
+
     private static string Normalize(string s) => s.Replace('.', ' ').Replace('_', ' ').Replace('-', ' ');
+
+    internal static bool MatchesQuery(string name, string query)
+    {
+        return MatchesNormalizedName(Normalize(name), QueryTerms(query));
+    }
+
+    private static string[] QueryTerms(string query) =>
+        Normalize(query).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+
+    private static bool MatchesNormalizedName(string normalized, IReadOnlyList<string> terms)
+    {
+        for (var index = 0; index < terms.Count; index++)
+            if (!normalized.Contains(terms[index], StringComparison.OrdinalIgnoreCase)) return false;
+        return true;
+    }
+
+    private sealed class SearchRun
+    {
+        public readonly List<SearchResult> Results = [];
+        public string Method = "Search";
+        public DateTime? IndexBuiltAtUtc;
+        public bool Partial;
+        public bool TimedOut;
+        public bool Truncated;
+        public readonly List<SearchListingFailure> Failures = [];
+        public SearchOutcome Snapshot() => new(Results.AsReadOnly(), Method, IndexBuiltAtUtc,
+            Partial || TimedOut || Truncated || Failures.Count > 0, TimedOut, Truncated, Failures.AsReadOnly());
+    }
 
     internal static string NormalizeSearchRoot(string path)
     {
@@ -63,80 +118,92 @@ public class FtpSearchService : IDisposable
         input.Replace("\r", "").Replace("\n", "").Replace("\0", "");
 
     /// <summary>
-    /// Main search entry point. Uses the configured method (or Auto to try all in order).
-    /// Retries once on exception (not on empty results).
+    /// Compatibility entry point for callers that only consume matches. Interactive
+    /// callers use SearchDetailed so a failed listing cannot masquerade as no matches.
     /// </summary>
     public async Task<List<SearchResult>> Search(string keyword, IProgress<string>? progress = null, CancellationToken ct = default)
     {
-        for (var attempt = 0; attempt < 2; attempt++)
-        {
-            try
-            {
-                if (attempt > 0)
-                {
-                    progress?.Report("Retrying search...");
-                    await Task.Delay(1000, ct);
-                }
-
-                return await SearchOnce(keyword, progress, ct);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                if (attempt > 0)
-                {
-                    Log.Error(ex, "Search failed after retry for: {Keyword}", keyword);
-                    throw;
-                }
-                Log.Warning(ex, "Search failed on first attempt for {Keyword}, retrying", keyword);
-            }
-        }
-
-        return [];
+        return (await SearchDetailed(keyword, progress, ct)).Results.ToList();
     }
 
-    private async Task<List<SearchResult>> SearchOnce(string keyword, IProgress<string>? progress, CancellationToken ct)
+    public async Task<SearchOutcome> SearchDetailed(string keyword, IProgress<string>? progress = null, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(_searchDeadline);
+        var run = new SearchRun();
+        try
+        {
+            await SearchOnce(keyword, progress, run, deadline.Token);
+            deadline.Token.ThrowIfCancellationRequested();
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            run.TimedOut = true;
+            progress?.Report($"Search time limit reached — {run.Results.Count} partial result(s)");
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            run.Partial = true;
+            run.Failures.Add(new("Search", ex.Message));
+            Log.Warning(ex, "Search incomplete for {Keyword}", keyword);
+        }
+        ct.ThrowIfCancellationRequested();
+        return run.Snapshot();
+    }
+
+    private async Task SearchOnce(string keyword, IProgress<string>? progress, SearchRun run, CancellationToken ct)
     {
         var method = _searchConfig.Method;
 
         if (method == SearchMethod.SiteSearch)
-            return await RunSiteSearch(keyword, progress, ct);
+        {
+            await RunSiteSearch(keyword, progress, run, ct);
+            return;
+        }
 
         if (method == SearchMethod.CachedIndex)
-            return RunIndexSearch(keyword, progress);
+        {
+            RunIndexSearch(keyword, progress, run);
+            return;
+        }
 
         if (method == SearchMethod.LiveCrawl)
-            return await RunLiveCrawl(keyword, progress, ct);
+        {
+            await RunLiveCrawl(keyword, progress, run, ct);
+            return;
+        }
 
         // Auto mode: try SITE SEARCH → Cached Index → Live Crawl
-        return await RunAutoSearch(keyword, progress, ct);
+        await RunAutoSearch(keyword, progress, run, ct);
     }
 
-    private async Task<List<SearchResult>> RunAutoSearch(string keyword, IProgress<string>? progress, CancellationToken ct)
+    private async Task RunAutoSearch(string keyword, IProgress<string>? progress, SearchRun run, CancellationToken ct)
     {
+        // A populated cache needs no login. This fast path matters when downloads
+        // occupy the sole main-pool session; do not spend 15s probing SITE first.
+        if (RunIndexSearch(keyword, progress, run) > 0) return;
+        run.IndexBuiltAtUtc = null;
+        run.Failures.Clear();
+        run.Partial = false;
+
         // 1. Try SITE SEARCH if not known to be unsupported
         if (_siteSearchSupported != false)
         {
-            var results = await TrySiteSearch(keyword, progress, ct);
-            if (results != null)
-                return results;
+            run.Method = "SITE SEARCH";
+            var site = await TrySiteSearch(keyword, progress, ct);
+            if (site is { Results.Count: > 0 })
+            {
+                run.Method = "SITE SEARCH";
+                run.Results.AddRange(site.Results);
+                run.Truncated = site.Truncated;
+                if (!site.Truncated) return;
+            }
         }
 
-        // 2. Try cached index if populated
-        List<IndexEntry> snapshot;
-        lock (_indexLock)
-            snapshot = _index;
-
-        if (snapshot.Count > 0)
-        {
-            progress?.Report("Searching cached index...");
-            var results = FilterIndex(snapshot, keyword);
-            progress?.Report($"{results.Count} result(s) from cached index");
-            return results;
-        }
-
-        // 3. Fall back to live crawl
-        return await RunLiveCrawl(keyword, progress, ct);
+        // Empty, unrecognized or truncated server replies need live evidence.
+        await RunLiveCrawl(keyword, progress, run, ct);
     }
 
     #region SITE SEARCH
@@ -145,34 +212,43 @@ public class FtpSearchService : IDisposable
         @"^(?<path>/\S+)\s+\((?<files>\d+)F/(?<size>[\d.]+)(?<unit>[KMG]?)/(?<age>[^)]+)\)",
         RegexOptions.Compiled);
 
-    private async Task<List<SearchResult>> RunSiteSearch(string keyword, IProgress<string>? progress, CancellationToken ct)
+    private async Task RunSiteSearch(string keyword, IProgress<string>? progress, SearchRun run, CancellationToken ct)
     {
-        var results = await TrySiteSearch(keyword, progress, ct);
-        if (results != null) return results;
+        run.Method = "SITE SEARCH";
+        var site = await TrySiteSearch(keyword, progress, ct);
+        if (site is { Results.Count: > 0 })
+        {
+            run.Results.AddRange(site.Results);
+            run.Truncated = site.Truncated;
+            if (!site.Truncated) return;
+        }
 
-        progress?.Report("SITE SEARCH not supported, falling back to live crawl...");
-        return await RunLiveCrawl(keyword, progress, ct);
+        progress?.Report("Checking live directories for additional matches...");
+        await RunLiveCrawl(keyword, progress, run, ct);
     }
+
+    private sealed record SiteSearchMatches(List<SearchResult> Results, bool Truncated);
 
     /// <summary>
     /// Tries SITE SEARCH. Returns null if the server doesn't support it.
     /// Only marks unsupported on explicit server rejection (5xx), not on transient errors.
     /// </summary>
-    private async Task<List<SearchResult>?> TrySiteSearch(string keyword, IProgress<string>? progress, CancellationToken ct)
+    private async Task<SiteSearchMatches?> TrySiteSearch(string keyword, IProgress<string>? progress, CancellationToken ct)
     {
         try
         {
             progress?.Report("Trying SITE SEARCH...");
-            using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            borrowCts.CancelAfter(BorrowTimeout);
-            await using var conn = await _pool.Borrow(borrowCts.Token);
-            var reply = await conn.Client.Execute($"SITE SEARCH {SanitizeFtpInput(keyword)}", ct);
+            // glftpd search scripts disagree about multiword/phrase semantics. Ask
+            // for one discriminating term and apply the same AND matcher locally.
+            var query = Normalize(keyword).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+                .OrderByDescending(term => term.Length).FirstOrDefault() ?? "";
+            var reply = await ExecuteSiteSearch(SanitizeFtpInput(query), ct);
 
             if (!reply.Success)
             {
                 Log.Debug("SITE SEARCH returned {Code}: {Message}", reply.Code, reply.Message);
                 // Only permanently disable on 5xx (command not recognized) — not transient errors
-                if (reply.Code.StartsWith('5'))
+                if (reply.Code is "500" or "502")
                     _siteSearchSupported = false;
                 return null;
             }
@@ -181,8 +257,11 @@ public class FtpSearchService : IDisposable
             var raw = reply.InfoMessages ?? reply.Message ?? "";
             Log.Debug("SITE SEARCH raw response ({Length} chars): {Response}", raw.Length, raw);
             var results = ParseSiteSearchResponse(raw);
+            var truncated = results.Count >= MaxResults;
+            var terms = QueryTerms(keyword);
+            results = results.Where(r => MatchesNormalizedName(Normalize(r.ReleaseName), terms)).ToList();
             progress?.Report($"{results.Count} result(s) from SITE SEARCH");
-            return results;
+            return new(results, truncated);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -196,6 +275,31 @@ public class FtpSearchService : IDisposable
             // Connection errors are transient — don't permanently disable SITE SEARCH
             Log.Debug(ex, "SITE SEARCH failed (transient), will retry next search");
             return null;
+        }
+    }
+
+    private async Task<FtpReply> ExecuteSiteSearch(string query, CancellationToken ct)
+    {
+        if (_siteSearchOverride != null) return await _siteSearchOverride(query, ct);
+        using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        borrowCts.CancelAfter(BorrowTimeout);
+        await using var conn = await _pool.Borrow(borrowCts.Token);
+        ct.ThrowIfCancellationRequested();
+        try
+        {
+            var reply = await conn.Client.Execute($"SITE SEARCH {query}", ct);
+            if (reply.Code == "421") conn.Poison("SITE SEARCH server closed control connection (421)");
+            return reply;
+        }
+        catch (OperationCanceledException)
+        {
+            conn.Poison("SITE SEARCH cancelled after command started");
+            throw;
+        }
+        catch (Exception ex) when (!IsCleanCommandRejection(ex))
+        {
+            conn.Poison($"SITE SEARCH transport failure: {ex.GetType().Name}");
+            throw;
         }
     }
 
@@ -251,33 +355,44 @@ public class FtpSearchService : IDisposable
 
     #region Cached Index
 
-    private List<SearchResult> RunIndexSearch(string keyword, IProgress<string>? progress)
+    private int RunIndexSearch(string keyword, IProgress<string>? progress, SearchRun run)
     {
         List<IndexEntry> snapshot;
         lock (_indexLock)
+        {
             snapshot = _index;
+            run.IndexBuiltAtUtc = _indexBuiltAtUtc;
+            run.Failures.AddRange(_indexFailures);
+        }
+        run.Method = "Cached index";
 
         if (snapshot.Count == 0)
         {
             progress?.Report("Index is empty — building in background...");
-            return [];
+            run.Partial = run.IndexBuiltAtUtc == null || run.Failures.Count > 0;
+            return 0;
         }
 
         progress?.Report("Searching cached index...");
-        var results = FilterIndex(snapshot, keyword);
+        var results = FilterIndex(snapshot, keyword, out var truncated);
+        run.Results.AddRange(results);
+        run.Truncated = truncated;
+        run.Partial = run.Failures.Count > 0;
         progress?.Report($"{results.Count} result(s) from cached index");
-        return results;
+        return results.Count;
     }
 
-    private static List<SearchResult> FilterIndex(List<IndexEntry> index, string keyword)
+    private static List<SearchResult> FilterIndex(List<IndexEntry> index, string keyword, out bool truncated)
     {
-        var normalized = Normalize(keyword);
+        truncated = false;
         var results = new List<SearchResult>();
+        var terms = QueryTerms(keyword);
 
         foreach (var entry in index)
         {
-            if (entry.NormalizedName.Contains(normalized, StringComparison.OrdinalIgnoreCase))
+            if (MatchesNormalizedName(entry.NormalizedName, terms))
             {
+                if (results.Count >= MaxResults) { truncated = true; break; }
                 results.Add(new SearchResult
                 {
                     ReleaseName = entry.Name,
@@ -286,7 +401,6 @@ public class FtpSearchService : IDisposable
                     Size = entry.Size,
                     Modified = entry.Modified
                 });
-                if (results.Count >= MaxResults) break;
             }
         }
 
@@ -315,7 +429,11 @@ public class FtpSearchService : IDisposable
             previous = _index;
         var merged = MergeAfterCrawl(entries, previous, report);
         lock (_indexLock)
+        {
             _index = merged;
+            if (!report.Aborted || previous.Count == 0) _indexBuiltAtUtc = DateTime.UtcNow;
+            _indexFailures = report.Failures.ToList();
+        }
 
         progress?.Report($"Index built: {merged.Count} entries");
         if (report.Aborted)
@@ -384,6 +502,8 @@ public class FtpSearchService : IDisposable
         public int ConsecutiveFailures { get; private set; }
         public bool Aborted => ConsecutiveFailures >= MaxConsecutiveFailures;
         public List<string> FailedPaths { get; } = [];
+        public List<SearchListingFailure> Failures { get; } = [];
+        public bool Truncated { get; set; }
         public string? FirstFailedPath { get; private set; }
         public string? FirstError { get; private set; }
         public string? LastFailedPath { get; private set; }
@@ -396,6 +516,7 @@ public class FtpSearchService : IDisposable
             Failed++;
             ConsecutiveFailures++;
             FailedPaths.Add(path);
+            Failures.Add(new(path, ex.Message));
             LastFailedPath = path;
             LastError = ex.Message;
             if (FirstFailedPath != null) return;
@@ -406,9 +527,10 @@ public class FtpSearchService : IDisposable
 
     private async Task<FtpListItem[]> ListViaPool(string path, CancellationToken ct)
     {
+        if (_listOverride != null) return await _listOverride(path, ct);
         // Borrow per-listing so we don't hold a connection for the entire crawl
         await using var conn = await _pool.Borrow(ct);
-        return await ListDirect(conn.Client, path, ct);
+        return await ListBorrowed(conn, path, ct);
     }
 
     /// <summary>
@@ -525,78 +647,117 @@ public class FtpSearchService : IDisposable
 
     #region Live Crawl
 
-    private async Task<List<SearchResult>> RunLiveCrawl(string keyword, IProgress<string>? progress, CancellationToken ct)
+    private async Task RunLiveCrawl(string keyword, IProgress<string>? progress, SearchRun run, CancellationToken ct)
     {
-        var results = new List<SearchResult>();
-        var normalizedKeyword = Normalize(keyword);
+        run.Method = run.Results.Count > 0 ? "SITE SEARCH + Live crawl" : "Live crawl";
+        var results = run.Results;
         var report = new IndexCrawlReport();
+        var terms = QueryTerms(keyword);
 
         progress?.Report("Live searching...");
 
         try
         {
             // Search paths sequentially to avoid borrowing multiple connections at once
-            foreach (var path in _searchConfig.SearchPaths)
+            for (var rootIndex = 0; rootIndex < _searchConfig.SearchPaths.Count; rootIndex++)
             {
+                var path = _searchConfig.SearchPaths[rootIndex];
                 ct.ThrowIfCancellationRequested();
-                var pathResults = await SearchPath(NormalizeSearchRoot(path), normalizedKeyword, progress, report, ct);
-                results.AddRange(pathResults);
-                if (results.Count >= MaxResults || report.Aborted) break;
+                if (results.Count >= MaxResults) { report.Truncated = true; break; }
+                await SearchRecursive(ListForLiveSearch, NormalizeSearchRoot(path), keyword,
+                    0, _searchConfig.MaxDepth, results, progress, ct, report, queryTerms: terms);
+                if (results.Count >= MaxResults || report.Aborted)
+                {
+                    if (rootIndex + 1 < _searchConfig.SearchPaths.Count) report.Truncated = true;
+                    break;
+                }
             }
 
             if (results.Count > MaxResults)
                 results.RemoveRange(MaxResults, results.Count - MaxResults);
         }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex)
+        finally
         {
-            Log.Error(ex, "FTP search failed for: {Keyword}", keyword);
+            run.Failures.AddRange(report.Failures);
+            run.Truncated |= report.Truncated;
+            run.Partial |= report.Aborted;
+            if (report.Failed > 0)
+                Log.Warning("Live search returned partial results: {Failed} listing(s) failed; last {Path}: {Error}",
+                    report.Failed, report.LastFailedPath, report.LastError);
+            progress?.Report($"{results.Count} result(s) from live crawl" +
+                (report.Failed > 0 ? $" ({report.Failed} directory listing(s) failed)" : ""));
         }
-
-        if (report.Failed > 0)
-            Log.Warning("Live search returned partial results: {Failed} listing(s) failed; last {Path}: {Error}",
-                report.Failed, report.LastFailedPath, report.LastError);
-        progress?.Report($"{results.Count} result(s) from live crawl" +
-            (report.Failed > 0 ? $" ({report.Failed} directory listing(s) failed)" : ""));
-        return results;
     }
 
-    private async Task<List<SearchResult>> SearchPath(string rootPath, string keyword, IProgress<string>? progress,
-        IndexCrawlReport report, CancellationToken ct)
+    private Task<FtpListItem[]> ListForLiveSearch(string path, CancellationToken ct) =>
+        ListWithTransientRetry(ListForLiveSearchOnce, path, ct, _listingRetryDelay);
+
+    private async Task<FtpListItem[]> ListForLiveSearchOnce(string path, CancellationToken ct)
     {
-        var results = new List<SearchResult>();
-
-        try
-        {
-            await SearchRecursive(ListForLiveSearch, rootPath, keyword, 0, _searchConfig.MaxDepth, results, progress, ct, report);
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex)
-        {
-            Log.Debug(ex, "Failed to search path {Path}, skipping", rootPath);
-        }
-
-        return results;
-    }
-
-    private async Task<FtpListItem[]> ListForLiveSearch(string path, CancellationToken ct)
-    {
+        if (_listOverride != null) return await _listOverride(path, ct);
         using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         borrowCts.CancelAfter(BorrowTimeout);
-        await using var conn = await _pool.Borrow(borrowCts.Token);
-        return await ListDirect(conn.Client, path, ct);
+        PooledConnection conn;
+        try { conn = await _pool.Borrow(borrowCts.Token); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new TimeoutException("FTP connection busy; timed out waiting for a free connection");
+        }
+        await using var borrowed = conn;
+        return await ListBorrowed(conn, path, ct);
+    }
+
+    internal static async Task<FtpListItem[]> ListWithTransientRetry(
+        DirectoryLister list, string path, CancellationToken ct, TimeSpan retryDelay)
+    {
+        try { return await list(path, ct); }
+        catch (Exception ex) when (!ct.IsCancellationRequested && IsTransientListingFailure(ex))
+        {
+            // A single fair second borrow lets a busy download return its login.
+            // Clean 550/permission/path denials are never retried.
+            await Task.Delay(retryDelay, ct);
+            return await list(path, ct);
+        }
+    }
+
+    private static bool IsTransientListingFailure(Exception ex) =>
+        ex is OperationCanceledException or TimeoutException or System.Net.Sockets.SocketException
+        || (ex is IOException && !FtpCommandRejection.IsClean(ex)
+            && !Regex.IsMatch(ex.Message, @"\b5\d{2}\b", RegexOptions.CultureInvariant));
+
+    private static bool IsCleanCommandRejection(Exception ex) => FtpCommandRejection.IsClean(ex)
+        || ex is FtpCommandException command && FtpCommandRejection.LeavesChannelInSync(command.CompletionCode);
+
+    private async Task<FtpListItem[]> ListBorrowed(PooledConnection conn, string path, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        try { return await ListDirect(conn.Client, path, ct); }
+        catch (OperationCanceledException)
+        {
+            // Borrow cancellation never reaches this scope. Once LIST began, a
+            // cancellation can leave data/final replies unread on the control stream.
+            conn.Poison($"search LIST cancelled after command started: {path}");
+            throw;
+        }
+        catch (Exception ex) when (!IsCleanCommandRejection(ex))
+        {
+            conn.Poison($"search LIST transport failure: {path}: {ex.GetType().Name}");
+            throw;
+        }
     }
 
     internal static async Task SearchRecursive(
         DirectoryLister list, string path, string keyword,
         int depth, int maxDepth, List<SearchResult> results,
         IProgress<string>? progress, CancellationToken ct,
-        IndexCrawlReport? report = null, string? searchRoot = null)
+        IndexCrawlReport? report = null, string? searchRoot = null, string[]? queryTerms = null)
     {
         ct.ThrowIfCancellationRequested();
         report ??= new IndexCrawlReport();
         searchRoot ??= path;
-        if (results.Count >= MaxResults || report.Aborted) return;
+        queryTerms ??= QueryTerms(keyword);
+        if (results.Count >= MaxResults) { report.Truncated = true; return; }
+        if (report.Aborted) return;
 
         progress?.Report($"Scanning {path}...");
 
@@ -617,11 +778,13 @@ public class FtpSearchService : IDisposable
         foreach (var item in items)
         {
             ct.ThrowIfCancellationRequested();
-            if (results.Count >= MaxResults || report.Aborted) return;
+            if (results.Count >= MaxResults) { report.Truncated = true; return; }
+            if (report.Aborted) return;
             if (item.Type != FtpObjectType.Directory) continue;
             if (SkipDirectory(item.Name)) continue;
 
-            if (Normalize(item.Name).Contains(keyword, StringComparison.OrdinalIgnoreCase))
+            if (MatchesNormalizedName(Normalize(item.Name), queryTerms)
+                && !results.Any(r => string.Equals(r.RemotePath, item.FullName, StringComparison.Ordinal)))
             {
                 var category = ExtractCategory(searchRoot, item.FullName);
                 results.Add(new SearchResult
@@ -635,7 +798,7 @@ public class FtpSearchService : IDisposable
             }
 
             if (depth < maxDepth)
-                await SearchRecursive(list, item.FullName, keyword, depth + 1, maxDepth, results, progress, ct, report, searchRoot);
+                await SearchRecursive(list, item.FullName, keyword, depth + 1, maxDepth, results, progress, ct, report, searchRoot, queryTerms);
         }
     }
 
@@ -659,7 +822,7 @@ public class FtpSearchService : IDisposable
         if (_pool.UseCpsv)
             return await CpsvDataHelper.ListDirectory(client, remotePath, _pool.ControlHost, ct);
 
-        return await client.GetListing(remotePath, FtpListOption.AllFiles, ct);
+        return await FtpListing.GetListing(client, remotePath, ct);
     }
 
     #endregion

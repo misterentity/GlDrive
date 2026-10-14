@@ -32,6 +32,34 @@ pem.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.Priv
                                  serialization.NoEncryption()) + cert.public_bytes(serialization.Encoding.PEM))
 class ReleaseCheckHandler(TLS_FTPHandler):
     _reject_retr_completion = False
+    proto_cmds = TLS_FTPHandler.proto_cmds.copy()
+    proto_cmds["SITE SEARCH"] = {"perm": None, "auth": True, "arg": None,
+                                "help": "Syntax: SITE SEARCH <query>"}
+
+    def ftp_SITE_SEARCH(self, line):
+        response = root / "site-search-response"
+        if not response.exists():
+            self.respond("500 Fixture SITE SEARCH unavailable")
+            return
+        self.push("200-Search results\r\n")
+        for result in response.read_text().splitlines():
+            self.push("200-" + result + "\r\n")
+        self.respond("200 Search complete")
+
+    def reject_search_listing(self, path):
+        denied = root / "reject-search-path"
+        if denied.exists() and self.fs.fs2ftp(path).rstrip("/") == denied.read_text().strip().rstrip("/"):
+            self.respond("550 Fixture search listing denied")
+            return True
+        return False
+
+    def ftp_LIST(self, path):
+        if not self.reject_search_listing(path):
+            return super().ftp_LIST(path)
+
+    def ftp_MLSD(self, path):
+        if not self.reject_search_listing(path):
+            return super().ftp_MLSD(path)
 
     def ftp_USER(self, line):
         # Count authentication attempts without recording any credential values.

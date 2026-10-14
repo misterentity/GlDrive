@@ -99,27 +99,82 @@ public sealed partial class AutomationService
         var filter = Optional(a, "serverId", 128);
         var limit = Integer(a, "limit", 200, 1, 2000);
         var services = filter == null ? _servers.GetMountedServers() : [Mounted(filter)];
-        var results = new List<SearchResult>();
-        var errors = new List<object>();
-        foreach (var service in services)
+        var targets = services.Select(service => new SearchTarget(service.ServerId, service.ServerName,
+            service.Search is { } search ? (query, token) => search.SearchDetailed(query, ct: token) : null)).ToArray();
+        return await QuerySearchTargetsAsync(targets, query, limit, ct);
+    }
+
+    internal sealed record SearchTarget(string ServerId, string ServerName,
+        Func<string, CancellationToken, Task<SearchOutcome>>? Search);
+    internal sealed record SearchError(string ServerId, string Message);
+    internal sealed record SearchServerInfo(string ServerId, string ServerName, string? Method,
+        DateTime? IndexBuiltAtUtc, int ResultCount, bool IsPartial, bool TimedOut, bool Truncated,
+        bool Unavailable, int FailedListings, IReadOnlyList<SearchListingFailure> Failures);
+    internal sealed record SearchResponse(IReadOnlyList<SearchResult> Results, int Total,
+        IReadOnlyList<SearchError> Errors, bool IsPartial, bool Truncated, IReadOnlyList<SearchServerInfo> Servers);
+
+    internal static async Task<SearchResponse> QuerySearchTargetsAsync(IReadOnlyList<SearchTarget> targets,
+        string query, int limit, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (targets.Count == 0) throw new InvalidOperationException("No mounted servers are available to search.");
+
+        // Independent servers can answer concurrently. Capture each failure so a
+        // busy server never discards another server's valid matches.
+        var responses = await Task.WhenAll(targets.Select(async target =>
         {
-            ct.ThrowIfCancellationRequested();
-            if (service.Search == null) continue;
             try
             {
-                foreach (var result in await service.Search.Search(query, ct: ct))
-                {
-                    result.ServerId = service.ServerId;
-                    result.ServerName = service.ServerName;
-                    results.Add(result);
-                }
+                if (target.Search == null) throw new InvalidOperationException("Search service unavailable.");
+                var outcome = await target.Search(query, ct);
+                ct.ThrowIfCancellationRequested();
+                return (Target: target, Outcome: (SearchOutcome?)outcome, Error: (string?)null);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
             {
-                errors.Add(new { serverId = service.ServerId, message = ex.Message });
+                return (Target: target, Outcome: (SearchOutcome?)null, Error: (string?)ex.Message);
             }
+        }));
+        ct.ThrowIfCancellationRequested();
+        var results = new List<SearchResult>();
+        var errors = new List<SearchError>();
+        var servers = new List<SearchServerInfo>();
+        foreach (var response in responses)
+        {
+            var target = response.Target;
+            if (response.Outcome is not { } outcome)
+            {
+                errors.Add(new SearchError(target.ServerId, response.Error!));
+                servers.Add(new SearchServerInfo(target.ServerId, target.ServerName, null, null, 0,
+                    true, false, false, true, 0, []));
+                continue;
+            }
+            // Preserve the existing results/total/errors schema. Detailed server
+            // diagnostics are additive; legacy clients also see incomplete reads
+            // in errors instead of mistaking an unavailable listing for no matches.
+            foreach (var result in outcome.Results)
+                results.Add(new SearchResult
+                {
+                    ReleaseName = result.ReleaseName, Category = result.Category, RemotePath = result.RemotePath,
+                    Size = result.Size, Modified = result.Modified, Files = result.Files.ToList(),
+                    ServerId = target.ServerId, ServerName = target.ServerName
+                });
+            if (outcome.Failures.Count > 0)
+                errors.Add(new SearchError(target.ServerId,
+                    $"Search incomplete: {outcome.Failures.Count} listing failure(s); {outcome.Failures[0].Path}: {outcome.Failures[0].Message}"));
+            else if (outcome.TimedOut)
+                errors.Add(new SearchError(target.ServerId, "Search time limit reached; results are incomplete."));
+            else if (outcome.IsPartial && !outcome.Truncated)
+                errors.Add(new SearchError(target.ServerId, "Search incomplete; results may be missing."));
+            servers.Add(new SearchServerInfo(target.ServerId, target.ServerName, outcome.Method, outcome.IndexBuiltAtUtc,
+                outcome.Results.Count, outcome.IsPartial, outcome.TimedOut, outcome.Truncated, false,
+                outcome.FailedListings, outcome.Failures.ToArray()));
         }
-        return new { results = results.Take(limit).ToArray(), total = results.Count, errors };
+        var truncated = results.Count > limit || servers.Any(server => server.Truncated);
+        return new SearchResponse(results.Take(limit).ToArray(), results.Count, errors,
+            truncated || servers.Any(server => server.IsPartial || server.Unavailable || server.TimedOut || server.FailedListings > 0),
+            truncated, servers);
     }
 
     private object Wishlist(string op, JsonElement a)

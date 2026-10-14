@@ -2485,6 +2485,37 @@
                                     <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
                                     <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                                     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="14">
+                                        <StackPanel>
+                                        <ItemsControl ItemsSource="{Binding QueuedRaces}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Margin="0,0,0,10" Padding="14,10"
+                                                            Background="{DynamicResource SurfaceBrush}"
+                                                            BorderBrush="{DynamicResource LineBrush}" BorderThickness="1">
+                                                        <DockPanel>
+                                                            <Button DockPanel.Dock="Right" Content="Cancel" Margin="12,0,0,0"
+                                                                    VerticalAlignment="Center" Padding="8,4"
+                                                                    Command="{Binding DataContext.CancelQueuedRaceCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                    CommandParameter="{Binding}"/>
+                                                            <StackPanel>
+                                                                <TextBlock Text="{Binding ReleaseName}" FontSize="12"
+                                                                           Foreground="{DynamicResource ForegroundBrush}"
+                                                                           TextTrimming="CharacterEllipsis" ToolTip="{Binding ReleaseName}"/>
+                                                                <TextBlock Text="{Binding StatusText}" FontSize="11"
+                                                                           Foreground="{DynamicResource AccentBrush}"
+                                                                           TextTrimming="CharacterEllipsis" ToolTip="{Binding StatusText}"/>
+                                                                <StackPanel Orientation="Horizontal">
+                                                                    <TextBlock Text="{Binding Section}" FontSize="10"
+                                                                               Foreground="{DynamicResource TextFaintBrush}" Margin="0,0,12,0"/>
+                                                                    <TextBlock Text="{Binding RetryText}" FontSize="10"
+                                                                               Foreground="{DynamicResource TextFaintBrush}"/>
+                                                                </StackPanel>
+                                                            </StackPanel>
+                                                        </DockPanel>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
                                         <ItemsControl ItemsSource="{Binding SpreadJobs}">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate>
@@ -2632,6 +2663,7 @@
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
                                         </ItemsControl>
+                                        </StackPanel>
                                     </ScrollViewer>
                                 </Grid>
                             </DockPanel>
