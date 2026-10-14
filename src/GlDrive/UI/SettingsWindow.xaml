@@ -2,6 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:aia="clr-namespace:GlDrive.AiAgent"
+        xmlns:ui="clr-namespace:GlDrive.UI"
         Title="GlDrive Settings" Width="1100" Height="780"
         MinWidth="900" MinHeight="600"
         WindowStartupLocation="CenterScreen" ResizeMode="CanResize"
@@ -95,6 +96,56 @@
                         <TextBlock Text="Speed Limit (KB/s, 0=unlimited):" Margin="0,0,0,4"/>
                         <TextBox Text="{Binding SpeedLimitKbps, UpdateSourceTrigger=PropertyChanged}"
                                  Width="80" HorizontalAlignment="Left" Margin="0,0,0,12"/>
+
+                        <Separator Margin="0,0,0,12"/>
+                        <TextBlock Text="Networks &amp; streams" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                        <CheckBox Content="Use multiple streams for downloads"
+                                  IsChecked="{Binding MultiStreamEnabled}" Margin="0,0,0,4"/>
+                        <CheckBox Content="Borrow the race login while a site isn't racing (FTP)"
+                                  IsChecked="{Binding BorrowIdleRaceLogin}" Margin="0,0,0,8"
+                                  ToolTip="Uses the site's idle racing connection as a second download stream; handed back within about a second when a race starts. Never affects racing."/>
+                        <TextBlock Text="HTTP streams per network:" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding HttpLanesPerNetwork, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+                        <TextBlock Text="FTP minimum split (MB):" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding FtpMinSplitMb, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+                        <TextBlock Text="Slow mode limit (KB/s):" Margin="0,0,0,4"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                            <TextBox Text="{Binding SlowModeKbps, UpdateSourceTrigger=PropertyChanged}"
+                                     Width="80" Margin="0,0,12,0"/>
+                            <CheckBox Content="Slow mode on" IsChecked="{Binding SlowMode}" VerticalAlignment="Center"/>
+                        </StackPanel>
+
+                        <TextBlock Text="Networks:" Margin="0,0,0,4"/>
+                        <DataGrid x:Name="NetworksGrid" ItemsSource="{Binding Networks}"
+                                  AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False"
+                                  SelectionMode="Single" GridLinesVisibility="Horizontal"
+                                  HeadersVisibility="Column" MinHeight="80" MaxHeight="200" Margin="0,0,0,4">
+                            <DataGrid.Columns>
+                                <DataGridTemplateColumn Header="Use" Width="45">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <CheckBox IsChecked="{Binding Use, UpdateSourceTrigger=PropertyChanged}"
+                                                      HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                                <DataGridTextColumn Header="Adapter" Binding="{Binding AdapterDisplay, Mode=OneWay}"
+                                                    IsReadOnly="True" Width="*"/>
+                                <DataGridTextColumn Header="Friendly name" Binding="{Binding FriendlyName}" Width="140"/>
+                                <DataGridTextColumn Header="Limit KB/s" Binding="{Binding LimitKbps}" Width="80"/>
+                                <DataGridTextColumn Header="Allowance GB" Binding="{Binding AllowanceGb}" Width="90"/>
+                                <DataGridComboBoxColumn Header="Period" Width="90"
+                                    ItemsSource="{x:Static ui:NetworkRowViewModel.PeriodOptions}"
+                                    SelectedItemBinding="{Binding Period}"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <TextBlock Text="No network ticked = default connection only (current behavior). Tick two or more internet connections (e.g. Ethernet + phone tether) to combine them. FTP uses them for data connections; the drive and racing stay on the default route. Limit and allowance: 0 = unlimited."
+                                   TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" FontSize="11" Margin="0,0,0,8"/>
+                        <Button Content="Refresh" Command="{Binding RefreshNetworksCommand}" Padding="12,4"
+                                HorizontalAlignment="Left" Margin="0,0,0,12" Style="{StaticResource SecondaryButton}"
+                                ToolTip="Re-scan network adapters"/>
 
                         <Separator Margin="0,0,0,12"/>
                         <TextBlock Text="Auto-Retry" FontWeight="SemiBold" Margin="0,0,0,8"/>

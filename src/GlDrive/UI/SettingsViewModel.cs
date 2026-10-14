@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
 using GlDrive.Config;
+using GlDrive.Downloads.Segmented;
 using GlDrive.Tls;
 using static GlDrive.Config.CredentialStore;
 
@@ -44,6 +45,12 @@ public class SettingsViewModel : INotifyPropertyChanged
     private bool _spreadDebugMode;
     private bool _spreadValidateOnBorrow;
     private string _spreadKeepaliveSeconds;
+    private bool _multiStreamEnabled;
+    private bool _borrowIdleRaceLogin;
+    private string _httpLanesPerNetwork;
+    private string _ftpMinSplitMb;
+    private bool _slowMode;
+    private string _slowModeKbps;
 
     public SettingsViewModel(AppConfig config, bool readLocalState = true)
     {
@@ -82,6 +89,14 @@ public class SettingsViewModel : INotifyPropertyChanged
         _spreadDebugMode = config.Spread.DebugMode;
         _spreadValidateOnBorrow = config.Spread.ValidateConnectionOnBorrow;
         _spreadKeepaliveSeconds = config.Spread.SpreadKeepaliveSeconds.ToString();
+        var ms = config.Downloads.MultiStream;
+        _multiStreamEnabled = ms.Enabled;
+        _borrowIdleRaceLogin = ms.BorrowIdleRaceLogin;
+        _httpLanesPerNetwork = ms.HttpLanesPerNetwork.ToString();
+        _ftpMinSplitMb = ms.FtpMinSplitMb.ToString();
+        _slowMode = ms.SlowMode;
+        _slowModeKbps = ms.SlowModeKbps.ToString();
+        LoadNetworks(readLocalState);
 
         GlobalSkiplist = new ObservableCollection<SkiplistRule>(config.Spread.GlobalSkiplist);
     }
@@ -121,6 +136,28 @@ public class SettingsViewModel : INotifyPropertyChanged
     public bool SpreadValidateOnBorrow { get => _spreadValidateOnBorrow; set { _spreadValidateOnBorrow = value; OnPropertyChanged(); } }
     public string SpreadKeepaliveSeconds { get => _spreadKeepaliveSeconds; set { _spreadKeepaliveSeconds = value; OnPropertyChanged(); } }
     public ObservableCollection<SkiplistRule> GlobalSkiplist { get; set; } = new();
+    public bool MultiStreamEnabled { get => _multiStreamEnabled; set { _multiStreamEnabled = value; OnPropertyChanged(); } }
+    public bool BorrowIdleRaceLogin { get => _borrowIdleRaceLogin; set { _borrowIdleRaceLogin = value; OnPropertyChanged(); } }
+    public string HttpLanesPerNetwork { get => _httpLanesPerNetwork; set { _httpLanesPerNetwork = value; OnPropertyChanged(); } }
+    public string FtpMinSplitMb { get => _ftpMinSplitMb; set { _ftpMinSplitMb = value; OnPropertyChanged(); } }
+    public bool SlowMode { get => _slowMode; set { _slowMode = value; OnPropertyChanged(); } }
+    public string SlowModeKbps { get => _slowModeKbps; set { _slowModeKbps = value; OnPropertyChanged(); } }
+    public ObservableCollection<NetworkRowViewModel> Networks { get; } = new();
+    public ICommand RefreshNetworksCommand => new RelayCommand(() => LoadNetworks(true));
+
+    // Re-enumerating keeps edits made so far: current rows are folded back into configs first.
+    private void LoadNetworks(bool enumerate)
+    {
+        var configured = Networks.Count > 0
+            ? NetworkRowViewModel.ToConfigs(Networks)
+            : _config.Downloads.MultiStream.Networks;
+        IReadOnlyList<NetworkCatalog.Adapter> candidates = enumerate
+            ? NetworkCatalog.Candidates(NetworkCatalog.EnumerateAdapters())
+            : [];
+        Networks.Clear();
+        foreach (var row in NetworkRowViewModel.Build(configured, candidates))
+            Networks.Add(row);
+    }
 
     // Agent properties — bound directly to _config.Agent (no local backing field needed)
     public bool AgentEnabled
@@ -328,6 +365,15 @@ public class SettingsViewModel : INotifyPropertyChanged
         config.Spread.ValidateConnectionOnBorrow = SpreadValidateOnBorrow;
         config.Spread.SpreadKeepaliveSeconds = int.TryParse(SpreadKeepaliveSeconds, out var sks) ? Math.Clamp(sks, 0, 300) : 30;
         config.Spread.GlobalSkiplist = GlobalSkiplist.ToList();
+
+        var ms = config.Downloads.MultiStream;
+        ms.Enabled = MultiStreamEnabled;
+        ms.BorrowIdleRaceLogin = BorrowIdleRaceLogin;
+        ms.HttpLanesPerNetwork = int.TryParse(HttpLanesPerNetwork, out var hlpn) ? Math.Clamp(hlpn, 1, 32) : 4;
+        ms.FtpMinSplitMb = int.TryParse(FtpMinSplitMb, out var fms) ? Math.Clamp(fms, 4, 1024) : 32;
+        ms.SlowMode = SlowMode;
+        ms.SlowModeKbps = int.TryParse(SlowModeKbps, out var smk) ? Math.Clamp(smk, 64, 1_000_000) : 2048;
+        ms.Networks = NetworkRowViewModel.ToConfigs(Networks);
 
         // AI Agent — properties bind directly to _config.Agent, but mirror to the passed-in
         // config for consistency with all other ApplyTo sections. Keeps the method the
