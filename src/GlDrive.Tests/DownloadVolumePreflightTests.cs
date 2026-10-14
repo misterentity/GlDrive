@@ -20,7 +20,7 @@ public sealed class DownloadVolumePreflightTests
         // Any attempt to use FTP throws. An absent destination must be detected first,
         // regardless of whether the network is available (the September 17 regression).
         await using var pool = new FtpConnectionPool(null!);
-        using var manager = new DownloadManager(store, null!, new StreamingDownloader(pool),
+        using var manager = new DownloadManager(store, null!, new StreamingDownloader(pool, id, new DownloadConfig(), 0, null),
             new DownloadConfig { MaxRetries = 3 });
         var item = new DownloadItem
         {

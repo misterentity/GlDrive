@@ -8,7 +8,7 @@ using Serilog;
 
 namespace GlDrive.Spread;
 
-public class SpreadManager : IDisposable
+public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLoginLender
 {
     private readonly AppConfig _config;
     private readonly Dictionary<string, FtpConnectionPool> _spreadPools = new();
@@ -1316,6 +1316,50 @@ public class SpreadManager : IDisposable
     public IReadOnlyList<string> GetConnectedServerIds()
     {
         lock (_lock) return _spreadPools.Keys.ToList();
+    }
+
+    // IRaceLoginLender — lets a download use this site's idle race login as a second stream.
+    // Racing state is only READ here; the borrowed lane polls IsRaceIdle and hands the
+    // connection back (clean Return, which wakes a waiting race Borrow) within ~1s.
+    public bool IsRaceIdle(string serverId)
+    {
+        lock (_lock)
+        {
+            if (_disposed) return false;
+            if (_activeJobs.Any(j => j.Sites.ContainsKey(serverId))) return false;
+            if (_startingRequests.Any(r => r.ServerIds.Contains(serverId))) return false;
+            return !_raceQueue.Any(r => r.ServerIds.Contains(serverId));
+        }
+    }
+
+    public async Task<PooledConnection?> TryBorrowAsync(string serverId, TimeSpan wait, CancellationToken ct)
+    {
+        FtpConnectionPool? pool;
+        lock (_lock)
+        {
+            if (!_spreadPools.TryGetValue(serverId, out pool)) return null;
+        }
+        if (!IsRaceIdle(serverId) || pool.IsThrottled || !pool.UseCpsv) return null;
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(wait);
+        try
+        {
+            var conn = await pool.Borrow(cts.Token);
+            // A race may have been queued while we waited — give it straight back.
+            if (IsRaceIdle(serverId)) return conn;
+            await conn.DisposeAsync();
+            return null;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return null; // nothing came free within the wait
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Log.Debug(ex, "Download: race login for {Server} not borrowable", serverId);
+            return null;
+        }
     }
 
     /// <summary>

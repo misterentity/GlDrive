@@ -405,13 +405,7 @@ public class DownloadManager : IDisposable
                 // Single file download
                 var fileName = Path.GetFileName(item.RemotePath);
 
-                // Check for existing partial file for resume
-                long resumeOffset = 0;
-                var localFile = new FileInfo(item.LocalPath);
-                if (localFile.Exists && localFile.Length > 0)
-                    resumeOffset = localFile.Length;
-
-                if (resumeOffset > 0)
+                if (HasPartial(item.LocalPath))
                     EmitDownloadOutcome(item, "resumed");
 
                 var progress = new Progress<DownloadProgress>(p =>
@@ -421,7 +415,8 @@ public class DownloadManager : IDisposable
                     DownloadProgressChanged?.Invoke(item, p with { CurrentFileName = fileName });
                 });
 
-                await _downloader.DownloadToFile(item.RemotePath, item.LocalPath, resumeOffset, progress, itemCts.Token);
+                await _downloader.DownloadFiles([new FtpDownloadFile(item.RemotePath, item.LocalPath, -1)],
+                    progress, itemCts.Token);
             }
             else
             {
@@ -464,13 +459,11 @@ public class DownloadManager : IDisposable
                     reservedBytes = remaining;
                 }
 
-                long completedBytes = 0;
                 var localPathFull = Path.GetFullPath(item.LocalPath);
+                var toDownload = new List<FtpDownloadFile>(dataFiles.Count);
 
                 foreach (var file in dataFiles)
                 {
-                    itemCts.Token.ThrowIfCancellationRequested();
-
                     var safeName = PathSanitizer.Sanitize(Path.GetFileName(file.Name));
                     if (string.IsNullOrEmpty(safeName) || safeName.Contains(".."))
                     {
@@ -483,38 +476,22 @@ public class DownloadManager : IDisposable
                         Log.Warning("Skipping file that escapes download directory: {Name}", file.Name);
                         continue;
                     }
-
-                    // Resume: check existing file
-                    long resumeOffset = 0;
-                    var existingFile = new FileInfo(localFilePath);
-                    if (existingFile.Exists)
-                    {
-                        if (existingFile.Length >= file.Size)
-                        {
-                            // File already fully downloaded
-                            completedBytes += file.Size;
-                            item.DownloadedBytes = completedBytes;
-                            continue;
-                        }
-                        resumeOffset = existingFile.Length;
-                    }
-
-                    if (resumeOffset > 0)
-                        EmitDownloadOutcome(item, "resumed");
-
-                    long fileCompleted = resumeOffset;
-
-                    var progress = new Progress<DownloadProgress>(p =>
-                    {
-                        fileCompleted = p.DownloadedBytes;
-                        item.DownloadedBytes = completedBytes + fileCompleted;
-                        DownloadProgressChanged?.Invoke(item, new DownloadProgress(
-                            item.DownloadedBytes, item.TotalBytes, p.BytesPerSecond, file.Name));
-                    });
-
-                    await _downloader.DownloadToFile(file.FullName, localFilePath, resumeOffset, progress, itemCts.Token);
-                    completedBytes += file.Size;
+                    toDownload.Add(new FtpDownloadFile(file.FullName, localFilePath, file.Size));
                 }
+
+                if (toDownload.Any(f => HasPartial(f.LocalPath, f.Size)))
+                    EmitDownloadOutcome(item, "resumed");
+
+                // The whole release goes to the engine at once so its lanes can work on
+                // different volumes in parallel. Files already complete on disk are skipped
+                // by the engine and counted as done.
+                var progress = new Progress<DownloadProgress>(p =>
+                {
+                    item.DownloadedBytes = p.DownloadedBytes;
+                    DownloadProgressChanged?.Invoke(item, p with { TotalBytes = item.TotalBytes });
+                });
+
+                await _downloader.DownloadFiles(toDownload, progress, itemCts.Token);
             }
 
             // Network phase done — hand the concurrency slot back so other downloads
@@ -628,6 +605,18 @@ public class DownloadManager : IDisposable
             DownloadStatusChanged?.Invoke(item);
             ScheduleRetry(item, (int)delay.TotalSeconds);
         }
+        catch (GlDrive.Downloads.Segmented.NetworkAllowanceExhaustedException ex)
+        {
+            // The user's data cap, not a failure: park without spending a retry and look again
+            // later (allowance periods roll over at midnight / Monday / the 1st).
+            Log.Warning("Download parked: {Release} — {Reason}. Re-checking in 15m; raise the allowance in Settings to resume now.",
+                item.ReleaseName, ex.Message);
+            item.Status = DownloadStatus.Queued;
+            item.ErrorMessage = $"Waiting: {ex.Message}";
+            _store.Update(item);
+            DownloadStatusChanged?.Invoke(item);
+            ScheduleRetry(item, 15 * 60);
+        }
         catch (Exception ex)
         {
             // A previously-parked item that got this far reached the network, so the volume
@@ -698,6 +687,14 @@ public class DownloadManager : IDisposable
                 });
         }
         catch (Exception ex) { Serilog.Log.Debug(ex, "EmitDownloadOutcome failed"); }
+    }
+
+    /// <summary>A staged partial, or a legacy partial written straight to the final name.</summary>
+    private static bool HasPartial(string localPath, long size = -1)
+    {
+        if (File.Exists(localPath + ".gdpart")) return true;
+        var final = new FileInfo(localPath);
+        return final.Exists && final.Length > 0 && (size < 0 || final.Length < size);
     }
 
     private static string? ClassifyFailure(string? err)

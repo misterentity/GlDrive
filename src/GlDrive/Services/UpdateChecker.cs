@@ -411,12 +411,21 @@ public class UpdateChecker : IDisposable
 
         Log.Information("Downloading update: {Url} → {Path}", asset.BrowserDownloadUrl, tempZip);
 
-        // Stream download to disk to avoid buffering 150MB+ in memory
-        using var response = await _http.GetAsync(asset.BrowserDownloadUrl, HttpCompletionOption.ResponseHeadersRead);
-        response.EnsureSuccessStatusCode();
-
-        await using (var fs = File.Create(tempZip))
+        // Multi-stream ranged download (plexo-style); the SHA-256 check below guards the result.
+        // Any failure falls back to the original single streamed GET.
+        try
         {
+            await GlDrive.Downloads.Segmented.SegmentedHttpDownloader.DownloadAsync(
+                new Uri(asset.BrowserDownloadUrl), tempZip, null, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Multi-stream update download failed — retrying as a single stream");
+            try { File.Delete(tempZip + ".gdpart"); File.Delete(tempZip + ".gdpart.json"); } catch { }
+
+            using var response = await _http.GetAsync(asset.BrowserDownloadUrl, HttpCompletionOption.ResponseHeadersRead);
+            response.EnsureSuccessStatusCode();
+            await using var fs = File.Create(tempZip);
             await response.Content.CopyToAsync(fs);
         }
 

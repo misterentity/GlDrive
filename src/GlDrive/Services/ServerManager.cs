@@ -66,7 +66,7 @@ public class ServerManager : IDisposable
             return;
         }
 
-        var service = new MountService(serverConfig, _config.Downloads, _certManager);
+        var service = new MountService(serverConfig, _config.Downloads, _certManager, _spreadManager);
 
         service.StateChanged += state =>
             ServerStateChanged?.Invoke(serverId, serverConfig.Name, state);
