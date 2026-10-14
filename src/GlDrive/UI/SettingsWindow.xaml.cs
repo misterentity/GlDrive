@@ -20,9 +20,18 @@ public partial class SettingsWindow : Window
     private readonly ObservableCollection<ServerListItem> _serverItems = new();
     private readonly ObservableCollection<CategoryPathItem> _categoryPaths = new();
 
-    public SettingsWindow(AppConfig config, ServerManager serverManager, bool readLocalState = true)
+    /// <summary>Tag of the multi-stream tab, for opening Settings straight onto it.</summary>
+    public const string StreamsTab = "Streams";
+
+    public SettingsWindow(AppConfig config, ServerManager serverManager, bool readLocalState = true, string? initialTab = null)
     {
         InitializeComponent();
+        if (initialTab != null)
+        {
+            var tab = SettingsTabs.Items.OfType<System.Windows.Controls.TabItem>()
+                .FirstOrDefault(t => Equals(t.Tag, initialTab));
+            if (tab != null) SettingsTabs.SelectedItem = tab;
+        }
         _config = config;
         _serverManager = serverManager;
         _vm = new SettingsViewModel(config, readLocalState);
@@ -282,7 +291,6 @@ public partial class SettingsWindow : Window
 
     private void Save_Click(object sender, RoutedEventArgs e)
     {
-        NetworksGrid.CommitEdit(System.Windows.Controls.DataGridEditingUnit.Row, true);
         _vm.ApplyTo(_config);
 
         // Save category paths

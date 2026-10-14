@@ -36,6 +36,9 @@ public sealed class RangeScheduler
         internal bool Splittable { get; }
         internal bool Released { get; set; }
 
+        /// <summary>The lane holding this range (display only).</summary>
+        public LaneTag? Tag { get; internal set; }
+
         // Bytes past Position that the holder has claimed for an in-progress write; a steal
         // never splits below this.
         internal long Reserved { get; set; }
@@ -122,13 +125,36 @@ public sealed class RangeScheduler
     /// already done. The engine sets it only when no lane that can stop early is alive —
     /// otherwise such a hole would strand forever.
     /// </summary>
-    public Assignment? Take(bool canStopEarly, bool allowRedownload = false)
+    public Assignment? Take(bool canStopEarly, bool allowRedownload = false, LaneTag? tag = null)
     {
         lock (_lock)
         {
-            return TakeGap(canStopEarly)
+            var a = TakeGap(canStopEarly)
                 ?? Steal(canStopEarly)
                 ?? (allowRedownload && !canStopEarly ? TakeRedownload() : null);
+            if (a != null) a.Tag = tag;
+            return a;
+        }
+    }
+
+    /// <summary>
+    /// Consistent copy of the done ranges per file and every in-flight range, taken under one
+    /// lock. Nothing returned aliases scheduler state.
+    /// </summary>
+    public (IReadOnlyList<ByteRange>[] Done, IReadOnlyList<SegmentSnapshot> InFlight) Snapshot()
+    {
+        lock (_lock)
+        {
+            var done = new IReadOnlyList<ByteRange>[_done.Length];
+            for (int i = 0; i < _done.Length; i++) done[i] = _done[i].Ranges.ToArray();
+            var inFlight = new SegmentSnapshot[_inFlight.Count];
+            for (int i = 0; i < _inFlight.Count; i++)
+            {
+                var a = _inFlight[i];
+                inFlight[i] = new SegmentSnapshot(a.FileIndex, a.Start, a.Position, a.End,
+                    a.Tag?.Label ?? "", a.Tag?.NetworkId);
+            }
+            return (done, inFlight);
         }
     }
 
