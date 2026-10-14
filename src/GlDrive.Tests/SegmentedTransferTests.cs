@@ -421,6 +421,51 @@ public sealed class SegmentedTransferTests : IDisposable
         Assert.IsAssignableFrom<OperationCanceledException>(lane.Faults.Single());
     }
 
+    // ---- Codex review round 2 regressions ----
+
+    [Fact]
+    public async Task CancelledDuringEofConfirmation_IsNotPublished_AndResumeRefetchesOnlyTheTail()
+    {
+        var f = AddFile("a.r00", 300_000);
+        using (var cts = new CancellationTokenSource())
+        {
+            var hanging = new FakeLane(_source, "main", canStopEarly: false) { BlockEofFinish = true };
+            var run = new SegmentedTransfer([f], Opts()).RunAsync([hanging], null, null, cts.Token);
+            while (!hanging.Finishes.Contains(true)) await Task.Delay(10);
+            cts.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+        }
+        Assert.False(File.Exists(f.LocalPath), "an unconfirmed file must not be published");
+
+        var second = new FakeLane(_source, "main");
+        await new SegmentedTransfer([f], Opts()).RunAsync([second], null, null, default);
+
+        AssertOnDisk(f);
+        Assert.All(second.Opens, o => Assert.True(o.Offset > 200_000, $"refetched from {o.Offset}, not just the tail"));
+    }
+
+    [Fact]
+    public async Task UnknownSize_RefetchedShorter_IsTruncated()
+    {
+        var f = AddFile("listing.bin", 100_000, unknownSize: true);
+        var shorter = new byte[40_000];
+        new Random(7).NextBytes(shorter);
+        int failures = 0;
+        var lane = new FakeLane(_source, "main")
+        {
+            FinishFault = eof =>
+            {
+                if (!eof || Interlocked.Increment(ref failures) != 1) return null;
+                _source[f.Key] = shorter;                    // the remote changed under us
+                return new IOException("RETR did not complete: 426");
+            },
+        };
+
+        await new SegmentedTransfer([f], Opts()).RunAsync([lane], null, null, default);
+
+        Assert.Equal(shorter, File.ReadAllBytes(f.LocalPath));
+    }
+
     // Progress<T> posts to the sync context / thread pool; this reports inline.
     private sealed class SyncProgress<T>(Action<T> handler) : IProgress<T>
     {
@@ -448,6 +493,7 @@ public sealed class SegmentedTransferTests : IDisposable
         public Func<bool, Exception?>? FinishFault { get; init; }
         public long BlockReadsAt { get; set; } = long.MaxValue;   // reads hang (until cancelled) from here
         public bool BlockOpens { get; init; }
+        public bool BlockEofFinish { get; init; }                 // the EOF confirmation hangs until cancelled
         public int ReadDelayMs { get; init; }
         public int MaxChunk { get; init; } = 8 * 1024;
         public long TruncateAt { get; init; } = long.MaxValue;
@@ -494,6 +540,7 @@ public sealed class SegmentedTransferTests : IDisposable
             public Task FinishAsync(bool reachedEof, CancellationToken ct)
             {
                 lane.Finishes.Enqueue(reachedEof);
+                if (reachedEof && lane.BlockEofFinish) return Task.Delay(Timeout.Infinite, ct);
                 return lane.FinishFault?.Invoke(reachedEof) is { } ex ? Task.FromException(ex) : Task.CompletedTask;
             }
 

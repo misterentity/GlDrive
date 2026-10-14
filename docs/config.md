@@ -30,6 +30,8 @@ All under `%AppData%\GlDrive\` unless noted. Resolved via `ConfigManager.AppData
 | App config | `appsettings.json` (camelCase) |
 | Trusted certs | `trusted_certs.json` |
 | Downloads (per server) | `downloads-{serverId}.json` |
+| Download data usage (per network) | `network-usage.json` |
+| Staged partial downloads | `<file>.gdpart` + `<file>.gdpart.json` next to the destination file |
 | Race history | `race-history.json` |
 | Wishlist | `wishlist.json` |
 | Extractor settings | `extractor-settings.json` |

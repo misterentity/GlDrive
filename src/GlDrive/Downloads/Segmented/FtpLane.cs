@@ -2,6 +2,8 @@ using System.IO;
 using System.Net.Security;
 using System.Net.Sockets;
 using FluentFTP;
+using FluentFTP.Exceptions;
+using FluentFTP.Exceptions;
 using GlDrive.Ftp;
 using Serilog;
 
@@ -104,9 +106,19 @@ internal sealed class FtpLane : ISegmentLane
                 Log.Information("Download: {Server} is not CPSV — its data connections use the default route, not {Network}",
                     client.Host, _network.DisplayName);
             }
-            var stream = offset > 0
-                ? await client.OpenRead(file.Key, FtpDataType.Binary, offset, token: ct)
-                : await client.OpenRead(file.Key, token: ct);
+            Stream stream;
+            try
+            {
+                stream = offset > 0
+                    ? await client.OpenRead(file.Key, FtpDataType.Binary, offset, token: ct)
+                    : await client.OpenRead(file.Key, token: ct);
+            }
+            catch (FtpCommandException ex) when (offset > 0 && ex.CompletionCode is "500" or "501" or "502" or "504")
+            {
+                // FluentFTP sends REST before RETR; a syntax/not-implemented refusal means this
+                // server can't resume mid-file.
+                throw new RangeNotSupportedException($"REST {offset} refused: {ex.CompletionCode} {ex.Message}");
+            }
             return new StandardReader(client, stream);
         }
 

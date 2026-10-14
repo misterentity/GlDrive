@@ -45,16 +45,34 @@ public class PoolSlotFreedWakeTests
     }
 
     [Fact]
-    public void AtCapacityWait_RacesTheChannelAgainstAFreedSlot()
+    public void Quarantine_AdvancesTheFreedGeneration()
     {
-        var wait = Section(ReadPoolSource(), "At capacity — wait for one to be returned", "CheckPooledForBorrow(client, ct)");
-        Assert.Contains("WaitToReadAsync", wait);
-        Assert.Contains("_slotFreed", wait);
-        Assert.Contains("Task.WhenAny(readable, freed)", wait);
-        // A freed slot must still honor the parked states and the gate-derived ceiling.
-        Assert.Contains("IsThrottled", wait);
-        Assert.Contains("EffectiveMaxSize", wait);
-        Assert.Contains("AcquireAndConnect(ct)", wait);
-        Assert.DoesNotContain("_pool.Reader.ReadAsync(ct)", wait);
+        var quarantine = Section(ReadPoolSource(), "internal void Quarantine(", "_ = Task.Run(");
+        Assert.Contains("Interlocked.Increment(ref _freedGeneration)", quarantine);
+    }
+
+    [Fact]
+    public void Waiter_RacesTheChannelAgainstAFreedSlot_AndRechecksPeriodically()
+    {
+        var helper = Section(ReadPoolSource(), "private async Task<AsyncFtpClient?> WaitForReturnedConnectionAsync(", "public int ActiveCount");
+        // Snapshot the pulse before checking state, or a quarantine in between is missed.
+        Assert.True(helper.IndexOf("_slotFreed", StringComparison.Ordinal) < helper.IndexOf("TryRead", StringComparison.Ordinal));
+        Assert.Contains("WaitToReadAsync", helper);
+        Assert.Contains("Task.WhenAny(readable, freed, Task.Delay(SlotRecheckInterval, ct))", helper);
+        // Re-run Borrow only for a slot freed AFTER Borrow began — never just because capacity
+        // looks free, which is the state right after a failed connect (reconnect storm).
+        Assert.Contains("_freedGeneration) != freedGeneration", helper);
+    }
+
+    [Fact]
+    public void Borrow_NeverWaitsOnTheChannelAlone()
+    {
+        var borrow = Section(ReadPoolSource(), "public async Task<PooledConnection> Borrow(", "internal void Return(");
+        Assert.DoesNotContain("_pool.Reader.ReadAsync(", borrow);
+        Assert.Contains("WaitForReturnedConnectionAsync(parked: true, freedGeneration, ct)", borrow);
+        Assert.Contains("WaitForReturnedConnectionAsync(parked: false, freedGeneration, ct)", borrow);
+        // A null wait result re-runs Borrow so a fresh connect goes through the normal gated,
+        // failure-classified path rather than a side door.
+        Assert.Contains("if (client == null) return await Borrow(ct);", borrow);
     }
 }

@@ -467,6 +467,36 @@ public class FtpConnectionPool : IAsyncDisposable
     }
 
     private TaskCompletionSource _slotFreed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private long _freedGeneration;
+    private static readonly TimeSpan SlotRecheckInterval = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Wait for a connection to come back through the channel, but stop waiting (return null =
+    /// "run Borrow again") as soon as waiting can no longer succeed or is no longer needed: the
+    /// last connection is gone, a slot was quarantined since this Borrow began and left room, or
+    /// — for a parked pool — the cooldown ended. Found by the review of multi-stream downloads: a waiter on the channel
+    /// alone hung forever when the connection it waited for was discarded (a download dropping a
+    /// borrowed race login while a race waited for it). The quarantine pulse wakes it at once;
+    /// the periodic re-check is a backstop for any state change that has no pulse.
+    /// </summary>
+    private async Task<AsyncFtpClient?> WaitForReturnedConnectionAsync(bool parked, long freedGeneration, CancellationToken ct)
+    {
+        while (true)
+        {
+            var freed = Volatile.Read(ref _slotFreed).Task; // snapshot BEFORE checking state
+            if (_pool.Reader.TryRead(out var client)) return client;
+            if (Volatile.Read(ref _created) <= 0) return null;
+            if (parked
+                    ? !IsThrottled
+                    : Interlocked.Read(ref _freedGeneration) != freedGeneration && Volatile.Read(ref _created) < EffectiveMaxSize)
+                return null;
+
+            var readable = _pool.Reader.WaitToReadAsync(ct).AsTask();
+            var woke = await Task.WhenAny(readable, freed, Task.Delay(SlotRecheckInterval, ct));
+            if (woke == readable && !await readable) throw new ChannelClosedException();
+            ct.ThrowIfCancellationRequested();
+        }
+    }
 
     public int ActiveCount => _active;
     public int TotalCreated => _created;
@@ -586,6 +616,10 @@ public class FtpConnectionPool : IAsyncDisposable
     public async Task<PooledConnection> Borrow(CancellationToken ct = default)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(FtpConnectionPool));
+        // Quarantines seen so far: the at-capacity wait re-runs Borrow only for a slot freed
+        // AFTER this point — never merely because capacity looks free (that is the state right
+        // after a failed connect, and re-running then would be a reconnect storm).
+        var freedGeneration = Interlocked.Read(ref _freedGeneration);
 
         // Try to get from pool first
         if (_pool.Reader.TryRead(out var client))
@@ -630,7 +664,8 @@ public class FtpConnectionPool : IAsyncDisposable
                 throw new InvalidOperationException(
                     $"{reason} — not attempting new connection");
             }
-            client = await _pool.Reader.ReadAsync(ct);
+            client = await WaitForReturnedConnectionAsync(parked: true, freedGeneration, ct);
+            if (client == null) return await Borrow(ct); // parked state ended, or the last connection went
             if (await CheckPooledForBorrow(client, ct) == BorrowCheck.Usable)
             {
                 Interlocked.Increment(ref _active);
@@ -875,47 +910,11 @@ public class FtpConnectionPool : IAsyncDisposable
             throw new InvalidOperationException("Pool exhausted: all connections discarded and new connections failed");
         }
 
-        // At capacity — wait for one to be returned, OR for a slot to free. A connection that is
-        // quarantined while we wait is never written back to the channel, so waiting on the
-        // channel alone could wait forever (found when a download's borrowed race login was
-        // discarded after a failed transfer while a race sat here waiting for it).
-        while (true)
-        {
-            var freed = Volatile.Read(ref _slotFreed).Task;
-            if (_pool.Reader.TryRead(out client)) break;
-            var readable = _pool.Reader.WaitToReadAsync(ct).AsTask();
-            if (await Task.WhenAny(readable, freed) == readable)
-            {
-                if (!await readable) throw new ChannelClosedException();
-                continue;
-            }
-            if (IsThrottled)
-            {
-                if (_created <= 0)
-                {
-                    IncrementExhaust();
-                    throw new InvalidOperationException("Pool parked (cooldown/backoff) and its last connection was discarded");
-                }
-                continue;
-            }
-            if (Interlocked.Increment(ref _created) <= EffectiveMaxSize)
-            {
-                try
-                {
-                    var sw = System.Diagnostics.Stopwatch.StartNew();
-                    client = await AcquireAndConnect(ct);
-                    RecordConnect(sw.ElapsedMilliseconds);
-                    Interlocked.Increment(ref _active);
-                    return new PooledConnection(client, this);
-                }
-                catch
-                {
-                    Interlocked.Decrement(ref _created);
-                    throw;
-                }
-            }
-            Interlocked.Decrement(ref _created);
-        }
+        // At capacity — wait for one to be returned. A slot freed by a quarantine never comes
+        // back through the channel, so the wait also ends when one frees; Borrow then runs again
+        // and connects through the normal path (gate, failure classification, cooldowns).
+        client = await WaitForReturnedConnectionAsync(parked: false, freedGeneration, ct);
+        if (client == null) return await Borrow(ct);
         if (await CheckPooledForBorrow(client, ct) == BorrowCheck.Usable)
         {
             Interlocked.Increment(ref _active);
@@ -1049,6 +1048,7 @@ public class FtpConnectionPool : IAsyncDisposable
         if (Interlocked.Decrement(ref _created) < 0) Interlocked.Increment(ref _created);
         ReleasePermit();
         // Wake borrowers waiting at capacity: this slot will never come back through the channel.
+        Interlocked.Increment(ref _freedGeneration);
         Interlocked.Exchange(ref _slotFreed, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously))
             .TrySetResult();
 

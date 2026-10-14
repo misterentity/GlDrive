@@ -192,11 +192,13 @@ public sealed class StagedFile : IAsyncDisposable
         _sincePersist.Restart();
     }
 
-    public Task CommitAsync()
+    /// <param name="finalLength">Truncate to this length first (unknown-size downloads).</param>
+    public Task CommitAsync(long? finalLength = null)
     {
         lock (_lock)
         {
             if (_committed || IsComplete) return Task.CompletedTask;
+            if (finalLength is { } len && _handle != null) RandomAccess.SetLength(_handle, len);
             _handle?.Dispose();
             _handle = null;
             _closed = true;
