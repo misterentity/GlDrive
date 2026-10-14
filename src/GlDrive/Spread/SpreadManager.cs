@@ -31,6 +31,7 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _poolInitGates = new();
     private volatile bool _disposed;
     private readonly GlDrive.Util.BackgroundTasks _workers = new();
+    private Timer? _queueWakeTimer;
 
     // Global per-server transfer-gate (v2.4: Option A). Each FXP transfer
     // acquires BOTH src and dst gates before STOR. Without this, concurrent
@@ -103,7 +104,33 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
     public bool RemoveQueuedRace(string section, string releaseName)
     {
         bool removed;
-        lock (_lock) removed = _raceQueue.RemoveAll(r => IsSameRace(r.Section, r.ReleaseName, section, releaseName)) > 0;
+        lock (_lock)
+        {
+            removed = _raceQueue.RemoveAll(r => IsSameRace(r.Section, r.ReleaseName, section, releaseName)) > 0;
+            ScheduleQueueWakeupNoLock();
+        }
+        if (removed) PersistQueue();
+        return removed;
+    }
+
+    /// <summary>Cancel a queued wait even if its due timer has just admitted its next probe.</summary>
+    public bool CancelRaceRequest(string section, string releaseName)
+    {
+        bool removed;
+        lock (_lock)
+        {
+            removed = _raceQueue.RemoveAll(r => IsSameRace(r.Section, r.ReleaseName, section, releaseName)) > 0;
+            removed |= _startingRequests.RemoveAll(r => IsSameRace(r.Section, r.ReleaseName, section, releaseName)) > 0;
+            foreach (var job in _activeJobs.Where(j => IsSameRace(j.Section, j.ReleaseName, section, releaseName)))
+            {
+                // Set Stopped while holding the same lock that requeues a Waiting job.
+                // A cancelled probe can neither be registered nor returned to the queue.
+                job.Stop();
+                _activeRequests.Remove(job);
+                removed = true;
+            }
+            ScheduleQueueWakeupNoLock();
+        }
         if (removed) PersistQueue();
         return removed;
     }
@@ -457,7 +484,7 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
         lock (_lock)
         {
             pools = serverIds
-                .Where(id => _spreadPools.ContainsKey(id))
+                .Where(id => _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed)
                 .ToDictionary(id => id, id => _spreadPools[id]);
 
             configs = serverIds
@@ -519,6 +546,7 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
             }
         };
         job.LivePoolResolver = id => { lock (_lock) { _spreadPools.TryGetValue(id, out var p); return p; } };
+        job.LiveMainPoolResolver = _getMainPool;
         job.SourceSearch = async (release, exclude, ct) =>
         {
             var r = await SearchReleaseOnServers(release, exclude, ct);
@@ -533,12 +561,13 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
                 ObjectDisposedException.ThrowIf(_disposed, this);
                 // A pool can disappear while the main-pool callback runs. Reject
                 // registration; the caller decides whether to retain the request.
-                var currentPools = serverIds.Where(_spreadPools.ContainsKey)
+                var currentPools = serverIds.Where(id => _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed)
                     .ToDictionary(id => id, id => _spreadPools[id]);
                 if (currentPools.Count < 2)
                     throw new InvalidOperationException("Spread pools changed during race admission");
                 job.UpdatePools(currentPools);
-                _startingRequests.Remove(request);
+                if (!_startingRequests.Remove(request))
+                    throw new OperationCanceledException("Race request cancelled during admission");
                 _activeJobs.Add(job);
                 _activeRequests[job] = request;
             }
@@ -566,7 +595,7 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
                 lock (_lock)
                 {
                     fresh = sids
-                        .Where(id => _spreadPools.ContainsKey(id))
+                        .Where(id => _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed)
                         .ToDictionary(id => id, id => _spreadPools[id]);
                 }
 
@@ -597,17 +626,23 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
                 // Error/Completed, which left zombie jobs in _activeJobs and
                 // permanently blocked the queue.
                 bool wasActive;
+                bool waiting;
                 lock (_lock)
                 {
                     wasActive = _activeJobs.Remove(job);
-                    _activeRequests.Remove(job);
-                    if (wasActive && deferredForPools && !_disposed)
+                    var stillRequested = _activeRequests.Remove(job);
+                    waiting = job.State == SpreadJobState.Waiting;
+                    if (wasActive && stillRequested && deferredForPools && !_disposed)
                         _raceQueue.Insert(0, request);
+                    else if (wasActive && stillRequested && waiting && !_disposed)
+                        _raceQueue.Add(request.Defer(DateTime.UtcNow, job.WaitReason ?? "Waiting for remaining release files",
+                            job.WaitingForIncompleteRelease, job.Sites.Values.Any(s => s.BytesTransferred > 0)));
+                    ScheduleQueueWakeupNoLock();
                 }
                 PersistQueue();
                 if (wasActive)
                 {
-                    if (!deferredForPools) RecordHistory(job);
+                    if (!deferredForPools && !waiting) RecordHistory(job);
                     if (job.State == SpreadJobState.Stopped)
                         Log.Information("Spread job stopped: {Release} [{Section}]",
                             job.ReleaseName, job.Section);
@@ -773,15 +808,17 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
             lock (_lock)
             {
                 if (_disposed) return;
+                ScheduleQueueWakeupNoLock();
                 var maxRaces = Math.Max(_config.Spread.MaxConcurrentRaces, 1);
                 if (_raceQueue.Count == 0 || _activeJobs.Count + _startingRequests.Count >= maxRaces)
                     return;
 
                 var now = DateTime.UtcNow;
-                expired.AddRange(_raceQueue.Where(r => now - r.QueuedAtUtc > RaceQueueStore.MaxAge));
-                _raceQueue.RemoveAll(r => now - r.QueuedAtUtc > RaceQueueStore.MaxAge);
+                expired.AddRange(_raceQueue.Where(r => r.IsExpired(now)));
+                _raceQueue.RemoveAll(r => r.IsExpired(now));
 
-                var index = _raceQueue.FindIndex(r => r.ServerIds.Count(_spreadPools.ContainsKey) >= 2);
+                var index = _raceQueue.FindIndex(r => r.IsDue(now)
+                    && r.ServerIds.Count(id => _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed) >= 2);
                 if (index >= 0)
                 {
                     next = _raceQueue[index];
@@ -804,6 +841,7 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
                 StartReservedRace(next, retainOnFailure: true);
             }
             catch (ObjectDisposedException) when (_disposed) { return; }
+            catch (OperationCanceledException) { continue; }
             catch (Exception ex)
             {
                 Log.Warning(ex, "Failed to start queued race; request retained: {Release}", next.ReleaseName);
@@ -815,13 +853,38 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
     private void RestoreQueue()
     {
         var restore = RaceQueueStore.Restore(_queueStore!.Load(), DateTime.UtcNow);
-        lock (_lock) _raceQueue.AddRange(restore.Races);
+        lock (_lock)
+        {
+            _raceQueue.AddRange(restore.Races);
+            ScheduleQueueWakeupNoLock();
+        }
         if (restore.Races.Count + restore.DroppedStale + restore.DroppedResumeCap > 0)
             Log.Information(
                 "Race queue restored: {Count} race(s), {Resumed} were in flight; dropped {Stale} older than {Hours}h and {Capped} at the {Max}-resume cap",
                 restore.Races.Count, restore.Resumed, restore.DroppedStale, (int)RaceQueueStore.MaxAge.TotalHours,
                 restore.DroppedResumeCap, RaceQueueStore.MaxResumes);
         PersistQueue();
+    }
+
+    // One timer for the whole queue, not one sleeping task per incomplete release.
+    // Overdue requests with unavailable pools are woken by pool initialization.
+    private void ScheduleQueueWakeupNoLock()
+    {
+        if (_disposed) return;
+        var now = DateTime.UtcNow;
+        var next = _raceQueue.Where(r => r.NextProbeAtUtc > now)
+            .Select(r => r.NextProbeAtUtc).Min();
+        if (next == null)
+        {
+            _queueWakeTimer?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            return;
+        }
+        _queueWakeTimer ??= new Timer(_ => _workers.TryRun(() =>
+        {
+            DequeueNextRace();
+            return Task.CompletedTask;
+        }));
+        _queueWakeTimer.Change(next.Value - now, Timeout.InfiniteTimeSpan);
     }
 
     /// <summary>
@@ -1195,12 +1258,16 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
 
     public void StopJob(string jobId)
     {
-        SpreadJob? job;
         lock (_lock)
         {
-            job = _activeJobs.FirstOrDefault(j => j.Id == jobId);
+            var job = _activeJobs.FirstOrDefault(j => j.Id == jobId);
+            if (job != null)
+            {
+                job.Stop();
+                _activeRequests.Remove(job);
+            }
         }
-        job?.Stop();
+        PersistQueue();
     }
 
     public async Task StartFxp(string srcServerId, string srcPath,
@@ -1416,8 +1483,11 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
             {
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 cts.CancelAfter(timeout);
-                var results = await svc.Search(release, null, cts.Token);
-                var exact = results.FirstOrDefault(r =>
+                var search = await svc.SearchDetailed(release, null, cts.Token);
+                if (search.IsPartial)
+                    Log.Information("Alternate-source search incomplete on {Server}: {Count} matches, {Failed} failed listings, timed out={TimedOut}, truncated={Truncated}",
+                        id, search.Results.Count, search.FailedListings, search.TimedOut, search.Truncated);
+                var exact = search.Results.FirstOrDefault(r =>
                     r.ReleaseName.Equals(release, StringComparison.OrdinalIgnoreCase));
                 if (exact == null) return null;
                 exact.ServerId = id; // ensure attribution
@@ -1529,6 +1599,7 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
             _startingRequests.Clear();
         }
         _poolRecovery.Dispose();
+        _queueWakeTimer?.Dispose();
         foreach (var job in jobs) job.Stop();
         var workers = _workers.StopAsync();
         var teardown = Task.Run(async () =>

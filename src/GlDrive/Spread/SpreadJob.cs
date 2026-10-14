@@ -7,7 +7,7 @@ using Serilog;
 
 namespace GlDrive.Spread;
 
-public enum SpreadJobState { Running, Paused, Completed, Failed, Stopped }
+public enum SpreadJobState { Running, Paused, Completed, Failed, Stopped, Waiting }
 
 public class SiteProgress
 {
@@ -25,7 +25,7 @@ public class SiteProgress
 public class SpreadJob : IDisposable
 {
     private readonly SpreadConfig _spreadConfig;
-    private Dictionary<string, FtpConnectionPool> _pools;
+    private volatile Dictionary<string, FtpConnectionPool> _pools;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, ServerConfig> _serverConfigs;
     private readonly SpeedTracker _speedTracker;
     private readonly SkiplistEvaluator _skiplist;
@@ -46,7 +46,7 @@ public class SpreadJob : IDisposable
     private readonly Dictionary<string, int> _serverFileCount = new(); // per-server owned file count
     private readonly Dictionary<string, SiteProgress> _siteProgress = new();
     private int _expectedFileCount;
-    private (string serverId, string path, string relName)? _pendingSfv;
+    private readonly Dictionary<string, (string serverId, string path)> _pendingSfvs = new(StringComparer.OrdinalIgnoreCase);
     // SFVs already counted into _expectedFileCount, keyed by RELEASE-RELATIVE path
     // (file.Name), NOT the full site path: the same SFV exists at a different full
     // path on every site, and keying by full path counted it once per site after we
@@ -55,6 +55,15 @@ public class SpreadJob : IDisposable
     // zipscript-complete dir. Distinct SFVs (CD1/x.sfv vs CD2/y.sfv) still sum.
     // Guarded by _ownershipLock.
     private readonly HashSet<string> _parsedSfvs = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _expectedFiles = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, HashSet<string>> _sfvInventory = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, DateTime> _sfvParsedAt = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, long> _sfvSizes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _parsingSfvs = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, DateTime> _poolRetryAt = new(StringComparer.Ordinal);
+    public string? WaitReason { get; private set; }
+    internal bool WaitingForIncompleteRelease { get; private set; }
+    private Task? _sfvParseTask;
 
     // True once ANY source listing has completed (even with 0 files). While false,
     // the engine cannot distinguish "release has no files" from "every source scan
@@ -196,6 +205,7 @@ public class SpreadJob : IDisposable
     // The live source set (mirrors RunAsync's local sourceServers + failover additions).
     // Read under _ownershipLock. Used to exclude sources from dest-completion eval.
     private readonly HashSet<string> _sourceServersField = new(StringComparer.Ordinal);
+    private string? _primarySourceServerId;
     // Extra source paths discovered by failover (serverId -> release path). Scanned by
     // ScanSites IN ADDITION to sitePaths. ConcurrentDictionary so failover can add from
     // any thread without racing the background scan's enumeration. Never mutate sitePaths.
@@ -416,6 +426,35 @@ public class SpreadJob : IDisposable
     /// (the authoritative registry) rather than the job's stale _pools snapshot.
     /// </summary>
     public Func<string, FtpConnectionPool?>? LivePoolResolver { get; set; }
+
+    public Func<string, FtpConnectionPool?>? LiveMainPoolResolver { get; set; }
+
+    // A live registry returning null means unmounted/reconnecting. Never fall back
+    // to the retired snapshot in that case; snapshots support standalone jobs only.
+    internal FtpConnectionPool? ResolveSpreadPool(string serverId)
+    {
+        var pool = LivePoolResolver != null ? LivePoolResolver(serverId) : _pools.GetValueOrDefault(serverId);
+        return pool is { IsDisposed: false } ? pool : null;
+    }
+
+    internal FtpConnectionPool? ResolveMainPool(string serverId)
+    {
+        var pool = LiveMainPoolResolver != null ? LiveMainPoolResolver(serverId) : _mainPools.GetValueOrDefault(serverId);
+        return pool is { IsDisposed: false } ? pool : null;
+    }
+
+    private void RefreshLivePools()
+    {
+        if (LivePoolResolver == null) return;
+        var fresh = new Dictionary<string, FtpConnectionPool>();
+        foreach (var id in _serverConfigs.Keys)
+            if (ResolveSpreadPool(id) is { } pool) fresh[id] = pool;
+        UpdatePools(fresh);
+    }
+
+    private bool IsReceivingSite(string serverId) =>
+        _serverConfigs.TryGetValue(serverId, out var config)
+        && !config.SpreadSite.DownloadOnly && !_affilCache.GetValueOrDefault(serverId);
 
     /// <summary>Set by SpreadManager: search connected sites (excluding given ids) for
     /// an alternate source of this release. Returns (serverId, path, category) or null.</summary>
@@ -809,13 +848,11 @@ public class SpreadJob : IDisposable
                 return;
             }
 
-            // Phase 2b: Check if any destination is actually reachable (not blocked by affil)
-            // A server is a viable destination if it doesn't already have the release,
-            // isn't downloadOnly, and isn't affil-blocked for this release.
+            // Directory presence only identifies a possible source. A resumed race
+            // can have the directory on every site with different volumes missing.
+            // Those sites must still be scanned and filled as receiving participants.
             var viableDestinations = sitePaths.Keys
-                .Where(id => !sourceServers.Contains(id))
-                .Where(id => !_serverConfigs[id].SpreadSite.DownloadOnly)
-                .Where(id => !_affilCache.GetValueOrDefault(id))
+                .Where(IsReceivingSite)
                 .ToList();
 
             if (viableDestinations.Count == 0)
@@ -862,6 +899,8 @@ public class SpreadJob : IDisposable
             {
                 _sourceServersField.Clear();
                 foreach (var s in sourceServers) _sourceServersField.Add(s);
+                _primarySourceServerId = sourceServers.Contains(_knownSourceServerId ?? "")
+                    ? _knownSourceServerId : sourceServers.FirstOrDefault();
             }
             _sitePathsRef = sitePaths;
 
@@ -926,8 +965,7 @@ public class SpreadJob : IDisposable
                 lock (_ownershipLock)
                 {
                     viableDestCount = sitePaths.Keys
-                        .Count(id => !sourceServers.Contains(id)
-                                  && !_serverConfigs[id].SpreadSite.DownloadOnly
+                        .Count(id => IsReceivingSite(id)
                                   && !IsDestDroppedNoLock(id));
                 }
                 if (viableDestCount == 0)
@@ -957,11 +995,24 @@ public class SpreadJob : IDisposable
                 }
 
                 // 2. Parse SFV if discovered (non-blocking — fire and forget)
-                if (_pendingSfv is { } sfv)
+                (string serverId, string path, string relName)? pendingSfv;
+                lock (_ownershipLock)
                 {
-                    _pendingSfv = null;
-                    _ = ParseSfvForCount(sfv.serverId, sfv.path, sfv.relName);
+                    pendingSfv = null;
+                    if (_sfvParseTask is not { IsCompleted: false } && _pendingSfvs.Count > 0)
+                    {
+                        var nextSfv = _pendingSfvs.First();
+                        pendingSfv = (nextSfv.Value.serverId, nextSfv.Value.path, nextSfv.Key);
+                        _pendingSfvs.Remove(nextSfv.Key);
+                    }
+                    if (pendingSfv is { } pending) _parsingSfvs.Add(pending.relName);
                 }
+                if (pendingSfv is { } sfv)
+                {
+                    _sfvParseTask = ParseSfvForCount(sfv.serverId, sfv.path, sfv.relName);
+                }
+
+                RefreshLivePools();
 
                 // 3. Find best transfer — pre-compute speed map outside lock
                 var transfer = FindBestTransfer(sitePaths, scorer);
@@ -1009,9 +1060,11 @@ public class SpreadJob : IDisposable
                         return;
                     }
 
-                    var done = _spreadConfig.WaitForDestinationComplete
+                    var waitingForRelease = HasPendingReleaseInventory();
+                    var poolsUnavailable = sitePaths.Keys.Any(id => ResolveSpreadPool(id) == null);
+                    var done = !waitingForRelease && !poolsUnavailable && (_spreadConfig.WaitForDestinationComplete
                         ? AllDestinationsTerminal(sitePaths, sourceServers)
-                        : IsJobComplete();
+                        : IsJobComplete());
                     if (done)
                     {
                         // Fire-and-forget transfers may still be in flight — let
@@ -1029,6 +1082,28 @@ public class SpreadJob : IDisposable
                             ReleaseName, DestinationStateSummary());
                         State = SpreadJobState.Completed;
                         Completed?.Invoke(this);
+                        return;
+                    }
+
+                    if (activeCount == 0 && (waitingForRelease || poolsUnavailable))
+                    {
+                        // Finish our current metadata reads before returning the race
+                        // slot. A queued retry must not overlap an old scan or SFV read.
+                        bool sfvsPending;
+                        lock (_ownershipLock) sfvsPending = _pendingSfvs.Count > 0;
+                        if (_backgroundScan is { IsCompleted: false } || _sfvParseTask is { IsCompleted: false } || sfvsPending)
+                        {
+                            await Task.Delay(TimeSpan.FromSeconds(1), token);
+                            continue;
+                        }
+                        lock (_ownershipLock)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            WaitingForIncompleteRelease = waitingForRelease;
+                            WaitReason = poolsUnavailable ? "Waiting for server reconnection" : "Waiting for remaining release files";
+                            State = SpreadJobState.Waiting;
+                        }
+                        Log.Information("Spread queued: {Reason}: {Release}", WaitReason, ReleaseName);
                         return;
                     }
 
@@ -1091,7 +1166,7 @@ public class SpreadJob : IDisposable
                                 if (sitePaths.TryGetValue(serverId, out var bp)
                                     && IsDestDirscriptDeniedNoLock(serverId, bp)) continue;
                                 var owned = _serverFileCount.GetValueOrDefault(serverId);
-                                var total = _fileInfos.Count;
+                                var total = ExpectedTotalNoLock();
                                 if (owned < total) missingFiles += total - owned;
                             }
                         }
@@ -1130,11 +1205,11 @@ public class SpreadJob : IDisposable
 
                             // Reinitialize exhausted spread pools via live registry so a
                             // pool replaced by ReinitDeadPools is not missed here.
-                            var poolIds = _pools.Keys.ToList();
+                            var poolIds = sitePaths.Keys.ToList();
                             var freshPools = new Dictionary<string, FtpConnectionPool>();
                             foreach (var serverId in poolIds)
                             {
-                                var livePool = LivePoolResolver?.Invoke(serverId) ?? _pools.GetValueOrDefault(serverId);
+                                var livePool = ResolveSpreadPool(serverId);
                                 if (livePool == null) continue;
                                 try
                                 {
@@ -1267,8 +1342,12 @@ public class SpreadJob : IDisposable
             // releases get auto-nuked by dirscript/zipscript which costs the
             // user credits and triggers ratio penalties, so we always clean up
             // our own incomplete work before leaving.
-            await CleanupIncompleteDirs(sitePaths);
-            EmitRaceOutcome(State == SpreadJobState.Completed ? "complete"
+            // User cancellation and app shutdown must preserve landed volumes for a
+            // resumed race. An incomplete upstream release is also legitimate work.
+            if (State is not (SpreadJobState.Stopped or SpreadJobState.Waiting) && !HasPendingReleaseInventory())
+                await CleanupIncompleteDirs(sitePaths);
+            if (State != SpreadJobState.Waiting)
+                EmitRaceOutcome(State == SpreadJobState.Completed ? "complete"
                           : _blacklisted                       ? "blacklisted"
                           :                                      "aborted");
         }
@@ -1368,7 +1447,7 @@ public class SpreadJob : IDisposable
             ownedCounts = new Dictionary<string, int>(_serverFileCount);
             destStates = new Dictionary<string, DestState>(_destStates);
             deliveredCounts = new Dictionary<string, int>(_destDelivered);
-            total = ResolveFileTotal(_expectedFileCount, _fileInfos.Count);
+            total = ExpectedTotalNoLock();
         }
 
         foreach (var serverId in created)
@@ -1554,13 +1633,13 @@ public class SpreadJob : IDisposable
             var (serverId, basePath) = kvp;
             var serverName = _serverConfigs.TryGetValue(serverId, out var cfg) ? cfg.Name : serverId;
 
-            _mainPools.TryGetValue(serverId, out var mainPool);
-            _pools.TryGetValue(serverId, out var spreadPool);
+            var mainPool = ResolveMainPool(serverId);
+            var spreadPool = ResolveSpreadPool(serverId);
 
             if (mainPool == null && spreadPool == null)
             {
-                Interlocked.Increment(ref hardFailureCount);
-                Log.Warning("Spread scan: no pool for {Server}", serverName);
+                Interlocked.Increment(ref contentionDeferralCount);
+                Log.Debug("Spread scan deferred while {Server} reconnects", serverName);
                 return;
             }
 
@@ -1756,8 +1835,7 @@ public class SpreadJob : IDisposable
         // IsComplete=true just because its own tiny file set matched the
         // partial _fileInfos snapshot.
         var finalTotal = ReconcileProgressFromOwnership();
-        if (_spreadConfig.WaitForDestinationComplete)
-            EvaluateDestCompletion(finalTotal);
+        EvaluateDestCompletion(finalTotal);
         ProgressChanged?.Invoke(this);
 
         foreach (var sourceId in suspectedSourceMigrations)
@@ -1773,14 +1851,16 @@ public class SpreadJob : IDisposable
     {
         lock (_ownershipLock)
         {
-            var total = ResolveFileTotal(_expectedFileCount, _fileInfos.Count);
+            var total = ExpectedTotalNoLock();
             lock (_progressLock)
             {
                 foreach (var progress in _siteProgress.Values)
                 {
                     progress.FilesOwned = _serverFileCount.GetValueOrDefault(progress.ServerId);
                     progress.FilesTotal = total;
-                    progress.IsComplete = progress.FilesOwned >= total && total > 0;
+                    progress.IsComplete = progress.FilesOwned >= total && total > 0
+                        && !_destHasMissingStub.GetValueOrDefault(progress.ServerId)
+                        && HasExpectedFilesNoLock(progress.ServerId);
                 }
             }
             return total;
@@ -1874,7 +1954,7 @@ public class SpreadJob : IDisposable
                 if (pool.UseCpsv)
                     items = await CpsvDataHelper.ListDirectory(conn.Client, currentPath, pool.ControlHost, ct);
                 else
-                    items = await conn.Client.GetListing(currentPath, FtpListOption.AllFiles, ct);
+                    items = await FtpListing.GetListing(conn.Client, currentPath, ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -1919,7 +1999,8 @@ public class SpreadJob : IDisposable
 
                 if (CompletionDetector.IsCompletionMarker(item.Name, _spreadConfig.CompletionMarkers))
                     signals.SawCompletionMarker = true;
-                if (CompletionDetector.IsMissingStub(item.Name, item.Size))
+                if (CompletionDetector.IsMissingStub(item.Name, item.Size)
+                    || ReleaseSourceState.IsIncompleteMarker(item.Name))
                     signals.HasMissingStub = true;
 
                 // Skip zipscript artifact directories — some configs render the
@@ -1946,7 +2027,8 @@ public class SpreadJob : IDisposable
 
                 if (CompletionDetector.IsCompletionMarker(item.Name, _spreadConfig.CompletionMarkers))
                     signals.SawCompletionMarker = true;
-                if (CompletionDetector.IsMissingStub(item.Name, item.Size))
+                if (CompletionDetector.IsMissingStub(item.Name, item.Size)
+                    || ReleaseSourceState.IsIncompleteMarker(item.Name))
                     signals.HasMissingStub = true;
 
                 // Skip glftpd zipscript artifacts — -MISSING placeholders, "-missing"
@@ -2015,10 +2097,17 @@ public class SpreadJob : IDisposable
             // Only arm for SFVs not already counted — re-arming for a parsed SFV
             // wasted a download every scan cycle. (Called under _ownershipLock.)
             if (fileName.EndsWith(".sfv", StringComparison.OrdinalIgnoreCase)
-                && !_parsedSfvs.Contains(file.Name)
                 && _fileOwnership.TryGetValue(file.Name, out var observedOwners)
                 && observedOwners.Contains(serverId))
-                _pendingSfv = (serverId, file.FullPath, file.Name);
+            {
+                if ((_sfvSizes.TryGetValue(file.Name, out var previousSize) && previousSize != file.Size)
+                    || (_sfvParsedAt.TryGetValue(file.Name, out var parsedAt)
+                        && DateTime.UtcNow - parsedAt >= TimeSpan.FromSeconds(30)))
+                    _parsedSfvs.Remove(file.Name);
+                _sfvSizes[file.Name] = file.Size;
+                if (!_parsedSfvs.Contains(file.Name) && !_parsingSfvs.Contains(file.Name))
+                    _pendingSfvs[file.Name] = (serverId, file.FullPath);
+            }
         }
 
         // The listing's NEGATIVE half: anything this site owned and no longer lists
@@ -2038,7 +2127,7 @@ public class SpreadJob : IDisposable
 
         // Snapshot counts under ownership lock, then update progress outside it
         var owned = _serverFileCount.GetValueOrDefault(serverId);
-        var total = ResolveFileTotal(_expectedFileCount, _fileInfos.Count);
+        var total = ExpectedTotalNoLock();
 
         lock (_progressLock)
         {
@@ -2050,7 +2139,8 @@ public class SpreadJob : IDisposable
                 // reclassified every dest as a source the moment it received its
                 // first file, which zeroed FilesDelivered in race history and
                 // mislabeled roles in telemetry.
-                progress.IsSource = _sourceServersField.Contains(serverId);
+                progress.IsSource = _sourceServersField.Contains(serverId)
+                    && (serverId == _primarySourceServerId || !IsReceivingSite(serverId));
                 progress.IsComplete = owned >= total && total > 0;
             }
         }
@@ -2062,45 +2152,93 @@ public class SpreadJob : IDisposable
     {
         try
         {
-            if (!_pools.TryGetValue(serverId, out var pool)) return;
-            await using var conn = await pool.Borrow(_cts.Token);
+            using var readTimeout = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+            readTimeout.CancelAfter(TimeSpan.FromSeconds(15));
+            var token = readTimeout.Token;
+            var pool = ResolveSpreadPool(serverId);
+            if (pool == null) return;
+            await using var conn = await pool.Borrow(token);
 
             byte[] data;
             if (pool.UseCpsv)
-                data = await CpsvDataHelper.DownloadFile(conn.Client, sfvPath, pool.ControlHost, _cts.Token);
+                data = await CpsvDataHelper.DownloadFile(conn.Client, sfvPath, pool.ControlHost, token);
             else
             {
                 using var ms = new MemoryStream();
-                await conn.Client.DownloadStream(ms, sfvPath, token: _cts.Token);
+                if (!await conn.Client.DownloadStream(ms, sfvPath, token: token))
+                    throw new IOException("SFV transfer did not complete");
                 data = ms.ToArray();
             }
 
-            var content = System.Text.Encoding.UTF8.GetString(data);
-            var lineCount = 0;
-            foreach (var line in content.Split('\n'))
-            {
-                var trimmed = line.TrimEnd('\r').TrimStart();
-                if (!string.IsNullOrEmpty(trimmed) && !trimmed.StartsWith(';'))
-                    lineCount++;
-            }
-
-            lock (_ownershipLock)
-            {
-                // Count each distinct SFV exactly once, keyed by release-relative
-                // path so the same SFV seen on source AND dest counts once.
-                if (_parsedSfvs.Add(relName))
-                    _expectedFileCount += lineCount + 1; // +1 for the SFV itself; accumulates across DISTINCT SFVs
-            }
+            ApplySfvInventory(relName, System.Text.Encoding.UTF8.GetString(data));
         }
         catch (Exception ex)
         {
             Log.Debug(ex, "Failed to parse SFV from {Path}", sfvPath);
+        }
+        finally
+        {
+            lock (_ownershipLock) _parsingSfvs.Remove(relName);
+        }
+    }
+
+    internal bool ApplySfvInventory(string relName, string content)
+    {
+        var prefix = relName.Contains('/') ? relName[..(relName.LastIndexOf('/') + 1)] : "";
+        var entries = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { relName };
+        var valid = true;
+        lock (_ownershipLock)
+        {
+            foreach (var line in content.Split('\n'))
+            {
+                var trimmed = line.Trim();
+                if (trimmed.Length == 0 || trimmed.StartsWith(';')) continue;
+                var split = trimmed.LastIndexOfAny([' ', '\t']);
+                if (split <= 0 || trimmed.Length - split - 1 != 8
+                    || !uint.TryParse(trimmed[(split + 1)..], System.Globalization.NumberStyles.HexNumber,
+                        System.Globalization.CultureInfo.InvariantCulture, out _)) { valid = false; continue; }
+                var name = trimmed[..split].Trim().Replace('\\', '/');
+                if (name.StartsWith('/') || name.Contains(':') || name.Split('/').Any(p => p == "..")) { valid = false; continue; }
+                while (name.StartsWith("./", StringComparison.Ordinal)) name = name[2..];
+                if (name.Length > 0) entries.Add(prefix + name);
+            }
+            // An SFV still being uploaded can be empty or end halfway through a
+            // line. Preserve the prior inventory and keep it pending for a retry.
+            if (!valid || entries.Count <= 1) { _parsedSfvs.Remove(relName); return false; }
+            _sfvInventory[relName] = entries;
+            _expectedFiles.Clear();
+            foreach (var inventory in _sfvInventory.Values) _expectedFiles.UnionWith(inventory);
+            _parsedSfvs.Add(relName);
+            _sfvParsedAt[relName] = DateTime.UtcNow;
+            _expectedFileCount = _expectedFiles.Count;
+            return true;
+        }
+    }
+
+    private bool HasExpectedFilesNoLock(string serverId) => _expectedFiles.All(name =>
+        _fileOwnership.TryGetValue(name, out var owners) && owners.Contains(serverId));
+
+    private int ExpectedTotalNoLock() => Math.Max(_expectedFileCount,
+        _fileInfos.Count + _expectedFiles.Count(name => !_fileInfos.ContainsKey(name)));
+
+    internal bool HasPendingReleaseInventory()
+    {
+        lock (_ownershipLock)
+        {
+            // Inventory identity matters: an NFO/sample cannot stand in for a missing
+            // SFV volume just because the total number of discovered files matches.
+            return _expectedFiles.Any(name => !_fileOwnership.TryGetValue(name, out var owners) || owners.Count == 0)
+                || _fileInfos.Count < _expectedFileCount
+                || _fileInfos.Keys.Any(name => name.EndsWith(".sfv", StringComparison.OrdinalIgnoreCase)
+                    && !_parsedSfvs.Contains(name))
+                || _destHasMissingStub.Any(kv => kv.Value);
         }
     }
 
     private (SpreadFileInfo file, string srcId, string dstId)? FindBestTransfer(
         Dictionary<string, string> sitePaths, SpreadScorer scorer)
     {
+        RefreshLivePools();
         var elapsed = DateTime.UtcNow - StartedAt;
 
         // Read the pool registry once (volatile, replaced by UpdatePools). Used to
@@ -2232,7 +2370,8 @@ public class SpreadJob : IDisposable
                     // Source's pool is in a BNC cooldown — new connections are
                     // parked, so a Borrow would just throw. Skip every candidate
                     // pulling from it until the cooldown clears.
-                    if (poolsSnap.TryGetValue(srcId, out var srcPoolCd) && srcPoolCd.IsThrottled)
+                    if (!poolsSnap.TryGetValue(srcId, out var srcPoolCd) || srcPoolCd.IsDisposed
+                        || srcPoolCd.IsThrottled || _poolRetryAt.GetValueOrDefault(srcId) > now)
                     { skippedCooldown++; continue; }
 
                     foreach (var (dstId, dstBasePath) in sitePaths)
@@ -2244,7 +2383,8 @@ public class SpreadJob : IDisposable
 
                         // Dest's pool is in a BNC cooldown — can't open a data/
                         // control connection to receive. Skip until it clears.
-                        if (poolsSnap.TryGetValue(dstId, out var dstPoolCd) && dstPoolCd.IsThrottled)
+                        if (!poolsSnap.TryGetValue(dstId, out var dstPoolCd) || dstPoolCd.IsDisposed
+                            || dstPoolCd.IsThrottled || _poolRetryAt.GetValueOrDefault(dstId) > now)
                         { skippedCooldown++; continue; }
 
                         // Per-destination backoff. The dest recently failed and
@@ -2388,10 +2528,9 @@ public class SpreadJob : IDisposable
     private async Task ExecuteTransfer(SpreadFileInfo file, string srcId, string dstId,
         string dstBasePath, CancellationToken ct, CancellationToken jobToken, Action? armTransferCeiling = null)
     {
-        var pools = _pools; // read volatile field once to avoid torn reads from UpdatePools
-        var srcPool = pools[srcId];
-        var dstPool = pools[dstId];
-        var mode = FxpModeDetector.Detect(srcPool, dstPool);
+        var srcPool = ResolveSpreadPool(srcId);
+        var dstPool = ResolveSpreadPool(dstId);
+        var mode = srcPool != null && dstPool != null ? FxpModeDetector.Detect(srcPool, dstPool) : default;
 
         // Slots already claimed by TryClaimSlots
 
@@ -2405,6 +2544,7 @@ public class SpreadJob : IDisposable
 
         try
         {
+            if (srcPool == null || dstPool == null) return;
             // Acquire global per-server gates BEFORE borrowing the connection pool.
             // The gate cap is enforced across ALL concurrent jobs and auto-tightens
             // when a BNC's 530 reveals its login cap. Doing this before Borrow means
@@ -2750,10 +2890,11 @@ public class SpreadJob : IDisposable
             // beside it and sent 194 SYN timeouts a day chasing the wrong subsystem.
             var srcName = _serverConfigs[srcId].Name;
             var dstName = _serverConfigs[dstId].Name;
-            Log.Warning("FXP borrow timeout: {File} ({Src} -> {Dst}) — {Cause}",
-                file.Name, srcName, dstName,
-                BorrowStarvationDiagnoser.Describe(
-                    srcName, SnapshotPool(srcPool), dstName, SnapshotPool(dstPool)));
+            if (srcPool != null && dstPool != null)
+                Log.Warning("FXP borrow timeout: {File} ({Src} -> {Dst}) — {Cause}",
+                    file.Name, srcName, dstName,
+                    BorrowStarvationDiagnoser.Describe(
+                        srcName, SnapshotPool(srcPool), dstName, SnapshotPool(dstPool)));
             // Congestion (no login permit free), NOT corruption. The borrow timed
             // out DURING Borrow, before any STOR/RETR — so the surviving peer (if
             // any) never touched its GnuTLS data channel and is pristine. Do NOT
@@ -2775,7 +2916,16 @@ public class SpreadJob : IDisposable
             // borrowed (srcConn/dstConn are null, nothing to poison). Log quietly
             // so it doesn't masquerade as an FXP error. The route resumes once the
             // cooldown clears.
-            if (ex is InvalidOperationException &&
+            if (ex is ObjectDisposedException && !transferProtocolStarted)
+            {
+                lock (_ownershipLock)
+                {
+                    _poolRetryAt[srcId] = DateTime.UtcNow.AddSeconds(5);
+                    _poolRetryAt[dstId] = DateTime.UtcNow.AddSeconds(5);
+                }
+                Log.Debug("FXP deferred while a server reconnects: {File} ({Src} -> {Dst})", file.Name, srcId, dstId);
+            }
+            else if (ex is InvalidOperationException &&
                 ex.Message.Contains("BNC cooldown", StringComparison.OrdinalIgnoreCase))
             {
                 Log.Debug("FXP deferred (BNC cooldown): {File} ({Src} -> {Dst})", file.Name, srcId, dstId);
@@ -2789,8 +2939,8 @@ public class SpreadJob : IDisposable
                 Log.Information("FXP setup deferred: {File} ({Src} -> {Dst}) — {Error}; {Cause}",
                     file.Name, srcId, dstId, ex.Message,
                     BorrowStarvationDiagnoser.Describe(
-                        _serverConfigs[srcId].Name, SnapshotPool(srcPool),
-                        _serverConfigs[dstId].Name, SnapshotPool(dstPool)));
+                        _serverConfigs[srcId].Name, SnapshotPool(srcPool!),
+                        _serverConfigs[dstId].Name, SnapshotPool(dstPool!)));
             }
             else
             {
@@ -2987,9 +3137,7 @@ public class SpreadJob : IDisposable
     /// Probe failure is NOT treated as proof of migration (returns true = assume present).</summary>
     private async Task<bool> SourceStillHasRelease(string serverId, string path, CancellationToken ct)
     {
-        FtpConnectionPool? pool = null;
-        if (_mainPools.TryGetValue(serverId, out var mainPool)) pool = mainPool;
-        else if (_pools.TryGetValue(serverId, out var spreadPool)) pool = spreadPool;
+        var pool = ResolveMainPool(serverId) ?? ResolveSpreadPool(serverId);
         if (pool == null) return true;
         try
         {
@@ -3019,9 +3167,7 @@ public class SpreadJob : IDisposable
     private async Task<string?> FindRelocatedSourcePath(string serverId, string currentPath, CancellationToken ct)
     {
         if (!_serverConfigs.TryGetValue(serverId, out var config)) return null;
-        FtpConnectionPool? pool = null;
-        if (_mainPools.TryGetValue(serverId, out var mainPool)) pool = mainPool;
-        else if (_pools.TryGetValue(serverId, out var spreadPool)) pool = spreadPool;
+        var pool = ResolveMainPool(serverId) ?? ResolveSpreadPool(serverId);
         if (pool == null) return null;
 
         // One connection serves every candidate; a probe that throws poisons it and the
@@ -3367,8 +3513,7 @@ public class SpreadJob : IDisposable
             foreach (var serverId in participants)
             {
                 if (!_serverConfigs.TryGetValue(serverId, out var cfg)) continue;
-                if (cfg.SpreadSite.DownloadOnly) continue;
-                if (_sourceServersField.Contains(serverId)) continue; // sources aren't dests
+                if (!IsReceivingSite(serverId)) continue;
                 // Unopened fill-only dests get no completion state at all — they
                 // never participated, and a "pending" entry here made every
                 // otherwise-complete race report partial.
@@ -3376,13 +3521,14 @@ public class SpreadJob : IDisposable
                 var owned = _serverFileCount.GetValueOrDefault(serverId);
                 var sawMarker = _destSawMarker.GetValueOrDefault(serverId);
                 var hasMissing = _destHasMissingStub.GetValueOrDefault(serverId);
-                var state = CompletionDetector.Evaluate(owned, finalTotal, sawMarker, hasMissing);
+                var hasInventory = HasExpectedFilesNoLock(serverId);
+                var state = CompletionDetector.Evaluate(owned, finalTotal,
+                    sawMarker && !hasMissing && hasInventory && owned >= finalTotal,
+                    hasMissing || !hasInventory);
 
-                // Preserve a prior terminal verdict (don't flap Complete back to
-                // Transferring if a later scan momentarily under-counts).
-                if (_destStates.TryGetValue(serverId, out var prev) &&
-                    (prev == DestState.Complete || prev == DestState.TimedOut))
-                    continue;
+                // New volumes and larger source files must reopen a prior complete
+                // snapshot. A terminal state is evidence from the latest listing,
+                // never a permanent exemption from later inventory.
 
                 _destStates[serverId] = state;
                 if (state == DestState.AwaitingCompletion)
@@ -3409,8 +3555,7 @@ public class SpreadJob : IDisposable
             int dests = 0, blocked = 0;
             foreach (var (dstId, basePath) in sitePaths)
             {
-                if (sourceServers.Contains(dstId)) continue;
-                if (_serverConfigs.TryGetValue(dstId, out var cfg) && cfg.SpreadSite.DownloadOnly) continue;
+                if (!IsReceivingSite(dstId)) continue;
                 // Fill-only dest waiting on a peer to create the dir is pending, not blocked.
                 if (_fillOnlyDests.Contains(dstId) && !_destDirConfirmed.Contains(dstId)) continue;
                 dests++;
@@ -3428,14 +3573,14 @@ public class SpreadJob : IDisposable
     /// </summary>
     private bool AllDestinationsTerminal(Dictionary<string, string> sitePaths, HashSet<string> sourceServers)
     {
+        if (HasPendingReleaseInventory()) return false;
         lock (_ownershipLock)
         {
             var states = new List<DestState>();
             var now = DateTime.UtcNow;
             foreach (var id in sitePaths.Keys)
             {
-                if (sourceServers.Contains(id)) continue;
-                if (_serverConfigs[id].SpreadSite.DownloadOnly) continue;
+                if (!IsReceivingSite(id)) continue;
                 if (IsDestDroppedNoLock(id)) { states.Add(DestState.TimedOut); continue; }
                 // Unopened fill-only dest = terminal for gating purposes (the race
                 // must not wait on it), but evaluated dynamically so it revives if
@@ -3474,7 +3619,7 @@ public class SpreadJob : IDisposable
             var now = DateTime.UtcNow;
             foreach (var (id, state) in _destStates)
             {
-                if (_sourceServersField.Contains(id)) continue;
+                if (!IsReceivingSite(id)) continue;
                 if (state != DestState.AwaitingCompletion) continue;
                 if (_destAllFilesAt.TryGetValue(id, out var at) &&
                     !CompletionDetector.IsAwaitExpired(at, now, _spreadConfig.DestinationCompletionWaitMinutes))
@@ -3507,16 +3652,18 @@ public class SpreadJob : IDisposable
 
     private bool IsJobComplete()
     {
+        if (HasPendingReleaseInventory()) return false;
         lock (_ownershipLock)
         {
             if (_fileInfos.Count == 0) return false;
             if (_expectedFileCount > 0 && _fileInfos.Count < _expectedFileCount) return false;
 
-            foreach (var (serverId, _) in _siteProgress)
+            var participants = _sitePathsRef?.Keys ?? (IEnumerable<string>)_siteProgress.Keys;
+            foreach (var serverId in participants)
             {
-                if (_serverConfigs[serverId].SpreadSite.DownloadOnly) continue;
+                if (!IsReceivingSite(serverId)) continue;
                 var owned = _serverFileCount.GetValueOrDefault(serverId);
-                if (owned < _fileInfos.Count) return false;
+                if (owned < _fileInfos.Count || !HasExpectedFilesNoLock(serverId)) return false;
             }
             return true;
         }
@@ -3974,8 +4121,11 @@ public class SpreadJob : IDisposable
         // cancellation and exit cleanly.
         _pausedFlag = false;
         _pauseSignal.Set();
-        if (State == SpreadJobState.Running || State == SpreadJobState.Paused)
-            State = SpreadJobState.Stopped;
+        lock (_ownershipLock)
+        {
+            if (State is SpreadJobState.Running or SpreadJobState.Paused or SpreadJobState.Waiting)
+                State = SpreadJobState.Stopped;
+        }
     }
 
     /// <summary>

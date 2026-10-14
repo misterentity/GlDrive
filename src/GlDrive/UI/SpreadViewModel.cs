@@ -30,6 +30,7 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
     private readonly Dictionary<string, double> _jobMaxSpeed = new();
 
     public ObservableCollection<SpreadJobVm> SpreadJobs { get; } = new();
+    public ObservableCollection<QueuedRaceVm> QueuedRaces { get; } = new();
     public ObservableCollection<SpreadFileVm> SpreadFileTransfers { get; } = new();
     public ObservableCollection<SpreadScoreVm> SpreadScoreboard { get; } = new();
     public ObservableCollection<string> SpreadSections { get; } = new();
@@ -40,7 +41,7 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
     // Leader/queue stats reflect LIVE races only — retained finished cards (always 65,535 on a
     // clean race) would otherwise pin LeaderScore and inflate the queue depth.
     public int LeaderScore => SpreadJobs.Where(j => !j.IsFinished).Select(j => j.Score).DefaultIfEmpty(0).Max();
-    public int QueueDepth => SpreadJobs.Count(j => !j.IsFinished);
+    public int QueueDepth => SpreadJobs.Count(j => !j.IsFinished) + QueuedRaces.Count;
 
     // Cap on retained finished cards; oldest (by FinishedAt) evicted past this.
     private const int MaxFinishedCards = 25;
@@ -97,6 +98,7 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
     public ICommand ShowRaceDetailCommand { get; }
     public ICommand DismissJobCommand { get; }
     public ICommand ClearFinishedCommand { get; }
+    public ICommand CancelQueuedRaceCommand { get; }
 
     public bool HasSections => SpreadSections.Count > 0;
     public bool NeedSetup => SpreadSections.Count == 0;
@@ -114,6 +116,7 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         ShowRaceDetailCommand = new RelayCommand<RaceHistoryVm>(ShowRaceDetail);
         DismissJobCommand = new RelayCommand<SpreadJobVm>(DismissJob);
         ClearFinishedCommand = new RelayCommand(ClearFinished);
+        CancelQueuedRaceCommand = new RelayCommand<QueuedRaceVm>(CancelQueuedRace);
 
         RefreshSections();
         LoadHistory();
@@ -209,6 +212,13 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         _serverManager.Spread?.StopJob(SelectedSpreadJob.Id);
     }
 
+    private void CancelQueuedRace(QueuedRaceVm? race)
+    {
+        if (race == null) return;
+        _serverManager.Spread?.CancelRaceRequest(race.Section, race.ReleaseName);
+        SafeRefresh();
+    }
+
     private void PauseJob(SpreadJobVm? vm)
     {
         if (vm == null) return;
@@ -268,6 +278,8 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         }
 
         var jobs = spread.ActiveJobs;
+        var queued = spread.QueuedRaces.Select(r => QueuedRaceVm.From(r, DateTime.UtcNow)).ToList();
+        if (!QueuedRaces.SequenceEqual(queued)) SyncList(QueuedRaces, queued);
         var currentIds = jobs.Select(j => j.Id).ToHashSet();
 
         // Remove gone jobs — but KEEP finished cards: they intentionally outlive their job in
@@ -452,6 +464,7 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         vm.ScoreLabel = job.State switch
         {
             SpreadJobState.Paused    => "PAUSED",
+            SpreadJobState.Waiting   => "WAITING",
             SpreadJobState.Stopped   => "STOPPED",
             SpreadJobState.Failed    => "FAILED",
             SpreadJobState.Completed => "DONE",
@@ -800,6 +813,16 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         _refreshTimer.Stop();
         GC.SuppressFinalize(this);
     }
+}
+
+public sealed record QueuedRaceVm(string Section, string ReleaseName, string StatusText, string RetryText)
+{
+    internal static QueuedRaceVm From(PersistedRace race, DateTime nowUtc) => new(
+        race.Section, race.ReleaseName,
+        string.IsNullOrWhiteSpace(race.WaitReason) ? "Queued for an available race slot" : race.WaitReason,
+        race.NextProbeAtUtc is { } next
+            ? next > nowUtc ? $"Next check {next.ToLocalTime():HH:mm:ss}" : "Ready to check"
+            : "");
 }
 
 public class AutoRaceLogVm

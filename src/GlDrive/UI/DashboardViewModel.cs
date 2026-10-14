@@ -29,7 +29,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private string _searchQuery = "";
     private string _searchStatus = "";
     private bool _isSearching;
-    private CancellationTokenSource? _searchCts;
+    private readonly SearchRequestCoordinator _searchRequests = new();
     private readonly Dictionary<string, MountService> _subscribedServers = new();
     private readonly Action<string, string, MountState> _serverStateHandler;
     private readonly Action<string, string, string, string, string> _newReleaseHandler;
@@ -1329,17 +1329,15 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     private void CancelSearch()
     {
-        _searchCts?.Cancel();
+        _searchRequests.Cancel();
     }
 
     private async Task PerformSearch()
     {
         if (string.IsNullOrWhiteSpace(SearchQuery)) return;
 
-        // Cancel any in-progress search
-        _searchCts?.Cancel();
-        _searchCts = new CancellationTokenSource();
-        var ct = _searchCts.Token;
+        using var request = _searchRequests.Begin(SearchQuery);
+        SearchResults.Clear();
 
         var mounted = _serverManager.GetMountedServers()
             .Where(s => s.Search != null && s.CurrentState == MountState.Connected)
@@ -1348,64 +1346,66 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         if (mounted.Count == 0)
         {
             SearchStatus = "No connected servers";
+            IsSearching = false;
             return;
         }
 
         IsSearching = true;
         SearchStatus = "Searching...";
-        SearchResults.Clear();
         // Ensure the CollectionView wrapper is initialized so filter chips
         // affect the DataGrid bound to SearchResults (DataGrid implicitly
         // uses GetDefaultView, which is what EnsureSearchView caches).
         EnsureSearchView();
 
-        var progress = new Progress<string>(msg =>
-            Application.Current?.Dispatcher.BeginInvoke(() => SearchStatus = msg));
+        var siteResults = new List<SearchSiteResult>();
 
         try
         {
             // Search all servers in parallel
             var tasks = mounted.Select(async server =>
             {
-                var results = await server.Search!.Search(SearchQuery, progress, ct);
-                return results.Select(r => new SearchResultVm
+                var progress = _searchRequests.ProgressFor(request, message =>
+                    SearchStatus = SearchRequestCoordinator.Describe(siteResults, mounted.Count, DateTime.UtcNow) +
+                        $" — {server.ServerName}: {message}");
+                var result = await SearchRequestCoordinator.SearchSiteAsync(request, server.ServerName,
+                    server.Search!.SearchDetailed, progress);
+                if (!_searchRequests.CanPublish(request)) return;
+                siteResults.Add(result);
+                if (result.Error != null)
+                    Log.Warning("Search unavailable for {Server}: {Error}", server.ServerName, result.Error);
+                if (result.Outcome is { } outcome)
                 {
-                    ReleaseName = r.ReleaseName,
-                    Category = r.Category,
-                    RemotePath = r.RemotePath,
-                    Size = r.Size,
-                    SizeText = FormatSize(r.Size),
-                    ServerId = server.ServerId,
-                    ServerName = server.ServerName
-                });
+                    // Publish each site's matches as it finishes; a busy site does
+                    // not hold back the results already found elsewhere.
+                    using var defer = _searchResultsView?.DeferRefresh();
+                    foreach (var r in outcome.Results)
+                        SearchResults.Add(new SearchResultVm
+                        {
+                            ReleaseName = r.ReleaseName,
+                            Category = r.Category,
+                            RemotePath = r.RemotePath,
+                            Size = r.Size,
+                            SizeText = FormatSize(r.Size),
+                            ServerId = server.ServerId,
+                            ServerName = server.ServerName
+                        });
+                }
+                SearchStatus = SearchRequestCoordinator.Describe(siteResults, mounted.Count, DateTime.UtcNow);
             });
 
-            var allResults = await Task.WhenAll(tasks);
-            var totalCount = 0;
-
-            foreach (var serverResults in allResults)
-            {
-                foreach (var r in serverResults)
-                {
-                    SearchResults.Add(r);
-                    totalCount++;
-                }
-            }
-
-            SearchStatus = $"{totalCount} result(s) found across {mounted.Count} server(s)";
-        }
-        catch (OperationCanceledException)
-        {
-            SearchStatus = "Search cancelled";
+            await Task.WhenAll(tasks);
+            if (_searchRequests.IsCurrent(request))
+                SearchStatus = SearchRequestCoordinator.Describe(siteResults, mounted.Count, DateTime.UtcNow,
+                    request.Token.IsCancellationRequested);
         }
         catch (Exception ex)
         {
-            SearchStatus = $"Search failed: {ex.Message}";
+            if (_searchRequests.IsCurrent(request)) SearchStatus = $"Search failed: {ex.Message}";
             Log.Error(ex, "Dashboard search failed");
         }
         finally
         {
-            IsSearching = false;
+            if (_searchRequests.IsCurrent(request)) IsSearching = false;
         }
     }
 
@@ -1482,13 +1482,16 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         }
 
         _ircViewModel.AddLocalSystem($"Searching for: {releaseName}...");
+        using var request = new SearchRequest(releaseName);
+        var searched = new List<SearchSiteResult>();
 
         try
         {
             foreach (var server in mounted)
             {
-                var results = await server.Search!.Search(releaseName, null, CancellationToken.None);
-                var match = results.FirstOrDefault(r =>
+                var result = await SearchRequestCoordinator.SearchSiteAsync(request, server.ServerName, server.Search!.SearchDetailed);
+                searched.Add(result);
+                var match = result.Outcome?.Results.FirstOrDefault(r =>
                     r.ReleaseName.Equals(releaseName, StringComparison.OrdinalIgnoreCase));
 
                 if (match == null) continue;
@@ -1536,7 +1539,11 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                 return;
             }
 
-            _ircViewModel.AddLocalSystem($"Not found: {releaseName}");
+            var incomplete = searched.Any(site => site.Error != null ||
+                site.Outcome is { IsPartial: true } or { TimedOut: true } or { Truncated: true });
+            _ircViewModel.AddLocalSystem(incomplete
+                ? $"Search incomplete for {releaseName}: {SearchRequestCoordinator.Describe(searched, mounted.Count, DateTime.UtcNow)}"
+                : $"Not found: {releaseName}");
         }
         catch (Exception ex)
         {
@@ -1547,26 +1554,23 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     private void OnDownloadProgress(DownloadItem item, DownloadProgress progress)
     {
-        _serverSpeeds[item.ServerId] = progress.BytesPerSecond;
-
         var pct = progress.TotalBytes > 0
             ? (double)progress.DownloadedBytes / progress.TotalBytes * 100 : 0;
-        _activeDownloads[item.Id] = (item.ReleaseName, progress.BytesPerSecond, pct);
 
         Application.Current?.Dispatcher.InvokeAsync(() =>
         {
+            // A queued progress callback may arrive after the item was parked,
+            // cancelled, or completed. Keep its waiting reason and inactive state.
+            if (item.Status != DownloadStatus.Downloading) return;
+            _serverSpeeds[item.ServerId] = progress.BytesPerSecond;
+            _activeDownloads[item.Id] = (item.ReleaseName, progress.BytesPerSecond, pct);
             HasActiveDownload = true;
             UpdateActiveDownloadSummary();
 
             // Update the grid row's Progress column
             if (_downloadItemById.TryGetValue(item.Id, out var vm))
             {
-                var pctInt = (int)pct;
-                var fileName = progress.CurrentFileName ?? "";
-                vm.ProgressText = string.IsNullOrEmpty(fileName)
-                    ? $"{pctInt}%"
-                    : $"{pctInt}% — {fileName}";
-                vm.StreamsText = GlDrive.Downloads.Segmented.LaneSummary.Format(progress.Lanes);
+                vm.ApplyProgress(item, progress);
             }
 
             // Progress hops through two async callbacks, so a last report can land after the
@@ -1584,14 +1588,13 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     private void OnDownloadStatusChanged(DownloadItem item)
     {
-        if (item.Status != DownloadStatus.Downloading && item.Status != DownloadStatus.Extracting)
-        {
-            _activeDownloads.Remove(item.Id);
-            _serverSpeeds.Remove(item.ServerId);
-        }
-
         Application.Current?.Dispatcher.InvokeAsync(() =>
         {
+            if (item.Status != DownloadStatus.Downloading && item.Status != DownloadStatus.Extracting)
+            {
+                _activeDownloads.Remove(item.Id);
+                _serverSpeeds.Remove(item.ServerId);
+            }
             if (item.Status != DownloadStatus.Downloading && _streamMatrices.Remove(item.Id))
                 FocusStreamMatrix();
             RefreshDownloads();
@@ -2238,14 +2241,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                     ReleaseName = item.ReleaseName,
                     Category = item.Category,
                     Status = item.Status.ToString(),
-                    ProgressText = item.Status switch
-                    {
-                        DownloadStatus.Downloading when item.TotalBytes > 0
-                            => $"{item.DownloadedBytes * 100 / item.TotalBytes}%",
-                        DownloadStatus.Extracting => "Extracting...",
-                        DownloadStatus.Completed => "Done",
-                        _ => ""
-                    },
+                    ProgressText = DownloadItemVm.DescribeProgress(item),
                     ProgressPercent = item.Status switch
                     {
                         DownloadStatus.Downloading when item.TotalBytes > 0
@@ -2652,9 +2648,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         _preDbRefreshTimer = null;
         _preDbCountdownTimer?.Stop();
         _preDbCountdownTimer = null;
-        _searchCts?.Cancel();
-        _searchCts?.Dispose();
-        _searchCts = null;
+        _searchRequests.Dispose();
         _preDbCts?.Cancel();
         _preDbCts?.Dispose();
         _preDbCts = null;
@@ -2734,6 +2728,27 @@ public class DownloadItemVm : INotifyPropertyChanged
     public string ReleaseName { get; set; } = "";
     public string Category { get; set; } = "";
     public string Status { get; set; } = "";
+
+    internal static string DescribeProgress(DownloadItem item) => item.Status switch
+    {
+        DownloadStatus.Queued or DownloadStatus.Failed when !string.IsNullOrWhiteSpace(item.ErrorMessage)
+            => item.ErrorMessage,
+        DownloadStatus.Downloading when item.TotalBytes > 0
+            => $"{item.DownloadedBytes * 100 / item.TotalBytes}%",
+        DownloadStatus.Extracting => "Extracting...",
+        DownloadStatus.Completed => "Done",
+        _ => ""
+    };
+
+    internal void ApplyProgress(DownloadItem item, DownloadProgress progress)
+    {
+        if (item.Status != DownloadStatus.Downloading) return;
+        var percent = progress.TotalBytes > 0
+            ? (int)((double)progress.DownloadedBytes / progress.TotalBytes * 100) : 0;
+        ProgressText = string.IsNullOrEmpty(progress.CurrentFileName)
+            ? $"{percent}%" : $"{percent}% — {progress.CurrentFileName}";
+        StreamsText = GlDrive.Downloads.Segmented.LaneSummary.Format(progress.Lanes);
+    }
     public string ProgressText
     {
         get => _progressText;

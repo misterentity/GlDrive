@@ -9,8 +9,7 @@ namespace GlDrive.Downloads;
 public class DownloadManager : IDisposable
 {
     private readonly DownloadStore _store;
-    private readonly FtpOperations _ftp;
-    private readonly StreamingDownloader _downloader;
+    private readonly IDownloadSource _source;
     private readonly DownloadConfig _config;
     private readonly List<DownloadItem> _pendingQueue = new();
     private readonly SemaphoreSlim _queueSignal = new(0);
@@ -39,6 +38,7 @@ public class DownloadManager : IDisposable
     /// </summary>
     private readonly Dictionary<string, int> _volumeWaitAttempts = new();
     private readonly object _volumeWaitLock = new();
+    private readonly Dictionary<string, int> _sourceWaitAttempts = new();
 
     public event Action<DownloadItem, DownloadProgress>? DownloadProgressChanged;
     public event Action<DownloadItem>? DownloadStatusChanged;
@@ -49,10 +49,13 @@ public class DownloadManager : IDisposable
 
     public DownloadManager(DownloadStore store, FtpOperations ftp, StreamingDownloader downloader,
         DownloadConfig config, DiskReservation? disk = null)
+        : this(store, new DownloadSource(ftp, downloader), config, disk) { }
+
+    internal DownloadManager(DownloadStore store, IDownloadSource source,
+        DownloadConfig config, DiskReservation? disk = null)
     {
         _store = store;
-        _ftp = ftp;
-        _downloader = downloader;
+        _source = source;
         _config = config;
         _disk = disk;
         _concurrency = new SemaphoreSlim(config.MaxConcurrentDownloads);
@@ -182,6 +185,7 @@ public class DownloadManager : IDisposable
             // Starting a worker and cancelling it share this lock. In particular, a
             // queued item can be waiting for a slot without having an active CTS yet.
             item.Status = DownloadStatus.Cancelled;
+            item.ErrorMessage = null;
             if (_activeCts.TryGetValue(id, out var cts))
             {
                 cts.Cancel();
@@ -297,7 +301,7 @@ public class DownloadManager : IDisposable
                 // Cooldown-defer: if the download pool is in a BNC cooldown, a Borrow
                 // would just throw and burn a retry. Re-queue and wait for the window
                 // to clear — no RetryCount cost (like the race engine's cooldown skip).
-                if (_downloader.IsPoolInCooldown)
+                if (_source.IsInCooldown)
                 {
                     EnqueueForProcessing(fresh);
                     await Task.Delay(TimeSpan.FromSeconds(15), ct);
@@ -332,8 +336,12 @@ public class DownloadManager : IDisposable
             try
             {
                 await Task.Delay(TimeSpan.FromSeconds(delaySeconds), token);
-                if (Volatile.Read(ref _generation) == gen)
-                    EnqueueForProcessing(item);
+                lock (_activeCts)
+                {
+                    if (Volatile.Read(ref _generation) == gen &&
+                        ReferenceEquals(_store.GetById(item.Id), item) && item.Status == DownloadStatus.Queued)
+                        EnqueueForProcessing(item);
+                }
             }
             catch (OperationCanceledException) { }
             catch (ObjectDisposedException) { /* _cts disposed mid-delay during stop */ }
@@ -377,6 +385,7 @@ public class DownloadManager : IDisposable
             }
             _activeCts[item.Id] = itemCts;
             item.Status = DownloadStatus.Downloading;
+            item.ErrorMessage = null;
             item.StartedAt = DateTime.UtcNow;
         }
 
@@ -420,8 +429,13 @@ public class DownloadManager : IDisposable
 
             // Plan the complete tree before starting lanes. Directory-only releases
             // and empty directories are directories too, not candidates for RETR.
-            var plan = await DownloadTree.BuildAsync(item.RemotePath, item.LocalPath,
-                _ftp.DirectoryExists, _ftp.FileExists, _ftp.ListDirectory, itemCts.Token);
+            var plan = await _source.PlanAsync(item.RemotePath, item.LocalPath, itemCts.Token);
+            itemCts.Token.ThrowIfCancellationRequested();
+            if (plan.IncompleteReasons.Count > 0)
+            {
+                ParkForSource(item, $"source reports incomplete ({plan.IncompleteReasons[0]})", itemCts.Token);
+                return;
+            }
 
             if (!plan.IsDirectory)
             {
@@ -433,12 +447,17 @@ public class DownloadManager : IDisposable
 
                 var progress = new Progress<DownloadProgress>(p =>
                 {
-                    item.DownloadedBytes = p.DownloadedBytes;
-                    item.TotalBytes = p.TotalBytes;
-                    DownloadProgressChanged?.Invoke(item, p with { CurrentFileName = fileName });
+                    lock (_activeCts)
+                    {
+                        if (item.Status != DownloadStatus.Downloading ||
+                            !_activeCts.TryGetValue(item.Id, out var active) || active != itemCts) return;
+                        item.DownloadedBytes = p.DownloadedBytes;
+                        item.TotalBytes = p.TotalBytes;
+                        DownloadProgressChanged?.Invoke(item, p with { CurrentFileName = fileName });
+                    }
                 });
 
-                await _downloader.DownloadFiles(plan.Files,
+                await _source.DownloadAsync(plan.Files,
                     progress, itemCts.Token);
             }
             else
@@ -449,11 +468,7 @@ public class DownloadManager : IDisposable
                     var hasNfo = plan.Files.Any(f => f.RemotePath.EndsWith(".nfo", StringComparison.OrdinalIgnoreCase));
                     if (!hasNfo)
                     {
-                        item.Status = DownloadStatus.Failed;
-                        item.ErrorMessage = "Release appears incomplete (no .nfo file found)";
-                        _store.Update(item);
-                        DownloadStatusChanged?.Invoke(item);
-                        EmitDownloadOutcome(item, "failed");
+                        ParkForSource(item, "no .nfo file has arrived", itemCts.Token, sourceEvidence: false);
                         return;
                     }
                 }
@@ -491,46 +506,79 @@ public class DownloadManager : IDisposable
                 // The whole release goes to the engine at once so its lanes can work on
                 // different volumes in parallel. Files already complete on disk are skipped
                 // by the engine and counted as done.
+                var payloadFinished = false;
                 var progress = new Progress<DownloadProgress>(p =>
                 {
-                    item.DownloadedBytes = p.DownloadedBytes;
-                    DownloadProgressChanged?.Invoke(item, p with { TotalBytes = item.TotalBytes });
+                    lock (_activeCts)
+                    {
+                        if (payloadFinished || item.Status != DownloadStatus.Downloading ||
+                            !_activeCts.TryGetValue(item.Id, out var active) || active != itemCts) return;
+                        item.DownloadedBytes = p.DownloadedBytes;
+                        DownloadProgressChanged?.Invoke(item, p with { TotalBytes = item.TotalBytes });
+                    }
                 });
 
-                if (plan.Files.Count > 0)
-                    await _downloader.DownloadFiles(plan.Files, progress, itemCts.Token);
+                var payload = plan.Files.Where(f => !IsManifest(f)).ToArray();
+                if (payload.Length > 0)
+                    await _source.DownloadAsync(payload, progress, itemCts.Token);
+                lock (_activeCts)
+                {
+                    itemCts.Token.ThrowIfCancellationRequested();
+                    payloadFinished = true;
+                    item.DownloadedBytes = item.TotalBytes;
+                }
+
+                // A completed transfer only covers the inventory observed before
+                // it started. Do not extract a snapshot while the upstream release
+                // is still gaining files or a listed volume is still growing.
+                var latest = await _source.PlanAsync(item.RemotePath, item.LocalPath, itemCts.Token);
+                itemCts.Token.ThrowIfCancellationRequested();
+                if (latest.IncompleteReasons.Count > 0 || !SameInventory(plan, latest))
+                {
+                    ParkForSource(item, latest.IncompleteReasons.Count > 0
+                        ? $"source reports incomplete ({latest.IncompleteReasons[0]})"
+                        : "source files changed during download", itemCts.Token);
+                    return;
+                }
+
+                // Read after the payload and final listing, including same-size
+                // replacements. A stale local manifest is never authoritative.
+                foreach (var manifest in latest.Files.Where(IsManifest))
+                    await _source.RefreshManifestAsync(manifest, itemCts.Token);
+                plan = latest;
             }
 
             // Network phase done — hand the concurrency slot back so other downloads
             // can start while THIS item runs CPU-bound SFV verify + extraction.
             ReleaseSlot();
 
-            // SFV verification if enabled
-            if (_config.VerifySfv && Directory.Exists(item.LocalPath))
+            // Presence is always required when an SFV exists. The setting only
+            // controls the expensive CRC scan, never whether missing files count.
+            if (plan.IsDirectory)
             {
-                try
+                var verification = await SfvVerifier.VerifyDetailedAsync(item.LocalPath,
+                    plan.Files.Where(IsManifest).Select(f => f.LocalPath).ToArray(), _config.VerifySfv, itemCts.Token);
+                var errors = verification.Issues.Where(i => i.Kind != SfvIssueKind.Missing).ToArray();
+                if (errors.Length > 0)
                 {
-                    var failures = new List<string>();
-                    foreach (var directory in plan.Directories)
-                        failures.AddRange(await SfvVerifier.VerifyAsync(directory, itemCts.Token));
-                    if (failures.Count > 0)
-                    {
-                        foreach (var f in failures)
-                            Log.Warning("SFV verification failed: {File}", f);
-                        item.Status = DownloadStatus.Failed;
-                        item.ErrorMessage = $"SFV verification failed: {failures.Count} file(s) corrupt";
-                        _store.Update(item);
-                        DownloadStatusChanged?.Invoke(item);
-                        EmitDownloadOutcome(item, "failed");
-                        return;
-                    }
+                    foreach (var issue in errors) Log.Warning("SFV verification failed: {File}", issue);
+                    FailVerification(item, $"SFV verification failed: {errors.Length} checksum/read/manifest error(s): {errors[0]}", itemCts.Token);
+                    return;
+                }
+                var missing = verification.Issues.Where(i => i.Kind == SfvIssueKind.Missing).ToArray();
+                if (missing.Length > 0)
+                {
+                    ParkForSource(item, $"{missing.Length} SFV file(s) missing: {missing[0]}", itemCts.Token);
+                    return;
+                }
+                if (item.SourceCompletionPending && !plan.HasCompletionMarker &&
+                    !plan.Files.Any(IsManifest) && plan.Files.Any(f => ReleaseSourceState.IsArchive(f.LocalPath)))
+                {
+                    ParkForSource(item, "waiting for an SFV manifest for the archive set", itemCts.Token);
+                    return;
+                }
+                if (_config.VerifySfv && plan.Files.Any(IsManifest))
                     Log.Information("SFV verification passed for {Release}", item.ReleaseName);
-                }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception ex)
-                {
-                    Log.Warning(ex, "SFV verification error for {Release}", item.ReleaseName);
-                }
             }
 
             // Auto-extract RAR archives if enabled
@@ -577,11 +625,13 @@ public class DownloadManager : IDisposable
         }
         catch (OperationCanceledException)
         {
-            item.Status = StatusAfterCancellation(item.Status, globalCt.IsCancellationRequested);
-            _store.Update(item);
-            if (globalCt.IsCancellationRequested) _store.Save();
-            DownloadStatusChanged?.Invoke(item);
-            if (item.Status == DownloadStatus.Cancelled) EmitDownloadOutcome(item, "cancelled");
+            RecordCancellation(item, globalCt.IsCancellationRequested);
+        }
+        catch (Exception) when (itemCts.IsCancellationRequested || item.Status == DownloadStatus.Cancelled)
+        {
+            // Some FTP/file operations report an I/O error while cancellation
+            // tears them down. They must not replace an accepted cancel with a retry.
+            RecordCancellation(item, globalCt.IsCancellationRequested);
         }
         catch (Exception ex) when (DownloadTargetVolume.IsVolumeAbsent(ex, item.LocalPath))
         {
@@ -670,6 +720,68 @@ public class DownloadManager : IDisposable
         }
     }
 
+    private static bool IsManifest(FtpDownloadFile file) =>
+        file.RemotePath.EndsWith(".sfv", StringComparison.OrdinalIgnoreCase);
+
+    private void RecordCancellation(DownloadItem item, bool stopping)
+    {
+        lock (_activeCts)
+        {
+            item.Status = StatusAfterCancellation(item.Status, stopping);
+            if (item.Status == DownloadStatus.Cancelled) item.ErrorMessage = null;
+            _store.Update(item);
+            if (stopping) _store.Save();
+        }
+        DownloadStatusChanged?.Invoke(item);
+        if (item.Status == DownloadStatus.Cancelled) EmitDownloadOutcome(item, "cancelled");
+    }
+
+    internal static bool SameInventory(DownloadTreePlan first, DownloadTreePlan second) =>
+        first.IsDirectory == second.IsDirectory &&
+        first.Directories.Order(StringComparer.Ordinal).SequenceEqual(second.Directories.Order(StringComparer.Ordinal)) &&
+        first.Files.Select(f => (f.RemotePath, f.Size)).OrderBy(f => f.RemotePath, StringComparer.Ordinal)
+            .SequenceEqual(second.Files.Select(f => (f.RemotePath, f.Size)).OrderBy(f => f.RemotePath, StringComparer.Ordinal));
+
+    internal void ParkForSource(DownloadItem item, string reason, CancellationToken ct, bool sourceEvidence = true)
+    {
+        TimeSpan delay;
+        lock (_activeCts)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (item.Status == DownloadStatus.Cancelled || !ReferenceEquals(_store.GetById(item.Id), item))
+                throw new OperationCanceledException(ct);
+            _sourceWaitAttempts.TryGetValue(item.Id, out var attempt);
+            attempt = Math.Min(attempt + 1, 5);
+            _sourceWaitAttempts[item.Id] = attempt;
+            delay = ReleaseSourceState.RecheckDelay(attempt);
+            item.Status = DownloadStatus.Queued;
+            item.SourceCompletionPending |= sourceEvidence;
+            item.ErrorMessage = $"Waiting for release completion: {reason}. Rechecking in {(int)delay.TotalSeconds}s.";
+            _store.Update(item);
+            // Persist the waiting reason/evidence immediately, even if the app
+            // closes before the normal progress debounce fires.
+            _store.Save();
+        }
+        DownloadStatusChanged?.Invoke(item);
+        Log.Information("Download waiting for release completion: {Release} — {Reason}; rechecking in {Delay}",
+            item.ReleaseName, reason, delay);
+        ScheduleRetry(item, (int)delay.TotalSeconds);
+    }
+
+    private void FailVerification(DownloadItem item, string reason, CancellationToken ct)
+    {
+        lock (_activeCts)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (item.Status == DownloadStatus.Cancelled) throw new OperationCanceledException(ct);
+            item.Status = DownloadStatus.Failed;
+            item.ErrorMessage = reason;
+            _store.Update(item);
+        }
+        DownloadStatusChanged?.Invoke(item);
+        EmitDownloadOutcome(item, "failed");
+    }
+
     internal void CompleteItem(DownloadItem item, CancellationToken ct)
     {
         lock (_activeCts)
@@ -681,6 +793,9 @@ public class DownloadManager : IDisposable
             if (item.Status == DownloadStatus.Cancelled)
                 throw new OperationCanceledException(ct);
             item.Status = DownloadStatus.Completed;
+            item.ErrorMessage = null;
+            item.SourceCompletionPending = false;
+            _sourceWaitAttempts.Remove(item.Id);
             item.CompletedAt = DateTime.UtcNow;
             _store.Update(item);
         }

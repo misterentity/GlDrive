@@ -58,11 +58,17 @@ finally
     finally { detached?.Dispose(); }
 }
 await using var pool = new FtpConnectionPool(factory, 2);
-using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(180));
+using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(240));
 await pool.Initialize(deadline.Token);
 var ftp = new FtpOperations(pool);
 var remoteRoot = "/check-" + Guid.NewGuid().ToString("N");
 await ftp.CreateDirectory(remoteRoot, deadline.Token);
+if (args.Contains("--search-only", StringComparer.Ordinal))
+{
+    await CheckSearchRecovery(factory, root, remoteRoot, deadline.Token);
+    Console.WriteLine("PASS: local native FTPS search verification complete");
+    return;
+}
 await CheckSourceRelocation(factory, root, remoteRoot, deadline.Token);
 if (args.Contains("--relocation-only", StringComparer.Ordinal))
 {
@@ -70,11 +76,14 @@ if (args.Contains("--relocation-only", StringComparer.Ordinal))
     return;
 }
 await CheckManualEnumerationAndDownloads(factory, root, remoteRoot, deadline.Token);
+await CheckIncompleteDownloadRecovery(factory, root, remoteRoot, deadline.Token);
+await CheckIncompleteRaceRecovery(factory, root, remoteRoot, deadline.Token);
 if (args.Contains("--downloads-only", StringComparer.Ordinal))
 {
     Console.WriteLine("PASS: local native FTPS enumeration and download verification complete");
     return;
 }
+await CheckSearchRecovery(factory, root, remoteRoot, deadline.Token);
 // Stats must not turn an unreachable data endpoint into a six-hour ACL denial.
 // Wire only the pool/state: no mount, downloads, timers or production configuration.
 using (var statsService = new MountService(config, new DownloadConfig(), certs))
@@ -126,6 +135,9 @@ var leech = new ServerConfig { Id = "leech", Name = "Download only" };
 leech.SpreadSite.Sections["TV"] = remoteRoot + "/leech";
 leech.SpreadSite.DownloadOnly = true;
 await ftp.CreateDirectory(receiver.SpreadSite.Sections["TV"] + "/" + existingRelease, deadline.Token);
+await ftp.UploadFile(receiver.SpreadSite.Sections["TV"] + "/" + existingRelease + "/payload.bin", [1, 2, 3], deadline.Token);
+await ftp.UploadFile(receiver.SpreadSite.Sections["TV"] + "/" + existingRelease + "/release.sfv",
+    System.Text.Encoding.UTF8.GetBytes($"payload.bin {System.IO.Hashing.Crc32.HashToUInt32(new byte[] { 1, 2, 3 }):X8}\n"), deadline.Token);
 await ftp.CreateDirectory(leech.SpreadSite.Sections["TV"], deadline.Token);
 using (var job = new SpreadJob("TV", existingRelease, SpreadMode.Race, new SpreadConfig(),
     new() { [receiver.Id] = pool, [leech.Id] = pool }, new(),
@@ -451,6 +463,286 @@ static async Task CheckManualEnumerationAndDownloads(FtpClientFactory factory, s
         Check(File.ReadAllBytes(destination).SequenceEqual(new byte[1000])
             && !File.Exists(destination + StagedFile.StagingSuffix),
             $"{name}: native retry publishes only after complete data and a successful reply");
+    }
+}
+
+static async Task CheckSearchRecovery(FtpClientFactory factory, string fixtureRoot,
+    string remoteRoot, CancellationToken ct)
+{
+    await using var searchPool = new FtpConnectionPool(factory, 1);
+    await searchPool.Initialize(ct);
+    var searchRoot = remoteRoot + "/search-recovery";
+    var localRoot = Path.Combine(fixtureRoot, "data", searchRoot.TrimStart('/'));
+    const string wanted = "Wanted.Show.S01E01.1080p-GRP";
+    Directory.CreateDirectory(Path.Combine(localRoot, wanted));
+    Directory.CreateDirectory(Path.Combine(localRoot, "Other.Show.S01E01.720p-GRP"));
+    var responsePath = Path.Combine(fixtureRoot, "site-search-response");
+    var denialPath = Path.Combine(fixtureRoot, "reject-search-path");
+    try
+    {
+        foreach (var method in new[] { SearchMethod.CachedIndex, SearchMethod.LiveCrawl })
+        {
+            using var search = new FtpSearchService(searchPool, new SearchConfig
+            {
+                Method = method, SearchPaths = [searchRoot], MaxDepth = 1
+            });
+            if (method == SearchMethod.CachedIndex) await search.RefreshIndex(ct: ct);
+            var result = await search.SearchDetailed("  1080p   Wanted  ", ct: ct);
+            Check(result.Results.Count == 1 && result.Results[0].ReleaseName == wanted && !result.IsPartial,
+                $"native {method} matches all words across release punctuation in any order");
+        }
+
+        using (var search = new FtpSearchService(searchPool, new SearchConfig
+        {
+            Method = SearchMethod.Auto, SearchPaths = [searchRoot], MaxDepth = 1
+        }))
+        {
+            await search.RefreshIndex(ct: ct);
+            await using (var held = await searchPool.Borrow(ct))
+            {
+                var cached = await search.SearchDetailed("Wanted 1080p", ct: ct)
+                    .WaitAsync(TimeSpan.FromSeconds(3), ct);
+                Check(cached.Results.Count == 1, "native Auto returns cached matches while the only connection is busy");
+            }
+            // A nonempty old index and a successful but unfamiliar SITE reply
+            // must both allow live fallback for a release that arrived afterwards.
+            const string late = "Arrived.Later.S01E02.2160p-GRP";
+            Directory.CreateDirectory(Path.Combine(localRoot, late));
+            File.WriteAllText(responsePath, "Results are available in an unfamiliar server format");
+            var arrived = await search.SearchDetailed("Later 2160p", ct: ct);
+            Check(arrived.Results.Count == 1 && arrived.Results[0].ReleaseName == late,
+                "native Auto finds a new release beyond an old cache and an unrecognized SITE reply");
+        }
+
+        File.WriteAllText(responsePath, "No matches");
+        using (var search = new FtpSearchService(searchPool, new SearchConfig
+        {
+            Method = SearchMethod.SiteSearch, SearchPaths = [searchRoot], MaxDepth = 1
+        }))
+        {
+            var fallback = await search.SearchDetailed("Wanted 1080p", ct: ct);
+            Check(fallback.Results.Any(r => r.ReleaseName == wanted),
+                "native empty SITE SEARCH falls back to a live directory search");
+        }
+
+        var deniedRoot = searchRoot + "/denied";
+        Directory.CreateDirectory(Path.Combine(localRoot, "denied"));
+        File.WriteAllText(denialPath, deniedRoot);
+        FluentFTP.AsyncFtpClient originalListingClient;
+        await using (var connection = await searchPool.Borrow(ct)) originalListingClient = connection.Client;
+        var deniedListingRejected = false;
+        try { await new FtpOperations(searchPool).ListDirectory(deniedRoot, ct); }
+        catch (DataCommandRejectedException ex) when (ex.ControlChannelInSync) { deniedListingRejected = true; }
+        Check(deniedListingRejected, "native FTP listing rejection cannot appear as an empty download directory");
+        using (var search = new FtpSearchService(searchPool, new SearchConfig
+        {
+            Method = SearchMethod.LiveCrawl, SearchPaths = [deniedRoot, searchRoot], MaxDepth = 0
+        }))
+        {
+            var partial = await search.SearchDetailed("Wanted 1080p", ct: ct);
+            Check(partial.IsPartial && partial.Results.Any(r => r.ReleaseName == wanted),
+                "native denied search roots retain healthy results and report incomplete coverage");
+        }
+        await using (var connection = await searchPool.Borrow(ct))
+            Check(ReferenceEquals(originalListingClient, connection.Client),
+                "clean listing denial preserves the healthy native FTP session");
+        File.Delete(denialPath);
+
+        // Reproduce the production condition: one connection held by a transfer.
+        // Release it after the first borrow deadline so the bounded retry must recover.
+        using (var search = new FtpSearchService(searchPool, new SearchConfig
+        {
+            Method = SearchMethod.LiveCrawl, SearchPaths = [searchRoot], MaxDepth = 0
+        }))
+        {
+            var held = await searchPool.Borrow(ct);
+            Task<SearchOutcome>? pending = null;
+            try
+            {
+                pending = search.SearchDetailed("Wanted 1080p", ct: ct);
+                await Task.Delay(TimeSpan.FromSeconds(17), ct);
+            }
+            finally { await held.DisposeAsync(); }
+            var recovered = await pending!.WaitAsync(TimeSpan.FromSeconds(20), ct);
+            Check(recovered.Results.Any(r => r.ReleaseName == wanted) && !recovered.IsPartial,
+                "native live search retries a busy connection and succeeds when the slot becomes available");
+        }
+    }
+    finally
+    {
+        File.Delete(responsePath);
+        File.Delete(denialPath);
+    }
+}
+
+static async Task CheckIncompleteDownloadRecovery(FtpClientFactory factory, string fixtureRoot,
+    string remoteRoot, CancellationToken ct)
+{
+    await using var waitingPool = new FtpConnectionPool(factory, 1);
+    await waitingPool.Initialize(ct);
+    var ftp = new FtpOperations(waitingPool);
+    var release = remoteRoot + "/Arriving.Release-GRP";
+    var source = Path.Combine(fixtureRoot, "data", release.TrimStart('/'));
+    Directory.CreateDirectory(source);
+    var first = new byte[8192];
+    var second = new byte[16384];
+    new Random(3112).NextBytes(first);
+    new Random(3113).NextBytes(second);
+    File.WriteAllBytes(Path.Combine(source, "first.bin"), first);
+    File.WriteAllText(Path.Combine(source, "second.bin-missing"), "");
+    File.WriteAllText(Path.Combine(source, "release.sfv"),
+        $"first.bin {System.IO.Hashing.Crc32.HashToUInt32(first):X8}\n" +
+        $"second.bin {System.IO.Hashing.Crc32.HashToUInt32(second):X8}\n");
+    var localRoot = Path.Combine(fixtureRoot, "waiting-download-check", remoteRoot.TrimStart('/'));
+    Directory.CreateDirectory(localRoot);
+    var storePath = Path.Combine(localRoot, "queue.json");
+    var destination = Path.Combine(localRoot, "release");
+    // A valid part retained from an earlier run must survive waiting and restart.
+    Directory.CreateDirectory(destination);
+    File.WriteAllBytes(Path.Combine(destination, "first.bin"), first);
+    var downloadConfig = new DownloadConfig
+    {
+        MaxConcurrentDownloads = 1, MaxRetries = 0, AutoExtract = false,
+        VerifySfv = true, SkipIncompleteReleases = false
+    };
+    var downloader = new StreamingDownloader(waitingPool, "waiting-fixture", downloadConfig, 0, null);
+    DownloadStore NewStore()
+    {
+        var store = new DownloadStore("isolated-waiting-fixture");
+        typeof(DownloadStore).GetField("_filePath", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(store, storePath);
+        return store;
+    }
+    var item = new DownloadItem
+    {
+        RemotePath = release, LocalPath = destination, ReleaseName = "Arriving.Release-GRP",
+        ServerId = "waiting-fixture"
+    };
+    var firstStore = NewStore();
+    using (var manager = new DownloadManager(firstStore, ftp, downloader, downloadConfig))
+    {
+        var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sentinelDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        manager.DownloadStatusChanged += changed =>
+        {
+            if (changed.Id == item.Id && changed.Status == DownloadStatus.Queued &&
+                changed.ErrorMessage?.StartsWith("Waiting for release completion", StringComparison.Ordinal) == true)
+                parked.TrySetResult();
+            if (changed.ReleaseName == "sentinel" && changed.Status == DownloadStatus.Completed)
+                sentinelDone.TrySetResult();
+        };
+        firstStore.Add(item);
+        manager.Start();
+        try
+        {
+            await parked.Task.WaitAsync(TimeSpan.FromSeconds(15), ct);
+            Check(item.Status == DownloadStatus.Queued && item.RetryCount == 0 && item.CompletedAt == null,
+                "incomplete native FTPS download parks without exhausting a zero retry budget");
+            var sentinelPath = remoteRoot + "/waiting-sentinel.bin";
+            File.WriteAllBytes(Path.Combine(fixtureRoot, "data", sentinelPath.TrimStart('/')), [1, 2, 3]);
+            Check(manager.Enqueue(new DownloadItem
+            {
+                ReleaseName = "sentinel", RemotePath = sentinelPath,
+                LocalPath = Path.Combine(localRoot, "sentinel.bin")
+            }), "a waiting source allows another download to enter the queue");
+            await sentinelDone.Task.WaitAsync(TimeSpan.FromSeconds(15), ct);
+            Check(File.ReadAllBytes(Path.Combine(localRoot, "sentinel.bin")).SequenceEqual(new byte[] { 1, 2, 3 }),
+                "waiting releases free the sole network slot and native FTP connection");
+        }
+        finally { await manager.StopAsync(); }
+    }
+    var restartedStore = NewStore();
+    restartedStore.Load();
+    var restored = restartedStore.GetById(item.Id)!;
+    Check(restored.Status == DownloadStatus.Queued && restored.RetryCount == 0,
+        "source-completion waiting survives queue persistence and restart");
+    using (var manager = new DownloadManager(restartedStore, ftp, downloader, downloadConfig))
+    {
+        var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        manager.DownloadStatusChanged += changed =>
+        {
+            if (changed.Id != restored.Id) return;
+            if (changed.Status == DownloadStatus.Queued &&
+                changed.ErrorMessage?.StartsWith("Waiting for release completion", StringComparison.Ordinal) == true)
+                parked.TrySetResult();
+            if (changed.Status == DownloadStatus.Completed) completed.TrySetResult();
+            if (changed.Status == DownloadStatus.Failed)
+                completed.TrySetException(new Exception(changed.ErrorMessage));
+        };
+        manager.Start();
+        try
+        {
+            await parked.Task.WaitAsync(TimeSpan.FromSeconds(15), ct);
+            File.WriteAllBytes(Path.Combine(source, "second.bin"), second);
+            File.Delete(Path.Combine(source, "second.bin-missing"));
+            await completed.Task.WaitAsync(TimeSpan.FromSeconds(75), ct);
+            Check(restored.ErrorMessage == null && restored.RetryCount == 0 &&
+                File.ReadAllBytes(Path.Combine(destination, "first.bin")).SequenceEqual(first) &&
+                File.ReadAllBytes(Path.Combine(destination, "second.bin")).SequenceEqual(second),
+                "scheduled native rescan downloads late files and verifies the complete release automatically");
+            Check(!File.Exists(Path.Combine(destination, "second.bin-missing")),
+                "missing-file placeholders are not downloaded as release content");
+        }
+        finally { await manager.StopAsync(); }
+    }
+}
+
+static async Task CheckIncompleteRaceRecovery(FtpClientFactory factory, string fixtureRoot,
+    string remoteRoot, CancellationToken ct)
+{
+    await using var racePool = new FtpConnectionPool(factory, 2);
+    await racePool.Initialize(ct);
+    var source = new ServerConfig { Id = "arriving-source", Name = "Arriving source" };
+    var receiver = new ServerConfig { Id = "arriving-receiver", Name = "Arriving receiver" };
+    source.SpreadSite.Sections["TV"] = remoteRoot + "/arriving-source";
+    receiver.SpreadSite.Sections["TV"] = remoteRoot + "/arriving-receiver";
+    const string release = "Already.Started.S01E01-GRP";
+    var first = new byte[] { 1, 2, 3 };
+    var second = new byte[] { 4, 5, 6 };
+    string LocalRelease(ServerConfig server) =>
+        Path.Combine(fixtureRoot, "data", server.SpreadSite.Sections["TV"].TrimStart('/'), release);
+    foreach (var server in new[] { source, receiver })
+    {
+        var path = LocalRelease(server);
+        Directory.CreateDirectory(path);
+        File.WriteAllBytes(Path.Combine(path, "first.bin"), first);
+        File.WriteAllText(Path.Combine(path, "second.bin-missing"), "");
+        File.WriteAllText(Path.Combine(path, "release.sfv"),
+            $"first.bin {System.IO.Hashing.Crc32.HashToUInt32(first):X8}\n" +
+            $"second.bin {System.IO.Hashing.Crc32.HashToUInt32(second):X8}\n");
+    }
+    SpreadJob NewJob() => new("TV", release, SpreadMode.Race,
+        new SpreadConfig { CompletionRefreshIntervalSeconds = 1 },
+        new() { [source.Id] = racePool, [receiver.Id] = racePool },
+        new() { [source.Id] = racePool, [receiver.Id] = racePool },
+        new() { [source.Id] = source, [receiver.Id] = receiver }, new SpeedTracker(), new SkiplistEvaluator());
+    using (var job = NewJob())
+    {
+        var errors = 0;
+        var completed = 0;
+        job.Error += (_, _) => errors++;
+        job.Completed += _ => completed++;
+        await job.RunAsync().WaitAsync(TimeSpan.FromSeconds(20), ct);
+        Check(job.State == SpreadJobState.Waiting && errors == 0 && completed == 0,
+            "native race discovery waits when both existing folders are still incomplete");
+        Check(new[] { source, receiver }.All(server =>
+            File.ReadAllBytes(Path.Combine(LocalRelease(server), "first.bin")).SequenceEqual(first)),
+            "parking a partial race preserves existing landed volumes");
+    }
+    // Model a release's later arrival at both sites without exercising unsupported
+    // glftpd FXP extensions in this loopback fixture. The real admission, scans,
+    // manifest reads and completion decision are rerun after durable requeue.
+    foreach (var server in new[] { source, receiver })
+    {
+        File.WriteAllBytes(Path.Combine(LocalRelease(server), "second.bin"), second);
+        File.Delete(Path.Combine(LocalRelease(server), "second.bin-missing"));
+    }
+    using (var job = NewJob())
+    {
+        await job.RunAsync().WaitAsync(TimeSpan.FromSeconds(20), ct);
+        Check(job.State == SpreadJobState.Completed && job.LastError == null,
+            "native resumed race completes only after the missing inventory arrives");
     }
 }
 

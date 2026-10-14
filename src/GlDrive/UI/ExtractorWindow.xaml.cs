@@ -36,6 +36,8 @@ public partial class ExtractorWindow : Window
     private readonly List<string> _watchFolders = new();
     private bool _watchEnabled;
     private readonly HashSet<string> _watchProcessed = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _managedDownloadParked = new(StringComparer.OrdinalIgnoreCase);
+    private readonly DownloadExtractionGuard _downloadGuard = new(ConfigManager.AppDataPath);
 
     // Fingerprint-keyed, NOT a bare HashSet. It was one until 2026-08-15, add-only and
     // consulted ahead of every other check, so a release abandoned mid-copy was dead for the
@@ -1164,6 +1166,7 @@ public partial class ExtractorWindow : Window
 
                             foreach (var item in Archives.Where(a => a.Status == "Queued").ToList())
                             {
+                                if (ParkForManagedDownload(item.FilePath, item)) continue;
                                 if (IsAlreadyExtracted(item))
                                 {
                                     item.Status = "Done";
@@ -1316,6 +1319,7 @@ public partial class ExtractorWindow : Window
     {
         var path = ResolveFirstVolumePath(eventPath);
         if (path == null || path.Contains(".gldrive-staging-", StringComparison.OrdinalIgnoreCase)) return;
+        if (ParkForManagedDownload(path)) return;
 
         // A give-up that outlives the condition it describes is a permanent exemption. This
         // asks the ledger with the CURRENT fingerprint, so a copy that was still arriving when
@@ -1362,6 +1366,7 @@ public partial class ExtractorWindow : Window
         try
         {
             var readiness = await WaitForVolumeSetReady(path, _lifetimeCts.Token);
+            if (ParkForManagedDownload(path)) return;
             if (readiness != ArchiveWaitOutcome.Ready)
             {
                 // The two endings are not the same event and must not read the same in the log.
@@ -1443,6 +1448,7 @@ public partial class ExtractorWindow : Window
                     // before IsAlreadyExtracted because that opens the archive to compare
                     // entries — expensive on an 85-volume set, and futile on a broken one.
                     if (SkipIfAbandoned(item.FilePath)) continue;
+                    if (ParkForManagedDownload(item.FilePath, item)) continue;
 
                     if (IsAlreadyExtracted(item))
                     {
@@ -1506,6 +1512,7 @@ public partial class ExtractorWindow : Window
     private async Task AutoExtractItem(ArchiveItem item)
     {
         if (item.Status != "Queued") return;
+        if (ParkForManagedDownload(item.FilePath, item)) return;
 
         // THE chokepoint. v3.10.63 put this check in the two routes I knew about
         // (HandleWatchedFileAsync, ScanAndAutoExtractAsync) and shipped — and the replay
@@ -1541,6 +1548,7 @@ public partial class ExtractorWindow : Window
         // watcher route already ran it on a pool thread; this makes that true for all three.
         var readiness = await Task.Run(
             () => WaitForVolumeSetReady(item.FilePath, _lifetimeCts.Token), _lifetimeCts.Token);
+        if (ParkForManagedDownload(item.FilePath, item)) return;
 
         if (readiness != ArchiveWaitOutcome.Ready)
         {
@@ -1594,6 +1602,15 @@ public partial class ExtractorWindow : Window
         {
             await _extractionGate.WaitAsync(_lifetimeCts.Token);
             gateHeld = true;
+            // Admission can wait behind another archive while a managed download
+            // starts or resumes. Check again before touching its files.
+            if (ParkForManagedDownload(item.FilePath, item)) return;
+            if (!File.Exists(item.FilePath) || IsAlreadyExtracted(item))
+            {
+                item.Status = "Done";
+                item.Progress = 100;
+                return;
+            }
             item.Status = "Extracting";
             item.Progress = 0;
             await ExtractArchiveAsync(item, outputDir, password, overwriteIdx, _lifetimeCts.Token);
@@ -2074,6 +2091,30 @@ public partial class ExtractorWindow : Window
             _ = SweepAbandonedAsync();
     }
 
+    private bool ParkForManagedDownload(string path, ArchiveItem? item = null)
+    {
+        var owner = _downloadGuard.FindOwner(path);
+        lock (_watchLock)
+        {
+            if (owner == null)
+            {
+                if (_managedDownloadParked.Remove(path)) _watchProcessed.Remove(path);
+                return false;
+            }
+            _managedDownloadParked.Add(path);
+            _watchProcessed.Add(path);
+        }
+        if (item != null)
+        {
+            item.Status = "Waiting";
+            item.ErrorMessage = "Waiting for managed download completion";
+        }
+        // Reuse the bounded sweep, without consuming extraction retries or
+        // recording an incomplete managed release as permanently corrupt.
+        StartAbandonSweep();
+        return true;
+    }
+
     /// <summary>
     /// Re-examine abandoned paths on a timer.
     ///
@@ -2098,6 +2139,31 @@ public partial class ExtractorWindow : Window
             {
                 await Task.Delay(AbandonSweepInterval, _lifetimeCts.Token);
                 if (!_watchEnabled) continue;
+
+                string[] managed;
+                lock (_watchLock) managed = _managedDownloadParked.ToArray();
+                foreach (var path in managed)
+                {
+                    if (_lifetimeCts.IsCancellationRequested) return;
+                    if (ParkForManagedDownload(path)) continue;
+                    // This also handles a managed extraction that removed its
+                    // source archive: there is then nothing left to queue.
+                    if (!File.Exists(path))
+                    {
+                        await Dispatcher.InvokeAsync(() =>
+                        {
+                            var item = Archives.FirstOrDefault(a => a.FilePath.Equals(path, StringComparison.OrdinalIgnoreCase));
+                            if (item?.Status == "Waiting")
+                            {
+                                item.Status = "Done";
+                                item.Progress = 100;
+                                item.ErrorMessage = null;
+                            }
+                        });
+                        continue;
+                    }
+                    await HandleWatchedFileAsync(path);
+                }
 
                 foreach (var path in _watchAbandoned.AbandonedPaths())
                 {

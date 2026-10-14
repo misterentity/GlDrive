@@ -128,6 +128,9 @@ public class FtpConnectionPool : IAsyncDisposable
 
     public bool IsThrottled => IsInCooldown || IsInLoginGateBackoff || IsHostUnreachable;
 
+    /// <summary>True after this pool has been retired, including during a server remount.</summary>
+    public bool IsDisposed => Volatile.Read(ref _disposed);
+
     /// <summary>PRD O2 — last observed BNC login cap (parsed from "restricted to N simultaneous logins"), or null.</summary>
     public int? ObservedLoginCap { get; private set; }
 

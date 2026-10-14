@@ -32,13 +32,21 @@
             </Border>
 
             <!-- Middle row: server / category / progress micro-text, lane chips, speed -->
-            <StackPanel Grid.Row="1" Grid.Column="0" Orientation="Horizontal" Margin="0,4,0,8">
+            <Grid Grid.Row="1" Grid.Column="0" Margin="0,4,8,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
                 <TextBlock Text="{Binding ServerName}" Style="{DynamicResource AccentTextStyle}" FontSize="11"/>
-                <TextBlock Text=" · " Foreground="{DynamicResource TextFaintBrush}"/>
-                <TextBlock Text="{Binding Category}" Style="{DynamicResource MicroTextStyle}"/>
-                <TextBlock Text=" · " Foreground="{DynamicResource TextFaintBrush}"/>
-                <TextBlock Text="{Binding ProgressText}" Style="{DynamicResource MicroTextStyle}"/>
-            </StackPanel>
+                <TextBlock Grid.Column="1" Text=" · " Foreground="{DynamicResource TextFaintBrush}"/>
+                <TextBlock Grid.Column="2" Text="{Binding Category}" Style="{DynamicResource MicroTextStyle}"/>
+                <TextBlock Grid.Column="3" Text=" · " Foreground="{DynamicResource TextFaintBrush}"/>
+                <TextBlock Grid.Column="4" Text="{Binding ProgressText}" Style="{DynamicResource MicroTextStyle}"
+                           TextTrimming="CharacterEllipsis" ToolTip="{Binding ProgressText}"/>
+            </Grid>
             <sm:LaneChipsView Grid.Row="1" Grid.Column="1" DataContext="{Binding Matrix}"
                               HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,3,8,0"
                               ToolTip="{Binding DataContext.StreamsText, ElementName=RowRoot}"
