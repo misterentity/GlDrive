@@ -1321,6 +1321,21 @@ public partial class ExtractorWindow : Window
         if (path == null || path.Contains(".gldrive-staging-", StringComparison.OrdinalIgnoreCase)) return;
         if (ParkForManagedDownload(path)) return;
 
+        // The release folder itself is gone (a failed download was discarded, or it was deleted
+        // by hand). No retry can change that, so drop the bookkeeping rather than re-watch it
+        // through five more stall windows. Checked on the folder, not the first volume: for
+        // old-style sets the .rar legitimately arrives after every .rNN.
+        if (!Directory.Exists(Path.GetDirectoryName(path)))
+        {
+            lock (_watchLock)
+            {
+                _watchProcessed.Remove(path);
+                _watchRetryCounts.Remove(path);
+            }
+            Log.Information("Extractor: release folder no longer exists — dropping {Path}", path);
+            return;
+        }
+
         // A give-up that outlives the condition it describes is a permanent exemption. This
         // asks the ledger with the CURRENT fingerprint, so a copy that was still arriving when
         // we ran out of retries revives itself the moment it grows, and a stalled one stays put.
