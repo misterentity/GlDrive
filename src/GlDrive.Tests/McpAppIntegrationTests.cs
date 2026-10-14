@@ -15,6 +15,7 @@ public class McpAppIntegrationTests
     [Fact]
     public async Task Real_stdio_bridge_reads_and_writes_through_actual_authenticated_app_endpoint()
     {
+        Assert.Null(System.Windows.Application.Current);
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start(); var port = ((IPEndPoint)listener.LocalEndpoint).Port; listener.Stop();
         var config = new AppConfig { ControlApi = new() { Enabled = true, Port = port, Token = Guid.NewGuid().ToString("N") } };
@@ -70,9 +71,15 @@ public class McpAppIntegrationTests
                 operations = new[] { new { op = "replace", path = "/logging/level", value = "Debug" } }
             } });
             Assert.False(write.GetProperty("isError").GetBoolean());
-            Assert.True(write.GetProperty("structuredContent").GetProperty("saved").GetBoolean());
+            Assert.True(write.TryGetProperty("structuredContent", out var written), "config_patch returned no structured content.");
+            Assert.True(written.TryGetProperty("saved", out var saved),
+                written.TryGetProperty("jobId", out _)
+                    ? "config_patch did not complete within the inline deadline. It returned a background job; check for an unpumped test Application dispatcher."
+                    : "config_patch completed without the required saved result.");
+            Assert.True(saved.GetBoolean());
             Assert.Equal("Debug", config.Logging.Level); Assert.Equal(1, saves);
             var reread = await Request(5, "tools/call", new { name = "config_get", arguments = new { pointer = "/logging/level" } });
+            Assert.False(reread.GetProperty("isError").GetBoolean());
             Assert.Equal("Debug", reread.GetProperty("structuredContent").GetProperty("value").GetString());
             var invalid = await Request(6, "tools/call", new { name = "config_patch", arguments = new { operations = new[] { new { op = "replace", path = "/unknownSetting", value = "bad" } } } });
             Assert.True(invalid.GetProperty("isError").GetBoolean()); Assert.Equal(1, saves);
