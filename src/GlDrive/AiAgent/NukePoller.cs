@@ -125,6 +125,14 @@ public sealed class NukePoller : IDisposable
                 {
                     break;
                 }
+                catch (OperationCanceledException)
+                {
+                    // Poll deadline, almost always while Borrow waited on a busy pool. A skipped
+                    // poll, not a fault — counts toward the breaker without a stack trace.
+                    Log.Information("NukePoller skipped {Server}: no reply within {Timeout}s (pool busy or slow server)",
+                        serverId, (int)_pollTimeout.TotalSeconds);
+                    BumpFail(serverId);
+                }
                 catch (Exception ex)
                 {
                     Log.Warning(ex, "NukePoller failed for {Server}", serverId);
