@@ -72,7 +72,7 @@ public sealed class StagedFile : IAsyncDisposable
                 saved = TryReadSidecar(sidecar, out why);
                 if (saved != null && saved.Size != f.Size)
                     why = $"remote file changed (size {saved.Size} -> {f.Size})";
-                else if (saved != null && f.Validator != null && saved.Validator != null && saved.Validator != f.Validator)
+                else if (saved != null && f.Validator != null && saved.Validator != f.Validator)
                     why = $"remote file changed (validator {saved.Validator} -> {f.Validator})";
             }
 
@@ -155,6 +155,20 @@ public sealed class StagedFile : IAsyncDisposable
             _bytesSincePersist += Done.Add(range);
             if (_bytesSincePersist >= PersistBytes || _sincePersist.Elapsed >= PersistInterval)
                 PersistLocked();
+        }
+    }
+
+    /// <summary>
+    /// Forget every done range (the bytes on disk stay and get overwritten). Used when a file's
+    /// completion could not be confirmed, or the server refused to resume it mid-file.
+    /// </summary>
+    public void ResetDone()
+    {
+        lock (_lock)
+        {
+            if (_committed || _closed) return;
+            Done.Clear();
+            PersistLocked();
         }
     }
 

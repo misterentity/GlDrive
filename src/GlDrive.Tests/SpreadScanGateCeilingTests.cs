@@ -184,7 +184,9 @@ public class SpreadScanGateCeilingTests
         var source = ReadSource("src", "GlDrive", "Ftp", "FtpConnectionPool.cs");
 
         Assert.DoesNotContain("Interlocked.Increment(ref _created) <= _maxSize", source);
-        Assert.Equal(3,
+        // 4: fresh create, ghost-kill retry, stale replacement, and the at-capacity waiter that
+        // creates when a quarantined slot frees (PoolSlotFreedWakeTests).
+        Assert.Equal(4,
             source.Split("Interlocked.Increment(ref _created) <= EffectiveMaxSize").Length - 1);
     }
 }

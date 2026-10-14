@@ -312,6 +312,115 @@ public sealed class SegmentedTransferTests : IDisposable
         Assert.Equal(1_000_000 - savedDone.TotalLength, Interlocked.Read(ref second.BytesRead));
     }
 
+    // ---- Codex review round 1 regressions ----
+
+    [Fact]
+    public async Task FailedCompletion_IsNotCommitted_AndTheFileIsRefetched()
+    {
+        var f = AddFile("a.r00", 200_000);
+        int failures = 0;
+        var lane = new FakeLane(_source, "main", canStopEarly: false)
+        {
+            FinishFault = eof => eof && Interlocked.Increment(ref failures) == 1 ? new IOException("RETR did not complete: 426") : null,
+        };
+        var completed = new ConcurrentBag<string>();
+
+        await new SegmentedTransfer([f], Opts(f => completed.Add(f.Key))).RunAsync([lane], null, null, default);
+
+        AssertOnDisk(f);
+        Assert.Single(completed);
+        Assert.Equal(2, lane.Opens.Count);                        // the unconfirmed copy was fetched again
+        Assert.Contains(lane.Faults, e => e.Message.Contains("426"));
+    }
+
+    [Fact]
+    public async Task CompletionPending_OnAnotherLane_BlocksCommit()
+    {
+        // Lane b holds the tail and its 226 fails: the file must not be published even though
+        // lane a finished its half cleanly and every byte is on disk.
+        var f = AddFile("a.r00", 1_000_000);
+        int failures = 0;
+        var a = new FakeLane(_source, "a") { ReadDelayMs = 1 };
+        var b = new FakeLane(_source, "b") { ReadDelayMs = 1,
+            FinishFault = eof => eof && Interlocked.Increment(ref failures) == 1 ? new IOException("extra bytes") : null };
+        var completed = new ConcurrentBag<string>();
+
+        await new SegmentedTransfer([f], Opts(f => completed.Add(f.Key))).RunAsync([a, b], null, null, default);
+
+        AssertOnDisk(f);
+        Assert.Single(completed);
+    }
+
+    [Fact]
+    public async Task RefusedResume_RefetchesWholeFileSequentially()
+    {
+        var f = AddFile("a.r00", 600_000);
+        var refuse = (TransferFile _, long offset) => offset > 0 ? new RangeNotSupportedException($"REST {offset} refused: 502") : null;
+        var a = new FakeLane(_source, "a") { ReadDelayMs = 1, OpenFaultAt = refuse };
+        var b = new FakeLane(_source, "b") { ReadDelayMs = 1, OpenFaultAt = refuse };
+
+        await new SegmentedTransfer([f], Opts(maxFailures: 50)).RunAsync([a, b], null, null, default);
+
+        AssertOnDisk(f);
+    }
+
+    [Fact]
+    public async Task Yield_InterruptsAReadThatIsBlocked()
+    {
+        var f = AddFile("a.r00", 800_000);
+        var raceWantsLogin = false;
+        var borrowed = new FakeLane(_source, "race login") { BlockReadsAt = 64 * 1024, YieldWhen = () => Volatile.Read(ref raceWantsLogin) };
+        // The borrowed lane takes the whole file and then hangs; main steals the tail, and its
+        // first bytes are the moment "the race wants its login back".
+        var main = new FakeLane(_source, "main") { ReadDelayMs = 1 };
+        var opts = new SegmentedTransferOptions
+        {
+            BufferSize = 8 * 1024, MinSplitBytes = 16 * 1024, LaneRetryDelay = TimeSpan.FromMilliseconds(1),
+            OnBytes = (net, _) => { if (net == "net-main") Volatile.Write(ref raceWantsLogin, true); },
+        };
+
+        var run = new SegmentedTransfer([f], opts).RunAsync([borrowed, main], null, null, default);
+        Assert.Same(run, await Task.WhenAny(run, Task.Delay(TimeSpan.FromSeconds(30))));
+        await run;
+
+        AssertOnDisk(f);
+        Assert.NotEmpty(borrowed.Opens);
+        Assert.Contains(false, borrowed.Finishes);   // clean early finish, connection reusable
+        Assert.Empty(borrowed.Faults);
+    }
+
+    [Fact]
+    public async Task StalledLane_IsFailed_AndItsRangeFinishedElsewhere()
+    {
+        var f = AddFile("a.r00", 600_000);
+        var stalled = new FakeLane(_source, "stalled") { BlockReadsAt = 32 * 1024 };
+        var healthy = new FakeLane(_source, "healthy") { ReadDelayMs = 1 };
+        var opts = new SegmentedTransferOptions
+        {
+            BufferSize = 8 * 1024, MinSplitBytes = 16 * 1024, MaxLaneFailures = 1,
+            LaneRetryDelay = TimeSpan.FromMilliseconds(1), StallTimeout = TimeSpan.FromMilliseconds(400),
+        };
+
+        await new SegmentedTransfer([f], opts).RunAsync([stalled, healthy], null, null, default);
+
+        AssertOnDisk(f);
+        Assert.Contains(stalled.Faults, e => e.Message.StartsWith("No data for"));
+    }
+
+    [Fact]
+    public async Task CancelledOpen_FaultsTheLane()
+    {
+        var f = AddFile("a.r00", 100_000);
+        var lane = new FakeLane(_source, "main") { BlockOpens = true };
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            new SegmentedTransfer([f], Opts()).RunAsync([lane], null, null, cts.Token));
+
+        Assert.Single(lane.Faults);
+        Assert.IsAssignableFrom<OperationCanceledException>(lane.Faults.Single());
+    }
+
     // Progress<T> posts to the sync context / thread pool; this reports inline.
     private sealed class SyncProgress<T>(Action<T> handler) : IProgress<T>
     {
@@ -335,6 +444,10 @@ public sealed class SegmentedTransferTests : IDisposable
         public Func<bool>? YieldWhen { get; set; }
         public Func<TransferFile, Exception?>? OpenFault { get; init; }
         public Func<long, Exception?>? ReadFault { get; init; }
+        public Func<TransferFile, long, Exception?>? OpenFaultAt { get; init; }
+        public Func<bool, Exception?>? FinishFault { get; init; }
+        public long BlockReadsAt { get; set; } = long.MaxValue;   // reads hang (until cancelled) from here
+        public bool BlockOpens { get; init; }
         public int ReadDelayMs { get; init; }
         public int MaxChunk { get; init; } = 8 * 1024;
         public long TruncateAt { get; init; } = long.MaxValue;
@@ -349,6 +462,8 @@ public sealed class SegmentedTransferTests : IDisposable
         {
             Opens.Enqueue((file.Key, offset, end));
             if (OpenFault?.Invoke(file) is { } ex) throw ex;
+            if (OpenFaultAt?.Invoke(file, offset) is { } ex2) throw ex2;
+            if (BlockOpens) return Task.Delay(Timeout.Infinite, ct).ContinueWith<ISegmentReader>(_ => throw new OperationCanceledException(ct));
             return Task.FromResult<ISegmentReader>(new Reader(this, source[file.Key], offset));
         }
 
@@ -367,6 +482,7 @@ public sealed class SegmentedTransferTests : IDisposable
                 if (lane.ReadDelayMs > 0) await Task.Delay(lane.ReadDelayMs, ct);
                 else await Task.Yield();
                 if (lane.ReadFault?.Invoke(position) is { } ex) throw ex;
+                if (position >= lane.BlockReadsAt) await Task.Delay(Timeout.Infinite, ct);
                 long limit = Math.Min(data.Length, lane.TruncateAt);
                 int n = (int)Math.Min(Math.Min(buffer.Length, lane.MaxChunk), Math.Max(0, limit - position));
                 data.AsMemory((int)position, n).CopyTo(buffer);
@@ -378,7 +494,7 @@ public sealed class SegmentedTransferTests : IDisposable
             public Task FinishAsync(bool reachedEof, CancellationToken ct)
             {
                 lane.Finishes.Enqueue(reachedEof);
-                return Task.CompletedTask;
+                return lane.FinishFault?.Invoke(reachedEof) is { } ex ? Task.FromException(ex) : Task.CompletedTask;
             }
 
             public ValueTask DisposeAsync() => ValueTask.CompletedTask;

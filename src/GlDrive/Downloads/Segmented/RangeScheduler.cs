@@ -47,6 +47,7 @@ public sealed class RangeScheduler
     private readonly long[] _sizes;          // long.MaxValue while a file's size is unknown
     private readonly bool[] _sizeUnknown;
     private readonly bool[] _unknownDone;
+    private readonly bool[] _sequential;     // resume refused mid-file: one lane, from the start
     private readonly ByteRangeSet[] _done;
     private readonly List<Assignment> _inFlight = new();
     private readonly long _minSplitBytes;
@@ -60,6 +61,7 @@ public sealed class RangeScheduler
         _sizes = new long[n];
         _sizeUnknown = new bool[n];
         _unknownDone = new bool[n];
+        _sequential = new bool[n];
         _done = new ByteRangeSet[n];
         for (int i = 0; i < n; i++)
         {
@@ -135,6 +137,13 @@ public sealed class RangeScheduler
         for (int i = 0; i < _sizes.Length; i++)
         {
             if (IsFileCompleteLocked(i)) continue;
+
+            if (_sequential[i] && !_sizeUnknown[i])
+            {
+                if (_inFlight.Any(a => a.FileIndex == i)) continue;
+                long seqFrom = _done[i].Ranges.Count > 0 && _done[i].Ranges[0].Start == 0 ? _done[i].Ranges[0].End : 0;
+                return Add(new Assignment(i, seqFrom, _sizes[i], canStopEarly, splittable: false));
+            }
 
             if (_sizeUnknown[i])
             {
@@ -260,4 +269,20 @@ public sealed class RangeScheduler
     }
 
     public bool IsSizeUnknown(int fileIndex) => _sizeUnknown[fileIndex];
+
+    /// <summary>
+    /// Forget a file's done bytes so it is fetched again. In-flight assignments keep running
+    /// and re-add what they write. <paramref name="sequential"/>: from now on the file is only
+    /// handed out whole-from-the-start to one lane (the server refused to resume mid-file).
+    /// </summary>
+    public void Invalidate(int fileIndex, bool sequential = false)
+    {
+        lock (_lock)
+        {
+            _doneBytes -= _done[fileIndex].TotalLength;
+            _done[fileIndex] = new ByteRangeSet();
+            _unknownDone[fileIndex] = false;
+            if (sequential) _sequential[fileIndex] = true;
+        }
+    }
 }

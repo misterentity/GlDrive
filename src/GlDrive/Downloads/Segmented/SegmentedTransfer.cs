@@ -13,6 +13,7 @@ namespace GlDrive.Downloads.Segmented;
 public sealed class SegmentedTransfer
 {
     private static readonly TimeSpan IdleWait = TimeSpan.FromMilliseconds(200);
+    private static readonly TimeSpan WatchInterval = TimeSpan.FromMilliseconds(250);
 
     private readonly IReadOnlyList<TransferFile> _files;
     private readonly SegmentedTransferOptions _options;
@@ -46,13 +47,20 @@ public sealed class SegmentedTransfer
         public required RangeScheduler Scheduler;
         public required CancellationTokenSource Cts;
         public readonly int[] Committed;
+        // Readers open on each file. A file is only committed once none are, so a lane whose
+        // completion check (226, EOF) is still pending can still invalidate it.
+        public readonly int[] OpenReaders;
         public readonly List<LaneRun> Lanes = new();
         public readonly object Gate = new();
         public ExceptionDispatchInfo? LastLaneError;
         public ExceptionDispatchInfo? Fatal;
         private TaskCompletionSource _workSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Run(int fileCount) => Committed = new int[fileCount];
+        public Run(int fileCount)
+        {
+            Committed = new int[fileCount];
+            OpenReaders = new int[fileCount];
+        }
 
         public void PulseWork()
         {
@@ -272,6 +280,12 @@ public sealed class SegmentedTransfer
                 catch (Exception ex)
                 {
                     lock (run.Gate) run.LastLaneError = ExceptionDispatchInfo.Capture(ex);
+                    if (ex is RangeNotSupportedException)
+                    {
+                        Log.Warning("Download lane {Label}: {Message} — refetching {File} from the start on one lane",
+                            lane.Label, ex.Message, _files[a.FileIndex].LocalPath);
+                        InvalidateFile(run, a.FileIndex, sequential: true);
+                    }
                     if (ex is LaneBackoffException backoff)
                     {
                         Log.Information("Download lane {Label} backing off {Delay}: {Message}", lane.Label, backoff.Delay, ex.Message);
@@ -315,6 +329,18 @@ public sealed class SegmentedTransfer
         bool unknownSize = file.Size < 0;
         ISegmentReader? reader = null;
         bool finished = false;
+
+        // Reads and pacing waits on a stoppable lane run under readCts, which the watcher cancels
+        // when the lane must yield (the race wants its login back) or the data stops flowing —
+        // a blocked read would otherwise hold a borrowed race login indefinitely. Only managed
+        // streams (CPSV SslStream, HTTP) are interrupted this way; a GnuTLS data read must never
+        // be cancelled, so non-stoppable lanes read with the plain token as before.
+        using var readCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+        var readToken = lane.CanStopEarly ? readCts.Token : token;
+        int interrupt = 0; // 1 = yield, 2 = stall
+        int pacing = 0;    // a pacer wait is deliberate silence, not a stall
+        long lastActivity = Environment.TickCount64;
+        Task? watcher = null;
         try
         {
             lr.State = LaneState.Connecting;
@@ -322,47 +348,53 @@ public sealed class SegmentedTransfer
             {
                 reader = await lane.OpenAsync(file, a.Position, a.End, token);
             }
-            catch (Exception ex) when (!token.IsCancellationRequested)
+            catch (Exception ex)
             {
-                lane.Fault(ex);
+                // Any failed open may have left a control reply unread — cancellation included.
+                lane.Fault(token.IsCancellationRequested ? new OperationCanceledException(token) : ex);
                 throw;
             }
+            Interlocked.Increment(ref run.OpenReaders[a.FileIndex]);
             lr.State = LaneState.Active;
+
+            if (lane.CanStopEarly)
+                watcher = WatchAsync();
 
             while (true)
             {
-                if (lane.ShouldYield)
-                {
-                    run.Scheduler.Release(a);
-                    run.PulseWork();
-                    await reader.FinishAsync(false, token);
-                    finished = true;
-                    Log.Information("Download lane {Label} yielded at {Position} of {File}", lane.Label, a.Position, file.LocalPath);
-                    return RangeOutcome.Yielded;
-                }
+                if (Volatile.Read(ref interrupt) == 1 || lane.ShouldYield)
+                    return await YieldAsync();
 
                 long remaining = a.End - a.Position;
                 if (remaining <= 0)
                 {
                     bool eof = !unknownSize && a.Position >= file.Size;
                     run.Scheduler.Release(a);
-                    await reader.FinishAsync(eof, token);
-                    finished = true;
+                    await FinishAsync(eof);
                     return RangeOutcome.Finished;
                 }
 
                 int want = (int)Math.Min(buffer.Length, remaining);
-                int n = await reader.ReadAsync(buffer.AsMemory(0, want), token);
+                int n;
+                try
+                {
+                    n = await reader.ReadAsync(buffer.AsMemory(0, want), readToken);
+                }
+                catch (OperationCanceledException) when (!token.IsCancellationRequested && Volatile.Read(ref interrupt) != 0)
+                {
+                    if (Volatile.Read(ref interrupt) == 1) return await YieldAsync();
+                    throw new IOException($"No data for {_options.StallTimeout.TotalSeconds:0}s on {file.Key}");
+                }
                 if (n == 0)
                 {
                     if (!unknownSize)
                         throw new IOException($"Premature end of data at {a.Position} of {file.Key} (expected {a.End})");
                     run.Scheduler.CompleteUnknown(a);
                     run.Scheduler.Release(a);
-                    await reader.FinishAsync(true, token);
-                    finished = true;
+                    await FinishAsync(true);
                     return RangeOutcome.Finished;
                 }
+                Volatile.Write(ref lastActivity, Environment.TickCount64);
 
                 long allowed = run.Scheduler.Reserve(a, n);
                 if (allowed > 0)
@@ -383,7 +415,20 @@ public sealed class SegmentedTransfer
 
                 Interlocked.Add(ref lr.Bytes, n);
                 _options.OnBytes?.Invoke(lane.NetworkId, n);
-                if (_options.Pacer != null) await _options.Pacer.WaitAsync(lane.NetworkId, n, token);
+                if (_options.Pacer != null)
+                {
+                    Volatile.Write(ref pacing, 1);
+                    try
+                    {
+                        await _options.Pacer.WaitAsync(lane.NetworkId, n, readToken);
+                    }
+                    catch (OperationCanceledException) when (!token.IsCancellationRequested && Volatile.Read(ref interrupt) != 0)
+                    {
+                        if (Volatile.Read(ref interrupt) == 1) return await YieldAsync();
+                    }
+                    finally { Volatile.Write(ref pacing, 0); }
+                }
+                Volatile.Write(ref lastActivity, Environment.TickCount64);
             }
         }
         catch (Exception ex) when (reader != null && !finished)
@@ -394,22 +439,86 @@ public sealed class SegmentedTransfer
         }
         finally
         {
+            readCts.Cancel();
+            if (watcher != null) await watcher;
             run.Scheduler.Release(a);
             run.PulseWork();
             if (reader != null)
             {
                 try { await reader.DisposeAsync(); }
                 catch (Exception ex) { Log.Debug(ex, "Download reader dispose failed on lane {Label}", lane.Label); }
+                Interlocked.Decrement(ref run.OpenReaders[a.FileIndex]);
             }
             await CommitReadyFilesAsync(run);
         }
+
+        async Task<RangeOutcome> YieldAsync()
+        {
+            run.Scheduler.Release(a);
+            run.PulseWork();
+            await reader!.FinishAsync(false, token);
+            finished = true;
+            Log.Information("Download lane {Label} yielded at {Position} of {File}", lane.Label, a.Position, file.LocalPath);
+            return RangeOutcome.Yielded;
+        }
+
+        async Task FinishAsync(bool eof)
+        {
+            try
+            {
+                await reader!.FinishAsync(eof, token);
+            }
+            catch (Exception) when (eof && !token.IsCancellationRequested)
+            {
+                // Every byte arrived but the server would not confirm the file (extra bytes, no
+                // 226): don't publish it — fetch it again.
+                Log.Warning("Download of {File} was not confirmed by the server — refetching it", file.LocalPath);
+                InvalidateFile(run, a.FileIndex, sequential: false);
+                throw;
+            }
+            finished = true;
+        }
+
+        async Task WatchAsync()
+        {
+            try
+            {
+                while (!readCts.IsCancellationRequested)
+                {
+                    await Task.Delay(WatchInterval, readCts.Token);
+                    if (lane.ShouldYield)
+                    {
+                        Volatile.Write(ref interrupt, 1);
+                        readCts.Cancel();
+                        return;
+                    }
+                    if (Volatile.Read(ref pacing) == 1) Volatile.Write(ref lastActivity, Environment.TickCount64);
+                    else if (_options.StallTimeout > TimeSpan.Zero &&
+                        Environment.TickCount64 - Volatile.Read(ref lastActivity) > _options.StallTimeout.TotalMilliseconds)
+                    {
+                        Volatile.Write(ref interrupt, 2);
+                        readCts.Cancel();
+                        return;
+                    }
+                }
+            }
+            catch (OperationCanceledException) { }
+        }
+    }
+
+    private static void InvalidateFile(Run run, int fileIndex, bool sequential)
+    {
+        run.Scheduler.Invalidate(fileIndex, sequential);
+        run.Staged[fileIndex].ResetDone();
+        run.PulseWork();
     }
 
     private async Task CommitReadyFilesAsync(Run run)
     {
         for (int i = 0; i < _files.Count; i++)
         {
-            if (Volatile.Read(ref run.Committed[i]) != 0 || !run.Scheduler.IsFileComplete(i)) continue;
+            if (Volatile.Read(ref run.Committed[i]) != 0 || Volatile.Read(ref run.OpenReaders[i]) != 0
+                || !run.Scheduler.IsFileComplete(i)) continue;
             if (Interlocked.Exchange(ref run.Committed[i], 1) != 0) continue;
             try
             {

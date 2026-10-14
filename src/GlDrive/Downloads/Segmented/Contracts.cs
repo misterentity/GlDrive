@@ -136,6 +136,12 @@ public sealed class SegmentedTransferOptions
     /// <summary>Called when a file is fully written and committed to its final name.</summary>
     public Action<TransferFile>? OnFileCompleted { get; init; }
 
+    /// <summary>
+    /// A stoppable lane whose data stops flowing for this long is failed (its range goes back to
+    /// the scheduler). Zero disables. Lanes that cannot stop early are never interrupted.
+    /// </summary>
+    public TimeSpan StallTimeout { get; init; } = TimeSpan.FromSeconds(90);
+
     /// <summary>Minimum interval between progress reports.</summary>
     public TimeSpan ProgressInterval { get; init; } = TimeSpan.FromMilliseconds(500);
 }
@@ -169,3 +175,9 @@ public sealed class LaneBackoffException(string message, TimeSpan delay, Excepti
 {
     public TimeSpan Delay { get; } = delay;
 }
+
+/// <summary>
+/// The server refused to start mid-file (FTP REST rejected). The engine forgets the file's
+/// partial bytes and fetches it whole, from the start, on one lane.
+/// </summary>
+public sealed class RangeNotSupportedException(string message) : IOException(message);
