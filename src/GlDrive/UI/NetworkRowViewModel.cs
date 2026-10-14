@@ -30,11 +30,67 @@ public class NetworkRowViewModel : INotifyPropertyChanged
         }
     }
 
+    public string NameDisplay => string.IsNullOrEmpty(AdapterName) ? AdapterId : AdapterName;
+    public string AddressDisplay => IsConnected ? (string.IsNullOrEmpty(IPv4) ? "no ipv4" : IPv4) : "offline";
+
     public bool Use { get => _use; set { _use = value; OnPropertyChanged(); } }
     public string FriendlyName { get => _friendlyName; set { _friendlyName = value; OnPropertyChanged(); } }
     public string LimitKbps { get => _limitKbps; set { _limitKbps = value; OnPropertyChanged(); } }
-    public string AllowanceGb { get => _allowanceGb; set { _allowanceGb = value; OnPropertyChanged(); } }
-    public AllowancePeriod Period { get => _period; set { _period = value; OnPropertyChanged(); } }
+    public string AllowanceGb { get => _allowanceGb; set { _allowanceGb = value; OnPropertyChanged(); OnUsageChanged(); } }
+    public AllowancePeriod Period { get => _period; set { _period = value; OnPropertyChanged(); RefreshUsage(); } }
+
+    // ── Data usage this period (read-only view of NetworkUsageStore) ──
+
+    private long _usedBytes;
+
+    /// <summary>Reads usage for (adapter id, period); null when local state isn't read (screenshots, tests).</summary>
+    public Func<string, AllowancePeriod, long>? UsageLookup { get; set; }
+
+    /// <summary>With no allowance period set, usage is still shown for the current month.</summary>
+    public AllowancePeriod UsagePeriod => Period == AllowancePeriod.None ? AllowancePeriod.Monthly : Period;
+
+    public long UsedBytes { get => _usedBytes; set { _usedBytes = value; OnUsageChanged(); } }
+
+    public double AllowanceBytes =>
+        double.TryParse(AllowanceGb, NumberStyles.Float, CultureInfo.CurrentCulture, out var g) && g > 0 && Period != AllowancePeriod.None
+            ? g * 1024 * 1024 * 1024 : 0;
+
+    public bool HasAllowance => AllowanceBytes > 0;
+    public double UsageFraction => HasAllowance ? Math.Clamp(UsedBytes / AllowanceBytes, 0, 1) : 0;
+    public bool IsOverAllowance => HasAllowance && UsedBytes >= AllowanceBytes;
+
+    public string UsageText
+    {
+        get
+        {
+            var used = $"{UsedBytes / (1024.0 * 1024 * 1024):0.00}";
+            var period = UsagePeriod switch
+            {
+                AllowancePeriod.Daily => "today",
+                AllowancePeriod.Weekly => "this week",
+                _ => "this month",
+            };
+            return HasAllowance
+                ? $"{used} / {AllowanceBytes / (1024.0 * 1024 * 1024):0.##} GB {period}"
+                : $"{used} GB {period}";
+        }
+    }
+
+    public void RefreshUsage()
+    {
+        if (UsageLookup != null) UsedBytes = UsageLookup(AdapterId, UsagePeriod);
+        else OnUsageChanged();
+    }
+
+    private void OnUsageChanged()
+    {
+        OnPropertyChanged(nameof(UsedBytes));
+        OnPropertyChanged(nameof(UsagePeriod));
+        OnPropertyChanged(nameof(HasAllowance));
+        OnPropertyChanged(nameof(UsageFraction));
+        OnPropertyChanged(nameof(IsOverAllowance));
+        OnPropertyChanged(nameof(UsageText));
+    }
 
     public static AllowancePeriod[] PeriodOptions { get; } = Enum.GetValues<AllowancePeriod>();
 

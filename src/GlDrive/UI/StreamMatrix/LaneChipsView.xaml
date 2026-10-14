@@ -1,0 +1,36 @@
+<UserControl x:Class="GlDrive.UI.StreamMatrix.LaneChipsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:sm="clr-namespace:GlDrive.UI.StreamMatrix">
+    <!-- Neon lane chips for a downloads row: "◢ ETHERNET 42.1 MB/s". DataContext = StreamMatrixViewModel. -->
+    <ItemsControl ItemsSource="{Binding Chips}" Focusable="False">
+        <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+                <StackPanel Orientation="Horizontal"/>
+            </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+            <DataTemplate DataType="{x:Type sm:LaneChipVm}">
+                <Grid Margin="6,0,0,0">
+                    <Border x:Name="Chip" Padding="6,1,7,1" BorderThickness="1"
+                            BorderBrush="{Binding Brush}" Background="{DynamicResource StreamChipBackgroundBrush}">
+                        <Border.Effect>
+                            <DropShadowEffect Color="{Binding Color}" BlurRadius="7" ShadowDepth="0"
+                                              Opacity="{DynamicResource LaneGlowOpacity}"/>
+                        </Border.Effect>
+                        <TextBlock FontFamily="{DynamicResource StreamMonoFontFamily}" FontSize="10">
+                            <Run Text="{Binding Glyph, Mode=OneWay}" Foreground="{Binding Brush, Mode=OneWay}"/>
+                            <Run Text="{Binding Label, Mode=OneWay}" Foreground="{Binding Brush, Mode=OneWay}" FontWeight="Bold"/>
+                            <Run Text="{Binding Detail, Mode=OneWay}" Foreground="{DynamicResource StreamTextBrush}"/>
+                        </TextBlock>
+                    </Border>
+                </Grid>
+                <DataTemplate.Triggers>
+                    <DataTrigger Binding="{Binding IsLive}" Value="False">
+                        <Setter TargetName="Chip" Property="Opacity" Value="0.5"/>
+                    </DataTrigger>
+                </DataTemplate.Triggers>
+            </DataTemplate>
+        </ItemsControl.ItemTemplate>
+    </ItemsControl>
+</UserControl>

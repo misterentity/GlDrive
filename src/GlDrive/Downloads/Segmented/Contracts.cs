@@ -31,7 +31,26 @@ public enum LaneState { Connecting, Active, Idle, Yielded, Failed, Done }
 public sealed record LaneStats(string Label, string? NetworkId, long Bytes, double BytesPerSecond, LaneState State);
 
 public sealed record TransferProgress(
-    long DoneBytes, long TotalBytes, double BytesPerSecond, string? CurrentFile, IReadOnlyList<LaneStats> Lanes);
+    long DoneBytes, long TotalBytes, double BytesPerSecond, string? CurrentFile, IReadOnlyList<LaneStats> Lanes,
+    TransferMap? Map = null);
+
+/// <summary>
+/// Point-in-time copy of where every byte stands, for the stream-matrix view. Built only when
+/// progress is reported; nothing in it is shared with the engine.
+/// </summary>
+public sealed record TransferMap(IReadOnlyList<FileMap> Files, IReadOnlyList<SegmentSnapshot> InFlight);
+
+/// <summary>One file's completed ranges. <paramref name="Size"/> is -1 while unknown.</summary>
+public sealed record FileMap(string Name, long Size, IReadOnlyList<ByteRange> Done);
+
+/// <summary>
+/// One lane's in-flight range: [Start, Position) is written, [Position, End) still to fetch.
+/// End is long.MaxValue for an unknown-size file.
+/// </summary>
+public sealed record SegmentSnapshot(int FileIndex, long Start, long Position, long End, string Lane, string? NetworkId);
+
+/// <summary>Which lane holds an assignment — copied into <see cref="SegmentSnapshot"/>.</summary>
+public sealed record LaneTag(string Label, string? NetworkId);
 
 /// <summary>
 /// One connection the engine can pull ranges through. The engine owns the lane once handed

@@ -156,8 +156,22 @@ public class SettingsViewModel : INotifyPropertyChanged
             : [];
         Networks.Clear();
         foreach (var row in NetworkRowViewModel.Build(configured, candidates))
+        {
+            if (enumerate)
+            {
+                row.UsageLookup = DownloadNetworkServices.Usage.UsedThisPeriod;
+                row.RefreshUsage();
+            }
             Networks.Add(row);
+        }
     }
+
+    public ICommand ResetUsageCommand => new RelayCommand<NetworkRowViewModel>(row =>
+    {
+        if (row == null) return;
+        DownloadNetworkServices.Usage.Reset(row.AdapterId);
+        row.UsedBytes = 0;
+    });
 
     // Agent properties — bound directly to _config.Agent (no local backing field needed)
     public bool AgentEnabled

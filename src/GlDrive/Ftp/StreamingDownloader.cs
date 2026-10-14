@@ -93,7 +93,7 @@ public class StreamingDownloader
                 extra != null ? " (+ race login while idle)" : "");
 
             var reporter = progress == null ? null : new Progress<TransferProgress>(p =>
-                progress.Report(new DownloadProgress(p.DoneBytes, p.TotalBytes, p.BytesPerSecond, p.CurrentFile, p.Lanes)));
+                progress.Report(new DownloadProgress(p.DoneBytes, p.TotalBytes, p.BytesPerSecond, p.CurrentFile, p.Lanes, p.Map)));
 
             using (KeepAwake.Acquire())
             {

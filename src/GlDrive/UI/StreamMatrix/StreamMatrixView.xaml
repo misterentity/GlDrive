@@ -1,0 +1,197 @@
+<UserControl x:Class="GlDrive.UI.StreamMatrix.StreamMatrixView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:sm="clr-namespace:GlDrive.UI.StreamMatrix"
+             xmlns:seg="clr-namespace:GlDrive.Downloads.Segmented"
+             TextElement.FontFamily="{DynamicResource StreamMonoFontFamily}">
+    <UserControl.Resources>
+        <Style x:Key="ColHeader" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="9"/>
+            <Setter Property="Foreground" Value="{DynamicResource StreamTextFaintBrush}"/>
+            <Setter Property="FontFamily" Value="{DynamicResource StreamMonoFontFamily}"/>
+        </Style>
+        <Style x:Key="Cell" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Foreground" Value="{DynamicResource StreamTextBrush}"/>
+            <Setter Property="FontFamily" Value="{DynamicResource StreamMonoFontFamily}"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+        </Style>
+        <Style x:Key="ConfigButton" TargetType="Button">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Foreground" Value="{DynamicResource StreamSparkBrush}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="Transparent" Padding="8,2"
+                                BorderBrush="{DynamicResource StreamMatrixBorderBrush}" BorderThickness="1">
+                            <TextBlock Text="⚙ CONFIG" FontSize="10" Foreground="{TemplateBinding Foreground}"
+                                       FontFamily="{DynamicResource StreamMonoFontFamily}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource StreamSparkBrush}"/>
+                                <Setter TargetName="Bd" Property="Effect" Value="{DynamicResource LaneGlowEffect}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
+    <Border Background="{DynamicResource StreamMatrixBackgroundBrush}"
+            BorderBrush="{DynamicResource StreamMatrixBorderBrush}" BorderThickness="1"
+            SnapsToDevicePixels="True">
+        <Grid>
+            <DockPanel>
+                <!-- Header: ▚ STREAM MATRIX // 2 LINKS // AGG 84.2 MB/s // ETA 00:03:12 -->
+                <Border DockPanel.Dock="Top" Padding="12,7" Background="{DynamicResource StreamMatrixHeaderBrush}"
+                        BorderBrush="{DynamicResource StreamGridLineBrush}" BorderThickness="0,0,0,1">
+                    <DockPanel LastChildFill="True">
+                        <Button DockPanel.Dock="Right" Style="{StaticResource ConfigButton}" Margin="12,0,0,0"
+                                Click="Config_Click" ToolTip="Open Settings → Streams &amp; uplinks"/>
+                        <TextBlock DockPanel.Dock="Right" Text="{Binding ReleaseName}" FontSize="10" MaxWidth="420"
+                                   Foreground="{DynamicResource StreamTextDimBrush}" VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"/>
+                        <TextBlock FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis">
+                            <Run Text="▚ STREAM MATRIX" FontWeight="Bold" Foreground="{DynamicResource StreamSparkBrush}"/>
+                            <Run Text=" // " Foreground="{DynamicResource StreamTextFaintBrush}"/>
+                            <Run Text="{Binding HeaderLinks, Mode=OneWay}" Foreground="{DynamicResource StreamTextBrush}"/>
+                            <Run Text=" // AGG " Foreground="{DynamicResource StreamTextFaintBrush}"/>
+                            <Run Text="{Binding HeaderAgg, Mode=OneWay}" FontWeight="Bold" Foreground="{DynamicResource LaneBrush2}"/>
+                            <Run Text=" // ETA " Foreground="{DynamicResource StreamTextFaintBrush}"/>
+                            <Run Text="{Binding HeaderEta, Mode=OneWay}" Foreground="{DynamicResource LaneBrush3}"/>
+                        </TextBlock>
+                    </DockPanel>
+                </Border>
+
+                <Grid Margin="12,10,12,10">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <sm:SegmentGridControl x:Name="SegmentGrid" Grid.Row="0" Height="74"
+                                           Model="{Binding Grid}" Version="{Binding Version}"/>
+
+                    <DockPanel Grid.Row="1" Margin="0,6,0,8">
+                        <TextBlock DockPanel.Dock="Right" FontSize="10" Foreground="{DynamicResource StreamTextDimBrush}">
+                            <Run Text="▸ " Foreground="{DynamicResource StreamFileSeparatorBrush}"/><Run Text="{Binding CurrentFile, Mode=OneWay}"/>
+                        </TextBlock>
+                        <TextBlock Text="{Binding StatsLine}" FontSize="10" Foreground="{DynamicResource StreamTextDimBrush}"/>
+                    </DockPanel>
+
+                    <Grid Grid.Row="2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="16"/>
+                            <ColumnDefinition Width="340"/>
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Lane table -->
+                        <StackPanel Grid.Column="0">
+                            <Grid Margin="0,0,0,3">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="18"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="80"/>
+                                    <ColumnDefinition Width="118"/>
+                                    <ColumnDefinition Width="86"/>
+                                    <ColumnDefinition Width="80"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="1" Text="LANE" Style="{StaticResource ColHeader}"/>
+                                <TextBlock Grid.Column="2" Text="NET" Style="{StaticResource ColHeader}"/>
+                                <TextBlock Grid.Column="3" Text="STATE" Style="{StaticResource ColHeader}"/>
+                                <TextBlock Grid.Column="4" Text="RATE" Style="{StaticResource ColHeader}" HorizontalAlignment="Right"/>
+                                <TextBlock Grid.Column="5" Text="BYTES" Style="{StaticResource ColHeader}" HorizontalAlignment="Right"/>
+                            </Grid>
+                            <Rectangle Height="1" Fill="{DynamicResource StreamGridLineBrush}" Margin="0,0,0,2"/>
+                            <ItemsControl ItemsSource="{Binding Lanes}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate DataType="{x:Type sm:LaneRowVm}">
+                                        <Grid Height="20">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="18"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="80"/>
+                                                <ColumnDefinition Width="118"/>
+                                                <ColumnDefinition Width="86"/>
+                                                <ColumnDefinition Width="80"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Rectangle Grid.Column="0" Width="9" Height="9" HorizontalAlignment="Left"
+                                                       Fill="{Binding Brush}">
+                                                <Rectangle.Effect>
+                                                    <DropShadowEffect Color="{Binding Color}" BlurRadius="8" ShadowDepth="0"
+                                                                      Opacity="{DynamicResource LaneGlowOpacity}"/>
+                                                </Rectangle.Effect>
+                                            </Rectangle>
+                                            <TextBlock Grid.Column="1" Text="{Binding Lane}" Style="{StaticResource Cell}"/>
+                                            <TextBlock Grid.Column="2" Text="{Binding Net}" Style="{StaticResource Cell}"
+                                                       Foreground="{DynamicResource StreamTextDimBrush}"/>
+                                            <TextBlock Grid.Column="3" Text="{Binding StateText}">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock" BasedOn="{StaticResource Cell}">
+                                                        <Setter Property="Foreground" Value="{DynamicResource StreamTextDimBrush}"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding State}" Value="{x:Static seg:LaneState.Active}">
+                                                                <Setter Property="Foreground" Value="{Binding Brush}"/>
+                                                                <Setter Property="FontWeight" Value="Bold"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding State}" Value="{x:Static seg:LaneState.Connecting}">
+                                                                <Setter Property="Foreground" Value="{DynamicResource StreamSparkBrush}"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding State}" Value="{x:Static seg:LaneState.Yielded}">
+                                                                <Setter Property="Foreground" Value="{DynamicResource StreamWarnBrush}"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding State}" Value="{x:Static seg:LaneState.Failed}">
+                                                                <Setter Property="Foreground" Value="{DynamicResource StreamBadBrush}"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding State}" Value="{x:Static seg:LaneState.Done}">
+                                                                <Setter Property="Foreground" Value="{DynamicResource StreamGoodBrush}"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                            <TextBlock Grid.Column="4" Text="{Binding Rate}" Style="{StaticResource Cell}"
+                                                       HorizontalAlignment="Right"/>
+                                            <TextBlock Grid.Column="5" Text="{Binding Bytes}" Style="{StaticResource Cell}"
+                                                       HorizontalAlignment="Right" Foreground="{DynamicResource StreamTextDimBrush}"/>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+
+                        <!-- Throughput sparkline -->
+                        <Border Grid.Column="2" BorderBrush="{DynamicResource StreamGridLineBrush}" BorderThickness="1"
+                                Background="{DynamicResource StreamMatrixHeaderBrush}">
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Top" Margin="6,3,6,0" FontSize="9"
+                                           Foreground="{DynamicResource StreamTextFaintBrush}">
+                                    <Run Text="THROUGHPUT"/><Run Text=" // 60s // AGG + LANES"/>
+                                </TextBlock>
+                                <sm:ThroughputSparkline Height="74" Margin="2,2,2,2"
+                                                        History="{Binding History}" Version="{Binding Version}"/>
+                            </DockPanel>
+                        </Border>
+                    </Grid>
+                </Grid>
+            </DockPanel>
+
+            <!-- CRT scanlines (Cyberpunk only; the key is absent elsewhere so this stays empty) -->
+            <Rectangle Fill="{DynamicResource ScanlineOverlayBrush}" Opacity="0.35" IsHitTestVisible="False"/>
+            <!-- HUD corner brackets -->
+            <Border Width="10" Height="10" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="-1,-1,0,0"
+                    BorderBrush="{DynamicResource StreamSparkBrush}" BorderThickness="1,1,0,0" IsHitTestVisible="False"/>
+            <Border Width="10" Height="10" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-1,-1,0"
+                    BorderBrush="{DynamicResource StreamSparkBrush}" BorderThickness="0,1,1,0" IsHitTestVisible="False"/>
+            <Border Width="10" Height="10" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="-1,0,0,-1"
+                    BorderBrush="{DynamicResource StreamSparkBrush}" BorderThickness="1,0,0,1" IsHitTestVisible="False"/>
+            <Border Width="10" Height="10" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,-1,-1"
+                    BorderBrush="{DynamicResource StreamSparkBrush}" BorderThickness="0,0,1,1" IsHitTestVisible="False"/>
+        </Grid>
+    </Border>
+</UserControl>
