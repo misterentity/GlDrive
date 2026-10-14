@@ -331,8 +331,8 @@ public class SettingsViewModel : INotifyPropertyChanged
     {
         var dlg = new Microsoft.Win32.OpenFileDialog
         {
-            InitialDirectory = System.IO.Path.Combine(
-                GlDrive.Config.ConfigManager.AppDataPath, "ai-data", "ai-snapshots"),
+            InitialDirectory = GlDrive.Util.DialogPaths.ExistingDirectoryOrNull(System.IO.Path.Combine(
+                GlDrive.Config.ConfigManager.AppDataPath, "ai-data", "ai-snapshots")) ?? "",
             Filter = "Snapshot (*.json)|*.json"
         };
         if (dlg.ShowDialog() != true) return;
