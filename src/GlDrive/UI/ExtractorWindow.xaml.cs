@@ -2005,7 +2005,14 @@ public partial class ExtractorWindow : Window
         if (!_abandonStore.ShouldSkip(path, volumeCount, totalBytes)) return false;
 
         Log.Information("Extractor: skipping {Path} — unchanged volume set already ruled unextractable", path);
-        lock (_watchLock) _watchProcessed.Add(path);
+        lock (_watchLock)
+        {
+            // A restart reloads only the durable store. Register its parked paths with
+            // the live ledger too, so the sweep can see growth and the watcher can clear
+            // _watchProcessed when a new or resized part makes this verdict obsolete.
+            _watchAbandoned.Abandon(path, volumeCount, totalBytes);
+            _watchProcessed.Add(path);
+        }
         return true;
     }
 
