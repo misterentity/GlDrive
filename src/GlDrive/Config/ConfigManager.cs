@@ -82,6 +82,9 @@ public class ConfigManager
     }
 
     public static void Save(AppConfig config)
+        => SecureFile.WithPathLock(ConfigFilePath, () => SaveCore(config));
+
+    private static void SaveCore(AppConfig config)
     {
         if (ReadOnly)
         {

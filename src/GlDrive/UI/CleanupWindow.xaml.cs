@@ -67,7 +67,7 @@ public partial class CleanupWindow : Window
             ScanHint.Visibility = Visibility.Visible;
     }
 
-    private static List<CleanupItem> ScanForLeftovers(string rootPath)
+    internal static List<CleanupItem> ScanForLeftovers(string rootPath)
     {
         var results = new List<CleanupItem>();
 
@@ -78,6 +78,7 @@ public partial class CleanupWindow : Window
             {
                 RecurseSubdirectories = true,
                 IgnoreInaccessible = true,
+                AttributesToSkip = FileAttributes.ReparsePoint | FileAttributes.System | FileAttributes.Hidden,
                 MaxRecursionDepth = 5
             });
         }

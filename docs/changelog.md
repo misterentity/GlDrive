@@ -12,7 +12,11 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
-## v3.10.156 — multi-stream / multi-network downloads (2026-10-14)
+## v3.11.0 — MCP automation + multi-stream / multi-network downloads (2026-10-14)
+
+- **MCP automation** — local MCP server for Claude Code, Claude Desktop and Codex over the authenticated loopback control API; see the [release notes](releases/v3.11.0.md) and `docs/mcp.md`.
+
+### Multi-stream / multi-network downloads
 
 Inspired by [plexo](https://github.com/anmolkapil/plexo). Downloads only. FXP racing is untouched, apart from lending its idle login (below).
 

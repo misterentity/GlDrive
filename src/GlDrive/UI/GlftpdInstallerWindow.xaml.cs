@@ -258,7 +258,7 @@ public partial class GlftpdInstallerWindow : Window
         sb.AppendLine();
 
         void Line(string key, string val, string comment) =>
-            sb.AppendLine($"{key}=\"{val}\" # {comment}");
+            sb.AppendLine($"{key}={QuoteInstallerValue(val)} # {comment}");
 
         Line("sitename", Sitename.Text, "Name of the site");
         Line("port", FtpPort.Text, "Port for the FTP");
@@ -361,26 +361,43 @@ public partial class GlftpdInstallerWindow : Window
     // ── Installation ──
 
     private async void Install_Click(object sender, RoutedEventArgs e)
+        => await RunInstallationAsync(interactive: true, CancellationToken.None);
+
+    private async Task RunInstallationAsync(bool interactive, CancellationToken ct)
     {
         if (_ssh == null || !_ssh.IsConnected)
         {
+            if (!interactive) throw new InvalidOperationException("Connect via SSH first");
             ShowError("Connect via SSH first");
             return;
         }
-        if (_installing) return;
+        if (_installing)
+        {
+            if (!interactive) throw new InvalidOperationException("Installation is already running.");
+            return;
+        }
 
         var errors = Validate();
         if (errors.Count > 0)
         {
+            if (!interactive) throw new ArgumentException(string.Join("; ", errors));
             ShowError("Fix the following:\n\n" + string.Join("\n", errors.Select(e => $"- {e}")));
             return;
         }
 
         var host = SshHost.Text;
-        if (MessageBox.Show($"Install glFTPd on {host}?\n\nThis will modify the remote server.",
+        if (interactive && MessageBox.Show($"Install glFTPd on {host}?\n\nThis will modify the remote server.",
                 "Confirm Installation", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
             return;
 
+        // Capture all WPF values before running background SSH work.
+        var sudoPassword = SshPassword.Password;
+        string cacheContent;
+        try { cacheContent = GenerateCache(); }
+        catch (ArgumentException ex) when (interactive) { ShowError(ex.Message); return; }
+        using var installationCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _installationCancellation = installationCancellation;
+        ct = installationCancellation.Token;
         _installing = true;
         InstallButton.IsEnabled = false;
         ProgressBar.Value = 0;
@@ -397,11 +414,7 @@ public partial class GlftpdInstallerWindow : Window
         {
             // Step 1: Create remote dir
             UpdateProgress(1, totalSteps, "CREATING DIR");
-            await Task.Run(() =>
-            {
-                var cmd = _ssh!.RunCommand($"umask 077 && mkdir -p '{remotePath.Replace("'", "'\\''")}' && chmod 700 '{remotePath.Replace("'", "'\\''")}'");
-                if (cmd.ExitStatus != 0) throw new Exception($"mkdir failed: {cmd.Error}");
-            });
+            await AutomationCommand($"umask 077 && mkdir -p '{remotePath}' && chmod 700 '{remotePath}'", ct);
             AppendLog("Created installation directory");
 
             // Step 2: Transfer install.sh
@@ -412,7 +425,8 @@ public partial class GlftpdInstallerWindow : Window
                 AppendLog($"install.sh not found at {installShPath}", "error");
                 throw new FileNotFoundException("install.sh not found. Place glftpd-installer repo in Documents.");
             }
-            await Task.Run(() => _sftp!.UploadFile(File.OpenRead(installShPath), $"{remotePath}/install.sh", true));
+            using (var script = File.OpenRead(installShPath))
+                await _sftp!.UploadFileAsync(script, $"{remotePath}/install.sh", ct);
             AppendLog("Transferred install.sh");
 
             // Step 2b: Transfer packages directory if it exists
@@ -420,45 +434,38 @@ public partial class GlftpdInstallerWindow : Window
             if (Directory.Exists(packagesPath))
             {
                 AppendLog("Transferring packages...");
-                await Task.Run(() => UploadDirectory(packagesPath, $"{remotePath}/packages"));
+                await UploadDirectoryAsync(packagesPath, $"{remotePath}/packages", ct);
                 AppendLog("Transferred packages directory");
             }
 
             // Step 3: Transfer config
             UpdateProgress(3, totalSteps, "TRANSFERRING CONFIG");
-            var cacheContent = GenerateCache();
-            await Task.Run(() =>
-            {
-                using var stream = new MemoryStream(Encoding.UTF8.GetBytes(cacheContent));
-                _sftp!.UploadFile(stream, $"{remotePath}/install.cache", true);
-            });
+            using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(cacheContent)))
+                await _sftp!.UploadFileAsync(stream, $"{remotePath}/install.cache", ct);
             AppendLog("Transferred install.cache");
 
             // Step 4: chmod
             UpdateProgress(4, totalSteps, "SETTING UP");
-            await Task.Run(() =>
-            {
-                var escapedPath = remotePath.Replace("'", "'\\''");
-                var cmd = _ssh!.RunCommand($"chmod 700 '{escapedPath}/install.sh' && chmod 600 '{escapedPath}/install.cache'");
-                if (cmd.ExitStatus != 0) throw new Exception($"chmod failed: {cmd.Error}");
-            });
+            await AutomationCommand($"chmod 700 '{remotePath}/install.sh' && chmod 600 '{remotePath}/install.cache'", ct);
             AppendLog("Made install.sh executable");
 
             // Step 5+: Execute install.sh with streaming output
             UpdateProgress(stageStep, totalSteps, "INSTALLING");
-            await Task.Run(() =>
+            await Task.Run(async () =>
             {
-                using var shellCmd = _ssh!.CreateCommand($"sudo -S '{remotePath.Replace("'", "'\\''")}/install.sh'");
+                using var shellCmd = _ssh!.CreateCommand($"cd '{remotePath}' && sudo -S './install.sh'");
                 shellCmd.CommandTimeout = TimeSpan.FromMinutes(30);
 
-                var asyncResult = shellCmd.BeginExecute();
+                var execution = shellCmd.ExecuteAsync(ct);
+                _ = execution.ContinueWith(t => { _ = t.Exception; }, CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
 
                 // Send password for sudo
                 using (var inputStream = shellCmd.CreateInputStream())
                 {
-                    var pwBytes = Encoding.UTF8.GetBytes(SshPassword.Password + "\n");
-                    inputStream.Write(pwBytes, 0, pwBytes.Length);
-                    inputStream.Flush();
+                    var pwBytes = Encoding.UTF8.GetBytes(sudoPassword + "\n");
+                    await inputStream.WriteAsync(pwBytes, ct);
+                    await inputStream.FlushAsync(ct);
                 }
 
                 // Stream stdout
@@ -466,9 +473,9 @@ public partial class GlftpdInstallerWindow : Window
                 var buf = new char[4096];
                 var lineBuf = new StringBuilder();
 
-                while (!asyncResult.IsCompleted || !reader.EndOfStream)
+                while (true)
                 {
-                    var read = reader.Read(buf, 0, buf.Length);
+                    var read = await reader.ReadAsync(buf.AsMemory(), ct);
                     if (read > 0)
                     {
                         lineBuf.Append(buf, 0, read);
@@ -494,11 +501,11 @@ public partial class GlftpdInstallerWindow : Window
                     }
                     else
                     {
-                        Thread.Sleep(50);
+                        break;
                     }
                 }
 
-                shellCmd.EndExecute(asyncResult);
+                await execution;
 
                 // Remaining buffer
                 if (lineBuf.Length > 0)
@@ -514,29 +521,34 @@ public partial class GlftpdInstallerWindow : Window
 
             installOk = true;
             UpdateProgress(totalSteps, totalSteps, "COMPLETE");
-            await Task.Run(() => _ssh!.RunCommand($"rm -rf '{remotePath.Replace("'", "'\\''")}'"));
+            await AutomationCommand($"rm -rf '{remotePath}'", ct);
             AppendLog("Installation completed successfully!", "success");
-            MessageBox.Show("Installation completed!", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
+            StatusBar.Text = "Installation completed";
+            if (interactive) MessageBox.Show("Installation completed!", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
+            StatusBar.Text = ct.IsCancellationRequested ? "Installation cancelled" : "Installation failed";
+            ProgressLabel.Text = ct.IsCancellationRequested ? "CANCELLED" : "FAILED";
             AppendLog($"Error: {ex.Message}", "error");
             if (!installOk)
                 AppendLog($"Non-secret remote files kept at {remotePath} for debugging", "warning");
-            MessageBox.Show($"Installation failed: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            if (interactive) MessageBox.Show($"Installation failed: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            else throw;
         }
         finally
         {
             try
             {
                 if (_ssh?.IsConnected == true)
-                    await Task.Run(() => _ssh.RunCommand($"rm -f '{remotePath.Replace("'", "'\\''")}/install.cache'"));
+                    await AutomationCommand($"rm -f '{remotePath}/install.cache'", CancellationToken.None);
             }
             catch (Exception cleanupEx)
             {
                 Log.Warning(cleanupEx, "Failed to remove remote installer secrets");
             }
             _installing = false;
+            _installationCancellation = null;
             InstallButton.IsEnabled = true;
             _elapsedTimer.Stop();
             _stopwatch?.Stop();

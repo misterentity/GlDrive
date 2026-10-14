@@ -43,6 +43,7 @@ public class IrcService : IDisposable
     private CancellationTokenSource? _cts;
     private Task? _serviceTask;
     private readonly Dictionary<string, IrcChannel> _channels = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _channelStateLock = new();
     // Pending DH1080 exchanges. Bounded to prevent memory exhaustion via NOTICE floods.
     // Entries carry a timestamp so we can LRU-evict and TTL-expire.
     private readonly Dictionary<string, (Dh1080 dh, DateTime createdAt)> _pendingKeyExchanges =
@@ -103,6 +104,15 @@ public class IrcService : IDisposable
     public string ServerId => _serverConfig.Id;
     public string ServerName => _serverConfig.Name;
     public IReadOnlyDictionary<string, IrcChannel> Channels => _channels;
+    /// <summary>Detached channel/member snapshot for readers outside the IRC receive loop.</summary>
+    public IReadOnlyList<IrcChannel> GetChannelSnapshot()
+    {
+        lock (_channelStateLock)
+            return _channels.Values.Select(c => new IrcChannel
+            {
+                Name = c.Name, Topic = c.Topic, HasFishKey = c.HasFishKey, Nicks = c.Nicks.ToList()
+            }).ToArray();
+    }
     /// <summary>Targets (channels, PM nicks, "*") that have scrollback history.</summary>
     public IReadOnlyList<string> GetScrollbackTargets() => _scrollback.Targets;
     /// <summary>Chronological snapshot of one target's scrollback.</summary>
@@ -279,7 +289,7 @@ public class IrcService : IDisposable
         SetState(IrcServiceState.Connecting);
         AddSystemMessage("*", $"Connecting to {irc.Host}:{irc.Port}...");
 
-        _channels.Clear();
+        lock (_channelStateLock) _channels.Clear();
         _pendingInviteJoins.Clear();
         _invitedChannels.Clear();
 
@@ -346,6 +356,11 @@ public class IrcService : IDisposable
     }
 
     private void HandleMessage(IrcMessage msg)
+    {
+        lock (_channelStateLock) HandleMessageCore(msg);
+    }
+
+    private void HandleMessageCore(IrcMessage msg)
     {
         // Track liveness — any message from server means connection is alive
         _lastPongOrMessage = DateTime.UtcNow;
@@ -1624,16 +1639,18 @@ public class IrcService : IDisposable
     public void SetFishKey(string target, string key, FishMode mode)
     {
         _fishKeyStore.SetKey(target, key, mode);
-        if (_channels.TryGetValue(target, out var ch))
-            ch.HasFishKey = true;
+        lock (_channelStateLock)
+            if (_channels.TryGetValue(target, out var ch))
+                ch.HasFishKey = true;
         AddSystemMessage(target, $"FiSH key set ({mode}, manual)");
     }
 
     public void RemoveFishKey(string target)
     {
         _fishKeyStore.RemoveKey(target);
-        if (_channels.TryGetValue(target, out var ch))
-            ch.HasFishKey = false;
+        lock (_channelStateLock)
+            if (_channels.TryGetValue(target, out var ch))
+                ch.HasFishKey = false;
         AddSystemMessage(target, "FiSH key removed");
     }
 

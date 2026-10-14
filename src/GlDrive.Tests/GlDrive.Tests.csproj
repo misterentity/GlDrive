@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\GlDrive\GlDrive.csproj" />
+    <ProjectReference Include="..\GlDrive.Mcp\GlDrive.Mcp.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 

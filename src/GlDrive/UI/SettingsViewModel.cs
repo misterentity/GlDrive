@@ -13,6 +13,8 @@ public class SettingsViewModel : INotifyPropertyChanged
 {
     private AppConfig _config;
     private string _logLevel;
+    public bool ControlApiEnabled { get; set; }
+    public string ControlApiPort { get; set; } = "8756";
     private string _trustedCertsInfo;
     private string _downloadLocalPath;
     private string _maxConcurrentDownloads;
@@ -55,6 +57,8 @@ public class SettingsViewModel : INotifyPropertyChanged
     public SettingsViewModel(AppConfig config, bool readLocalState = true)
     {
         _config = config;
+        ControlApiEnabled = config.ControlApi.Enabled;
+        ControlApiPort = config.ControlApi.Port.ToString();
         _logLevel = config.Logging.Level;
         _trustedCertsInfo = readLocalState ? GetCertsInfo() : "No trusted certificates.";
         _downloadLocalPath = config.Downloads.LocalPath;
@@ -343,6 +347,9 @@ public class SettingsViewModel : INotifyPropertyChanged
     public void ApplyTo(AppConfig config)
     {
         config.Logging.Level = LogLevel;
+        config.ControlApi.Enabled = ControlApiEnabled;
+        config.ControlApi.Port = int.TryParse(ControlApiPort, out var apiPort) && apiPort is >= 1024 and <= 65535 ? apiPort : 8756;
+        GlDrive.Services.ControlApi.EnsureToken(config);
         config.Downloads.LocalPath = DownloadLocalPath;
         config.Downloads.MaxConcurrentDownloads = int.TryParse(MaxConcurrentDownloads, out var mcd) ? Math.Clamp(mcd, 1, 5) : 1;
         config.Downloads.StreamingBufferSizeKb = int.TryParse(StreamingBufferSize, out var sbs) ? Math.Clamp(sbs, 64, 4096) : 256;

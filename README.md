@@ -320,6 +320,7 @@ Use **Add or Remove Programs**. The uninstaller intentionally leaves `%AppData%\
 
 ## Documentation
 
+- [docs/mcp.md](docs/mcp.md) — connect Claude or Codex to read and control the running app through MCP
 - [docs/project-overview-pdr.md](docs/project-overview-pdr.md) — what the project is, why it exists, success criteria
 - [docs/codebase-summary.md](docs/codebase-summary.md) — subsystem inventory, folder layout, dependencies
 - [docs/system-architecture.md](docs/system-architecture.md) — Mermaid diagrams, CPSV, FXP, IRC, update flow

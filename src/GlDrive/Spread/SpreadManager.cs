@@ -93,6 +93,21 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
 
     public RaceHistoryStore History => _history;
 
+    /// <summary>A detached snapshot of requests waiting for a race slot.</summary>
+    public IReadOnlyList<PersistedRace> QueuedRaces
+    {
+        get { lock (_lock) return _raceQueue.Select(r => r with { ServerIds = r.ServerIds.ToList() }).ToArray(); }
+    }
+
+    /// <summary>Cancel a waiting request without interrupting already active transfers.</summary>
+    public bool RemoveQueuedRace(string section, string releaseName)
+    {
+        bool removed;
+        lock (_lock) removed = _raceQueue.RemoveAll(r => IsSameRace(r.Section, r.ReleaseName, section, releaseName)) > 0;
+        if (removed) PersistQueue();
+        return removed;
+    }
+
     /// <summary>
     /// PRD O2 — per-server pool health snapshot. Returns one entry per known
     /// spread pool with live counters (size/active/created/quarantine), BNC
