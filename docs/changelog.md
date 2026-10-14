@@ -12,6 +12,18 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.11.1 — STREAM MATRIX UI for multi-stream downloads (2026-10-14)
+
+- **Features**
+  - Cyberpunk **STREAM MATRIX** live view on the Downloads tab: a segment grid coloured by the lane that fetched each block, with write heads and resumed bytes shown; a lane table; and a 60 s throughput sparkline. Fed by a read-only transfer snapshot.
+  - Neon lane chips on download rows.
+  - A dedicated Settings → **STREAMS & UPLINKS** tab holding every multi-stream option, the global speed limit, Slow mode, and uplinks with usage bars against each allowance and a reset.
+- **Fixes** (Codex UI review)
+  - The ETA no longer overflows during a stall, which used to freeze the matrix.
+  - A late progress report no longer resurrects a finished download's matrix.
+  - The uplink table stays readable at the Settings window's minimum width.
+- Also ships the project-review fixes already on master (`0796c63`: transfers, mounts, AI settings).
+
 ## v3.11.0 — MCP automation + multi-stream / multi-network downloads (2026-10-14)
 
 - **MCP automation** — local MCP server for Claude Code, Claude Desktop and Codex over the authenticated loopback control API; see the [release notes](releases/v3.11.0.md) and `docs/mcp.md`.
@@ -26,7 +38,7 @@ Inspired by [plexo](https://github.com/anmolkapil/plexo). Downloads only. FXP ra
   - Staged `.gdpart` files with validated resume: FTP uses SIZE+MDTM and HTTP uses ETag/Last-Modified, so a resume never splices two versions together. Files take their final name only once the server confirms EOF.
   - Pacing: one app-wide total limit, Slow mode (tray), per-server and per-network limits. Data allowances per network per day, week or month; when every selected network is over its allowance, downloads park instead of failing.
   - HTTP update downloads use ranged multi-connection lanes, with the old single GET as fallback. Torrents get the speed caps.
-  - Cyberpunk STREAM MATRIX live view (segment grid by lane, lane table, throughput sparkline), lane chips on download rows, and a new Settings → STREAMS & UPLINKS tab.
+  - Settings: a Networks & streams group on Performance (replaced by a dedicated tab in v3.11.1).
 - **Fixes**
   - Connection pool: a borrower waiting at capacity is woken when a connection is discarded. Before, it could wait forever for a connection that would never come back.
 - Plan: `docs/superpowers/plans/2026-10-14-multistream-downloads.md`. Reviewed cross-model with Codex over 4 rounds.
