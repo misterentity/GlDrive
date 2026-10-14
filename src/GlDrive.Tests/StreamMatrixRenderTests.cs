@@ -81,6 +81,29 @@ public class StreamMatrixRenderTests
             Render(BuildRows(matrix), $"multistream-row-{name}.png");
             Render(BuildSettings(), $"multistream-settings-{name}.png");
         }
+
+        AssertUplinkTableFitsNarrowSettings();
+    }
+
+    // Settings opens no narrower than MinWidth=900; after the window and tab chrome the panel gets
+    // well under 800px. The uplink table's fixed columns once took all of it, collapsing the
+    // adapter column to zero so you couldn't tell which network a row edited (Codex UI review).
+    private static void AssertUplinkTableFitsNarrowSettings()
+    {
+        var panel = BuildSettings();
+        panel.Width = 760;
+        var root = new Window
+        {
+            Content = panel, SizeToContent = SizeToContent.WidthAndHeight, WindowStyle = WindowStyle.None,
+            ShowInTaskbar = false, ShowActivated = false, Left = -20000, Top = -20000,
+        };
+        root.Show();
+        Pump();
+        panel.UpdateLayout();
+        var names = FindAll<TextBlock>(panel).Where(t => t.Text is "Ethernet" or "Cellular (5G tether)").ToList();
+        root.Close();
+        Assert.NotEmpty(names);
+        Assert.All(names, t => Assert.True(t.ActualWidth >= 100, $"adapter column only {t.ActualWidth:0}px wide at 760px"));
     }
 
     // A 6-volume release mid-transfer: Ethernet and the race login racing through it, a tether

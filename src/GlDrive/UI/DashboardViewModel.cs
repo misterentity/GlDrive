@@ -1569,7 +1569,9 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                 vm.StreamsText = GlDrive.Downloads.Segmented.LaneSummary.Format(progress.Lanes);
             }
 
-            if (progress.Map != null || progress.Lanes is { Count: > 0 })
+            // Progress hops through two async callbacks, so a last report can land after the
+            // status change that removed this download's matrix — don't resurrect it.
+            if (item.Status == DownloadStatus.Downloading && (progress.Map != null || progress.Lanes is { Count: > 0 }))
             {
                 if (!_streamMatrices.TryGetValue(item.Id, out var matrix))
                     _streamMatrices[item.Id] = matrix = new GlDrive.UI.StreamMatrix.StreamMatrixViewModel(item.ReleaseName);
