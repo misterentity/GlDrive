@@ -1,3 +1,5 @@
+using System.IO;
+
 namespace GlDrive.Downloads.Segmented;
 
 // Shared contracts for multi-stream downloads (plexo-style). One transfer = a list of files
@@ -154,4 +156,16 @@ public interface IRaceLoginLender
     /// what the spread pool itself would.
     /// </summary>
     Task<GlDrive.Ftp.PooledConnection?> TryBorrowAsync(string serverId, TimeSpan wait, CancellationToken ct);
+}
+
+/// <summary>
+/// A lane was refused by the server in a way that says "fewer connections, please" (HTTP
+/// 403/429/503, no response). The engine parks the lane for <see cref="Delay"/> without
+/// counting it toward the lane's failure budget — plexo's "drop to the accepted stream count,
+/// regain one per minute" behavior.
+/// </summary>
+public sealed class LaneBackoffException(string message, TimeSpan delay, Exception? inner = null)
+    : IOException(message, inner)
+{
+    public TimeSpan Delay { get; } = delay;
 }
