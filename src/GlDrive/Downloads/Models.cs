@@ -67,7 +67,8 @@ public record ParsedRelease(
     bool IsSeasonPack,
     string? Source = null);
 
-public record DownloadProgress(long DownloadedBytes, long TotalBytes, double BytesPerSecond, string? CurrentFileName = null);
+public record DownloadProgress(long DownloadedBytes, long TotalBytes, double BytesPerSecond, string? CurrentFileName = null,
+    IReadOnlyList<GlDrive.Downloads.Segmented.LaneStats>? Lanes = null);
 
 /// <summary>
 /// Sanitizes a string for use as a Windows path segment (file or folder name).

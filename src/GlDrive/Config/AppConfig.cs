@@ -235,6 +235,8 @@ public class DownloadConfig
     public int ScheduleStartHour { get; set; }
     public int ScheduleEndHour { get; set; } = 6;
     public bool VerifySfv { get; set; } = true;
+    /// <summary>Multi-stream / multi-network download settings (plexo-style). Downloads only — never FXP.</summary>
+    public MultiStreamConfig MultiStream { get; set; } = new();
     public bool PlaySoundOnComplete { get; set; }
     public string Theme { get; set; } = "Cyberpunk";
     public bool CyberpunkPromoted { get; set; }
@@ -256,4 +258,50 @@ public class AgentConfig
     public string ModelId { get; set; } = "anthropic/claude-sonnet-4-6";
     public int TelemetryMaxFileMB { get; set; } = 100;
     public bool HasAcceptedConsent { get; set; } = false;
+}
+
+/// <summary>
+/// Multi-stream / multi-network downloads (plan: docs/superpowers/plans/2026-10-14-multistream-downloads.md).
+/// Applies to FTP release downloads, HTTP downloads (updates) and — speed caps only — torrents.
+/// FXP racing never reads this.
+/// </summary>
+public class MultiStreamConfig
+{
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>
+    /// Let an FTP download use the site's race login (the spread pool's idle connection) as a
+    /// second stream while that site is not racing. The download hands it back within about a
+    /// second when a race starts or is queued for the site. CPSV sites only.
+    /// </summary>
+    public bool BorrowIdleRaceLogin { get; set; } = true;
+
+    /// <summary>HTTP connections per enabled network (plexo starts at 8; updates are one zip, 4 is plenty).</summary>
+    public int HttpLanesPerNetwork { get; set; } = 4;
+
+    /// <summary>An in-flight FTP range is only split when both halves are at least this big.</summary>
+    public int FtpMinSplitMb { get; set; } = 32;
+
+    /// <summary>Slow mode: a temporary total cap, toggled from the tray.</summary>
+    public bool SlowMode { get; set; }
+    public int SlowModeKbps { get; set; } = 2048;
+
+    /// <summary>Networks downloads may use. Empty = default route only (unchanged behavior).</summary>
+    public List<NetworkPathConfig> Networks { get; set; } = [];
+}
+
+public enum AllowancePeriod { None, Daily, Weekly, Monthly }
+
+public class NetworkPathConfig
+{
+    /// <summary>NetworkInterface.Id — stable across reboots; AdapterName is the fallback match.</summary>
+    public string AdapterId { get; set; } = "";
+    public string AdapterName { get; set; } = "";
+    public string FriendlyName { get; set; } = "";
+    public bool Enabled { get; set; } = true;
+    /// <summary>Per-network download cap, 0 = unlimited.</summary>
+    public int SpeedLimitKbps { get; set; }
+    /// <summary>Data allowance per <see cref="Period"/> in GB, 0 = unlimited. Counts only GlDrive download traffic.</summary>
+    public double AllowanceGb { get; set; }
+    public AllowancePeriod Period { get; set; } = AllowancePeriod.None;
 }
