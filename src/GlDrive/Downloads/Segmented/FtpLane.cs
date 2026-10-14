@@ -3,7 +3,6 @@ using System.Net.Security;
 using System.Net.Sockets;
 using FluentFTP;
 using FluentFTP.Exceptions;
-using FluentFTP.Exceptions;
 using GlDrive.Ftp;
 using Serilog;
 
