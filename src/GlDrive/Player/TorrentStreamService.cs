@@ -31,10 +31,12 @@ public class TorrentStreamService : IDisposable
     /// `Factories` API, which does not exist in 3.0.2, and 3.0.2 is the newest STABLE release
     /// (3.0.3 and 3.9.0 are alpha). Treat this as reducing exposure, not eliminating it.
     /// </param>
+    /// <param name="maxDownloadBytesPerSecond">Engine-wide download cap, 0 = unlimited. See <see cref="DownloadRateLimit"/>.</param>
     public TorrentStreamService(
         string downloadPath,
         string? vpnAdapterName = null,
-        TorrentContentPolicy? contentPolicy = null)
+        TorrentContentPolicy? contentPolicy = null,
+        long maxDownloadBytesPerSecond = 0)
     {
         _policy = contentPolicy ?? new TorrentContentPolicy(blockExecutables: true);
 
@@ -61,6 +63,7 @@ public class TorrentStreamService : IDisposable
             MaximumConnections = 100,
             MaximumHalfOpenConnections = 16,
             MaximumUploadRate = 100 * 1024, // 100 KB/s upload
+            MaximumDownloadRate = ToEngineRate(maxDownloadBytesPerSecond),
             // Local peer discovery broadcasts on the LAN and is meaningless over a tunnel;
             // leaving it on while bound to a VPN would announce us on the local network.
             AllowLocalPeerDiscovery = Equals(bindAddress, IPAddress.Any),
@@ -79,6 +82,27 @@ public class TorrentStreamService : IDisposable
 
         _engine = new ClientEngine(settings);
     }
+
+    /// <summary>
+    /// The torrent download cap in bytes/s implied by the download settings: slow mode wins,
+    /// otherwise the global download speed limit. 0 = unlimited.
+    /// </summary>
+    public static long DownloadRateLimit(GlDrive.Config.DownloadConfig downloads) =>
+        downloads.MultiStream.SlowMode
+            ? Math.Max(0, downloads.MultiStream.SlowModeKbps) * 1024L
+            : Math.Max(0, downloads.SpeedLimitKbps) * 1024L;
+
+    /// <summary>Change the engine-wide download cap live (slow-mode toggle). 0 = unlimited.</summary>
+    public async Task ApplyDownloadRateLimitAsync(long bytesPerSecond)
+    {
+        var rate = ToEngineRate(bytesPerSecond);
+        if (_engine.Settings.MaximumDownloadRate == rate) return;
+        await _engine.UpdateSettingsAsync(
+            new EngineSettingsBuilder(_engine.Settings) { MaximumDownloadRate = rate }.ToSettings());
+        Log.Information("TorrentStreamService: download cap set to {Rate} B/s (0 = unlimited)", rate);
+    }
+
+    private static int ToEngineRate(long bytesPerSecond) => (int)Math.Clamp(bytesPerSecond, 0, int.MaxValue);
 
     /// <summary>Outcome of screening a magnet's contents before anything is added to the engine.</summary>
     public sealed record ScreeningResult(
