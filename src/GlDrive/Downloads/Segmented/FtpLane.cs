@@ -69,6 +69,18 @@ internal sealed class FtpLane : ISegmentLane
     private long _lastYieldCheck = long.MinValue / 2;
     private bool _yieldCached;
 
+    /// <summary>
+    /// Remote modification time (MDTM, "yyyyMMddHHmmss"), or null if the server won't say. With the
+    /// size it fingerprints the remote version, so a resume never splices two versions together.
+    /// </summary>
+    public async Task<string?> GetModifiedStampAsync(string remotePath, CancellationToken ct)
+    {
+        var client = await ClientAsync(ct);
+        var reply = await client.Execute($"MDTM {CpsvDataHelper.SanitizeFtpPath(remotePath)}", ct);
+        var stamp = reply.Message.Trim();
+        return reply.Code == "213" && stamp.Length >= 14 ? stamp[..14] : null;
+    }
+
     /// <summary>Size of a remote file over this lane's control connection, -1 if the server won't say.</summary>
     public async Task<long> GetSizeAsync(string remotePath, CancellationToken ct)
     {
@@ -108,7 +120,7 @@ internal sealed class FtpLane : ISegmentLane
             {
                 var rest = await client.Execute($"REST {offset}", ct);
                 if (!rest.Success)
-                    throw new IOException($"REST {offset} refused: {rest.Code} {rest.Message}");
+                    throw new RangeNotSupportedException($"REST {offset} refused: {rest.Code} {rest.Message}");
             }
             var retr = await client.Execute($"RETR {CpsvDataHelper.SanitizeFtpPath(file.Key)}", ct);
             if (retr.Code is not ("150" or "125"))

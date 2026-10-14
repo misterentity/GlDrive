@@ -21,6 +21,12 @@ public sealed class ByteRangeSet
 
     public ByteRangeSet Clone() => new(_ranges);
 
+    public void Clear()
+    {
+        _ranges.Clear();
+        TotalLength = 0;
+    }
+
     /// <summary>Adds a range; returns how many bytes were newly covered.</summary>
     public long Add(ByteRange range)
     {

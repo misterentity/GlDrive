@@ -57,9 +57,19 @@ public class StreamingDownloader
             foreach (var f in files)
             {
                 var size = f.Size >= 0 ? f.Size : await mainLane.GetSizeAsync(f.RemotePath, ct);
+                if (size > 0 && File.Exists(f.LocalPath) && new FileInfo(f.LocalPath).Length >= size)
+                {
+                    // Already complete on disk — the engine counts it as done without a fetch.
+                    transferFiles.Add(new TransferFile(f.RemotePath, f.LocalPath, size));
+                    continue;
+                }
                 if (_config.WriteBufferLimitMb > 0 && size > _config.WriteBufferLimitMb * 1024L * 1024)
                     throw new IOException($"Write buffer limit exceeded ({_config.WriteBufferLimitMb} MB): {f.RemotePath}");
-                transferFiles.Add(new TransferFile(f.RemotePath, f.LocalPath, size));
+                // size + MDTM identify the remote version; a staged partial of another version
+                // is restarted instead of resumed (StagedFile compares this).
+                var stamp = size >= 0 ? await mainLane.GetModifiedStampAsync(f.RemotePath, ct) : null;
+                transferFiles.Add(new TransferFile(f.RemotePath, f.LocalPath, size,
+                    stamp == null ? null : $"{size}:{stamp}"));
             }
 
             ILaneSource? extra = null;

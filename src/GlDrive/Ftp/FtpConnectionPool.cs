@@ -466,6 +466,8 @@ public class FtpConnectionPool : IAsyncDisposable
         }
     }
 
+    private TaskCompletionSource _slotFreed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     public int ActiveCount => _active;
     public int TotalCreated => _created;
     public int MaxSize => _maxSize;
@@ -873,8 +875,47 @@ public class FtpConnectionPool : IAsyncDisposable
             throw new InvalidOperationException("Pool exhausted: all connections discarded and new connections failed");
         }
 
-        // At capacity — wait for one to be returned
-        client = await _pool.Reader.ReadAsync(ct);
+        // At capacity — wait for one to be returned, OR for a slot to free. A connection that is
+        // quarantined while we wait is never written back to the channel, so waiting on the
+        // channel alone could wait forever (found when a download's borrowed race login was
+        // discarded after a failed transfer while a race sat here waiting for it).
+        while (true)
+        {
+            var freed = Volatile.Read(ref _slotFreed).Task;
+            if (_pool.Reader.TryRead(out client)) break;
+            var readable = _pool.Reader.WaitToReadAsync(ct).AsTask();
+            if (await Task.WhenAny(readable, freed) == readable)
+            {
+                if (!await readable) throw new ChannelClosedException();
+                continue;
+            }
+            if (IsThrottled)
+            {
+                if (_created <= 0)
+                {
+                    IncrementExhaust();
+                    throw new InvalidOperationException("Pool parked (cooldown/backoff) and its last connection was discarded");
+                }
+                continue;
+            }
+            if (Interlocked.Increment(ref _created) <= EffectiveMaxSize)
+            {
+                try
+                {
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    client = await AcquireAndConnect(ct);
+                    RecordConnect(sw.ElapsedMilliseconds);
+                    Interlocked.Increment(ref _active);
+                    return new PooledConnection(client, this);
+                }
+                catch
+                {
+                    Interlocked.Decrement(ref _created);
+                    throw;
+                }
+            }
+            Interlocked.Decrement(ref _created);
+        }
         if (await CheckPooledForBorrow(client, ct) == BorrowCheck.Usable)
         {
             Interlocked.Increment(ref _active);
@@ -1007,6 +1048,9 @@ public class FtpConnectionPool : IAsyncDisposable
         // capacity checks by one until the next successful create.
         if (Interlocked.Decrement(ref _created) < 0) Interlocked.Increment(ref _created);
         ReleasePermit();
+        // Wake borrowers waiting at capacity: this slot will never come back through the channel.
+        Interlocked.Exchange(ref _slotFreed, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously))
+            .TrySetResult();
 
         var live = Interlocked.Increment(ref _quarantineLive);
         Log.Information("Pool[{Pool}]: quarantined connection ({Reason}, deferred teardown {Delay}s, live={Live}, created={Created})",
