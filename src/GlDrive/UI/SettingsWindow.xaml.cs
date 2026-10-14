@@ -22,6 +22,7 @@ public partial class SettingsWindow : Window
 
     /// <summary>Tag of the multi-stream tab, for opening Settings straight onto it.</summary>
     public const string StreamsTab = "Streams";
+    public const string McpTab = "MCP";
 
     public SettingsWindow(AppConfig config, ServerManager serverManager, bool readLocalState = true, string? initialTab = null)
     {
@@ -303,17 +304,32 @@ public partial class SettingsWindow : Window
 
     private void Save_Click(object sender, RoutedEventArgs e)
     {
-        _vm.ApplyTo(_config);
-
-        // Save category paths
-        _config.Downloads.CategoryPaths.Clear();
-        foreach (var item in _categoryPaths)
+        if (!_vm.Mcp.TryGetPort(out _, out var error))
         {
-            if (!string.IsNullOrWhiteSpace(item.Category) && !string.IsNullOrWhiteSpace(item.Path))
-                _config.Downloads.CategoryPaths[item.Category.Trim()] = item.Path.Trim();
+            SettingsTabs.SelectedItem = McpTabItem;
+            MessageBox.Show(this, error, "MCP settings", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
         }
-
-        ConfigManager.Save(_config);
+        try
+        {
+            McpSettingsPersistence.SaveAll(_config, candidate =>
+            {
+                _vm.ApplyTo(candidate);
+                candidate.Downloads.CategoryPaths.Clear();
+                foreach (var item in _categoryPaths)
+                {
+                    if (!string.IsNullOrWhiteSpace(item.Category) && !string.IsNullOrWhiteSpace(item.Path))
+                        candidate.Downloads.CategoryPaths[item.Category.Trim()] = item.Path.Trim();
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Warning("Settings save failed ({ErrorType})", ex.GetType().Name);
+            MessageBox.Show(this, "Settings could not be saved. Check that the settings file is writable and try again.",
+                "Settings", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
 
         if (Application.Current is App app) app.RefreshControlApi(_config);
 
