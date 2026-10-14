@@ -5,6 +5,7 @@ using System.Text;
 using System.Windows;
 using System.Xml.Linq;
 using GlDrive.Config;
+using GlDrive.Util;
 using GlDrive.Logging;
 using GlDrive.Services;
 using GlDrive.Tls;
@@ -221,7 +222,7 @@ public partial class SettingsWindow : Window
         var dialog = new Microsoft.Win32.OpenFolderDialog
         {
             Title = "Select Download Folder",
-            InitialDirectory = _vm.DownloadLocalPath
+            InitialDirectory = DialogPaths.ExistingDirectoryOrNull(_vm.DownloadLocalPath) ?? ""
         };
 
         if (dialog.ShowDialog() == true)
@@ -247,7 +248,7 @@ public partial class SettingsWindow : Window
         var dialog = new Microsoft.Win32.OpenFolderDialog
         {
             Title = $"Select folder for \"{selected.Category}\"",
-            InitialDirectory = string.IsNullOrWhiteSpace(selected.Path) ? _vm.DownloadLocalPath : selected.Path
+            InitialDirectory = DialogPaths.ExistingDirectoryOrNull(selected.Path, _vm.DownloadLocalPath) ?? ""
         };
 
         if (dialog.ShowDialog() == true)
