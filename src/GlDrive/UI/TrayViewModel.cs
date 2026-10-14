@@ -382,16 +382,20 @@ public class TrayViewModel : INotifyPropertyChanged
         _pauseTimer?.Dispose();
         _pauseTimer = new System.Threading.Timer(_ =>
         {
-            _config.Agent.Enabled = true;
-            GlDrive.Config.ConfigManager.Save(_config);
-            App.AgentRunner?.Start();
+            _ = Application.Current?.Dispatcher.InvokeAsync(() =>
+            {
+                _config.Agent.Enabled = true;
+                GlDrive.Config.ConfigManager.Save(_config);
+                App.AgentRunner?.Start();
+                OnPropertyChanged(nameof(AgentEnabled));
+            });
         }, null, TimeSpan.FromHours(24), System.Threading.Timeout.InfiniteTimeSpan);
         System.Windows.MessageBox.Show("AI agent paused. Will re-enable in 24 hours.");
     });
 
     public ICommand PanicRevertLastRunCommand => new RelayCommand(() =>
     {
-        var last = App.AuditTrail?.ReadAll().Where(r => r.Applied && !r.Undone).LastOrDefault()?.RunId;
+        var last = App.AuditTrail?.ReadAll().Where(r => r.WasApplied && !r.Undone).LastOrDefault()?.RunId;
         if (last is null)
         {
             System.Windows.MessageBox.Show("No recent applied changes to revert.");
@@ -415,7 +419,7 @@ public class TrayViewModel : INotifyPropertyChanged
     {
         if (App.AuditTrail is null || App.ChangeApplier is null) return;
         var rows = App.AuditTrail.ReadAll()
-            .Where(r => r.RunId == runId && r.Applied && !r.Undone)
+            .Where(r => r.RunId == runId && r.WasApplied && !r.Undone)
             .Reverse().ToList();
         var failures = new List<string>();
         var reverted = 0;
@@ -452,7 +456,7 @@ public class TrayViewModel : INotifyPropertyChanged
 
     // ── end AI Agent tray commands ─────────────────────────────────────────
 
-    public ICommand BuildDigestDebugCommand => new RelayCommand(() =>
+    public ICommand BuildDigestDebugCommand => new RelayCommand(async () =>
     {
         try
         {
@@ -460,12 +464,15 @@ public class TrayViewModel : INotifyPropertyChanged
             Directory.CreateDirectory(aiData);
             var windowDays = _config.Agent.WindowDays;
             var digester = new GlDrive.AiAgent.LogDigester(aiData);
-            var bundle = digester.Build(windowDays);
+            var bundle = await digester.BuildAsync(windowDays);
             var outPath = Path.Combine(aiData, "last-digest.json");
-            var json = System.Text.Json.JsonSerializer.Serialize(bundle,
-                new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(outPath, json);
-            var approxTokens = new FileInfo(outPath).Length / 4;
+            var approxTokens = await Task.Run(async () =>
+            {
+                var json = System.Text.Json.JsonSerializer.Serialize(bundle,
+                    new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+                await File.WriteAllTextAsync(outPath, json);
+                return new FileInfo(outPath).Length / 4;
+            });
             MessageBox.Show(
                 $"Digest written to:\n{outPath}\n\nApprox tokens: {approxTokens:N0}\nWindow: {windowDays}d",
                 "Build digest (debug)",

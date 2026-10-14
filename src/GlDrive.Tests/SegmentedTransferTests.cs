@@ -118,6 +118,28 @@ public sealed class SegmentedTransferTests : IDisposable
         Assert.NotEmpty(shortLane.Faults);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Short_or_unconfirmed_single_lane_download_never_publishes_a_final_file(bool shortData)
+    {
+        var f = AddFile("incomplete.r00", 100_000);
+        var lane = new FakeLane(_source, "standard", canStopEarly: false)
+        {
+            TruncateAt = shortData ? 10 : long.MaxValue,
+            FinishFault = eof => !shortData && eof ? new IOException("RETR failed: 426") : null
+        };
+        var completed = new List<TransferFile>();
+
+        await Assert.ThrowsAsync<IOException>(() => new SegmentedTransfer([f],
+            Opts(completed.Add, maxFailures: 1)).RunAsync([lane], null, null, default));
+
+        Assert.False(File.Exists(f.LocalPath));
+        Assert.True(File.Exists(f.LocalPath + StagedFile.StagingSuffix));
+        Assert.Empty(completed);
+        Assert.Single(lane.Faults);
+    }
+
     [Fact]
     public async Task BackoffException_IsNotCountedAsFailure()
     {

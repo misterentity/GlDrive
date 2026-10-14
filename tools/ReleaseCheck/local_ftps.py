@@ -31,6 +31,15 @@ pem = root / "fixture.pem"
 pem.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
                                  serialization.NoEncryption()) + cert.public_bytes(serialization.Encoding.PEM))
 class ReleaseCheckHandler(TLS_FTPHandler):
+    _reject_retr_completion = False
+
+    def ftp_USER(self, line):
+        # Count authentication attempts without recording any credential values.
+        # A rejected certificate must fail before the client sends USER/PASS.
+        with (root / "authentication-attempts").open("a") as attempts:
+            attempts.write("USER\n")
+        super().ftp_USER(line)
+
     def ftp_EPSV(self, line):
         if (root / "reject-passive").exists():
             self.respond(f"229 Entering extended passive mode (|||{blocked_port}|).")
@@ -43,9 +52,25 @@ class ReleaseCheckHandler(TLS_FTPHandler):
         else:
             super().ftp_PASV(line)
 
+    def ftp_SIZE(self, file):
+        if (root / "short-retr-size").exists() and pathlib.Path(file).name == "short.bin":
+            self.respond("213 1000")  # the RETR stream contains only ten bytes
+        else:
+            super().ftp_SIZE(file)
+
+    def ftp_RETR(self, file):
+        self._reject_retr_completion = (root / "reject-retr-completion").exists()
+        with (root / "retr-attempts").open("a") as attempts:
+            attempts.write(pathlib.Path(file).name + "\n")
+        return super().ftp_RETR(file)
+
     def respond(self, response, *args, **kwargs):
-        if response.startswith("226 ") and (root / "stats-trailer").exists():
-            response = "226 Transfer complete. Credits: 12.3 GB Ratio: 1:3"
+        if response.startswith("226 "):
+            if self._reject_retr_completion:
+                self._reject_retr_completion = False
+                response = "426 Fixture RETR completion rejection"
+            elif (root / "stats-trailer").exists():
+                response = "226 Transfer complete. Credits: 12.3 GB Ratio: 1:3"
         super().respond(response, *args, **kwargs)
 
     def ftp_NOOP(self, line):

@@ -1257,11 +1257,14 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
 
         // List source directory recursively
         var files = new List<(string relativePath, string fullPath)>();
-        await EnumerateDirectoryRecursive(srcPool, srcPath, srcPath, files, 0, ct);
+        // ListDirectory owns its borrow only until the listing completes. No
+        // parent directory may retain a login while its children are scanned.
+        await EnumerateDirectoryRecursive(new FtpOperations(srcPool).ListDirectory,
+            srcPath, srcPath, files, 0, ct);
 
         var mode = FxpModeDetector.Detect(srcPool, dstPool);
 
-        foreach (var (relativePath, fullPath) in files)
+        await TransferDirectoryFiles(files, async (relativePath, fullPath) =>
         {
             var destFile = dstPath.TrimEnd('/') + "/" + relativePath;
 
@@ -1294,29 +1297,39 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
             {
                 srcConn.Poison("direct FXP transfer failed");
                 dstConn.Poison("direct FXP transfer failed");
+                return transfer.ErrorMessage ?? "Server rejected the transfer";
             }
+            return null;
+        });
+    }
+
+    internal static async Task TransferDirectoryFiles(
+        IEnumerable<(string relativePath, string fullPath)> files,
+        Func<string, string, Task<string?>> transfer)
+    {
+        foreach (var (relativePath, fullPath) in files)
+        {
+            var error = await transfer(relativePath, fullPath);
+            if (error != null)
+                throw new IOException($"FXP transfer failed for {fullPath}: {error}");
         }
     }
 
-    private static async Task EnumerateDirectoryRecursive(FtpConnectionPool pool,
+    internal static async Task EnumerateDirectoryRecursive(
+        Func<string, CancellationToken, Task<FluentFTP.FtpListItem[]>> listDirectory,
         string basePath, string currentPath, List<(string relative, string full)> files,
         int depth, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         if (depth > 5) return;
 
-        await using var conn = await pool.Borrow(ct);
-
-        FluentFTP.FtpListItem[] items;
-        if (pool.UseCpsv)
-            items = await CpsvDataHelper.ListDirectory(conn.Client, currentPath, pool.ControlHost, ct);
-        else
-            items = await conn.Client.GetListing(currentPath, FluentFTP.FtpListOption.AllFiles, ct);
+        var items = await listDirectory(currentPath, ct);
 
         foreach (var item in items)
         {
             if (item.Type == FluentFTP.FtpObjectType.Directory)
             {
-                await EnumerateDirectoryRecursive(pool, basePath, item.FullName, files, depth + 1, ct);
+                await EnumerateDirectoryRecursive(listDirectory, basePath, item.FullName, files, depth + 1, ct);
             }
             else if (item.Type == FluentFTP.FtpObjectType.File)
             {

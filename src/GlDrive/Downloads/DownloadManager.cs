@@ -176,14 +176,18 @@ public class DownloadManager : IDisposable
 
         lock (_activeCts)
         {
+            // Completion and cancellation race for the same terminal transition.
+            // Once completion has committed, a late cancel cannot undo it.
+            if (item.Status == DownloadStatus.Completed) return;
+            // Starting a worker and cancelling it share this lock. In particular, a
+            // queued item can be waiting for a slot without having an active CTS yet.
+            item.Status = DownloadStatus.Cancelled;
             if (_activeCts.TryGetValue(id, out var cts))
             {
                 cts.Cancel();
-                _activeCts.Remove(id);
             }
         }
 
-        item.Status = DownloadStatus.Cancelled;
         _store.Update(item);
         DownloadStatusChanged?.Invoke(item);
     }
@@ -193,7 +197,13 @@ public class DownloadManager : IDisposable
         var item = _store.GetById(id);
         if (item == null || (item.Status != DownloadStatus.Failed && item.Status != DownloadStatus.Cancelled)) return;
 
-        item.Status = DownloadStatus.Queued;
+        lock (_activeCts)
+        {
+            // Let a cancelled worker finish unwinding before another worker owns
+            // the same files and download state.
+            if (_activeCts.ContainsKey(id)) return;
+            item.Status = DownloadStatus.Queued;
+        }
         // Don't reset DownloadedBytes — resume will pick up from partial
         item.ErrorMessage = null;
         _store.Update(item);
@@ -354,7 +364,21 @@ public class DownloadManager : IDisposable
     private async Task ProcessItem(DownloadItem item, CancellationToken globalCt)
     {
         var itemCts = CancellationTokenSource.CreateLinkedTokenSource(globalCt);
-        lock (_activeCts) _activeCts[item.Id] = itemCts;
+        lock (_activeCts)
+        {
+            // The queue check happened BEFORE waiting for a concurrency slot. The
+            // user may have cancelled or removed this item while that wait was pending.
+            if (!ReferenceEquals(_store.GetById(item.Id), item) ||
+                item.Status != DownloadStatus.Queued || _activeCts.ContainsKey(item.Id))
+            {
+                itemCts.Dispose();
+                _concurrency.Release();
+                return;
+            }
+            _activeCts[item.Id] = itemCts;
+            item.Status = DownloadStatus.Downloading;
+            item.StartedAt = DateTime.UtcNow;
+        }
 
         // The network concurrency slot (acquired by ProcessLoop) is released as soon
         // as the network phase finishes, BEFORE the CPU-bound SFV/extract — so a big
@@ -385,8 +409,6 @@ public class DownloadManager : IDisposable
 
         try
         {
-            item.Status = DownloadStatus.Downloading;
-            item.StartedAt = DateTime.UtcNow;
             _store.Update(item);
             DownloadStatusChanged?.Invoke(item);
 
@@ -396,11 +418,12 @@ public class DownloadManager : IDisposable
             if (DownloadTargetVolume.MissingVolumeRoot(item.LocalPath) is { } missingRoot)
                 throw new DriveNotFoundException($"Destination drive {missingRoot} is not mounted");
 
-            // List files in the release directory
-            var files = await _ftp.ListDirectory(item.RemotePath, itemCts.Token);
-            var dataFiles = files.Where(f => f.Type == FluentFTP.FtpObjectType.File).ToList();
+            // Plan the complete tree before starting lanes. Directory-only releases
+            // and empty directories are directories too, not candidates for RETR.
+            var plan = await DownloadTree.BuildAsync(item.RemotePath, item.LocalPath,
+                _ftp.DirectoryExists, _ftp.FileExists, _ftp.ListDirectory, itemCts.Token);
 
-            if (dataFiles.Count == 0)
+            if (!plan.IsDirectory)
             {
                 // Single file download
                 var fileName = Path.GetFileName(item.RemotePath);
@@ -415,7 +438,7 @@ public class DownloadManager : IDisposable
                     DownloadProgressChanged?.Invoke(item, p with { CurrentFileName = fileName });
                 });
 
-                await _downloader.DownloadFiles([new FtpDownloadFile(item.RemotePath, item.LocalPath, -1)],
+                await _downloader.DownloadFiles(plan.Files,
                     progress, itemCts.Token);
             }
             else
@@ -423,7 +446,7 @@ public class DownloadManager : IDisposable
                 // NFO pre-check
                 if (_config.SkipIncompleteReleases)
                 {
-                    var hasNfo = dataFiles.Any(f => f.Name.EndsWith(".nfo", StringComparison.OrdinalIgnoreCase));
+                    var hasNfo = plan.Files.Any(f => f.RemotePath.EndsWith(".nfo", StringComparison.OrdinalIgnoreCase));
                     if (!hasNfo)
                     {
                         item.Status = DownloadStatus.Failed;
@@ -436,7 +459,7 @@ public class DownloadManager : IDisposable
                 }
 
                 // Directory download — calculate total
-                item.TotalBytes = dataFiles.Sum(f => f.Size);
+                item.TotalBytes = plan.Files.Sum(f => Math.Max(0, f.Size));
 
                 // Disk-space reservation (v3.6 Phase 2b) — accounts for what OTHER
                 // concurrent downloads already reserved, so N downloads can't each
@@ -459,27 +482,10 @@ public class DownloadManager : IDisposable
                     reservedBytes = remaining;
                 }
 
-                var localPathFull = Path.GetFullPath(item.LocalPath);
-                var toDownload = new List<FtpDownloadFile>(dataFiles.Count);
+                foreach (var directory in plan.Directories)
+                    Directory.CreateDirectory(directory);
 
-                foreach (var file in dataFiles)
-                {
-                    var safeName = PathSanitizer.Sanitize(Path.GetFileName(file.Name));
-                    if (string.IsNullOrEmpty(safeName) || safeName.Contains(".."))
-                    {
-                        Log.Warning("Skipping file with unsafe name: {Name}", file.Name);
-                        continue;
-                    }
-                    var localFilePath = Path.Combine(item.LocalPath, safeName);
-                    if (!Path.GetFullPath(localFilePath).StartsWith(localPathFull, StringComparison.OrdinalIgnoreCase))
-                    {
-                        Log.Warning("Skipping file that escapes download directory: {Name}", file.Name);
-                        continue;
-                    }
-                    toDownload.Add(new FtpDownloadFile(file.FullName, localFilePath, file.Size));
-                }
-
-                if (toDownload.Any(f => HasPartial(f.LocalPath, f.Size)))
+                if (plan.Files.Any(f => HasPartial(f.LocalPath, f.Size)))
                     EmitDownloadOutcome(item, "resumed");
 
                 // The whole release goes to the engine at once so its lanes can work on
@@ -491,7 +497,8 @@ public class DownloadManager : IDisposable
                     DownloadProgressChanged?.Invoke(item, p with { TotalBytes = item.TotalBytes });
                 });
 
-                await _downloader.DownloadFiles(toDownload, progress, itemCts.Token);
+                if (plan.Files.Count > 0)
+                    await _downloader.DownloadFiles(plan.Files, progress, itemCts.Token);
             }
 
             // Network phase done — hand the concurrency slot back so other downloads
@@ -503,7 +510,9 @@ public class DownloadManager : IDisposable
             {
                 try
                 {
-                    var failures = await SfvVerifier.VerifyAsync(item.LocalPath, itemCts.Token);
+                    var failures = new List<string>();
+                    foreach (var directory in plan.Directories)
+                        failures.AddRange(await SfvVerifier.VerifyAsync(directory, itemCts.Token));
                     if (failures.Count > 0)
                     {
                         foreach (var f in failures)
@@ -533,17 +542,20 @@ public class DownloadManager : IDisposable
                     _store.Update(item);
                     DownloadStatusChanged?.Invoke(item);
 
-                    var extraction = await ArchiveExtractor.ExtractIfNeeded(item.LocalPath, itemCts.Token);
-                    Log.Information("Extraction result for {Release}: extracted={Extracted}, deleteEnabled={Delete}",
-                        item.ReleaseName, extraction.Extracted, _config.DeleteArchivesAfterExtract);
-                    if (extraction.Extracted && _config.DeleteArchivesAfterExtract)
+                    foreach (var directory in plan.Directories)
                     {
-                        var cleanupSucceeded = true;
-                        foreach (var firstVolume in extraction.FirstVolumes)
-                            cleanupSucceeded &= ArchiveExtractor.DeleteArchiveSet(firstVolume);
-                        if (!cleanupSucceeded)
-                            Log.Warning("Extraction succeeded but one or more source volumes could not be deleted for {Release}",
-                                item.ReleaseName);
+                        var extraction = await ArchiveExtractor.ExtractIfNeeded(directory, itemCts.Token);
+                        Log.Information("Extraction result for {Release}: extracted={Extracted}, deleteEnabled={Delete}",
+                            item.ReleaseName, extraction.Extracted, _config.DeleteArchivesAfterExtract);
+                        if (extraction.Extracted && _config.DeleteArchivesAfterExtract)
+                        {
+                            var cleanupSucceeded = true;
+                            foreach (var firstVolume in extraction.FirstVolumes)
+                                cleanupSucceeded &= ArchiveExtractor.DeleteArchiveSet(firstVolume);
+                            if (!cleanupSucceeded)
+                                Log.Warning("Extraction succeeded but one or more source volumes could not be deleted for {Release}",
+                                    item.ReleaseName);
+                        }
                     }
                 }
                 catch (OperationCanceledException) { throw; }
@@ -561,12 +573,7 @@ public class DownloadManager : IDisposable
 
             lock (_volumeWaitLock) _volumeWaitAttempts.Remove(item.Id);
 
-            item.Status = DownloadStatus.Completed;
-            item.CompletedAt = DateTime.UtcNow;
-            _store.Update(item);
-            DownloadStatusChanged?.Invoke(item);
-            EmitDownloadOutcome(item, "complete");
-            Log.Information("Download completed: {Release}", item.ReleaseName);
+            CompleteItem(item, itemCts.Token);
         }
         catch (OperationCanceledException)
         {
@@ -661,6 +668,25 @@ public class DownloadManager : IDisposable
             // next ProcessItem re-reserves, so the budget never double-counts.
             ReleaseReservation();
         }
+    }
+
+    internal void CompleteItem(DownloadItem item, CancellationToken ct)
+    {
+        lock (_activeCts)
+        {
+            // Empty directories and already-cached files may reach here without
+            // another cancellable operation. Check under Cancel's lock so an
+            // accepted cancellation cannot be replaced with Completed.
+            ct.ThrowIfCancellationRequested();
+            if (item.Status == DownloadStatus.Cancelled)
+                throw new OperationCanceledException(ct);
+            item.Status = DownloadStatus.Completed;
+            item.CompletedAt = DateTime.UtcNow;
+            _store.Update(item);
+        }
+        DownloadStatusChanged?.Invoke(item);
+        EmitDownloadOutcome(item, "complete");
+        Log.Information("Download completed: {Release}", item.ReleaseName);
     }
 
     private static void EmitDownloadOutcome(DownloadItem item, string result)
