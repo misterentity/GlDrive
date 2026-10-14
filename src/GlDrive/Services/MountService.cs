@@ -66,11 +66,15 @@ public class MountService : IDisposable
     public FtpSearchService? Search => _searchService;
     public WishlistMatcher? Matcher => _wishlistMatcher;
 
-    public MountService(ServerConfig serverConfig, DownloadConfig downloadConfig, CertificateManager certManager)
+    private readonly GlDrive.Downloads.Segmented.IRaceLoginLender? _raceLoginLender;
+
+    public MountService(ServerConfig serverConfig, DownloadConfig downloadConfig, CertificateManager certManager,
+        GlDrive.Downloads.Segmented.IRaceLoginLender? raceLoginLender = null)
     {
         _serverConfig = serverConfig;
         _downloadConfig = downloadConfig;
         _certManager = certManager;
+        _raceLoginLender = raceLoginLender;
     }
 
     public async Task Mount(CancellationToken ct = default)
@@ -195,18 +199,15 @@ public class MountService : IDisposable
             var wishlistStore = new WishlistStore();
             wishlistStore.Load();
 
-            var effectiveSpeedLimit = _serverConfig.SpeedLimitKbps > 0
-                ? _serverConfig.SpeedLimitKbps
-                : _downloadConfig.SpeedLimitKbps;
             // Downloads run on the main pool, capped by the shared account login
             // gate. (A separate download pool was evaluated but rejected: at the
             // conservative login cap its idle connection permanently holds a permit
-            // and starves the spread pool's initialization.) The disk reservation +
-            // slot-before-extract + cooldown-defer wins below don't need a separate
-            // pool.
+            // and starves the spread pool's initialization.) A second stream comes only
+            // from borrowing the race login while this site is not racing — see
+            // RaceLoginLaneSource. The global speed limit is app-wide (shared pacer);
+            // the per-server limit applies on top.
             _streamingDownloader = new StreamingDownloader(
-                _pool, _downloadConfig.StreamingBufferSizeKb, _downloadConfig.WriteBufferLimitMb,
-                effectiveSpeedLimit);
+                _pool, _serverConfig.Id, _downloadConfig, _serverConfig.SpeedLimitKbps, _raceLoginLender);
             _downloadManager = new DownloadManager(downloadStore, _ftp, _streamingDownloader,
                 _downloadConfig, _diskReservation);
             _searchService = new FtpSearchService(_pool, _serverConfig.Search);

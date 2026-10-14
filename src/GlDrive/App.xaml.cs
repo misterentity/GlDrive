@@ -176,6 +176,7 @@ public partial class App
 
         // Load config
         var config = ConfigManager.Load();
+        GlDrive.Downloads.Segmented.DownloadNetworkServices.Initialize(config.Downloads);
 
         // Init logging
         SerilogSetup.Configure(config.Logging);
@@ -265,6 +266,7 @@ public partial class App
                 return;
             }
             config = ConfigManager.Load(); // Reload after wizard saves
+            GlDrive.Downloads.Segmented.DownloadNetworkServices.Initialize(config.Downloads);
         }
 
         // Apply theme

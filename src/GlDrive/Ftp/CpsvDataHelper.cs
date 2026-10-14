@@ -165,7 +165,7 @@ public static class CpsvDataHelper
     /// link-local, and unroutable ranges to block SSRF-like redirection attempts.
     /// </summary>
     internal static async Task<TcpClient> OpenDataTcp(
-        AsyncFtpClient client, CancellationToken ct)
+        AsyncFtpClient client, CancellationToken ct, System.Net.IPAddress? localBind = null)
     {
         // From here until the completion reply is read, this control channel owes
         // us replies. Mark before CPSV is even sent: if CPSV itself reads a stale
@@ -191,7 +191,12 @@ public static class CpsvDataHelper
 
         // Connect to the CPSV-returned IP:port directly.
         // With BNCs, the CPSV IP is the backend data address.
-        var tcp = new TcpClient();
+        // localBind pins the DATA socket to one network adapter (multi-network downloads). The
+        // control channel stays on the default route; glftpd already accepts data from an IP
+        // other than the control one, because behind a BNC the control IP is the BNC's.
+        var tcp = localBind == null
+            ? new TcpClient()
+            : new TcpClient(new System.Net.IPEndPoint(localBind, 0));
         try
         {
             await WithDataDeadline(async t => { await tcp.ConnectAsync(cpsvIp, port, t); return true; },

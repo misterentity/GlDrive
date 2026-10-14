@@ -1,159 +1,110 @@
-using System.Diagnostics;
 using System.IO;
+using GlDrive.Config;
 using GlDrive.Downloads;
-using FluentFTP;
+using GlDrive.Downloads.Segmented;
 using Serilog;
 
 namespace GlDrive.Ftp;
 
+/// <summary>A remote file to download; <see cref="Size"/> -1 = ask the server.</summary>
+public sealed record FtpDownloadFile(string RemotePath, string LocalPath, long Size);
+
+/// <summary>
+/// FTP downloads through the multi-stream engine (<see cref="SegmentedTransfer"/>). Lane 1 is
+/// the main pool's connection; lane 2, when enabled, is the site's race login borrowed while
+/// the site is not racing. Files land as <c>.gdpart</c> staging files and are renamed into
+/// place when complete, so a half-written volume never carries its final name.
+/// </summary>
 public class StreamingDownloader
 {
-    private readonly int _bufferSize;
-    private readonly int _writeBufferLimitBytes;
-    private readonly long _speedLimitBytesPerSecond;
     private readonly FtpConnectionPool _pool;
+    private readonly string _serverId;
+    private readonly DownloadConfig _config;
+    private readonly IRaceLoginLender? _raceLender;
+    private readonly TransferPacer _serverPacer;
 
-    public StreamingDownloader(FtpConnectionPool pool, int bufferSizeKb = 256, int writeBufferLimitMb = 0, int speedLimitKbps = 0)
+    public StreamingDownloader(FtpConnectionPool pool, string serverId, DownloadConfig config,
+        int serverSpeedLimitKbps, IRaceLoginLender? raceLender)
     {
         _pool = pool;
-        _bufferSize = Math.Clamp(bufferSizeKb, 64, 4096) * 1024;
-        _writeBufferLimitBytes = writeBufferLimitMb > 0 ? writeBufferLimitMb * 1024 * 1024 : 0;
-        _speedLimitBytesPerSecond = speedLimitKbps > 0 ? speedLimitKbps * 1024L : 0;
+        _serverId = serverId;
+        _config = config;
+        _raceLender = raceLender;
+        var serverCap = serverSpeedLimitKbps > 0 ? serverSpeedLimitKbps * 1024L : 0;
+        _serverPacer = new TransferPacer(() => serverCap, _ => 0);
+        DownloadNetworkServices.Initialize(config);
     }
 
     /// <summary>True when the download pool is in a BNC cooldown — callers should
     /// defer rather than borrow (which would just throw).</summary>
     public bool IsPoolInCooldown => _pool.IsThrottled;
 
-    public async Task DownloadToFile(
-        string remotePath, string localPath, long resumeOffset,
+    public async Task DownloadFiles(IReadOnlyList<FtpDownloadFile> files,
         IProgress<DownloadProgress>? progress, CancellationToken ct)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
+        var multi = _config.MultiStream;
+        var networks = DownloadNetworkServices.ResolveNetworks();
+        var usable = networks.Where(n => !DownloadNetworkServices.IsOverAllowance(n)).ToList();
+        if (usable.Count == 0)
+            throw new NetworkAllowanceExhaustedException(string.Join(", ", networks.Select(n => n.DisplayName)));
 
         var conn = await _pool.Borrow(ct);
-        var client = conn.Client;
+        var mainLane = new FtpLane(conn, _pool, _pool.UseCpsv, usable[0], usable[0].DisplayName,
+            overAllowance: DownloadNetworkServices.IsOverAllowance);
         try
         {
-            if (resumeOffset > 0)
-                Log.Information("Resuming download at {Offset}: {Remote} -> {Local}", resumeOffset, remotePath, localPath);
-            else
-                Log.Information("Streaming download: {Remote} -> {Local}", remotePath, localPath);
+            var transferFiles = new List<TransferFile>(files.Count);
+            foreach (var f in files)
+            {
+                var size = f.Size >= 0 ? f.Size : await mainLane.GetSizeAsync(f.RemotePath, ct);
+                if (_config.WriteBufferLimitMb > 0 && size > _config.WriteBufferLimitMb * 1024L * 1024)
+                    throw new IOException($"Write buffer limit exceeded ({_config.WriteBufferLimitMb} MB): {f.RemotePath}");
+                transferFiles.Add(new TransferFile(f.RemotePath, f.LocalPath, size));
+            }
 
-            if (_pool.UseCpsv)
-                await DownloadCpsv(client, remotePath, localPath, resumeOffset, progress, ct);
-            else
-                await DownloadStandard(client, remotePath, localPath, resumeOffset, progress, ct);
+            ILaneSource? extra = null;
+            if (multi.Enabled && multi.BorrowIdleRaceLogin && _raceLender != null && _pool.UseCpsv)
+            {
+                var second = usable[usable.Count > 1 ? 1 : 0];
+                extra = new RaceLoginLaneSource(_raceLender, _serverId, second, DownloadNetworkServices.IsOverAllowance);
+            }
 
-            Log.Information("Download complete: {Local}", localPath);
+            var options = new SegmentedTransferOptions
+            {
+                BufferSize = Math.Clamp(_config.StreamingBufferSizeKb, 64, 4096) * 1024,
+                MinSplitBytes = Math.Clamp(multi.FtpMinSplitMb, 4, 1024) * 1024L * 1024,
+                MaxLanes = extra != null ? 2 : 1,
+                Pacer = new CompositePacer(DownloadNetworkServices.Pacer, _serverPacer),
+                OnBytes = DownloadNetworkServices.RecordBytes,
+            };
+
+            Log.Information("Streaming download: {Count} file(s), {Bytes:N0} bytes via {Network}{Extra}",
+                transferFiles.Count, transferFiles.Where(f => f.Size > 0).Sum(f => f.Size), usable[0].DisplayName,
+                extra != null ? " (+ race login while idle)" : "");
+
+            var reporter = progress == null ? null : new Progress<TransferProgress>(p =>
+                progress.Report(new DownloadProgress(p.DoneBytes, p.TotalBytes, p.BytesPerSecond, p.CurrentFile, p.Lanes)));
+
+            using (KeepAwake.Acquire())
+            {
+                var transfer = new SegmentedTransfer(transferFiles, options);
+                // The engine owns the lane from here and disposes it (returning the connection).
+                var lanes = new ISegmentLane[] { mainLane };
+                mainLane = null;
+                await transfer.RunAsync(lanes, extra, reporter, ct);
+            }
         }
-        catch
+        catch (Exception ex) when (mainLane != null)
         {
-            // RETR data-channel/TLS failure (or cancellation) corrupts the GnuTLS stream and
-            // can leave an unread completion reply on the control channel. Returning this
-            // connection to the pool risks reply desync and SEGV on reuse — poison so the
-            // pool discards instead of recycling it. Mirrors FtpOperations.ListDirectory.
-            conn.Poison($"streaming RETR {remotePath} failed");
+            // Failed before the engine took the lane (SIZE, cancel): the control channel may
+            // be mid-reply, so poison rather than return it.
+            mainLane.Fault(ex);
             throw;
         }
         finally
         {
-            await conn.DisposeAsync();
-        }
-    }
-
-    private async Task DownloadStandard(
-        AsyncFtpClient client, string remotePath, string localPath,
-        long resumeOffset, IProgress<DownloadProgress>? progress, CancellationToken ct)
-    {
-        var size = await client.GetFileSize(remotePath, -1, ct);
-        await using var remoteStream = resumeOffset > 0
-            ? await client.OpenRead(remotePath, FtpDataType.Binary, resumeOffset, token: ct)
-            : await client.OpenRead(remotePath, token: ct);
-        var fileMode = resumeOffset > 0 ? FileMode.Append : FileMode.Create;
-        await using var fileStream = new FileStream(localPath, fileMode, FileAccess.Write, FileShare.None, _bufferSize, true);
-
-        await CopyWithProgress(remoteStream, fileStream, size, resumeOffset, progress, ct);
-
-        remoteStream.Close();
-        var reply = await client.GetReply(ct);
-        Log.Debug("RETR complete: {Code} {Message}", reply.Code, reply.Message);
-    }
-
-    private async Task DownloadCpsv(
-        AsyncFtpClient client, string remotePath, string localPath,
-        long resumeOffset, IProgress<DownloadProgress>? progress, CancellationToken ct)
-    {
-        var sizeReply = await client.Execute($"SIZE {CpsvDataHelper.SanitizeFtpPath(remotePath)}", ct);
-        long size = -1;
-        if (sizeReply.Success && long.TryParse(sizeReply.Message.Trim(), out var parsed))
-            size = parsed;
-
-        await client.Execute("TYPE I", ct);
-
-        if (resumeOffset > 0)
-        {
-            var restReply = await client.Execute($"REST {resumeOffset}", ct);
-            if (!restReply.Success)
-            {
-                Log.Warning("REST command failed: {Code} {Message} — downloading from start", restReply.Code, restReply.Message);
-                resumeOffset = 0; // Reset so FileMode.Create is used instead of Append
-            }
-        }
-
-        var tcp = await CpsvDataHelper.OpenDataTcp(client, ct);
-        try
-        {
-            var retrReply = await client.Execute($"RETR {CpsvDataHelper.SanitizeFtpPath(remotePath)}", ct);
-            if (retrReply.Code != "150" && retrReply.Code != "125")
-                throw new IOException($"RETR failed: {retrReply.Code} {retrReply.Message}");
-
-            var ssl = await CpsvDataHelper.NegotiateDataTls(tcp.GetStream(), ct);
-            try
-            {
-                var fileMode = resumeOffset > 0 ? FileMode.Append : FileMode.Create;
-                await using var fileStream = new FileStream(localPath, fileMode, FileAccess.Write, FileShare.None, _bufferSize, true);
-                await CopyWithProgress(ssl, fileStream, size, resumeOffset, progress, ct);
-
-                ssl.Close();
-                tcp.Close();
-                var completeReply = await CpsvDataHelper.CompleteDataSequence(client, ct);
-                Log.Debug("RETR complete: {Code} {Message}", completeReply.Code, completeReply.Message);
-            }
-            finally { ssl.Dispose(); }
-        }
-        finally { tcp.Dispose(); }
-    }
-
-    private async Task CopyWithProgress(
-        Stream source, Stream destination, long totalSize, long initialOffset,
-        IProgress<DownloadProgress>? progress, CancellationToken ct)
-    {
-        var buffer = new byte[_bufferSize];
-        long totalRead = initialOffset;
-        var sw = Stopwatch.StartNew();
-        int bytesRead;
-
-        while ((bytesRead = await source.ReadAsync(buffer.AsMemory(0, _bufferSize), ct)) > 0)
-        {
-            if (_writeBufferLimitBytes > 0 && totalRead + bytesRead > _writeBufferLimitBytes)
-                throw new IOException($"Write buffer limit exceeded ({_writeBufferLimitBytes / (1024 * 1024)} MB)");
-
-            await destination.WriteAsync(buffer.AsMemory(0, bytesRead), ct);
-            totalRead += bytesRead;
-
-            var elapsed = sw.Elapsed.TotalSeconds;
-            var speed = elapsed > 0 ? (totalRead - initialOffset) / elapsed : 0;
-            progress?.Report(new DownloadProgress(totalRead, totalSize, speed));
-
-            // Speed limiting
-            if (_speedLimitBytesPerSecond > 0 && elapsed > 0)
-            {
-                var expectedTime = (double)(totalRead - initialOffset) / _speedLimitBytesPerSecond;
-                var delayMs = (expectedTime - elapsed) * 1000;
-                if (delayMs > 10)
-                    await Task.Delay((int)Math.Min(delayMs, 1000), ct);
-            }
+            if (mainLane != null) await mainLane.DisposeAsync();
+            DownloadNetworkServices.Flush();
         }
     }
 }
