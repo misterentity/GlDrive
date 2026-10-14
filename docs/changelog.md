@@ -12,6 +12,22 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.10.156 — multi-stream / multi-network downloads (2026-10-14)
+
+Inspired by [plexo](https://github.com/anmolkapil/plexo). Downloads only. FXP racing is untouched, apart from lending its idle login (below).
+
+- **Features**
+  - FTP release downloads run over a work-stealing multi-lane engine. Lane 1 is the main connection. Lane 2 is the site's race login, borrowed only while the site has no active, starting or queued race, and handed back within about a second (CPSV sites). Lanes mostly take whole RAR volumes, so they finish on clean 226s; files are split only at the tail.
+  - Downloads can combine several internet connections, e.g. Ethernet plus a phone tether. CPSV data sockets bind to the chosen uplink. No ticked uplink means the default route only, so nothing changes until you opt in.
+  - Staged `.gdpart` files with validated resume: FTP uses SIZE+MDTM and HTTP uses ETag/Last-Modified, so a resume never splices two versions together. Files take their final name only once the server confirms EOF.
+  - Pacing: one app-wide total limit, Slow mode (tray), per-server and per-network limits. Data allowances per network per day, week or month; when every selected network is over its allowance, downloads park instead of failing.
+  - HTTP update downloads use ranged multi-connection lanes, with the old single GET as fallback. Torrents get the speed caps.
+  - Cyberpunk STREAM MATRIX live view (segment grid by lane, lane table, throughput sparkline), lane chips on download rows, and a new Settings → STREAMS & UPLINKS tab.
+- **Fixes**
+  - Connection pool: a borrower waiting at capacity is woken when a connection is discarded. Before, it could wait forever for a connection that would never come back.
+- Plan: `docs/superpowers/plans/2026-10-14-multistream-downloads.md`. Reviewed cross-model with Codex over 4 rounds.
+- **Behavior change:** the global download speed limit is now shared across all servers. It used to apply to each server separately.
+
 ## v3.10.155 — verify growing-source recovery and production health (2026-10-13)
 
 - Add regressions through scan-result processing, transfer selection and progress accounting for a source file that grows after an earlier delivery. A smaller destination must become eligible for transfer again and regain ownership only at the full observed size.
