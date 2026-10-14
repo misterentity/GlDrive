@@ -13,6 +13,9 @@ using Xunit;
 
 namespace GlDrive.Tests;
 
+[CollectionDefinition("WpfRender", DisableParallelization = true)]
+public sealed class WpfRenderCollection { }
+
 /// <summary>
 /// Renders the multi-stream UI (stream matrix, a downloads row with lane chips, the
 /// STREAMS &amp; UPLINKS settings panel) with fake data in every theme, through the real App
@@ -42,14 +45,42 @@ public class StreamMatrixRenderTests
         Exception? failure = null;
         var thread = new Thread(() =>
         {
-            try { RenderAll(); }
+            try
+            {
+                Assert.Null(Application.Current);
+                RenderAll();
+            }
             catch (Exception ex) { failure = ex; }
+            finally
+            {
+                // Configuration/snapshot automation dispatches through Application.Current.
+                // Leaving this singleton attached to a departed STA strands those operations
+                // forever. Shutdown posts a callback, so pump it before stopping the dispatcher.
+                try
+                {
+                    if (Application.Current is { } application)
+                    {
+                        Assert.True(application.Dispatcher.CheckAccess(), "The render test must own its Application dispatcher.");
+                        application.Shutdown();
+                        Pump();
+                    }
+                    Assert.Null(Application.Current);
+                    var dispatcher = Dispatcher.CurrentDispatcher;
+                    dispatcher.InvokeShutdown();
+                    Assert.True(dispatcher.HasShutdownFinished);
+                }
+                catch (Exception cleanupFailure)
+                {
+                    failure = failure == null ? cleanupFailure : new AggregateException(failure, cleanupFailure);
+                }
+            }
         });
         thread.SetApartmentState(ApartmentState.STA);
         thread.IsBackground = true;
         thread.Start();
         Assert.True(thread.Join(TimeSpan.FromSeconds(90)), "UI render hung (a modal dialog or a stuck dispatcher)");
         if (failure != null) throw new Xunit.Sdk.XunitException(failure.ToString());
+        Assert.Null(Application.Current);
     }
 
     private static void RenderAll()
