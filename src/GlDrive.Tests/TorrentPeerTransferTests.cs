@@ -34,7 +34,13 @@ public sealed class TorrentPeerTransferTests
             }
         }.Encode();
         Assert.True(Torrent.TryLoad(metadata, out var torrent));
-        await File.WriteAllBytesAsync(Path.Combine(seedDirectory, "payload.bin"), payload);
+        // Give the only reachable peer exactly one valid piece. Its advertised
+        // availability is the barrier: even an arbitrarily fast downloader cannot
+        // finish before the progress observer gets to cancel the first operation.
+        var partialSeed = (byte[])payload.Clone();
+        for (var offset = 16384; offset < partialSeed.Length; offset += 16384)
+            partialSeed[offset] ^= 0xff;
+        await File.WriteAllBytesAsync(Path.Combine(seedDirectory, "payload.bin"), partialSeed);
         var metadataPath = Path.Combine(cache, "metadata", torrent.InfoHashes.V1OrV2.ToHex() + ".torrent");
         Directory.CreateDirectory(Path.GetDirectoryName(metadataPath)!);
         await File.WriteAllBytesAsync(metadataPath, metadata);
@@ -46,7 +52,8 @@ public sealed class TorrentPeerTransferTests
         try
         {
             await seed.StartAsync();
-            await Until(() => seed.State == TorrentState.Seeding, deadline.Token);
+            await Until(() => seed.State == TorrentState.Downloading, deadline.Token);
+            Assert.Equal(1, seed.Bitfield.TrueCount);
             var item = new DownloadItem
             {
                 SourceKind = DownloadSourceKind.Torrent, RemotePath = torrent.InfoHashes.V1OrV2.ToHex(),
@@ -56,6 +63,19 @@ public sealed class TorrentPeerTransferTests
             byte[]? checkpoint = null;
             for (var phase = 0; phase < 2; phase++)
             {
+                if (phase == 1)
+                {
+                    // Open the availability barrier only after cancellation has
+                    // drained the first downloader and saved its partial checkpoint.
+                    await seed.StopAsync(TimeSpan.FromSeconds(2));
+                    Assert.Equal(TorrentState.Stopped, seed.State);
+                    await File.WriteAllBytesAsync(Path.Combine(seedDirectory, "payload.bin"), payload);
+                    await seed.HashCheckAsync(autoStart: false);
+                    Assert.Equal(TorrentState.Stopped, seed.State);
+                    Assert.True(seed.Bitfield.AllTrue);
+                    await seed.StartAsync();
+                    await Until(() => seed.State == TorrentState.Seeding, deadline.Token);
+                }
                 var engine = new ClientEngine(Settings(cache));
                 var backend = new LocalPeerBackend(engine, new Uri($"ipv4://127.0.0.1:{port}"));
                 await using var source = new TorrentDownloadSource(() => backend, TimeSpan.FromMilliseconds(10));
@@ -77,7 +97,8 @@ public sealed class TorrentPeerTransferTests
                 if (firstPhase)
                 {
                     await Assert.ThrowsAnyAsync<OperationCanceledException>(() => transfer);
-                    Assert.InRange(interruptedAt, 1, payload.Length - 1);
+                    Assert.Equal(16384, interruptedAt);
+                    Assert.Equal(1, seed.Bitfield.TrueCount);
                 }
                 else await transfer;
                 Assert.True(backend.PeerAdded);
@@ -106,7 +127,7 @@ public sealed class TorrentPeerTransferTests
         ListenEndPoints = listenPort == null ? [] : new() { ["ipv4"] = new IPEndPoint(IPAddress.Loopback, listenPort.Value) },
         AllowLocalPeerDiscovery = false, AllowPortForwarding = false,
         AutoSaveLoadFastResume = true, AutoSaveLoadMagnetLinkMetadata = true,
-        MaximumDownloadRate = 128 * 1024, MaximumUploadRate = 512 * 1024
+        MaximumDownloadRate = 0, MaximumUploadRate = 0
     }.ToSettings();
 
     private static int FreeLoopbackPort()
