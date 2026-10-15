@@ -6,26 +6,15 @@ using Serilog;
 namespace GlDrive.Player;
 
 /// <summary>
-/// Finds the local IPv4 address of a VPN tunnel adapter so torrent sockets can be bound to it,
-/// keeping torrent traffic on the VPN while GlDrive's FTP and IRC connections keep using the
-/// default route.
+/// Finds the local IPv4 address of a requested VPN adapter. TorrentStreamService uses it
+/// for the incoming listener and DHT socket; TorrentPeerNetworking resolves it again for
+/// each outgoing peer connection and gives it precedence over ordinary download adapters.
+/// FTP and IRC retain their own routing policies.
 ///
-/// Why binding rather than ProtonVPN's own split tunnelling (asked 2026-08-15): Proton's split
-/// tunnelling is PER-PROCESS. GlDrive does FTP, IRC and BitTorrent from one GlDrive.exe, so
-/// Proton can only put the whole process in or out of the tunnel — it cannot tell one socket
-/// from another. Binding individual sockets is the only mechanism with the right granularity,
-/// and it is what qBittorrent's "Network Interface" setting does.
-///
-/// This works on this machine because the VPN is NOT the default route: measured 2026-08-15,
-/// ProtonVPN's route metric was 32000 against Ethernet's 25, and Find-NetRoute resolved a
-/// normal connection to 192.168.1.92. So ordinary traffic already bypasses the tunnel and only
-/// the explicitly-bound sockets ride it.
-///
-/// KNOWN LIMIT — read before trusting this. It binds what MonoTorrent 3.0.2 exposes: the
-/// incoming listener and the DHT socket. It CANNOT bind outgoing peer connections, because
-/// injecting a custom ISocketConnector needs the `Factories` API that does not exist in 3.0.2,
-/// and 3.0.2 is the newest stable release (3.0.3 and 3.9.0 are alpha). Outgoing connections
-/// therefore still follow the default route. This is a partial measure, not a leak-proof one.
+/// This is socket binding, not complete VPN isolation. Tracker and DNS traffic are not
+/// bound here, existing sockets are not migrated on an adapter change, and listener/DHT
+/// bindings require service recreation to change. An unavailable adapter retains the
+/// configured warning-and-default-route behavior instead of acting as a kill switch.
 /// </summary>
 public static class VpnBinding
 {
@@ -41,8 +30,7 @@ public static class VpnBinding
     /// reads "WireGuard Tunnel", and either could be what a user types.
     ///
     /// The address is deliberately resolved fresh rather than remembered: a VPN reconnect or
-    /// server switch changes it (10.2.0.2 today), so a cached value is a silent misbind waiting
-    /// to happen.
+    /// server switch can change it, so a cached value could bind the wrong interface.
     /// </summary>
     public static string? ResolveAddress(string wanted, IEnumerable<Adapter> adapters)
     {

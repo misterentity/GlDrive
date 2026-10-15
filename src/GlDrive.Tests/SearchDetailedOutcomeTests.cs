@@ -160,8 +160,36 @@ public sealed class SearchDetailedOutcomeTests
         Assert.Single(result.Results);
         Assert.True(result.TimedOut);
         Assert.True(result.IsPartial);
-        using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => f.Search.SearchDetailed("prophets", ct: cancel.Token));
+        // A 20 ms caller timer racing the same 80 ms search deadline is not
+        // deterministic under a loaded test runner: timer callbacks can execute
+        // out of due-time order. Cancel an actual in-flight listing explicitly,
+        // with no competing internal deadline in this caller-cancellation case.
+        var listingStarted = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseListing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var callerFixture = new Fixture(new() { Method = SearchMethod.LiveCrawl, SearchPaths = ["/TV"], MaxDepth = 1 },
+            async (path, ct) =>
+            {
+                if (path == "/TV") return [Dir("/TV/Small.Prophets.1080p")];
+                listingStarted.TrySetResult(ct);
+                await releaseListing.Task.WaitAsync(ct);
+                return [];
+            }, Unsupported, Timeout.InfiniteTimeSpan);
+        using var cancel = new CancellationTokenSource();
+        var search = callerFixture.Search.SearchDetailed("prophets", ct: cancel.Token);
+        try
+        {
+            var operationToken = await listingStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.False(search.IsCompleted);
+            cancel.Cancel();
+            Assert.True(operationToken.IsCancellationRequested);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => search.WaitAsync(TimeSpan.FromSeconds(10)));
+        }
+        finally
+        {
+            cancel.Cancel();
+            releaseListing.TrySetResult();
+            try { await search.WaitAsync(TimeSpan.FromSeconds(10)); } catch (OperationCanceledException) { }
+        }
     }
 
     [Fact]

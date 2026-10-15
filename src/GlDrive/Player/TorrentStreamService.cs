@@ -23,13 +23,15 @@ public partial class TorrentStreamService : IDisposable
 
     /// <param name="vpnAdapterName">
     /// Name (or description fragment) of a VPN tunnel adapter to bind torrent sockets to, e.g.
-    /// "ProtonVPN". Null or empty binds to all interfaces, i.e. the ordinary connection.
+    /// "ProtonVPN". When set and available, it takes precedence over the selected download
+    /// networks for outgoing peers and binds the incoming listener and DHT socket.
+    /// With no VPN preference, outgoing peers use the selected download networks (or the
+    /// default route); the listener and DHT retain their ordinary all-interface binding.
     ///
-    /// PARTIAL BY CONSTRUCTION — see <see cref="VpnBinding"/>. This binds the incoming listener
-    /// and the DHT socket, which is everything MonoTorrent 3.0.2 exposes. Outgoing peer
-    /// connections cannot be bound: that needs a custom ISocketConnector injected through the
-    /// `Factories` API, which does not exist in 3.0.2, and 3.0.2 is the newest STABLE release
-    /// (3.0.3 and 3.9.0 are alpha). Treat this as reducing exposure, not eliminating it.
+    /// Outgoing peer addresses are resolved for each new connection; listener and DHT
+    /// bindings are chosen at service construction. Tracker and DNS traffic are not bound
+    /// by this setting. A missing adapter preserves the existing warning-and-default-route
+    /// policy, so this is not a VPN kill switch. See <see cref="VpnBinding"/>.
     /// </param>
     /// <param name="maxDownloadBytesPerSecond">Engine-wide download cap, 0 = unlimited. See <see cref="DownloadRateLimit"/>.</param>
     public TorrentStreamService(
@@ -80,7 +82,8 @@ public partial class TorrentStreamService : IDisposable
             HttpStreamingPrefix = $"http://127.0.0.1:{httpPort}/",
         }.ToSettings();
 
-        _engine = new ClientEngine(settings);
+        var peerNetworking = TorrentPeerNetworking.ForDownloads(vpnAdapterName);
+        _engine = new ClientEngine(settings, peerNetworking.ApplyTo(TorrentTrackerFactories.Create()));
     }
 
     /// <summary>
