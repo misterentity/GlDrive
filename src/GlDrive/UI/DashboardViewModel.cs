@@ -139,9 +139,9 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     // Overview tab data. RefreshOverview() rebuilds these.
     public ObservableCollection<OverviewServerVm> MountedServerStatus { get; } = new();
-    public int MountedServerCount => MountedServerStatus.Count;
+    public int MountedServerCount => MountedServerStatus.Count(s => s.IsMounted || s.StatusLine == "CONNECTED");
     public int ConfiguredServerCount => _config.Servers.Count;
-    public string OperationsLogPreview { get; private set; } = "loading...";
+    public string OperationsLogPreview { get; private set; } = "No recent activity. Connect a server to get started.";
 
     // Mounts tab: TOFU trusted-cert list. RefreshMounts() rebuilds.
     public ObservableCollection<TrustedCertVm> TrustedCerts { get; } = new();
@@ -374,13 +374,13 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         return "";
     }
 
-    // Seed the throughput sparkline with 60 baseline points (Y = 20, the
-    // midpoint of a 40px chart) so the Polyline has geometry on first paint.
+    // Seed the throughput sparkline with 60 baseline points (Y = 40, the
+    // bottom of a 40px chart) so the Polyline has geometry on first paint.
     private void EnsureThroughputSeed()
     {
         if (_throughputPoints.Count == 60) return;
         var seed = new PointCollection();
-        for (int i = 0; i < 60; i++) seed.Add(new Point(i, 20));
+        for (int i = 0; i < 60; i++) seed.Add(new Point(i, 40));
         ThroughputPoints = seed;
     }
 
@@ -437,7 +437,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                 var mbps = progress.BytesPerSecond / (1024.0 * 1024.0);
                 var display = progress.BytesPerSecond <= 0
                     ? ""
-                    : (mbps >= 1.0 ? $"{mbps:0.0} MB/s" : $"{progress.BytesPerSecond / 1024.0:0} KB/s");
+                    : (mbps >= 1.0 ? $"{mbps:0.0} MiB/s" : $"{progress.BytesPerSecond / 1024.0:0} KB/s");
                 Application.Current?.Dispatcher.BeginInvoke(() =>
                 {
                     if (_downloadItemById.TryGetValue(item.Id, out var vm))
@@ -479,8 +479,8 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         var rxMb = rxBytesPerSec / (1024.0 * 1024.0);
         var txMb = txBytesPerSec / (1024.0 * 1024.0);
 
-        RxRateDisplay = $"{rxMb:0.0} MB/s";
-        TxRateDisplay = $"{txMb:0.0} MB/s";
+        RxRateDisplay = $"{rxMb:0.0} MiB/s";
+        TxRateDisplay = $"{txMb:0.0} MiB/s";
 
         // Sparkline Y range is 0..40 (chart height). Scale rxMb against a soft
         // upper bound of 50 MB/s; anything above clamps to the top of the chart.

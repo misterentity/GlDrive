@@ -30,6 +30,7 @@ public partial class ExtractorWindow : Window
     // InitializeComponent and LoadSettings, when not all UI controls exist
     // yet OR when internal state like _watchEnabled hasn't been restored.
     private bool _initialized;
+    private readonly bool _demoMode;
 
     // Watch folder monitoring
     private readonly List<FileSystemWatcher> _watchers = new();
@@ -84,14 +85,20 @@ public partial class ExtractorWindow : Window
     private static readonly string SettingsPath =
         Path.Combine(ConfigManager.AppDataPath, "extractor-settings.json");
 
-    public ExtractorWindow()
+    public ExtractorWindow() : this(demoMode: false) { }
+
+    internal ExtractorWindow(bool demoMode)
     {
+        _demoMode = demoMode;
         InitializeComponent();
         ArchiveGrid.ItemsSource = Archives;
         Archives.CollectionChanged += (_, _) => UpdateDropHint();
         UpdateDropHint();
-        LoadSettings();
-        _abandonStore.Load();
+        if (!demoMode)
+        {
+            LoadSettings();
+            _abandonStore.Load();
+        }
         _initialized = true; // Enable Settings_Changed → SaveSettings from here on
     }
 
@@ -101,7 +108,7 @@ public partial class ExtractorWindow : Window
         // controls or internal state may not be fully set up yet, and any
         // save at that point would both crash (NullReferenceException) and
         // corrupt the on-disk settings with intermediate state.
-        if (!_initialized) return;
+        if (!_initialized || _demoMode) return;
         SaveSettings();
     }
 
@@ -1195,6 +1202,7 @@ public partial class ExtractorWindow : Window
 
     private void SaveSettings(bool throwOnError = false)
     {
+        if (_demoMode) return;
         try
         {
             var s = new ExtractorSettings
@@ -2274,7 +2282,7 @@ public partial class ExtractorWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
-        SaveSettings();
+        if (!_demoMode) SaveSettings();
         _lifetimeCts.Cancel();
         try { _cts?.Cancel(); } catch (ObjectDisposedException) { }
         StopAllWatchers();

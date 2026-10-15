@@ -8,6 +8,15 @@
         WindowStartupLocation="CenterScreen" ResizeMode="CanResize"
         Background="{DynamicResource BackgroundBrush}"
         Foreground="{DynamicResource ForegroundBrush}">
+    <Window.Resources>
+        <Style x:Key="SelectedServerAction" TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding SelectedItems.Count, ElementName=ServerGrid}" Value="0">
+                    <Setter Property="IsEnabled" Value="False"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
     <Border Margin="14" Style="{DynamicResource HudPanelStyle}">
         <DockPanel>
             <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
@@ -24,7 +33,7 @@
                     <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
                     <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
                     <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
-                    <TabControl x:Name="SettingsTabs" TabStripPlacement="Left" Tag="SettingsTabs">
+                    <TabControl x:Name="SettingsTabs" TabStripPlacement="Left" Tag="SettingsTabs" Style="{DynamicResource SidebarTabControlStyle}">
             <!-- Servers Tab -->
             <TabItem Tag="Servers">
                 <TabItem.Header>
@@ -37,34 +46,55 @@
                         <TextBlock Grid.Column="1" Text="SERVERS" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
-                <DockPanel Margin="12">
-                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,10,0,0">
+                <DockPanel Margin="18,14,22,18">
+                    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
+                        <TextBlock Text="Servers" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <TextBlock Text="Manage connections and mounted drives. Select a server to edit it; use Ctrl or Shift to select several."
+                                   TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}"/>
+                    </StackPanel>
+                    <WrapPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
                         <Button Content="Add Server" Click="AddServer_Click"
                                 Padding="12,6" Margin="0,0,6,0" Style="{StaticResource PrimaryButton}"/>
                         <Button Content="Edit" Click="EditServer_Click"
-                                Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"/>
+                                Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SelectedServerAction}"/>
                         <Button Content="Remove" Click="RemoveServer_Click"
-                                Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"/>
+                                Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SelectedServerAction}"/>
                         <Button Content="Enable" Click="EnableServer_Click"
-                                Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"
+                                Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SelectedServerAction}"
                                 ToolTip="Enable selected server(s)"/>
                         <Button Content="Disable" Click="DisableServer_Click"
-                                Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"
+                                Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SelectedServerAction}"
                                 ToolTip="Disable selected server(s)"/>
                         <Button Content="Import Sites..." Click="ImportSites_Click"
                                 Padding="12,6" Style="{StaticResource SecondaryButton}"/>
-                    </StackPanel>
+                    </WrapPanel>
+                    <Grid>
                     <DataGrid x:Name="ServerGrid"
                               AutoGenerateColumns="False" IsReadOnly="True"
                               SelectionMode="Extended" GridLinesVisibility="Horizontal"
                               HeadersVisibility="Column" CanUserAddRows="False">
                         <DataGrid.Columns>
-                            <DataGridCheckBoxColumn Header="Enabled" Binding="{Binding Enabled}" Width="60"/>
+                            <DataGridCheckBoxColumn Header="Enabled" Binding="{Binding Enabled}" Width="75"/>
                             <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*"/>
                             <DataGridTextColumn Header="Host" Binding="{Binding Host}" Width="150"/>
                             <DataGridTextColumn Header="Drive" Binding="{Binding DriveLetter}" Width="55"/>
                         </DataGrid.Columns>
                     </DataGrid>
+                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="24" IsHitTestVisible="False">
+                        <StackPanel.Style>
+                            <Style TargetType="StackPanel">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Items.Count, ElementName=ServerGrid}" Value="0">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </StackPanel.Style>
+                        <TextBlock Text="Add your first server" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,8"/>
+                        <TextBlock Text="Choose Add Server, or import your existing FTPRush or FlashFXP sites." TextWrapping="Wrap" TextAlignment="Center" MaxWidth="380" Foreground="{DynamicResource ForegroundDimBrush}"/>
+                    </StackPanel>
+                    </Grid>
                 </DockPanel>
             </TabItem>
 
@@ -80,8 +110,10 @@
                         <TextBlock Grid.Column="1" Text="PERFORMANCE" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel Margin="12">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel Margin="18,14,22,18">
+                        <TextBlock Text="Performance" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <TextBlock Text="Tune transfer buffers and retry behavior. Speed limits and networks are in Streams &amp; uplinks." TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,18"/>
                         <!-- Downloads Section -->
                         <TextBlock Text="Downloads" FontWeight="SemiBold" Margin="0,0,0,8"/>
                         <TextBlock Text="Streaming Buffer Size (KB):" Margin="0,0,0,4"/>
@@ -94,7 +126,7 @@
                         <TextBox Text="{Binding MaxConcurrentDownloads, UpdateSourceTrigger=PropertyChanged}"
                                  Width="80" HorizontalAlignment="Left" Margin="0,0,0,12"/>
                         <TextBlock Text="Speed limits, slow mode and networks live under STREAMS &amp; UPLINKS."
-                                   Foreground="{DynamicResource ForegroundDimBrush}" FontSize="11" Margin="0,0,0,12"/>
+                                   Foreground="{DynamicResource ForegroundDimBrush}" TextWrapping="Wrap" FontSize="12" Margin="0,0,0,12"/>
                         <Separator Margin="0,0,0,12"/>
                         <TextBlock Text="Auto-Retry" FontWeight="SemiBold" Margin="0,0,0,8"/>
                         <TextBlock Text="Max Retries (0=disabled):" Margin="0,0,0,4"/>
@@ -134,8 +166,10 @@
                         <TextBlock Grid.Column="1" Text="DOWNLOADS" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel Margin="12">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel Margin="18,14,22,18">
+                        <TextBlock Text="Downloads" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <TextBlock Text="Choose where files go, how they are processed, and when downloads can run." TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,18"/>
                         <TextBlock Text="Default Download Folder:" Margin="0,0,0,4"/>
                         <DockPanel Margin="0,0,0,8">
                             <Button DockPanel.Dock="Right" Content="Browse..." Click="BrowseDownloadPath_Click"
@@ -148,6 +182,8 @@
                                   SelectedItem="{Binding QualityDefault}" Width="120"
                                   HorizontalAlignment="Left" Margin="0,0,0,8"/>
 
+                        <Separator Margin="0,8,0,14"/>
+                        <TextBlock Text="Search &amp; AI services" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,10"/>
                         <TextBlock Text="OMDB API Key (for movie search):" Margin="0,0,0,4"/>
                         <TextBox Text="{Binding OmdbApiKey, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
 
@@ -156,10 +192,10 @@
 
                         <TextBlock Text="OpenRouter API Key (for AI Setup):" Margin="0,0,0,4"/>
                         <TextBox Text="{Binding OpenRouterApiKey, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,4"/>
-                        <DockPanel Margin="0,0,0,8">
+                        <StackPanel Margin="0,0,0,16">
                             <TextBlock Text="AI Model:" VerticalAlignment="Center" Margin="0,0,6,0"/>
                             <TextBox Text="{Binding OpenRouterModel, UpdateSourceTrigger=PropertyChanged}"
-                                     Width="300" HorizontalAlignment="Left" Margin="0,0,0,2"/>
+                                     Margin="0,6,0,8"/>
                             <ItemsControl ItemsSource="{Binding OpenRouterModels}" Margin="0,0,0,0">
                                 <ItemsControl.ItemsPanel>
                                     <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
@@ -167,13 +203,14 @@
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
                                         <Button Content="{Binding}" Padding="6,2" Margin="0,0,4,2"
-                                                FontSize="10" Cursor="Hand"
+                                                FontSize="12" Cursor="Hand"
                                                 Click="ModelPreset_Click"/>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
-                        </DockPanel>
+                        </StackPanel>
 
+                        <TextBlock Text="After a download" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,8"/>
                         <CheckBox Content="Auto-download wishlist matches"
                                   IsChecked="{Binding AutoDownloadWishlist}" Margin="0,8,0,4"/>
                         <CheckBox Content="Auto-extract RAR archives after download"
@@ -191,15 +228,16 @@
                         <TextBlock Text="Download Schedule" FontWeight="SemiBold" Margin="0,0,0,4"/>
                         <CheckBox Content="Only download during scheduled hours"
                                   IsChecked="{Binding ScheduleEnabled}" Margin="0,0,0,8"/>
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
-                            <TextBlock Text="From hour:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6" IsEnabled="{Binding ScheduleEnabled}">
+                            <TextBlock Text="Start hour (0–23):" VerticalAlignment="Center" Margin="0,0,6,0"/>
                             <TextBox Text="{Binding ScheduleStartHour, UpdateSourceTrigger=PropertyChanged}"
                                      Width="50" Margin="0,0,16,0"/>
-                            <TextBlock Text="To hour:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBlock Text="End hour (0–23):" VerticalAlignment="Center" Margin="0,0,6,0"/>
                             <TextBox Text="{Binding ScheduleEndHour, UpdateSourceTrigger=PropertyChanged}"
                                      Width="50"/>
                         </StackPanel>
 
+                        <TextBlock Text="Uses local time. An end hour earlier than the start continues overnight." TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12" Margin="0,0,0,16"/>
                         <Separator Margin="0,0,0,12"/>
 
                         <!-- Category Path Routing -->
@@ -239,8 +277,10 @@
                         <TextBlock Grid.Column="1" Text="SPREAD" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel Margin="12">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel Margin="18,14,22,18">
+                        <TextBlock Text="Spread &amp; FXP" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <TextBlock Text="Control server-to-server transfers, connection health, and shared skip rules." TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,18"/>
                         <TextBlock Text="Spread Pool Size (per server):" Margin="0,0,0,4"/>
                         <TextBox Text="{Binding SpreadPoolSize, UpdateSourceTrigger=PropertyChanged}"
                                  Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
@@ -311,22 +351,22 @@
                         <TextBlock Grid.Column="1" Text="AI-AGENT" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
-              <ScrollViewer VerticalScrollBarVisibility="Auto">
-                <StackPanel Margin="12">
-                  <TextBlock Text="Nightly AI Agent" FontSize="18" FontWeight="Bold" Margin="0,0,0,8"/>
-                  <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource SecondaryTextBrush}" Margin="0,0,0,12">
-                    Reviews telemetry overnight and applies config tweaks within safety rails. BYOK via OpenRouter.
+              <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel Margin="18,14,22,18">
+                  <TextBlock Text="Nightly AI agent" FontSize="22" FontWeight="Bold" Margin="0,0,0,8"/>
+                  <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,12">
+                    Reviews recent activity overnight and suggests or applies settings changes. Uses your OpenRouter API key from Downloads.
                   </TextBlock>
 
-                  <CheckBox Content="Enabled" IsChecked="{Binding AgentEnabled}" Margin="0,0,0,8"/>
+                  <CheckBox Content="Enable nightly reviews" IsChecked="{Binding AgentEnabled}" Margin="0,0,0,8"/>
 
                   <TextBlock Text="Run hour (local, 0–23)" Margin="0,6,0,2"/>
                   <TextBox Text="{Binding AgentRunHourLocal, UpdateSourceTrigger=PropertyChanged}" Width="80" HorizontalAlignment="Left"/>
 
                   <TextBlock Text="Model (OpenRouter id)" Margin="0,10,0,2"/>
                   <Border BorderBrush="{DynamicResource AccentBrush}" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,4">
-                    <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource SecondaryTextBrush}">
-                      Suggested: anthropic/claude-sonnet-4-6 — best long-context reasoning for log review. Free tier models work but can miss trends.
+                    <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource ForegroundDimBrush}">
+                      Enter an OpenRouter model ID, such as anthropic/claude-sonnet-4-6. Model availability and cost depend on your OpenRouter account.
                     </TextBlock>
                   </Border>
                   <TextBox Text="{Binding AgentModelId, UpdateSourceTrigger=PropertyChanged}" Width="320" HorizontalAlignment="Left"/>
@@ -347,10 +387,10 @@
                     <Button Content="Reset to 3" Command="{Binding ResetDryRunsCommand}" Margin="8,0,0,0"/>
                   </StackPanel>
 
-                  <TextBlock Text="Window (days)" Margin="0,10,0,2"/>
+                  <TextBlock Text="Telemetry review window (days)" Margin="0,10,0,2"/>
                   <TextBox Text="{Binding AgentWindowDays, UpdateSourceTrigger=PropertyChanged}" Width="80" HorizontalAlignment="Left"/>
 
-                  <TextBlock Text="Nuke poll interval (hours)" Margin="0,10,0,2"/>
+                  <TextBlock Text="Release status check interval (hours)" Margin="0,10,0,2"/>
                   <TextBox Text="{Binding AgentNukePollIntervalHours, UpdateSourceTrigger=PropertyChanged}" Width="80" HorizontalAlignment="Left"/>
 
                   <TextBlock Text="Retention" FontWeight="Bold" Margin="0,16,0,4"/>
@@ -390,7 +430,10 @@
                         <TextBlock Grid.Column="1" Text="DIAGNOSTICS" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
-                <StackPanel Margin="12">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel Margin="18,14,22,18">
+                    <TextBlock Text="Appearance &amp; diagnostics" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                    <TextBlock Text="Choose your theme and manage troubleshooting information." TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,18"/>
                     <TextBlock Text="Theme:" Margin="0,0,0,4"/>
                     <ComboBox ItemsSource="{Binding ThemeOptions}"
                               SelectedItem="{Binding Theme}" Width="150" HorizontalAlignment="Left" Margin="0,0,0,12"/>
@@ -407,6 +450,7 @@
                     <Button Content="Open Log Folder" Click="OpenLogs_Click"
                             HorizontalAlignment="Left" Padding="16,6"/>
                 </StackPanel>
+                </ScrollViewer>
             </TabItem>
 
             <TabItem Tag="MCP" x:Name="McpTabItem">
@@ -427,9 +471,9 @@
 
                 <!-- Buttons -->
                 <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
-                    <Button Content="Save" Click="Save_Click" Padding="20,6" Margin="0,0,8,0"
+                    <Button Content="Save settings" Click="Save_Click" Padding="20,6" Margin="0,0,8,0"
                             Style="{StaticResource PrimaryButton}"/>
-                    <Button Content="Cancel" Click="Cancel_Click" Padding="20,6"
+                    <Button Content="Cancel" Click="Cancel_Click" IsCancel="True" Padding="20,6"
                             Style="{StaticResource SecondaryButton}"/>
                 </StackPanel>
             </Grid>

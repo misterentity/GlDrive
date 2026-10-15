@@ -12,10 +12,13 @@ namespace GlDrive.UI;
 
 internal static class ScreenshotCapture
 {
-    private static readonly string OutputDir = Path.Combine(ConfigManager.AppDataPath, "screenshots");
+    private static string OutputDir = Path.Combine(ConfigManager.AppDataPath, "screenshots");
 
-    internal static void CaptureAll(AppConfig config)
+    internal static void CaptureAll(AppConfig config, string? themeOverride = null)
     {
+        OutputDir = Path.Combine(ConfigManager.AppDataPath, "screenshots");
+        if (themeOverride is "Dark" or "Light" or "Cyberpunk")
+            OutputDir = Path.Combine(OutputDir, themeOverride);
         Directory.CreateDirectory(OutputDir);
 
         // Apply the user's saved theme before capturing. Without this, screenshots
@@ -25,7 +28,7 @@ internal static class ScreenshotCapture
         // showed basic dark styling but missed the 69KB CyberpunkTheme.xaml
         // brushes / effects / control templates that the actual running app
         // uses. The 'screenshots show the old UI' complaint was this mismatch.
-        var themeName = config.Downloads.Theme;
+        var themeName = themeOverride ?? config.Downloads.Theme;
         if (string.IsNullOrEmpty(themeName)) themeName = "Cyberpunk";
         try { ThemeManager.ApplyTheme(themeName); }
         catch (Exception ex) { Serilog.Log.Debug(ex, "Screenshot: theme apply failed (non-fatal)"); }
@@ -37,6 +40,7 @@ internal static class ScreenshotCapture
         CaptureWizard();
         CaptureDashboard(demoConfig);
         CaptureSettings(demoConfig);
+        CaptureUtilityWindows(demoConfig);
     }
 
     private static AppConfig BuildDemoConfig()
@@ -81,7 +85,7 @@ internal static class ScreenshotCapture
         SeedNotifications(notificationStore);
 
         var serverManager = new ServerManager(config, certManager, notificationStore);
-        var dashboard = new DashboardWindow(serverManager, config, notificationStore);
+        var dashboard = new DashboardWindow(serverManager, config, notificationStore, demoMode: true);
         dashboard.Show();
         DoEvents();
 
@@ -99,8 +103,33 @@ internal static class ScreenshotCapture
             foreach (var sr in BuildDemoSearchResults()) vm.SearchResults.Add(sr);
             vm.WishlistItems.Clear();
             foreach (var w in BuildDemoWishlist()) vm.WishlistItems.Add(w);
+            vm.MountedServerStatus.Clear();
+            vm.MountedServerStatus.Add(new OverviewServerVm
+            {
+                Name = "My Server", Host = "ftp.example.com:21", StatusLine = "OFFLINE", SiteTag = "OFFLINE",
+                CapacityUsedDisplay = "0", CapacityTotalDisplay = "4"
+            });
+            dashboard.DataContext = null;
+            dashboard.DataContext = vm;
         }
         DoEvents();
+
+        using var demoBrowse = new BrowseViewModel(serverManager, config);
+        ((TabItem)dashboard.FindName("BrowseTab")).DataContext = demoBrowse;
+        using var demoPlayer = new PlayerViewModel(serverManager, config);
+        ((Grid)dashboard.FindName("PlayerTab")).DataContext = demoPlayer;
+        using var demoSpread = new SpreadViewModel(serverManager, config);
+        demoSpread.RaceHistory.Clear();
+        demoSpread.SessionSummary = "Demo session: 1 active race";
+        demoSpread.SpreadSections.Add("MOVIES");
+        demoSpread.SelectedSection = "MOVIES";
+        demoSpread.SpreadJobs.Add(new GlDrive.Spread.SpreadJobVm
+        {
+            Id = "demo-race", Release = "Sample.Movie.2026.1080p.WEB-GROUP", Section = "MOVIES",
+            ProgressPercent = 48, Status = "Transferring", SourceDisplay = "site-a", DestDisplay = "site-b",
+            FilesDoneTotalDisplay = "24 / 50", Score = 32000, ScoreLabel = "32,000"
+        });
+        ((TabItem)dashboard.FindName("SpreadTab")).DataContext = demoSpread;
 
         // Tab headers in DashboardWindow.xaml include disabled "section header"
         // TabItems (+ DASHBOARD, + TRANSFERS, + MEDIA, + COMMS) interleaved with
@@ -111,12 +140,19 @@ internal static class ScreenshotCapture
 
         var dashboardTabs = new[]
         {
+            ("overview", "Overview"),
+            ("player", "Player"),
+            ("spread", "Spread"),
             ("notifications", "Notifications"),
             ("wishlist",      "Wishlist"),
             ("downloads",     "Downloads"),
             ("search",        "Search"),
             ("upcoming",      "Upcoming"),
             ("plex",          "Plex"),
+            ("irc", "IRC"),
+            ("predb", "PreDB"),
+            ("browse", "Browse"),
+            ("mounts", "Mounts"),
         };
 
         if (tabControl != null)
@@ -130,6 +166,33 @@ internal static class ScreenshotCapture
             }
         }
 
+        if (tabControl != null)
+        {
+            dashboard.Width = dashboard.MinWidth;
+            dashboard.Height = dashboard.MinHeight;
+            foreach (var header in new[] { "Downloads", "Search", "Notifications", "Browse", "Overview", "Player", "Spread" })
+            {
+                SelectTabByHeader(tabControl, header);
+                dashboard.UpdateLayout();
+                DoEvents();
+                RenderToFile(dashboard, $"dashboard-{header.ToLowerInvariant()}-narrow.png");
+            }
+            if (dashboard.DataContext is DashboardViewModel demoVm)
+            {
+                demoVm.DownloadItems.Clear();
+                demoVm.WishlistItems.Clear();
+                demoVm.SearchResults.Clear();
+                demoVm.NotificationItems.Clear();
+                dashboard.DataContext = null;
+                dashboard.DataContext = demoVm;
+                foreach (var header in new[] { "Downloads", "Wishlist", "Search", "Notifications" })
+                {
+                    SelectTabByHeader(tabControl, header);
+                    DoEvents();
+                    RenderToFile(dashboard, $"dashboard-{header.ToLowerInvariant()}-empty.png");
+                }
+            }
+        }
         dashboard.Close();
         serverManager.Dispose();
     }
@@ -328,6 +391,9 @@ internal static class ScreenshotCapture
         {
             ("servers",     "Servers"),
             ("performance", "Performance"),
+            ("streams", "STREAMS"),
+            ("spread", "Spread"),
+            ("agent", "AI-AGENT"),
             ("downloads",   "Downloads"),
             ("diagnostics", "Diagnostics"),
             ("mcp",         "MCP"),
@@ -361,6 +427,224 @@ internal static class ScreenshotCapture
 
         settings.Close();
         serverManager.Dispose();
+    }
+
+    private static void CaptureUtilityWindows(AppConfig demoConfig)
+    {
+        foreach (var (window, name) in new (Window, string)[]
+        {
+            (new ServerEditDialog(demoConfig.Servers[0]), "dialog-server"),
+            (new RuleTestDialog(demoConfig.Servers[0].SpreadSite), "dialog-rule-test"),
+            (new TagRulesDialog(new SectionMapping { IrcSection = "MOVIES", RemoteSection = "MOVIES" }), "dialog-tag-rules"),
+            (new FirstRunAgentConsentDialog("Demo model"), "dialog-agent-consent"),
+            (new RevertRunsDialog(), "dialog-revert-runs"),
+            (new MetadataSearchDialog(MediaType.TvShow, ""), "dialog-metadata-search"),
+            (new GlftpdInstallerWindow(), "dialog-installer")
+        })
+        {
+            window.Show();
+            window.UpdateLayout();
+            DoEvents();
+            RenderToFile(window, name + ".png");
+            window.Close();
+        }
+
+        // These views use only in-memory sample data. In particular, extractor demo mode
+        // skips saved watch folders and never writes extractor settings when closed.
+        var extractor = new ExtractorWindow(demoMode: true);
+        extractor.Archives.Add(new ArchiveItem
+        {
+            FileName = "Sample.Documentary.2026.1080p.WEB.part01.rar",
+            FilePath = @"C:\Downloads\Sample.Documentary.2026\Sample.Documentary.2026.1080p.WEB.part01.rar",
+            ArchiveType = "RAR", SizeText = "2.4 GB", EntryCount = 8, Status = "Done", Progress = 100
+        });
+        extractor.Archives.Add(new ArchiveItem
+        {
+            FileName = "Sample.Series.S01E02.2160p.WEB.part01.rar",
+            FilePath = @"C:\Downloads\Sample.Series.S01E02\Sample.Series.S01E02.2160p.WEB.part01.rar",
+            ArchiveType = "RAR", SizeText = "4.8 GB", EntryCount = 12, Status = "Extracting", Progress = 44.6
+        });
+        extractor.Archives.Add(new ArchiveItem
+        {
+            FileName = "Sample.Album.2026.FLAC.zip",
+            FilePath = @"C:\Downloads\Sample.Album.2026\Sample.Album.2026.FLAC.zip",
+            ArchiveType = "ZIP", SizeText = "420 MB", Status = "Queued"
+        });
+        extractor.Archives.Add(new ArchiveItem
+        {
+            FileName = "Sample.Archive.With.A.Long.Descriptive.Name.part01.rar",
+            FilePath = @"C:\Downloads\Sample.Archive\Sample.Archive.With.A.Long.Descriptive.Name.part01.rar",
+            ArchiveType = "RAR", SizeText = "1.8 GB", EntryCount = 5, Status = "Error", Progress = 18,
+            ErrorMessage = "Missing volume: part03.rar. Add the remaining archive parts, then try again."
+        });
+        ((ComboBox)extractor.FindName("OutputMode")).SelectedIndex = 2;
+        ((TextBox)extractor.FindName("CustomOutputPath")).Text = demoConfig.Downloads.LocalPath;
+        ((TextBox)extractor.FindName("WatchFoldersText")).Text = @"C:\Downloads\Incoming";
+        ((TextBlock)extractor.FindName("StatusText")).Text = "4 archives — 1 complete — 1 needs attention";
+        ((ProgressBar)extractor.FindName("TotalProgress")).Value = 41;
+        ((TextBlock)extractor.FindName("TotalProgressText")).Text = "41%";
+        extractor.Show();
+        ((DataGrid)extractor.FindName("ArchiveGrid")).SelectedIndex = 3;
+        extractor.UpdateLayout();
+        DoEvents();
+        RenderToFile(extractor, "extractor-populated.png");
+        extractor.Width = extractor.MinWidth;
+        extractor.Height = extractor.MinHeight;
+        extractor.UpdateLayout();
+        ((DataGrid)extractor.FindName("ArchiveGrid")).ScrollIntoView(extractor.Archives[3]);
+        DoEvents();
+        RenderToFile(extractor, "extractor-minimum.png");
+        extractor.Close();
+
+        var cleanup = new CleanupWindow();
+        cleanup.Show();
+        cleanup.UpdateLayout();
+        DoEvents();
+        RenderToFile(cleanup, "cleanup-empty.png");
+        cleanup.Items.Add(new CleanupItem
+        {
+            FolderName = "Sample.Documentary.2026.1080p.WEB",
+            FolderPath = @"C:\Media\Documentaries\Sample.Documentary.2026.1080p.WEB",
+            ArchiveCount = 24, ArchiveSize = 2576980377L, SizeText = "2.4 GB", MediaCount = 1
+        });
+        cleanup.Items.Add(new CleanupItem
+        {
+            FolderName = "Sample.Series.S01E02.2160p.WEB",
+            FolderPath = @"C:\Media\Series\Sample.Series.S01E02.2160p.WEB",
+            ArchiveCount = 12, ArchiveSize = 1288490188L, SizeText = "1.2 GB", MediaCount = 1
+        });
+        cleanup.Items.Add(new CleanupItem
+        {
+            FolderName = "Sample.Album.2026.FLAC", FolderPath = @"C:\Media\Music\Sample.Album.2026.FLAC",
+            ArchiveCount = 1, ArchiveSize = 440401920L, SizeText = "420 MB", MediaCount = 10, Status = "Cleaned"
+        });
+        ((TextBox)cleanup.FindName("ScanPath")).Text = @"C:\Media";
+        ((TextBlock)cleanup.FindName("ScanHint")).Visibility = Visibility.Collapsed;
+        ((TextBlock)cleanup.FindName("SummaryText")).Text = "2 folders with leftover archives — 3.6 GB reclaimable";
+        ((Button)cleanup.FindName("CleanAllButton")).IsEnabled = true;
+        ((DataGrid)cleanup.FindName("ResultsGrid")).SelectedIndex = 0;
+        cleanup.Width = cleanup.MinWidth;
+        cleanup.Height = cleanup.MinHeight;
+        cleanup.UpdateLayout();
+        DoEvents();
+        RenderToFile(cleanup, "cleanup-populated-minimum.png");
+        cleanup.Close();
+
+        var now = DateTime.UtcNow;
+        var auditRows = new System.Collections.ObjectModel.ObservableCollection<GlDrive.AiAgent.AuditRow>
+        {
+            new() { Ts = now.AddHours(-2).ToString("O"), RunId = "demo-run-001", Category = "pool-sizing",
+                Target = "/servers/demo/pool/maxConnections", Confidence = .96, Applied = true },
+            new() { Ts = now.AddHours(-3).ToString("O"), RunId = "demo-run-001", Category = "site-priority",
+                Target = "/servers/demo/priority", Confidence = .88, Applied = true, Undone = true }
+        };
+        var suggestions = new System.Collections.ObjectModel.ObservableCollection<GlDrive.AiAgent.AuditRow>
+        {
+            new() { Ts = now.AddHours(-2).ToString("O"), RunId = "demo-run-002", Category = "section-mapping",
+                Target = "/servers/demo/sections/documentaries", Confidence = .62,
+                RejectionReason = "Below the configured confidence threshold" },
+            new() { Ts = now.AddHours(-2).ToString("O"), RunId = "demo-run-002", Category = "pool-sizing",
+                Target = "/servers/demo/pool/maxConnections", Confidence = .91, Applied = true, DryRun = true,
+                RejectionReason = "Preview only; settings were not changed" }
+        };
+        var frozen = new System.Collections.ObjectModel.ObservableCollection<GlDrive.AiAgent.FreezeEntry>
+        {
+            new("/servers/demo/excludedCategories", now.AddDays(-1).ToString("O"), "Keep my category preferences")
+        };
+        var demoCommand = new RelayCommand(() => { });
+        var agent = new AgentView(demoMode: true);
+        var agentTabs = ((DockPanel)agent.Content).Children.OfType<TabControl>().Single();
+        // Anonymous demo properties are read-only; the production memo editor normally
+        // writes to AgentViewModel, so use a one-way binding for this rendering fixture.
+        var memoGrid = (Grid)((TabItem)agentTabs.Items[4]).Content;
+        memoGrid.Children.OfType<TextBox>().Single().SetBinding(TextBox.TextProperty,
+            new System.Windows.Data.Binding("Memo") { Mode = System.Windows.Data.BindingMode.OneWay });
+        agent.DataContext = new
+            {
+                BriefMarkdown = "Latest agent report\n\nConnection reliability improved over the last seven days. " +
+                    "Two changes were applied and two suggestions are ready for review.\n\n" +
+                    "Applied changes\n• Adjusted the connection pool to match recent usage.\n" +
+                    "• Updated server priority for more reliable transfers.\n\n" +
+                    "Needs your attention\nReview the proposed section mapping in Suggestions. " +
+                    "Your frozen category preferences were preserved.",
+                AuditRows = auditRows, Suggestions = suggestions, Frozen = frozen,
+                Memo = "Prefer reliable transfers over peak speed.\nKeep my excluded categories unchanged.",
+                RunNowCommand = demoCommand, RefreshCommand = demoCommand, UndoAuditRowCommand = demoCommand,
+                ApplyAnywayCommand = demoCommand, DismissSuggestionCommand = demoCommand,
+                UnfreezeCommand = demoCommand, SaveMemoCommand = demoCommand
+        };
+        var agentWindow = new Window
+        {
+            Title = "AI Agent", Width = 1100, Height = 680, WindowStartupLocation = WindowStartupLocation.CenterScreen,
+            Content = agent
+        };
+        agentWindow.Show();
+        DoEvents();
+        if (agentTabs != null)
+        {
+            var names = new[] { "brief", "audit", "suggestions", "frozen", "memo" };
+            for (var i = 0; i < names.Length; i++)
+            {
+                agentTabs.SelectedIndex = i;
+                agentWindow.UpdateLayout();
+                DoEvents();
+                RenderToFile(agentWindow, $"agent-{names[i]}.png");
+            }
+            auditRows.Clear();
+            suggestions.Clear();
+            frozen.Clear();
+            for (var i = 1; i <= 3; i++)
+            {
+                agentTabs.SelectedIndex = i;
+                agentWindow.UpdateLayout();
+                DoEvents();
+                RenderToFile(agentWindow, $"agent-{names[i]}-empty.png");
+            }
+        }
+        agentWindow.Close();
+
+        const long volume = 1L << 30;
+        var map = new GlDrive.Downloads.Segmented.TransferMap(
+            [new("sample.part01.rar", volume, [new(0, 768L << 20)]),
+             new("sample.part02.rar", volume, [new(0, 384L << 20)])],
+            [new(0, 512L << 20, 768L << 20, volume, "Ethernet", "demo-wired"),
+             new(1, 0, 384L << 20, volume, "race login", null)]);
+        var matrix = new StreamMatrix.StreamMatrixViewModel("Sample.Documentary.2026.1080p.WEB.Multi.Part.Release");
+        for (var tick = 0; tick < 120; tick++)
+        {
+            double wiredRate = (38 + 5 * Math.Sin(tick / 8.0)) * (1 << 20);
+            double raceRate = (18 + 3 * Math.Cos(tick / 5.0)) * (1 << 20);
+            matrix.Update(new DownloadProgress(1152L << 20, 2 * volume, wiredRate + raceRate, "sample.part02.rar",
+                [new("Ethernet", "demo-wired", 768L << 20, wiredRate, GlDrive.Downloads.Segmented.LaneState.Active),
+                 new("race login", null, 384L << 20, raceRate, GlDrive.Downloads.Segmented.LaneState.Active),
+                 new("Mobile tether", "demo-mobile", 64L << 20, 0, GlDrive.Downloads.Segmented.LaneState.Yielded)], map),
+                force: true);
+        }
+        var streamPanel = new StackPanel { Margin = new Thickness(16) };
+        streamPanel.Children.Add(new StreamMatrix.StreamMatrixView { DataContext = matrix, Margin = new Thickness(0, 0, 0, 16) });
+        streamPanel.Children.Add(new DownloadRowView
+        {
+            DataContext = new DownloadItemVm
+            {
+                ReleaseName = matrix.ReleaseName, Status = "Downloading", ServerName = "Demo server", Category = "Documentaries",
+                ProgressText = "1.13 GiB / 2.00 GiB", ProgressPercent = 56.25, SpeedDisplay = matrix.HeaderAgg,
+                Matrix = matrix, StreamsText = "2 active streams · 1 yielded"
+            }
+        });
+        var streamWindow = new Window
+        {
+            Title = "Download streams", Width = 1000, Height = 520, Content = streamPanel,
+            WindowStartupLocation = WindowStartupLocation.CenterScreen
+        };
+        streamWindow.Show();
+        streamWindow.UpdateLayout();
+        DoEvents();
+        RenderToFile(streamWindow, "stream-matrix.png");
+        streamWindow.Width = 760;
+        streamWindow.UpdateLayout();
+        DoEvents();
+        RenderToFile(streamWindow, "stream-matrix-narrow.png");
+        streamWindow.Close();
     }
 
     private static void RenderToFile(Window window, string filename)

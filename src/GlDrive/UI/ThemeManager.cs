@@ -58,7 +58,10 @@ public static class ThemeManager
             // the ones being shadowed by App.xaml. Theme-only keys (like our new
             // Cyberpunk-specific HudFrameStyle) flow through MergedDictionaries
             // normally and don't need a main-dict copy.
-            if (mainDict.Contains(key))
+            // Contains also searches merged dictionaries, including newTheme itself.
+            // Only actual local entries need overriding; otherwise a theme-only value
+            // gets saved as its own "original" and leaks into the next theme.
+            if (mainDict.Keys.Cast<object>().Contains(key))
             {
                 if (!_originalMainDictValues.ContainsKey(key))
                     _originalMainDictValues[key] = mainDict[key];

@@ -4,15 +4,41 @@
     <SolidColorBrush x:Key="BackgroundBrush" Color="#111111"/>
     <SolidColorBrush x:Key="SurfaceBrush" Color="#1C1C1C"/>
     <SolidColorBrush x:Key="SurfaceLightBrush" Color="#282828"/>
-    <SolidColorBrush x:Key="BorderBrush" Color="#333333"/>
+    <SolidColorBrush x:Key="BorderBrush" Color="#414141"/>
     <SolidColorBrush x:Key="ForegroundBrush" Color="#E8E8E8"/>
-    <SolidColorBrush x:Key="ForegroundDimBrush" Color="#888888"/>
+    <SolidColorBrush x:Key="ForegroundDimBrush" Color="#A3A3A3"/>
     <SolidColorBrush x:Key="AccentBrush" Color="#E53935"/>
     <SolidColorBrush x:Key="AccentHoverBrush" Color="#FF5252"/>
     <SolidColorBrush x:Key="AccentDimBrush" Color="#4E1A1A"/>
     <SolidColorBrush x:Key="AccentSubtleBrush" Color="#2A1515"/>
     <SolidColorBrush x:Key="WarningBrush" Color="#FF9800"/>
     <SolidColorBrush x:Key="ErrorBackgroundBrush" Color="#662222"/>
+
+    <!-- Shared control states and semantic surface colors. -->
+    <SolidColorBrush x:Key="FocusRingBrush" Color="#FF8A80"/>
+    <SolidColorBrush x:Key="PrimaryButtonBrush" Color="#C83230"/>
+    <SolidColorBrush x:Key="PrimaryButtonHoverBrush" Color="#AD2927"/>
+    <SolidColorBrush x:Key="AccentForegroundBrush" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="DisabledForegroundBrush" Color="#828282"/>
+    <SolidColorBrush x:Key="GoodBrush" Color="#70C889"/>
+    <SolidColorBrush x:Key="BadBrush" Color="#FF7B79"/>
+    <SolidColorBrush x:Key="WarnBrush" Color="#FFB74D"/>
+    <SolidColorBrush x:Key="TextBrush" Color="#E8E8E8"/>
+    <SolidColorBrush x:Key="TextDimBrush" Color="#A3A3A3"/>
+    <SolidColorBrush x:Key="TextFaintBrush" Color="#8C8C8C"/>
+    <SolidColorBrush x:Key="LineBrush" Color="#414141"/>
+    <SolidColorBrush x:Key="LineDimBrush" Color="#555555"/>
+    <SolidColorBrush x:Key="Background0Brush" Color="#111111"/>
+    <SolidColorBrush x:Key="Background1Brush" Color="#171717"/>
+    <SolidColorBrush x:Key="Background2Brush" Color="#1C1C1C"/>
+    <SolidColorBrush x:Key="Background3Brush" Color="#282828"/>
+    <SolidColorBrush x:Key="SignatureBrush" Color="#E53935"/>
+    <SolidColorBrush x:Key="Signature2Brush" Color="#BA68C8"/>
+    <SolidColorBrush x:Key="TopBarBackgroundBrush" Color="#1C1C1C"/>
+    <SolidColorBrush x:Key="TopBarLogoBrush" Color="#282828"/>
+    <SolidColorBrush x:Key="MarqueeBackgroundBrush" Color="#171717"/>
+    <FontFamily x:Key="MonoFontFamily">Cascadia Mono, Consolas, monospace</FontFamily>
+    <FontFamily x:Key="DisplayFontFamily">Segoe UI</FontFamily>
     <Color x:Key="AccentColor">#E53935</Color>
     <!-- Multi-stream downloads: lane palette + stream matrix (muted for the Dark theme). Keys must exist in every theme. -->
     <SolidColorBrush x:Key="LaneBrush0" Color="#4FC3F7"/>
@@ -36,8 +62,8 @@
         <GradientStop Offset="1" Color="#00E53935"/>
     </LinearGradientBrush>
     <SolidColorBrush x:Key="StreamTextBrush" Color="#E8E8E8"/>
-    <SolidColorBrush x:Key="StreamTextDimBrush" Color="#888888"/>
-    <SolidColorBrush x:Key="StreamTextFaintBrush" Color="#5A5A5A"/>
+    <SolidColorBrush x:Key="StreamTextDimBrush" Color="#A3A3A3"/>
+    <SolidColorBrush x:Key="StreamTextFaintBrush" Color="#8C8C8C"/>
     <SolidColorBrush x:Key="StreamCommentBrush" Color="#7FA37F"/>
     <SolidColorBrush x:Key="StreamGoodBrush" Color="#66BB6A"/>
     <SolidColorBrush x:Key="StreamWarnBrush" Color="#FF9800"/>

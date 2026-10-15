@@ -20,7 +20,11 @@
     <Border Margin="14" Style="{DynamicResource HudPanelStyle}">
         <DockPanel>
             <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                <TextBlock Text="&gt;&gt; EXTRACTOR" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                <StackPanel>
+                    <TextBlock Text="Extract archives" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                    <TextBlock Text="Add archives, choose where to save them, then extract." Margin="0,6,0,0"
+                               Foreground="{DynamicResource ForegroundDimBrush}" TextWrapping="Wrap"/>
+                </StackPanel>
             </Border>
             <Grid Margin="12">
                 <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -37,53 +41,67 @@
                     </Grid.RowDefinitions>
 
                     <!-- Toolbar -->
-                    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+                    <WrapPanel Grid.Row="0" Margin="0,0,0,8">
                         <Button Content="Add Files" Click="AddFiles_Click" Padding="14,5" Margin="0,0,4,0"
-                                Style="{StaticResource PrimaryButton}" FontSize="11"/>
+                                Style="{DynamicResource SecondaryButton}" FontSize="12"/>
                         <Button Content="Add Folder" Click="AddFolder_Click" Padding="14,5" Margin="0,0,4,0"
-                                Style="{StaticResource SecondaryButton}" FontSize="11"/>
-                        <Button Content="Remove" Click="Remove_Click" Padding="14,5" Margin="0,0,4,0"
-                                Style="{StaticResource SecondaryButton}" FontSize="11"/>
+                                Style="{DynamicResource SecondaryButton}" FontSize="12"/>
+                        <Button Content="Remove selected" Click="Remove_Click" Padding="14,5" Margin="0,0,4,0"
+                                ToolTip="Remove selected items from the queue; files stay on disk" FontSize="12">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SelectedItem, ElementName=ArchiveGrid}" Value="{x:Null}">
+                                            <Setter Property="IsEnabled" Value="False"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
                         <Button Content="Clear All" Click="ClearAll_Click" Padding="14,5" Margin="0,0,16,0"
-                                Style="{StaticResource SecondaryButton}" FontSize="11"/>
+                                Style="{DynamicResource SecondaryButton}" FontSize="12" ToolTip="Clear the queue; files stay on disk"/>
                         <Button x:Name="ExtractButton" Content="Extract All" Click="Extract_Click" Padding="18,5" Margin="0,0,4,0"
-                                Style="{StaticResource PrimaryButton}" FontSize="11" FontWeight="SemiBold"/>
+                                Style="{DynamicResource PrimaryButton}" FontSize="12" FontWeight="SemiBold"/>
                         <Button Content="Clean Folders" Click="CleanFolders_Click" Padding="14,5"
-                                Style="{StaticResource SecondaryButton}" FontSize="11"
+                                Style="{DynamicResource SecondaryButton}" FontSize="12"
                                 ToolTip="Scan folders for leftover archives after extraction"/>
-                    </StackPanel>
+                    </WrapPanel>
 
                     <!-- Archive list -->
                     <DataGrid Grid.Row="1" x:Name="ArchiveGrid"
                               AutoGenerateColumns="False" IsReadOnly="True"
                               SelectionMode="Extended" GridLinesVisibility="Horizontal"
+                              SelectionUnit="FullRow" MinRowHeight="36" RowHeaderWidth="0"
                               HeadersVisibility="Column" CanUserAddRows="False"
                               Background="{DynamicResource SurfaceBrush}"
                               BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
                               RowBackground="{DynamicResource SurfaceBrush}"
                               AlternatingRowBackground="{DynamicResource SurfaceLightBrush}">
                         <DataGrid.Columns>
-                            <DataGridTextColumn Header="Archive" Binding="{Binding FileName}" Width="*">
+                            <DataGridTextColumn Header="Archive" Binding="{Binding FileName}" Width="*" MinWidth="140">
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">
                                         <Setter Property="Padding" Value="4,2"/>
+                                        <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+                                        <Setter Property="ToolTip" Value="{Binding FilePath}"/>
                                     </Style>
                                 </DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>
                             <DataGridTextColumn Header="Type" Binding="{Binding ArchiveType}" Width="55"/>
                             <DataGridTextColumn Header="Size" Binding="{Binding SizeText}" Width="70"/>
                             <DataGridTextColumn Header="Files" Binding="{Binding EntryCount}" Width="45"/>
-                            <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="100">
+                            <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="115">
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">
                                         <Setter Property="Padding" Value="4,2"/>
+                                        <Setter Property="ToolTip" Value="{Binding ErrorMessage}"/>
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding Status}" Value="Done">
-                                                <Setter Property="Foreground" Value="#4CAF50"/>
+                                                <Setter Property="Foreground" Value="{DynamicResource GoodBrush}"/>
                                                 <Setter Property="FontWeight" Value="SemiBold"/>
                                             </DataTrigger>
                                             <DataTrigger Binding="{Binding Status}" Value="Error">
-                                                <Setter Property="Foreground" Value="#F44336"/>
+                                                <Setter Property="Foreground" Value="{DynamicResource BadBrush}"/>
                                                 <Setter Property="FontWeight" Value="SemiBold"/>
                                             </DataTrigger>
                                             <DataTrigger Binding="{Binding Status}" Value="Extracting">
@@ -96,17 +114,31 @@
                             <DataGridTemplateColumn Header="Progress" Width="100">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <ProgressBar Value="{Binding Progress, Mode=OneWay}" Minimum="0" Maximum="100" Height="14"
-                                                     Background="{DynamicResource BackgroundBrush}" Foreground="{DynamicResource AccentBrush}"/>
+                                        <StackPanel Margin="5" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding Progress, StringFormat={}{0:0}%}" FontSize="12" HorizontalAlignment="Right"/>
+                                            <ProgressBar Value="{Binding Progress, Mode=OneWay}" Minimum="0" Maximum="100" Height="5" Margin="0,3,0,0"
+                                                         AutomationProperties.Name="Archive extraction progress"
+                                                         Background="{DynamicResource BackgroundBrush}" Foreground="{DynamicResource AccentBrush}"/>
+                                        </StackPanel>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
                         </DataGrid.Columns>
+                        <DataGrid.RowDetailsTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="12,6,12,10">
+                                    <TextBlock Text="{Binding FilePath}" TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}"/>
+                                    <TextBlock Text="{Binding ErrorMessage}" TextWrapping="Wrap" Margin="0,4,0,0"
+                                               Foreground="{DynamicResource WarnBrush}"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </DataGrid.RowDetailsTemplate>
                     </DataGrid>
 
                     <!-- Drop hint overlay (shown when list is empty) -->
                     <TextBlock Grid.Row="1" x:Name="DropHint"
-                               Text="Drag &amp; drop archive files or folders here"
+                               Text="Drop archives here to get started&#10;or use Add Files or Add Folder above."
+                               TextAlignment="Center" TextWrapping="Wrap" Margin="24"
                                HorizontalAlignment="Center" VerticalAlignment="Center"
                                FontSize="15" Foreground="{DynamicResource ForegroundDimBrush}"
                                IsHitTestVisible="False"/>
@@ -126,16 +158,17 @@
 
                             <!-- Row 0: Watch folders -->
                             <DockPanel Grid.Row="0" Grid.ColumnSpan="2" Margin="0,0,0,6">
-                                <TextBlock Text="Watch:" Style="{StaticResource SmallLabel}" Width="55"/>
+                                <TextBlock Text="Watch:" Style="{StaticResource SmallLabel}" Width="64"/>
                                 <ToggleButton x:Name="WatchToggle" DockPanel.Dock="Right" Content="OFF" Click="WatchToggle_Click"
-                                              Padding="12,3" Margin="6,0,0,0" FontSize="11" Width="60"
-                                              FontWeight="Bold" Cursor="Hand">
+                                              Padding="12,3" Margin="6,0,0,0" FontSize="12" Width="60"
+                                              FontWeight="Bold" Cursor="Hand" AutomationProperties.Name="Watch folders for new archives"
+                                              ToolTip="Automatically extract new archives in the watch folders">
                                     <ToggleButton.Style>
                                         <Style TargetType="ToggleButton">
-                                            <!-- Default: OFF state shows red border + dim text -->
-                                            <Setter Property="Foreground" Value="{DynamicResource BadBrush}"/>
-                                            <Setter Property="Background" Value="#15FF3F63"/>
-                                            <Setter Property="BorderBrush" Value="{DynamicResource BadBrush}"/>
+                                            <!-- A disabled watcher is a neutral state, not an error. -->
+                                            <Setter Property="Foreground" Value="{DynamicResource ForegroundDimBrush}"/>
+                                            <Setter Property="Background" Value="{DynamicResource SurfaceLightBrush}"/>
+                                            <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
                                             <Setter Property="BorderThickness" Value="1"/>
                                             <Setter Property="Template">
                                                 <Setter.Value>
@@ -154,62 +187,72 @@
                                                 </Setter.Value>
                                             </Setter>
                                             <Style.Triggers>
-                                                <!-- ON state: green glow -->
+                                                <!-- Enabled monitoring uses the theme success color. -->
                                                 <Trigger Property="IsChecked" Value="True">
                                                     <Setter Property="Foreground" Value="{DynamicResource GoodBrush}"/>
-                                                    <Setter Property="Background" Value="#157CFF66"/>
+                                                    <Setter Property="Background" Value="{DynamicResource SurfaceLightBrush}"/>
                                                     <Setter Property="BorderBrush" Value="{DynamicResource GoodBrush}"/>
-                                                    <Setter Property="Effect">
-                                                        <Setter.Value>
-                                                            <DropShadowEffect Color="#7CFF66" BlurRadius="10" ShadowDepth="0" Opacity="0.5"/>
-                                                        </Setter.Value>
-                                                    </Setter>
                                                 </Trigger>
                                             </Style.Triggers>
                                         </Style>
                                     </ToggleButton.Style>
                                 </ToggleButton>
-                                <Button DockPanel.Dock="Right" Content="+" Click="AddWatchFolder_Click" Padding="8,2" Margin="6,0,0,0"
-                                        Style="{StaticResource SecondaryButton}" FontSize="11" ToolTip="Add watch folder"/>
-                                <TextBox x:Name="WatchFoldersText" FontSize="11" Padding="4,3" IsReadOnly="True"
+                                <Button DockPanel.Dock="Right" Content="Add…" Click="AddWatchFolder_Click" Padding="8,2" Margin="6,0,0,0"
+                                        AutomationProperties.Name="Add watch folder"
+                                        Style="{DynamicResource SecondaryButton}" FontSize="12" ToolTip="Add watch folder"/>
+                                <TextBox x:Name="WatchFoldersText" FontSize="12" Padding="4,3" IsReadOnly="True"
                                          Background="{DynamicResource SurfaceBrush}"
                                          Foreground="{DynamicResource ForegroundDimBrush}"
                                          BorderBrush="{DynamicResource BorderBrush}"
-                                         ToolTip="Folders being monitored for new archives (click + to add)"/>
+                                         ToolTip="Folders being monitored for new archives; choose Add to include another folder"/>
                             </DockPanel>
 
                             <!-- Row 1: Output folder -->
                             <DockPanel Grid.Row="1" Grid.ColumnSpan="2" Margin="0,0,0,6">
-                                <TextBlock Text="Output:" Style="{StaticResource SmallLabel}" Width="55"/>
-                                <Button DockPanel.Dock="Right" Content="..." Click="BrowseOutput_Click" Padding="8,2" Margin="6,0,0,0"
-                                        Style="{StaticResource SecondaryButton}" FontSize="11"/>
-                                <ComboBox x:Name="OutputMode" DockPanel.Dock="Right" Width="140" Margin="6,0,0,0"
-                                          SelectedIndex="0" FontSize="11"
+                                <TextBlock Text="Save to:" Style="{StaticResource SmallLabel}" Width="64"/>
+                                <Button DockPanel.Dock="Right" Content="Browse…" Click="BrowseOutput_Click" Padding="8,2" Margin="6,0,0,0"
+                                        AutomationProperties.Name="Choose output folder"
+                                        Style="{DynamicResource SecondaryButton}" FontSize="12"/>
+                                <ComboBox x:Name="OutputMode" DockPanel.Dock="Right" Width="160" Margin="6,0,0,0"
+                                          AutomationProperties.Name="Output folder mode"
+                                          SelectedIndex="0" FontSize="12"
                                           Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource ForegroundBrush}">
                                     <ComboBoxItem Content="Same as archive"/>
                                     <ComboBoxItem Content="Archive subfolder"/>
                                     <ComboBoxItem Content="Custom folder"/>
                                 </ComboBox>
-                                <TextBox x:Name="CustomOutputPath" FontSize="11" Padding="4,3"
+                                <TextBox x:Name="CustomOutputPath" FontSize="12" Padding="4,3"
                                          Background="{DynamicResource SurfaceBrush}"
                                          Foreground="{DynamicResource ForegroundBrush}"
-                                         BorderBrush="{DynamicResource BorderBrush}"/>
+                                         BorderBrush="{DynamicResource BorderBrush}" AutomationProperties.Name="Custom output folder"
+                                         ToolTip="Used when Custom folder is selected">
+                                    <TextBox.Style>
+                                        <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+                                            <Setter Property="IsEnabled" Value="False"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding SelectedIndex, ElementName=OutputMode}" Value="2">
+                                                    <Setter Property="IsEnabled" Value="True"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBox.Style>
+                                </TextBox>
                             </DockPanel>
 
                             <!-- Row 2: Options -->
                             <WrapPanel Grid.Row="2" Grid.Column="0" VerticalAlignment="Center">
-                                <CheckBox x:Name="ChkDeleteAfter" Content="Delete after extract" Margin="0,0,14,0"
-                                          Foreground="{DynamicResource ForegroundBrush}" FontSize="11"
+                                <CheckBox x:Name="ChkDeleteAfter" Content="Delete archives after extraction" Margin="0,4,14,4"
+                                          Foreground="{DynamicResource ForegroundBrush}" FontSize="12"
                                           Checked="Settings_Changed" Unchecked="Settings_Changed"/>
                                 <CheckBox x:Name="ChkRecursive" Content="Scan subfolders" Margin="0,0,14,0"
-                                          Foreground="{DynamicResource ForegroundBrush}" FontSize="11" IsChecked="True"
+                                          Foreground="{DynamicResource ForegroundBrush}" FontSize="12" IsChecked="True"
                                           Checked="Settings_Changed" Unchecked="Settings_Changed"/>
                                 <CheckBox x:Name="ChkCreateSubfolder" Content="Create subfolder per archive" Margin="0,0,14,0"
-                                          Foreground="{DynamicResource ForegroundBrush}" FontSize="11"
+                                          Foreground="{DynamicResource ForegroundBrush}" FontSize="12"
                                           Checked="Settings_Changed" Unchecked="Settings_Changed"/>
                                 <StackPanel Orientation="Horizontal" Margin="0,0,14,0">
                                     <TextBlock Text="Overwrite:" Style="{StaticResource SmallLabel}" Margin="0,0,4,0"/>
-                                    <ComboBox x:Name="OverwriteMode" Width="90" SelectedIndex="0" FontSize="11"
+                                    <ComboBox x:Name="OverwriteMode" Width="90" SelectedIndex="0" FontSize="12"
                                               Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource ForegroundBrush}">
                                         <ComboBoxItem Content="Overwrite"/>
                                         <ComboBoxItem Content="Skip"/>
@@ -221,7 +264,8 @@
                             <!-- Password -->
                             <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal">
                                 <TextBlock Text="Password:" Style="{StaticResource SmallLabel}" Margin="0,0,4,0"/>
-                                <PasswordBox x:Name="ArchivePassword" Width="120" FontSize="11" Padding="4,3"
+                                <PasswordBox x:Name="ArchivePassword" Width="120" Height="30" VerticalAlignment="Center" FontSize="12" Padding="4,3"
+                                             AutomationProperties.Name="Archive password"
                                              Background="{DynamicResource SurfaceBrush}"
                                              Foreground="{DynamicResource ForegroundBrush}"
                                              BorderBrush="{DynamicResource BorderBrush}"/>
@@ -236,12 +280,14 @@
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" x:Name="StatusText" FontSize="11"
+                        <TextBlock Grid.Column="0" x:Name="StatusText" FontSize="12"
+                                   TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
                                    Foreground="{DynamicResource ForegroundDimBrush}" VerticalAlignment="Center"/>
                         <ProgressBar Grid.Column="1" x:Name="TotalProgress" Width="200" Height="14" Margin="8,0"
+                                     AutomationProperties.Name="Overall extraction progress"
                                      Minimum="0" Maximum="100"
                                      Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource AccentBrush}"/>
-                        <TextBlock Grid.Column="2" x:Name="TotalProgressText" FontSize="11" Width="45"
+                        <TextBlock Grid.Column="2" x:Name="TotalProgressText" FontSize="12" Width="45"
                                    Foreground="{DynamicResource ForegroundDimBrush}" VerticalAlignment="Center"/>
                     </Grid>
                 </Grid>

@@ -12,7 +12,7 @@
         <Style x:Key="FieldLabel" TargetType="TextBlock">
             <Setter Property="VerticalAlignment" Value="Center"/>
             <Setter Property="Foreground" Value="{DynamicResource ForegroundDimBrush}"/>
-            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontSize" Value="13"/>
             <Setter Property="Margin" Value="0,0,8,0"/>
             <Setter Property="Width" Value="130"/>
         </Style>
@@ -21,17 +21,17 @@
             <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
             <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
             <Setter Property="Padding" Value="6,4"/>
-            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontSize" Value="13"/>
         </Style>
         <Style x:Key="FieldPassword" TargetType="PasswordBox">
             <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
             <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
             <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
             <Setter Property="Padding" Value="6,4"/>
-            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontSize" Value="13"/>
         </Style>
         <Style x:Key="SectionHeader" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontSize" Value="16"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
             <Setter Property="Margin" Value="0,14,0,6"/>
@@ -39,7 +39,7 @@
         <Style x:Key="ScriptCheck" TargetType="CheckBox">
             <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
             <Setter Property="Margin" Value="0,2"/>
-            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontSize" Value="13"/>
         </Style>
     </Window.Resources>
 
@@ -66,8 +66,10 @@
             <!-- ═══ CONNECTION TAB ═══ -->
             <TabItem Header="Connection">
                 <Border Background="{DynamicResource SurfaceBrush}" CornerRadius="6" Padding="20" Margin="0,8,0,0">
-                    <StackPanel MaxWidth="500">
-                        <TextBlock Text="SSH Connection" Style="{StaticResource SectionHeader}" Margin="0,0,0,12"/>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel MaxWidth="600" HorizontalAlignment="Left">
+                        <TextBlock Text="Connect to your server" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                        <TextBlock Text="Connect over SSH, review Configuration, then start the installation. You can follow its progress in Install Log." TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,18"/>
 
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -96,7 +98,7 @@
 
                             <TextBlock Grid.Row="4" Text="Key File" Style="{StaticResource FieldLabel}"/>
                             <DockPanel Grid.Row="4" Grid.Column="1" Margin="0,3">
-                                <Button DockPanel.Dock="Right" Content="..." Click="BrowseKeyFile_Click" Padding="8,4" Margin="6,0,0,0"
+                                <Button DockPanel.Dock="Right" Content="Browse…" Click="BrowseKeyFile_Click" Padding="8,4" Margin="6,0,0,0"
                                         Style="{StaticResource SecondaryButton}"/>
                                 <TextBox x:Name="SshKeyFile" Style="{StaticResource FieldBox}"/>
                             </DockPanel>
@@ -110,16 +112,17 @@
                         </StackPanel>
 
                         <TextBlock x:Name="ConnectionStatus" Text="Disconnected" Margin="0,12,0,0"
-                                   FontSize="12" Foreground="{DynamicResource ForegroundDimBrush}"/>
+                                   FontSize="13" Foreground="{DynamicResource ForegroundDimBrush}" AutomationProperties.LiveSetting="Polite"/>
                     </StackPanel>
+                    </ScrollViewer>
                 </Border>
             </TabItem>
 
             <!-- ═══ CONFIGURATION TAB ═══ -->
             <TabItem Header="Configuration">
                 <Border Background="{DynamicResource SurfaceBrush}" CornerRadius="6" Margin="0,8,0,0">
-                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="20">
-                        <StackPanel MaxWidth="600">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="20">
+                        <StackPanel MaxWidth="660" HorizontalAlignment="Left">
 
                             <!-- Server Config -->
                             <TextBlock Text="Server Config" Style="{StaticResource SectionHeader}"/>
@@ -214,8 +217,8 @@
                             <!-- Optional Scripts -->
                             <TextBlock Text="Optional Scripts" Style="{StaticResource SectionHeader}"/>
                             <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                                <Button Content="Select All" Click="SelectAllScripts_Click" Padding="12,4" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}" FontSize="11"/>
-                                <Button Content="Deselect All" Click="DeselectAllScripts_Click" Padding="12,4" Style="{StaticResource SecondaryButton}" FontSize="11"/>
+                                <Button Content="Select All" Click="SelectAllScripts_Click" Padding="12,4" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}" FontSize="12"/>
+                                <Button Content="Deselect All" Click="DeselectAllScripts_Click" Padding="12,4" Style="{StaticResource SecondaryButton}" FontSize="12"/>
                             </StackPanel>
                             <WrapPanel>
                                 <CheckBox x:Name="ChkEur0presystem" Content="Eur0-pre-system" Style="{StaticResource ScriptCheck}" Width="170"/>
@@ -281,8 +284,8 @@
 
                         <!-- Toolbar -->
                         <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
-                            <Button Content="Clear" Click="ClearLog_Click" Padding="12,4" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}" FontSize="11"/>
-                            <Button Content="Export Log" Click="ExportLog_Click" Padding="12,4" Style="{StaticResource SecondaryButton}" FontSize="11"/>
+                            <Button Content="Clear" Click="ClearLog_Click" Padding="12,4" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}" FontSize="12"/>
+                            <Button Content="Export Log" Click="ExportLog_Click" Padding="12,4" Style="{StaticResource SecondaryButton}" FontSize="12"/>
                         </StackPanel>
 
                         <!-- Progress -->
@@ -295,11 +298,11 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0" x:Name="ProgressLabel" Text="READY" FontWeight="SemiBold" FontSize="12"
                                        Foreground="{DynamicResource AccentBrush}" Margin="0,0,12,0" VerticalAlignment="Center"/>
-                            <TextBlock Grid.Column="1" x:Name="StepLabel" FontSize="11" VerticalAlignment="Center"
+                            <TextBlock Grid.Column="1" x:Name="StepLabel" FontSize="12" VerticalAlignment="Center"
                                        Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,12,0"/>
                             <ProgressBar Grid.Column="2" x:Name="ProgressBar" Height="16" Minimum="0" Maximum="100"
                                          Background="{DynamicResource BackgroundBrush}" Foreground="{DynamicResource AccentBrush}"/>
-                            <TextBlock Grid.Column="3" x:Name="ElapsedLabel" FontSize="11" FontFamily="Consolas"
+                            <TextBlock Grid.Column="3" x:Name="ElapsedLabel" FontSize="12" FontFamily="Consolas"
                                        Foreground="{DynamicResource AccentBrush}" Margin="12,0,0,0" VerticalAlignment="Center"/>
                         </Grid>
 
@@ -307,7 +310,7 @@
                         <TextBox Grid.Row="2" x:Name="LogOutput"
                                  IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
                                  VerticalScrollBarVisibility="Auto"
-                                 FontFamily="Consolas" FontSize="11"
+                                 FontFamily="Consolas" FontSize="12"
                                  Background="{DynamicResource BackgroundBrush}"
                                  Foreground="{DynamicResource ForegroundBrush}"
                                  BorderThickness="1" BorderBrush="{DynamicResource BorderBrush}"/>
@@ -318,7 +321,7 @@
 
         <!-- Status bar -->
         <Border Grid.Row="1" Background="{DynamicResource SurfaceBrush}" Padding="10,6">
-            <TextBlock x:Name="StatusBar" Text="Disconnected" FontSize="11"
+            <TextBlock x:Name="StatusBar" Text="Disconnected" FontSize="12"
                        Foreground="{DynamicResource ForegroundDimBrush}"/>
         </Border>
                 </Grid>

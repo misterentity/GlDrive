@@ -23,11 +23,38 @@
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
           </Grid.RowDefinitions>
-          <TextBlock Text="Select runs to revert. Each reverses every applied change from that run." TextWrapping="Wrap"/>
-          <ListBox Grid.Row="1" x:Name="RunList" SelectionMode="Multiple" Margin="0,8" DisplayMemberPath="Label"/>
+          <StackPanel>
+            <TextBlock Text="Revert AI changes" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,8"/>
+            <TextBlock Text="Select one or more runs. Each selection reverses every applied change from that run." TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}"/>
+          </StackPanel>
+          <Grid Grid.Row="1" Margin="0,14">
+            <ListBox x:Name="RunList" SelectionMode="Multiple" HorizontalContentAlignment="Stretch" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+              <ListBox.ItemTemplate>
+                <DataTemplate><TextBlock Text="{Binding Label}" TextWrapping="Wrap" Margin="4,6"/></DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+            <TextBlock Text="No applied runs are available to revert." TextWrapping="Wrap" TextAlignment="Center" VerticalAlignment="Center" Margin="20" IsHitTestVisible="False" Foreground="{DynamicResource ForegroundDimBrush}">
+              <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                  <Setter Property="Visibility" Value="Collapsed"/>
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding Items.Count, ElementName=RunList}" Value="0"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </TextBlock.Style>
+            </TextBlock>
+          </Grid>
           <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
-            <Button Content="Cancel" Width="80" Margin="0,0,8,0" Click="Cancel_Click"/>
-            <Button Content="Revert selected" Width="140" Click="Revert_Click"/>
+            <Button Content="Cancel" IsCancel="True" MinWidth="90" Margin="0,0,8,0" Click="Cancel_Click" Style="{StaticResource SecondaryButton}"/>
+            <Button Content="Revert selected" MinWidth="140" Click="Revert_Click">
+              <Button.Style>
+                <Style TargetType="Button" BasedOn="{StaticResource PrimaryButton}">
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding SelectedItems.Count, ElementName=RunList}" Value="0"><Setter Property="IsEnabled" Value="False"/></DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </Button.Style>
+            </Button>
           </StackPanel>
         </Grid>
       </Grid>

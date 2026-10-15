@@ -1,9 +1,34 @@
 <UserControl x:Class="GlDrive.UI.AgentView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-  <DockPanel>
-    <Expander DockPanel.Dock="Top" Header="What is the AI Agent?" Margin="6" IsExpanded="False">
-      <TextBlock TextWrapping="Wrap" Margin="6">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:GlDrive.UI">
+  <UserControl.Resources>
+    <local:AgentTimestampConverter x:Key="AgentTimestamp"/>
+    <Style x:Key="AgentCell" TargetType="TextBlock">
+      <Setter Property="Padding" Value="6,5"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+      <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+      <Setter Property="ToolTip" Value="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+    </Style>
+    <Style x:Key="EmptyState" TargetType="TextBlock">
+      <Setter Property="HorizontalAlignment" Value="Center"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+      <Setter Property="TextAlignment" Value="Center"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+      <Setter Property="Margin" Value="24"/>
+      <Setter Property="Foreground" Value="{DynamicResource ForegroundDimBrush}"/>
+      <Setter Property="FontSize" Value="14"/>
+      <Setter Property="IsHitTestVisible" Value="False"/>
+    </Style>
+  </UserControl.Resources>
+  <DockPanel Margin="6">
+    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
+      <TextBlock Text="AI Agent" FontSize="22" FontWeight="SemiBold"/>
+      <TextBlock Text="Review activity, manage suggestions, and guide future runs." Margin="0,4,0,0"
+                 Foreground="{DynamicResource ForegroundDimBrush}" TextWrapping="Wrap"/>
+    </StackPanel>
+    <Expander DockPanel.Dock="Top" Header="How the agent works" Margin="0,0,0,12" IsExpanded="False">
+      <TextBlock TextWrapping="Wrap" Margin="8" Foreground="{DynamicResource ForegroundDimBrush}">
 The AI Agent reviews 7 days of telemetry each night and makes bounded config changes
 (skiplist patterns, site priority, announce rules, wishlist pruning, pool sizing,
 blacklist, affils, excluded categories, section mappings, error reports).<LineBreak/><LineBreak/>
@@ -14,63 +39,92 @@ supported field to Freeze), confidence threshold, kill switch in tray.
     </Expander>
 
     <TabControl>
-      <TabItem Header="Today's Brief">
+      <TabItem Header="Latest brief">
         <Grid>
           <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
           </Grid.RowDefinitions>
-          <StackPanel Orientation="Horizontal" Margin="6">
-            <Button Content="Run now" Command="{Binding RunNowCommand}" Padding="10,4" Margin="0,0,8,0"/>
-            <Button Content="Refresh" Command="{Binding RefreshCommand}" Padding="10,4"/>
-          </StackPanel>
-          <ScrollViewer Grid.Row="1" Margin="6">
+          <DockPanel Margin="12">
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+              <Button Content="Refresh" Command="{Binding RefreshCommand}" Margin="0,0,8,0"/>
+              <Button Content="Run now" Command="{Binding RunNowCommand}" Style="{DynamicResource PrimaryButton}"
+                      ToolTip="Run the agent using your current settings"/>
+            </StackPanel>
+            <TextBlock Text="Most recent agent report" FontWeight="SemiBold" VerticalAlignment="Center"/>
+          </DockPanel>
+          <Border Grid.Row="1" Margin="12,0,12,12" Padding="12" Background="{DynamicResource SurfaceBrush}"
+                  BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="4">
             <TextBox Text="{Binding BriefMarkdown, Mode=OneWay}" IsReadOnly="True"
-                     TextWrapping="Wrap" FontFamily="Consolas" Background="Transparent"
+                     TextWrapping="Wrap" FontFamily="Segoe UI" FontSize="14" Background="Transparent"
+                     AutomationProperties.Name="Latest agent report"
                      BorderThickness="0" AcceptsReturn="True" VerticalScrollBarVisibility="Auto"/>
-          </ScrollViewer>
+          </Border>
         </Grid>
       </TabItem>
 
       <TabItem Header="Audit Trail">
-        <DataGrid ItemsSource="{Binding AuditRows}" AutoGenerateColumns="False" IsReadOnly="True">
+        <Grid Margin="8">
+        <DataGrid ItemsSource="{Binding AuditRows}" AutoGenerateColumns="False" IsReadOnly="True"
+                  CanUserAddRows="False" HeadersVisibility="Column" RowHeaderWidth="0" MinRowHeight="36">
           <DataGrid.Columns>
-            <DataGridTextColumn Header="Time" Binding="{Binding Ts}" Width="140"/>
-            <DataGridTextColumn Header="Run" Binding="{Binding RunId}" Width="80"/>
-            <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="120"/>
-            <DataGridTextColumn Header="Target" Binding="{Binding Target}" Width="300"/>
-            <DataGridTextColumn Header="Confidence" Binding="{Binding Confidence}" Width="80"/>
-            <DataGridTextColumn Header="Undone" Binding="{Binding Undone}" Width="60"/>
-            <DataGridTemplateColumn Header="Undo" Width="70">
+            <DataGridTextColumn Header="Time (local)" Binding="{Binding Ts, Converter={StaticResource AgentTimestamp}}" Width="130" ElementStyle="{StaticResource AgentCell}"/>
+            <DataGridTextColumn Header="Run" Binding="{Binding RunId}" Width="90" ElementStyle="{StaticResource AgentCell}"/>
+            <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="130" ElementStyle="{StaticResource AgentCell}"/>
+            <DataGridTextColumn Header="Target" Binding="{Binding Target}" Width="*" MinWidth="160" ElementStyle="{StaticResource AgentCell}"/>
+            <DataGridTextColumn Header="Confidence" Binding="{Binding Confidence, StringFormat=P0}" Width="100" ElementStyle="{StaticResource AgentCell}"/>
+            <DataGridTemplateColumn Header="Action" Width="100">
               <DataGridTemplateColumn.CellTemplate>
                 <DataTemplate>
-                  <Button Content="Undo"
+                  <Button Margin="4" Padding="10,4" ToolTip="Restore this change's previous value"
                           Command="{Binding DataContext.UndoAuditRowCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                          CommandParameter="{Binding}"/>
+                          CommandParameter="{Binding}">
+                    <Button.Style>
+                      <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                        <Setter Property="Content" Value="Undo"/>
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding Undone}" Value="True">
+                            <Setter Property="Content" Value="Undone"/>
+                            <Setter Property="IsEnabled" Value="False"/>
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </Button.Style>
+                  </Button>
                 </DataTemplate>
               </DataGridTemplateColumn.CellTemplate>
             </DataGridTemplateColumn>
           </DataGrid.Columns>
         </DataGrid>
+        <TextBlock Text="No applied changes yet.&#10;Agent changes will appear here after a live run.">
+          <TextBlock.Style><Style TargetType="TextBlock" BasedOn="{StaticResource EmptyState}">
+            <Setter Property="Visibility" Value="Collapsed"/>
+            <Style.Triggers><DataTrigger Binding="{Binding AuditRows.Count}" Value="0"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
+          </Style></TextBlock.Style>
+        </TextBlock>
+        </Grid>
       </TabItem>
 
       <TabItem Header="Suggestions">
-        <DataGrid ItemsSource="{Binding Suggestions}" AutoGenerateColumns="False" IsReadOnly="True">
+        <Grid Margin="8">
+        <DataGrid ItemsSource="{Binding Suggestions}" AutoGenerateColumns="False" IsReadOnly="True"
+                  CanUserAddRows="False" HeadersVisibility="Column" RowHeaderWidth="0" MinRowHeight="36">
           <DataGrid.Columns>
-            <DataGridTextColumn Header="Time" Binding="{Binding Ts}" Width="140"/>
-            <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="120"/>
-            <DataGridTextColumn Header="Target" Binding="{Binding Target}" Width="280"/>
-            <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="80"/>
-            <DataGridTextColumn Header="Reason" Binding="{Binding RejectionReason}" Width="180"/>
-            <DataGridTextColumn Header="Confidence" Binding="{Binding Confidence}" Width="80"/>
-            <DataGridTemplateColumn Header="Action" Width="180">
+            <DataGridTextColumn Header="Time (local)" Binding="{Binding Ts, Converter={StaticResource AgentTimestamp}}" Width="130" ElementStyle="{StaticResource AgentCell}"/>
+            <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="120" ElementStyle="{StaticResource AgentCell}"/>
+            <DataGridTextColumn Header="Target" Binding="{Binding Target}" Width="*" MinWidth="140" ElementStyle="{StaticResource AgentCell}"/>
+            <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="100" ElementStyle="{StaticResource AgentCell}"/>
+            <DataGridTextColumn Header="Reason" Binding="{Binding RejectionReason}" Width="*" MinWidth="140" ElementStyle="{StaticResource AgentCell}"/>
+            <DataGridTextColumn Header="Confidence" Binding="{Binding Confidence, StringFormat=P0}" Width="100" ElementStyle="{StaticResource AgentCell}"/>
+            <DataGridTemplateColumn Header="Action" Width="220" MinWidth="220">
               <DataGridTemplateColumn.CellTemplate>
                 <DataTemplate>
-                  <StackPanel Orientation="Horizontal">
-                    <Button Content="Apply anyway" Margin="0,0,4,0"
+                  <StackPanel Orientation="Horizontal" Margin="4">
+                    <Button Content="Apply anyway" Margin="0,0,4,0" Padding="8,4"
+                            ToolTip="Apply this suggestion manually, subject to validation"
                             Command="{Binding DataContext.ApplyAnywayCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                             CommandParameter="{Binding}"/>
-                    <Button Content="Dismiss"
+                    <Button Content="Dismiss" Padding="8,4" ToolTip="Remove this suggestion from review"
                             Command="{Binding DataContext.DismissSuggestionCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                             CommandParameter="{Binding}"/>
                   </StackPanel>
@@ -79,18 +133,27 @@ supported field to Freeze), confidence threshold, kill switch in tray.
             </DataGridTemplateColumn>
           </DataGrid.Columns>
         </DataGrid>
+        <TextBlock Text="No suggestions to review.&#10;Proposed changes that need attention will appear here.">
+          <TextBlock.Style><Style TargetType="TextBlock" BasedOn="{StaticResource EmptyState}">
+            <Setter Property="Visibility" Value="Collapsed"/>
+            <Style.Triggers><DataTrigger Binding="{Binding Suggestions.Count}" Value="0"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
+          </Style></TextBlock.Style>
+        </TextBlock>
+        </Grid>
       </TabItem>
 
       <TabItem Header="Frozen Fields">
-        <DataGrid ItemsSource="{Binding Frozen}" AutoGenerateColumns="False" IsReadOnly="True">
+        <Grid Margin="8">
+        <DataGrid ItemsSource="{Binding Frozen}" AutoGenerateColumns="False" IsReadOnly="True"
+                  CanUserAddRows="False" HeadersVisibility="Column" RowHeaderWidth="0" MinRowHeight="36">
           <DataGrid.Columns>
-            <DataGridTextColumn Header="Path" Binding="{Binding Path}" Width="*"/>
-            <DataGridTextColumn Header="Frozen At" Binding="{Binding FrozenAt}" Width="180"/>
-            <DataGridTextColumn Header="Note" Binding="{Binding Note}" Width="200"/>
-            <DataGridTemplateColumn Header="Unfreeze" Width="90">
+            <DataGridTextColumn Header="Protected field" Binding="{Binding Path}" Width="2*" MinWidth="180" ElementStyle="{StaticResource AgentCell}"/>
+            <DataGridTextColumn Header="Frozen (local)" Binding="{Binding FrozenAt, Converter={StaticResource AgentTimestamp}}" Width="140" ElementStyle="{StaticResource AgentCell}"/>
+            <DataGridTextColumn Header="Note" Binding="{Binding Note}" Width="*" MinWidth="120" ElementStyle="{StaticResource AgentCell}"/>
+            <DataGridTemplateColumn Header="Action" Width="100">
               <DataGridTemplateColumn.CellTemplate>
                 <DataTemplate>
-                  <Button Content="Unfreeze"
+                  <Button Content="Unfreeze" Margin="4" Padding="10,4" ToolTip="Allow the agent to change this field again"
                           Command="{Binding DataContext.UnfreezeCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                           CommandParameter="{Binding}"/>
                 </DataTemplate>
@@ -98,19 +161,32 @@ supported field to Freeze), confidence threshold, kill switch in tray.
             </DataGridTemplateColumn>
           </DataGrid.Columns>
         </DataGrid>
+        <TextBlock Text="No frozen fields.&#10;Right-click a supported setting and choose Freeze to protect it from agent changes.">
+          <TextBlock.Style><Style TargetType="TextBlock" BasedOn="{StaticResource EmptyState}">
+            <Setter Property="Visibility" Value="Collapsed"/>
+            <Style.Triggers><DataTrigger Binding="{Binding Frozen.Count}" Value="0"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
+          </Style></TextBlock.Style>
+        </TextBlock>
+        </Grid>
       </TabItem>
 
       <TabItem Header="Memo">
-        <Grid>
+        <Grid Margin="12">
           <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
           </Grid.RowDefinitions>
-          <TextBox Text="{Binding Memo, UpdateSourceTrigger=PropertyChanged}"
+          <TextBlock Text="Notes for the next run" FontWeight="SemiBold" Margin="0,0,0,8"/>
+          <TextBox Grid.Row="1" Text="{Binding Memo, UpdateSourceTrigger=PropertyChanged}"
                    AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
-                   FontFamily="Consolas" Margin="6"/>
-          <Button Grid.Row="1" Content="Save memo" Margin="6" HorizontalAlignment="Right"
-                  Command="{Binding SaveMemoCommand}"/>
+                   TextWrapping="Wrap" FontSize="14" Padding="12" AutomationProperties.Name="Agent memo"/>
+          <DockPanel Grid.Row="2" Margin="0,12,0,0">
+            <Button DockPanel.Dock="Right" Content="Save memo" Margin="12,0,0,0" Style="{DynamicResource PrimaryButton}"
+                    Command="{Binding SaveMemoCommand}"/>
+            <TextBlock Text="Saved notes are used as guidance on the next agent run." TextWrapping="Wrap"
+                       VerticalAlignment="Center" Foreground="{DynamicResource ForegroundDimBrush}"/>
+          </DockPanel>
         </Grid>
       </TabItem>
     </TabControl>

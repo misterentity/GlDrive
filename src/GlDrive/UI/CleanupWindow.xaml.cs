@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows;
+using System.Windows.Controls;
 using GlDrive.Downloads;
 using Microsoft.Win32;
 using Serilog;
@@ -44,27 +45,58 @@ public partial class CleanupWindow : Window
 
         Items.Clear();
         ScanButton.IsEnabled = false;
+        BrowseButton.IsEnabled = false;
+        ScanPath.IsEnabled = false;
+        CleanAllButton.IsEnabled = false;
+        CleanSelectedButton.IsEnabled = false;
         ScanButton.Content = "Scanning...";
         ScanHint.Visibility = Visibility.Collapsed;
         SummaryText.Text = "Scanning...";
 
-        var results = await Task.Run(() => ScanForLeftovers(root));
+        try
+        {
+            var results = await Task.Run(() => ScanForLeftovers(root));
+            foreach (var item in results)
+                Items.Add(item);
 
-        foreach (var item in results)
-            Items.Add(item);
-
-        var totalSize = results.Sum(r => r.ArchiveSize);
-        SummaryText.Text = results.Count > 0
-            ? $"{results.Count} folder(s) with leftover archives — {FormatSize(totalSize)} reclaimable"
-            : "No leftover archives found.";
-
-        CleanAllButton.IsEnabled = results.Count > 0;
-        CleanSelectedButton.IsEnabled = results.Count > 0;
-        ScanButton.Content = "Scan";
-        ScanButton.IsEnabled = true;
-
-        if (results.Count == 0)
+            var totalSize = results.Sum(r => r.ArchiveSize);
+            SummaryText.Text = results.Count > 0
+                ? $"{results.Count} folder(s) with leftover archives — {FormatSize(totalSize)} reclaimable"
+                : "Scan complete — no leftover archives found.";
+            CleanAllButton.IsEnabled = results.Count > 0;
+            if (results.Count == 0)
+            {
+                ScanHint.Text = "No leftover archives found.\nChoose another folder to scan again.";
+                ScanHint.Visibility = Visibility.Visible;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Folder cleanup scan failed for {Root}", root);
+            SummaryText.Text = "Scan failed. Check the folder path and access, then try again.";
+            ScanHint.Text = "The folder could not be scanned.";
             ScanHint.Visibility = Visibility.Visible;
+        }
+        finally
+        {
+            ScanButton.Content = "Scan";
+            ScanButton.IsEnabled = true;
+            BrowseButton.IsEnabled = true;
+            ScanPath.IsEnabled = true;
+            UpdateSelectedAction();
+        }
+    }
+
+    private void ResultsGrid_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateSelectedAction();
+
+    private void UpdateSelectedAction()
+    {
+        if (CleanSelectedButton == null) return;
+        var selectedCount = ResultsGrid.SelectedItems.Cast<CleanupItem>().Count(i => i.Status != "Cleaned");
+        CleanSelectedButton.IsEnabled = ScanButton.IsEnabled && selectedCount > 0;
+        CleanSelectedButton.Content = selectedCount > 0
+            ? $"Delete selected ({selectedCount})"
+            : "Delete selected";
     }
 
     internal static List<CleanupItem> ScanForLeftovers(string rootPath)
@@ -220,6 +252,7 @@ public partial class CleanupWindow : Window
             (totalFailed > 0 ? $" ({totalFailed} files failed)" : "");
 
         CleanAllButton.IsEnabled = Items.Any(i => i.Status != "Cleaned");
+        UpdateSelectedAction();
     }
 
     private static string FormatSize(long bytes)

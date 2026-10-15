@@ -6,7 +6,7 @@
         MinWidth="800" MinHeight="650"
         WindowStartupLocation="CenterOwner" ResizeMode="CanResize"
         Background="{DynamicResource BackgroundBrush}"
-        Foreground="{DynamicResource ForegroundBrush}">
+        Foreground="{DynamicResource ForegroundBrush}" FocusManager.FocusedElement="{Binding ElementName=NameBox}">
     <Border Margin="14" Style="{DynamicResource HudPanelStyle}">
         <DockPanel>
             <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
@@ -23,25 +23,45 @@
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
-        <ScrollViewer VerticalScrollBarVisibility="Auto" Grid.Row="0">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Grid.Row="0" Padding="0,0,12,0">
             <StackPanel>
-                <TextBlock Text="Server Name:" Margin="0,0,0,4"/>
-                <TextBox x:Name="NameBox" Margin="0,0,0,8"/>
-
-                <TextBlock Text="Host:" Margin="0,0,0,4"/>
-                <TextBox x:Name="HostBox" Margin="0,0,0,8"/>
-
-                <TextBlock Text="Port:" Margin="0,0,0,4"/>
-                <TextBox x:Name="PortBox" Text="1337" Width="100" HorizontalAlignment="Left" Margin="0,0,0,8"/>
-
-                <TextBlock Text="Username:" Margin="0,0,0,4"/>
-                <TextBox x:Name="UsernameBox" Margin="0,0,0,8"/>
-
-                <TextBlock Text="Password:" Margin="0,0,0,4"/>
-                <PasswordBox x:Name="PasswordBox" Margin="0,0,0,8"/>
-
-                <TextBlock Text="Root Path:" Margin="0,0,0,4"/>
-                <TextBox x:Name="RootPathBox" Text="/" Margin="0,0,0,12"/>
+                <TextBlock Text="Server connection" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                <TextBlock Text="Enter your FTPS details, then test the connection. Host and username are required."
+                           TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,18"/>
+                <TextBlock Text="Server name" Margin="0,0,0,4"/>
+                <TextBox x:Name="NameBox" Margin="0,0,0,12" AutomationProperties.Name="Server name"/>
+                <Grid Margin="0,0,0,12">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="110"/></Grid.ColumnDefinitions>
+                    <StackPanel Margin="0,0,14,0">
+                        <TextBlock Text="Host (required)" Margin="0,0,0,4"/>
+                        <TextBox x:Name="HostBox" AutomationProperties.Name="Server host, required" ToolTip="Hostname or IP address, without ftp://"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Text="Port" Margin="0,0,0,4"/>
+                        <TextBox x:Name="PortBox" Text="1337" MaxLength="5" AutomationProperties.Name="Server port"/>
+                    </StackPanel>
+                </Grid>
+                <Grid Margin="0,0,0,12">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                    <StackPanel Margin="0,0,14,0">
+                        <TextBlock Text="Username (required)" Margin="0,0,0,4"/>
+                        <TextBox x:Name="UsernameBox" AutomationProperties.Name="Server username, required"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Text="Password" Margin="0,0,0,4"/>
+                        <PasswordBox x:Name="PasswordBox" AutomationProperties.Name="Server password"/>
+                    </StackPanel>
+                </Grid>
+                <TextBlock Text="Root path" Margin="0,0,0,4"/>
+                <TextBox x:Name="RootPathBox" Text="/" Margin="0,0,0,6" AutomationProperties.Name="Server root path"/>
+                <TextBlock Text="Use / for the server root, or choose a remote directory such as /incoming."
+                           TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,16"/>
+                <WrapPanel>
+                    <Button Content="Test connection" Click="TestConnection_Click" Padding="16,6" Margin="0,0,8,0" Style="{StaticResource SecondaryButton}"/>
+                    <Button Content="Clear certificate" Click="ClearCert_Click" Padding="16,6" Style="{StaticResource SecondaryButton}"
+                            ToolTip="Remove this server's trusted TLS certificate. You will be asked to trust it again on the next connection."/>
+                </WrapPanel>
+                <TextBlock x:Name="TestResultText" Margin="0,8,0,16" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"/>
 
                 <!-- SOCKS5 Proxy -->
                 <Expander Header="SOCKS5 Proxy" Margin="0,0,0,8">
@@ -78,6 +98,8 @@
                     </StackPanel>
                 </Expander>
 
+                <Expander Header="Drive &amp; connection preferences" IsExpanded="True" Margin="0,0,0,12">
+                <StackPanel Margin="0,10,0,0">
                 <TextBlock Text="Drive Letter:" Margin="0,0,0,4"/>
                 <ComboBox x:Name="DriveLetterBox" Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
 
@@ -91,6 +113,9 @@
                 <TextBlock Text="Speed Limit (KB/s, 0=use global):" Margin="0,0,0,4"/>
                 <TextBox x:Name="SpeedLimitBox" Text="0" Width="100" HorizontalAlignment="Left" Margin="0,0,0,12"/>
 
+                </StackPanel>
+                </Expander>
+                <TextBlock Text="Advanced settings" FontSize="16" FontWeight="SemiBold" Margin="0,10,0,12"/>
                 <!-- Cache -->
                 <Expander Header="Cache" Margin="0,0,0,8">
                     <Grid Margin="0,6,0,0">
@@ -141,7 +166,7 @@
                         <CheckBox x:Name="NotificationsEnabledBox" Content="Enable new release notifications" IsChecked="True" Margin="0,0,0,8"/>
                         <TextBlock Text="Excluded Categories (comma-separated):" Margin="0,0,0,2"/>
                         <TextBox x:Name="ExcludedCategoriesBox" Margin="0,0,0,8"
-                                 ToolTip="e.g. xxx-paysite, 0day — these categories won't trigger notifications"
+                                 ToolTip="e.g. xxx-paysite, 0day â€” these categories won't trigger notifications"
                                  aia:AiAgentAttached.FreezablePath="{Binding ExcludedCategoriesFreezePath}"/>
                         <Grid Margin="0,0,0,8">
                             <Grid.ColumnDefinitions>
@@ -255,7 +280,7 @@
                 <!-- IRC Announce Rules (for auto-racing) -->
                 <TextBlock Text="Announce Rules (auto-race from IRC):" Margin="0,8,0,2" FontWeight="SemiBold"/>
                 <TextBlock Text="Regex with named groups: (?&lt;section&gt;...) (?&lt;release&gt;...)"
-                           Foreground="{DynamicResource ForegroundDimBrush}" FontSize="11" Margin="0,0,0,4"/>
+                           Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12" Margin="0,0,0,4"/>
                 <TextBox x:Name="IrcAnnounceRulesBox" AcceptsReturn="True" TextWrapping="Wrap"
                          Height="60" VerticalScrollBarVisibility="Auto" Margin="0,0,0,4"
                          ToolTip="One rule per line: #channel pattern&#x0a;e.g. #announce (?&lt;section&gt;\w+) :: (?&lt;release&gt;\S+)&#x0a;Or: #pre \[(?&lt;section&gt;[^\]]+)\]\s*(?&lt;release&gt;\S+)"
@@ -300,7 +325,7 @@
                 </Expander>
 
                 <!-- Spread/FXP Settings -->
-                <Expander Header="Spread / FXP" Margin="0,0,0,8" IsExpanded="True">
+                <Expander Header="Spread / FXP" Margin="0,0,0,8">
                     <StackPanel Margin="0,6,0,0">
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                             <Button Content="AI Setup" Click="AiSetup_Click"
@@ -308,7 +333,7 @@
                                     ToolTip="Use AI (OpenRouter) to analyze SITE RULES and suggest optimal spread configuration"/>
                             <Button Content="Quick Setup" Click="QuickSetup_Click"
                                     Padding="12,4" Style="{StaticResource PrimaryButton}"
-                                    ToolTip="Auto-detect sections, site rules, skiplist, and slots — all in one click"/>
+                                    ToolTip="Auto-detect sections, site rules, skiplist, and slots â€” all in one click"/>
                         </StackPanel>
 
                         <!-- Unified Section Mappings (replaces old SpreadSectionsBox) -->
@@ -320,7 +345,7 @@
                                       ToolTip="Scan all directories, not just /incoming/"/>
                             <TextBlock Text="Sections &amp; IRC Mappings:" VerticalAlignment="Bottom" FontWeight="SemiBold"/>
                         </DockPanel>
-                        <TextBlock FontSize="11" Foreground="{DynamicResource ForegroundDimBrush}"
+                        <TextBlock FontSize="12" Foreground="{DynamicResource ForegroundDimBrush}"
                                    TextWrapping="Wrap" Margin="0,2,0,4"
                                    Text="Each row is one section on this server. IRC Section = name announced on IRC; Remote Section = internal key used by spread; Path = directory on the server. Trigger regex filters which announces use this mapping (default .*). Tag Rules are per-mapping filters."/>
                         <DataGrid x:Name="SectionMappingsGrid"
@@ -372,7 +397,7 @@
                         <CheckBox x:Name="SpreadNeverSourceBox" Content="Never source (don't pull files off this site)" Margin="0,0,0,8"/>
                         <TextBlock Text="Affiliations (comma-separated groups):" Margin="0,0,0,2"/>
                         <TextBox x:Name="SpreadAffilsBox" Margin="0,0,0,4"
-                                 ToolTip="Groups affiliated with this site — their releases get auto-allowed (highest priority in rules engine)"
+                                 ToolTip="Groups affiliated with this site â€” their releases get auto-allowed (highest priority in rules engine)"
                                  aia:AiAgentAttached.FreezablePath="{Binding AffilsFreezePath}"/>
                     </StackPanel>
                 </Expander>
@@ -387,7 +412,7 @@
                                   aia:AiAgentAttached.FreezablePath="{Binding SkiplistRulesFreezePath}">
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="Pattern" Binding="{Binding Pattern}" Width="140"/>
-                                <DataGridCheckBoxColumn Header="Rx" Binding="{Binding IsRegex}" Width="40"/>
+                                <DataGridCheckBoxColumn Header="Regex" Binding="{Binding IsRegex}" Width="60"/>
                                 <DataGridTextColumn Header="Expression" Binding="{Binding Expression}" Width="*"/>
                                 <DataGridTextColumn Header="Action" Binding="{Binding Action}" Width="65"/>
                                 <DataGridCheckBoxColumn Header="Dirs" Binding="{Binding MatchDirectories}" Width="40"/>
@@ -412,11 +437,11 @@
                 </Expander>
 
                 <!-- Metadata Filter (IMDb/TVMaze) -->
-                <Expander Header="Metadata Filter (IMDb/TVMaze — no API key required)" Margin="0,0,0,8">
+                <Expander Header="Metadata Filter (IMDb/TVMaze â€” no API key required)" Margin="0,0,0,8">
                     <StackPanel Margin="0,6,0,0">
-                        <TextBlock FontSize="11" Foreground="{DynamicResource ForegroundDimBrush}"
+                        <TextBlock FontSize="12" Foreground="{DynamicResource ForegroundDimBrush}"
                                    TextWrapping="Wrap" Margin="0,0,0,6"
-                                   Text="Filters releases by IMDb rating (movies via imdbapi.dev free fallback) and TVMaze data (TV). Fails OPEN on lookup error so flaky APIs don't block races."/>
+                                   Text="Filter movies by IMDb rating and TV shows by TVMaze data. Releases are allowed if the lookup fails or times out."/>
                         <CheckBox x:Name="MetaFilterEnabledBox" Content="Enable metadata filter for auto-race"
                                   Margin="0,0,0,6"/>
                         <Grid Margin="0,0,0,4">
@@ -451,22 +476,13 @@
                     </StackPanel>
                 </Expander>
 
-                <Separator Margin="0,4,0,12"/>
-
-                <StackPanel Orientation="Horizontal">
-                    <Button Content="Test Connection" Click="TestConnection_Click"
-                            Padding="16,6" Margin="0,0,8,0"/>
-                    <Button Content="Clear Certificate" Click="ClearCert_Click"
-                            Padding="16,6" ToolTip="Remove the trusted TLS certificate for this server (will be re-accepted on next connect)"/>
-                </StackPanel>
-                <TextBlock x:Name="TestResultText" Margin="0,8,0,0" TextWrapping="Wrap"/>
             </StackPanel>
         </ScrollViewer>
 
         <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
-            <Button Content="Save" Click="Save_Click" Padding="20,6" Margin="0,0,8,0"
+            <Button Content="Save server" Click="Save_Click" Padding="20,6" Margin="0,0,8,0"
                     Style="{StaticResource PrimaryButton}"/>
-            <Button Content="Cancel" Click="Cancel_Click" Padding="20,6"
+            <Button Content="Cancel" Click="Cancel_Click" IsCancel="True" Padding="20,6"
                     Style="{StaticResource SecondaryButton}"/>
         </StackPanel>
                 </Grid>

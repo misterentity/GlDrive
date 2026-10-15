@@ -28,12 +28,17 @@ public partial class DashboardWindow : Window
     private BrowseViewModel? _browseVm;
     private Window? _fullscreenWindow;
     private DispatcherTimer? _clockTimer;
+    private IInputElement? _shortcutsReturnFocus;
+    private readonly bool _demoMode;
 
-    public DashboardWindow(ServerManager serverManager, AppConfig config, NotificationStore notificationStore)
+    public DashboardWindow(ServerManager serverManager, AppConfig config, NotificationStore notificationStore, bool demoMode = false)
     {
+        _demoMode = demoMode;
         _config = config;
         _serverManager = serverManager;
         InitializeComponent();
+        Width = Math.Min(Width, SystemParameters.WorkArea.Width);
+        Height = Math.Min(Height, SystemParameters.WorkArea.Height);
         var vm = new DashboardViewModel(serverManager, config, notificationStore);
         DataContext = vm;
         Closed += (_, _) =>
@@ -87,7 +92,7 @@ public partial class DashboardWindow : Window
         {
             if (e.Key == System.Windows.Input.Key.Escape && ShortcutsOverlay.Visibility == Visibility.Visible)
             {
-                ShortcutsOverlay.Visibility = Visibility.Collapsed;
+                ToggleShortcuts();
                 e.Handled = true;
                 return;
             }
@@ -97,9 +102,7 @@ public partial class DashboardWindow : Window
                 // Don't fire while typing in a TextBox / ComboBox / TextBox-like
                 if (Keyboard.FocusedElement is System.Windows.Controls.TextBox) return;
                 if (Keyboard.FocusedElement is System.Windows.Controls.ComboBox) return;
-                ShortcutsOverlay.Visibility = ShortcutsOverlay.Visibility == Visibility.Visible
-                    ? Visibility.Collapsed
-                    : Visibility.Visible;
+                ToggleShortcuts();
                 e.Handled = true;
             }
         };
@@ -107,8 +110,29 @@ public partial class DashboardWindow : Window
 
     private void ShortcutsOverlay_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
-        ShortcutsOverlay.Visibility = Visibility.Collapsed;
+        ToggleShortcuts();
         e.Handled = true;
+    }
+
+    private void Shortcuts_Click(object sender, RoutedEventArgs e)
+    {
+        ToggleShortcuts();
+        e.Handled = true;
+    }
+
+    private void ToggleShortcuts()
+    {
+        if (ShortcutsOverlay.Visibility == Visibility.Visible)
+        {
+            ShortcutsOverlay.Visibility = Visibility.Collapsed;
+            if (_shortcutsReturnFocus != null) Keyboard.Focus(_shortcutsReturnFocus);
+        }
+        else
+        {
+            _shortcutsReturnFocus = Keyboard.FocusedElement;
+            ShortcutsOverlay.Visibility = Visibility.Visible;
+            ShortcutsOverlay.Focus();
+        }
     }
 
     protected override void OnContentRendered(EventArgs e)
@@ -120,6 +144,35 @@ public partial class DashboardWindow : Window
         // Grid around the original content), so walking Content.Children[0] is
         // unreliable — name lookup is.
         MainTabControl.SelectionChanged += TabControl_SelectionChanged;
+        if (MainTabControl.SelectedItem is TabItem tab)
+        {
+            UpdateSectionHeading(GetTabName(tab));
+            if (!_demoMode && ReferenceEquals(tab, OverviewTab) && DataContext is DashboardViewModel vm)
+                vm.RefreshOverview();
+        }
+    }
+
+    private void UpdateSectionHeading(string? name)
+    {
+        CurrentSectionText.Text = name ?? "Overview";
+        CurrentSectionHint.Text = name switch
+        {
+            "Overview" => "Connections, transfers, and app activity at a glance.",
+            "Notifications" => "Discover new releases from your connected servers.",
+            "Wishlist" => "Track movies and shows and download matching releases automatically.",
+            "Downloads" => "Follow progress, retry interrupted transfers, and open your files.",
+            "Search" => "Find releases across connected servers. Enter a title below to begin.",
+            "Player" => "Browse media, choose a release, and watch it here.",
+            "Upcoming" => "Explore upcoming episodes and movies, then add them to your wishlist.",
+            "Plex" => "Connect your Plex account to manage library access and invitations.",
+            "IRC" => "Choose a channel to read or send messages. Enter sends your message.",
+            "PreDB" => "Search release announcements, then find them on your servers.",
+            "Spread" => "Transfer releases between servers and monitor active races.",
+            "Browse" => "Browse two servers side by side and transfer selected files between them.",
+            "Mounts" => "Manage server connections, mounted drives, and trusted certificates.",
+            "AI Agent" => "Review recommendations, run history, and configuration changes.",
+            _ => ""
+        };
     }
 
     // The v1.72 sidebar nav uses structured Grid headers (number prefix + label)
@@ -160,9 +213,13 @@ public partial class DashboardWindow : Window
 
     private async void TabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (e.Source is not TabControl tc) return;
+        if (!ReferenceEquals(e.Source, MainTabControl)) return;
+        var tc = MainTabControl;
         if (tc.SelectedItem is not TabItem tab) return;
         var header = GetTabName(tab);
+        UpdateSectionHeading(header);
+        // Rendering demo screens must not initialize network clients or load private logs.
+        if (_demoMode) return;
         var vm = DataContext as DashboardViewModel;
 
         if (header == "IRC")
