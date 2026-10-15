@@ -40,6 +40,13 @@
     <FontFamily x:Key="MonoFontFamily">Cascadia Mono, Consolas, monospace</FontFamily>
     <FontFamily x:Key="DisplayFontFamily">Segoe UI</FontFamily>
     <Color x:Key="AccentColor">#E53935</Color>
+    <!-- Release-name tokens (presentation only); each at least 4.5:1 on white except punctuation. -->
+    <SolidColorBrush x:Key="ReleaseTokenMetaBrush" Color="#00695C"/>
+    <SolidColorBrush x:Key="ReleaseTokenSourceBrush" Color="#555555"/>
+    <SolidColorBrush x:Key="ReleaseTokenCodecBrush" Color="#6B6B6B"/>
+    <SolidColorBrush x:Key="ReleaseTokenTagBrush" Color="#A64B00"/>
+    <SolidColorBrush x:Key="ReleaseTokenGroupBrush" Color="#6A1B9A"/>
+    <SolidColorBrush x:Key="ReleaseTokenSeparatorBrush" Color="#8A8A8A"/>
     <!-- Multi-stream downloads: lane palette + stream matrix (deep tones for the Light theme). Keys must exist in every theme. -->
     <SolidColorBrush x:Key="LaneBrush0" Color="#0277BD"/>
     <SolidColorBrush x:Key="LaneBrush1" Color="#C2185B"/>

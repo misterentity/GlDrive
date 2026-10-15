@@ -138,6 +138,14 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
         set { _statusText = value; OnPropertyChanged(); }
     }
 
+    // One status-strip segment ("IRC ○ off", "IRC ● site", "IRC 1/2"); StatusText keeps the detail.
+    private string _compactStatusText = "IRC ○ off";
+    public string CompactStatusText
+    {
+        get => _compactStatusText;
+        private set { if (_compactStatusText == value) return; _compactStatusText = value; OnPropertyChanged(); }
+    }
+
     public bool IsConnected
     {
         get => _isConnected;
@@ -630,6 +638,7 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
         if (services.Count == 0)
         {
             StatusText = "IRC not configured";
+            CompactStatusText = "IRC ○ off";
             IsConnected = false;
             return;
         }
@@ -648,6 +657,12 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
                 IrcServiceState.Reconnecting => $"IRC reconnecting to {svc.ServerName}...",
                 _ => $"IRC disconnected ({svc.ServerName})"
             };
+            CompactStatusText = svc.State switch
+            {
+                IrcServiceState.Connected => $"IRC ● {svc.ServerName}",
+                IrcServiceState.Connecting or IrcServiceState.Reconnecting => $"IRC ◌ {svc.ServerName}",
+                _ => $"IRC ○ {svc.ServerName}"
+            };
         }
         else
         {
@@ -664,6 +679,7 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
                 parts.Add($"{icon}{svc.ServerName}");
             }
             StatusText = $"IRC: {connected}/{total} connected  [{string.Join("  ", parts)}]";
+            CompactStatusText = $"IRC {(connected > 0 ? "●" : "○")} {connected}/{total}";
         }
     }
 

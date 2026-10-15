@@ -113,6 +113,9 @@ internal static class ScreenshotCapture
             dashboard.DataContext = vm;
         }
         DoEvents();
+        // Show the selected-row treatment in the Downloads captures.
+        if (dashboard.FindName("DownloadsGrid") is ListBox demoDownloads && demoDownloads.Items.Count > 1)
+            demoDownloads.SelectedIndex = 1;
 
         using var demoBrowse = new BrowseViewModel(serverManager, config);
         ((TabItem)dashboard.FindName("BrowseTab")).DataContext = demoBrowse;

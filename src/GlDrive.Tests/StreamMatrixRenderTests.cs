@@ -26,7 +26,7 @@ public sealed class WpfRenderCollection { }
 /// the XAML loads and every new theme key exists in all three dictionaries.
 /// </summary>
 [Collection("WpfRender")]
-public class StreamMatrixRenderTests
+public partial class StreamMatrixRenderTests
 {
     public static readonly string OutputDir = Path.Combine(Path.GetTempPath(), "gldrive-ui-render");
 
@@ -114,6 +114,7 @@ public class StreamMatrixRenderTests
 
             ThemeManager.ApplyTheme(theme);
             AssertDisclosureAndInputTheme(theme == "Cyberpunk" ? new CornerRadius(0) : originalInputRadius);
+            AssertTerminalUi(theme, dict);
             var matrix = BuildMatrix();
             var name = theme.ToLowerInvariant();
 
@@ -122,6 +123,7 @@ public class StreamMatrixRenderTests
             Render(BuildSettings(), $"multistream-settings-{name}.png");
         }
 
+        AssertTerminalUiOnce();
         AssertUplinkTableFitsNarrowSettings();
         ThemeManager.ApplyTheme("Light");
         Assert.Same(originalScanline, application.TryFindResource("ScanlineOverlayBrush"));

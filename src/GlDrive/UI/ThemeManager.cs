@@ -42,11 +42,8 @@ public static class ThemeManager
         // theme's keys *into* the main dict at runtime and restore originals on swap.
         RestoreMainDictOverrides();
         ApplyMainDictOverrides(newTheme);
-
-        if (resolved == "Cyberpunk")
-            CyberpunkChrome.Attach();
-        else
-            CyberpunkChrome.Detach();
+        // No window-wide chrome: themes never re-parent window content (which also hosts the
+        // LibVLC video surface and WebView2). Scanline texture lives inside instrument wells only.
     }
 
     private static void ApplyMainDictOverrides(ResourceDictionary themeDict)

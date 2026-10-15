@@ -11,14 +11,17 @@
             <CornerRadius x:Key="InputCornerRadius">4</CornerRadius>
             <CornerRadius x:Key="CheckBoxCornerRadius">2</CornerRadius>
 
-            <!-- Consistent keyboard focus for custom control templates. -->
+            <!-- Consistent keyboard focus for custom control templates: a solid, sharp 2px ring drawn
+                 outside the control, separated from it by a background-coloured gap so it stays
+                 visible on filled (primary) buttons as well as on plain surfaces. -->
             <Style x:Key="KeyboardFocusStyle" TargetType="Control">
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="Control">
-                            <Rectangle Margin="2" Stroke="{DynamicResource FocusRingBrush}"
-                                       StrokeThickness="1" StrokeDashArray="2,2"
-                                       RadiusX="3" RadiusY="3" IsHitTestVisible="False"/>
+                            <Grid Margin="-4" IsHitTestVisible="False" SnapsToDevicePixels="True">
+                                <Rectangle x:Name="FocusRing" Stroke="{DynamicResource FocusRingBrush}" StrokeThickness="2"/>
+                                <Rectangle x:Name="FocusGap" Margin="2" Stroke="{DynamicResource BackgroundBrush}" StrokeThickness="1"/>
+                            </Grid>
                         </ControlTemplate>
                     </Setter.Value>
                 </Setter>
@@ -346,7 +349,8 @@
                 <Setter Property="Foreground" Value="{DynamicResource ForegroundDimBrush}"/>
                 <Setter Property="FontFamily" Value="Segoe UI"/>
                 <Setter Property="FontSize" Value="13"/>
-                <Setter Property="Padding" Value="14,10"/>
+                <!-- Compact enough that every dashboard target fits at the minimum window height. -->
+                <Setter Property="Padding" Value="14,4"/>
                 <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
                 <Setter Property="VerticalContentAlignment" Value="Stretch"/>
                 <Setter Property="FocusVisualStyle" Value="{DynamicResource KeyboardFocusStyle}"/>
@@ -355,7 +359,7 @@
                         <ControlTemplate TargetType="TabItem">
                             <Border x:Name="Bd" Background="Transparent" BorderBrush="Transparent"
                                     BorderThickness="3,0,0,0" Padding="{TemplateBinding Padding}"
-                                    Cursor="Hand" MinHeight="40">
+                                    Cursor="Hand" MinHeight="26">
                                 <ContentPresenter ContentSource="Header" RecognizesAccessKey="True"
                                                   HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
                             </Border>
@@ -371,6 +375,7 @@
                                     <Setter Property="FontWeight" Value="SemiBold"/>
                                 </Trigger>
                                 <Trigger Property="IsEnabled" Value="False">
+                                    <Setter TargetName="Bd" Property="MinHeight" Value="18"/>
                                     <Setter Property="Foreground" Value="{DynamicResource DisabledForegroundBrush}"/>
                                 </Trigger>
                             </ControlTemplate.Triggers>
@@ -511,6 +516,8 @@
                 <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
                 <Setter Property="Height" Value="6"/>
             </Style>
+            <!-- Instrument meters: a plain bar here; the Cyberpunk theme draws discrete LED blocks. -->
+            <Style x:Key="SegmentedMeterStyle" TargetType="ProgressBar" BasedOn="{StaticResource {x:Type ProgressBar}}"/>
 
             <!-- Separator -->
             <Style TargetType="Separator">

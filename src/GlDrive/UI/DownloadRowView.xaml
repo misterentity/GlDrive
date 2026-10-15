@@ -1,68 +1,114 @@
 <UserControl x:Class="GlDrive.UI.DownloadRowView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="clr-namespace:GlDrive.UI"
              xmlns:sm="clr-namespace:GlDrive.UI.StreamMatrix">
-    <!-- One row of the Dashboard transfer queue. DataContext = DownloadItemVm. -->
+    <!-- One row of the Dashboard transfer queue. DataContext = DownloadItemVm.
+         State reads three ways at once: a left rail and progress fill in the status colour, a
+         glyph in the chip, and the status word. Selection is drawn by the row itself (the
+         opaque row surface would otherwise hide the ListBoxItem's selection tint). -->
     <UserControl.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
+        <ui:StatusGlyphConverter x:Key="StatusGlyph"/>
+        <Style x:Key="StatusRailStyle" TargetType="Rectangle">
+            <Setter Property="Fill" Value="{DynamicResource AccentBrush}"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding Status}" Value="Downloading">
+                    <Setter Property="Effect" Value="{DynamicResource LiveSignalGlowEffect}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Status}" Value="Completed">
+                    <Setter Property="Fill" Value="{DynamicResource GoodBrush}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Status}" Value="Failed">
+                    <Setter Property="Fill" Value="{DynamicResource BadBrush}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Status}" Value="Queued">
+                    <Setter Property="Fill" Value="{DynamicResource WarnBrush}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Status}" Value="Cancelled">
+                    <Setter Property="Fill" Value="{DynamicResource TextFaintBrush}"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="RowRootStyle" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource LineBrush}"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ListBoxItem}, FallbackValue=False}" Value="True">
+                    <Setter Property="BorderBrush" Value="{DynamicResource LineDimBrush}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}, FallbackValue=False}" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource AccentDimBrush}"/>
+                    <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
     </UserControl.Resources>
-    <Border x:Name="RowRoot" Margin="0,0,0,4" Padding="10,7"
-            Background="{DynamicResource SurfaceBrush}" CornerRadius="0"
-            BorderBrush="{DynamicResource LineBrush}" BorderThickness="1">
-        <Grid>
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="Auto" MinWidth="90"/>
-            </Grid.ColumnDefinitions>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
-
-            <!-- Top row: release name + status chip -->
-            <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding ReleaseName}"
-                       Style="{DynamicResource DisplayTextStyle}" FontSize="13" Margin="0,0,12,0"
-                       TextTrimming="CharacterEllipsis" ToolTip="{Binding ReleaseName}"/>
-            <Border Grid.Row="0" Grid.Column="1"
-                    Style="{DynamicResource DownloadStatusTagStyle}"
-                    HorizontalAlignment="Right">
-                <TextBlock Text="{Binding Status}" Style="{DynamicResource DownloadStatusTextStyle}"/>
-            </Border>
-
-            <!-- Middle row: server / category / progress micro-text, lane chips, speed -->
-            <Grid Grid.Row="1" Grid.Column="0" Margin="0,4,8,8">
+    <Border x:Name="RowRoot" Margin="0,0,0,4" CornerRadius="0" BorderThickness="1"
+            Style="{StaticResource RowRootStyle}">
+        <DockPanel>
+            <Rectangle x:Name="StatusRail" DockPanel.Dock="Left" Width="3" Style="{StaticResource StatusRailStyle}"/>
+            <Grid Margin="10,7">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto" MinWidth="90"/>
                 </Grid.ColumnDefinitions>
-                <TextBlock Text="{Binding ServerName}" Style="{DynamicResource AccentTextStyle}" FontSize="12"
-                           MaxWidth="160" TextTrimming="CharacterEllipsis" ToolTip="{Binding ServerName}"/>
-                <TextBlock Grid.Column="1" Text=" · " Foreground="{DynamicResource TextFaintBrush}"/>
-                <TextBlock Grid.Column="2" Text="{Binding Category}" Style="{DynamicResource MicroTextStyle}"
-                           FontSize="12" MaxWidth="140" TextTrimming="CharacterEllipsis" ToolTip="{Binding Category}"/>
-                <TextBlock Grid.Column="3" Text=" · " Foreground="{DynamicResource TextFaintBrush}"/>
-                <TextBlock Grid.Column="4" Text="{Binding ProgressText}" Style="{DynamicResource MicroTextStyle}" FontSize="12"
-                           TextTrimming="CharacterEllipsis" ToolTip="{Binding ProgressText}"/>
-            </Grid>
-            <sm:LaneChipsView Grid.Row="2" Grid.ColumnSpan="2" DataContext="{Binding Matrix}"
-                              HorizontalAlignment="Left" VerticalAlignment="Top" Margin="-6,0,0,6"
-                              ToolTip="{Binding DataContext.StreamsText, ElementName=RowRoot}"
-                              Visibility="{Binding DataContext.HasStreams, ElementName=RowRoot, Converter={StaticResource BoolToVisibility}}"/>
-            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SpeedDisplay}" Margin="8,4,0,8"
-                       HorizontalAlignment="Right"
-                       Style="{DynamicResource AccentTextStyle}" FontSize="12"/>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
 
-            <!-- Progress bar -->
-            <ProgressBar Grid.Row="3" Grid.ColumnSpan="2" Height="6"
-                         Minimum="0" Maximum="100"
-                         AutomationProperties.Name="Download progress"
-                         ToolTip="{Binding ProgressText}"
-                         Value="{Binding ProgressPercent, FallbackValue=0}"/>
-        </Grid>
+                <!-- Top row: release name (tokenized; text stays the exact name) + status chip -->
+                <TextBlock x:Name="ReleaseNameLabel" Grid.Row="0" Grid.Column="0" ui:ReleaseNameText.Source="{Binding ReleaseName}"
+                           Style="{DynamicResource DisplayTextStyle}" FontSize="13" Margin="0,0,12,0"
+                           TextTrimming="CharacterEllipsis" ToolTip="{Binding ReleaseName}"/>
+                <Border Grid.Row="0" Grid.Column="1"
+                        Style="{DynamicResource DownloadStatusTagStyle}"
+                        HorizontalAlignment="Right">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="{Binding Status, Converter={StaticResource StatusGlyph}}" Margin="0,0,5,0"
+                                   Style="{DynamicResource DownloadStatusTextStyle}"/>
+                        <TextBlock Text="{Binding Status}" Style="{DynamicResource DownloadStatusTextStyle}"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- Middle row: server / category / progress micro-text, lane chips, speed -->
+                <Grid Grid.Row="1" Grid.Column="0" Margin="0,4,8,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="{Binding ServerName}" Style="{DynamicResource AccentTextStyle}" FontSize="12"
+                               MaxWidth="160" TextTrimming="CharacterEllipsis" ToolTip="{Binding ServerName}"/>
+                    <TextBlock Grid.Column="1" Text=" · " Foreground="{DynamicResource TextFaintBrush}"/>
+                    <TextBlock Grid.Column="2" Text="{Binding Category}" Style="{DynamicResource MicroTextStyle}"
+                               FontSize="12" MaxWidth="140" TextTrimming="CharacterEllipsis" ToolTip="{Binding Category}"/>
+                    <TextBlock Grid.Column="3" Text=" · " Foreground="{DynamicResource TextFaintBrush}"/>
+                    <TextBlock Grid.Column="4" Text="{Binding ProgressText}" Style="{DynamicResource MicroTextStyle}" FontSize="12"
+                               TextTrimming="CharacterEllipsis" ToolTip="{Binding ProgressText}"/>
+                </Grid>
+                <sm:LaneChipsView Grid.Row="2" Grid.ColumnSpan="2" DataContext="{Binding Matrix}"
+                                  HorizontalAlignment="Left" VerticalAlignment="Top" Margin="-6,0,0,6"
+                                  ToolTip="{Binding DataContext.StreamsText, ElementName=RowRoot}"
+                                  Visibility="{Binding DataContext.HasStreams, ElementName=RowRoot, Converter={StaticResource BoolToVisibility}}"/>
+                <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SpeedDisplay}" Margin="8,4,0,8"
+                           HorizontalAlignment="Right" TextAlignment="Right"
+                           Style="{DynamicResource AccentTextStyle}" FontSize="12"/>
+
+                <!-- Progress fill follows the rail's status colour (failed red, done green, cancelled dim).
+                     It keeps the theme's implicit ProgressBar style, so a theme switch restyles it. -->
+                <ProgressBar x:Name="RowProgress" Grid.Row="3" Grid.ColumnSpan="2" Height="6"
+                             Minimum="0" Maximum="100"
+                             Foreground="{Binding Fill, ElementName=StatusRail}"
+                             AutomationProperties.Name="Download progress"
+                             ToolTip="{Binding ProgressText}"
+                             Value="{Binding ProgressPercent, FallbackValue=0}"/>
+            </Grid>
+        </DockPanel>
     </Border>
 </UserControl>

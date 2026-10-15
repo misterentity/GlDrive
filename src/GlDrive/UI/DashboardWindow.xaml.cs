@@ -30,6 +30,8 @@ public partial class DashboardWindow : Window
     private DispatcherTimer? _clockTimer;
     private IInputElement? _shortcutsReturnFocus;
     private readonly bool _demoMode;
+    private readonly AutoExpandLatch _streamsExpandLatch = new();
+    private bool _expandingStreams;
 
     public DashboardWindow(ServerManager serverManager, AppConfig config, NotificationStore notificationStore, bool demoMode = false)
     {
@@ -41,8 +43,10 @@ public partial class DashboardWindow : Window
         Height = Math.Min(Height, SystemParameters.WorkArea.Height);
         var vm = new DashboardViewModel(serverManager, config, notificationStore);
         DataContext = vm;
+        vm.PropertyChanged += Vm_StreamMatrixChanged;
         Closed += (_, _) =>
         {
+            vm.PropertyChanged -= Vm_StreamMatrixChanged;
             vm.Dispose();
             _playerVm?.Dispose();
             _spreadVm?.Dispose();
@@ -139,10 +143,8 @@ public partial class DashboardWindow : Window
     {
         base.OnContentRendered(e);
 
-        // Find the named TabControl directly. The outer Window content may be wrapped
-        // (e.g. by CyberpunkChrome.AttachToWindow which adds a scanline-overlay
-        // Grid around the original content), so walking Content.Children[0] is
-        // unreliable — name lookup is.
+        // Find the named TabControl directly rather than walking Content.Children[0];
+        // name lookup does not depend on the shell's layout.
         MainTabControl.SelectionChanged += TabControl_SelectionChanged;
         if (MainTabControl.SelectedItem is TabItem tab)
         {
@@ -568,6 +570,29 @@ public partial class DashboardWindow : Window
         _playerVm?.LoadLibrary();
     }
 
+    // Auto-open the stream matrix when a multi-stream transfer starts, unless the user closed it.
+    private void Vm_StreamMatrixChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(DashboardViewModel.HasStreamMatrix) || sender is not DashboardViewModel vm) return;
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(() => Vm_StreamMatrixChanged(sender, e));
+            return;
+        }
+        if (!_streamsExpandLatch.SignalChanged(vm.HasStreamMatrix) || StreamsExpander.IsExpanded) return;
+        _expandingStreams = true;
+        try { StreamsExpander.IsExpanded = true; }
+        finally { _expandingStreams = false; }
+    }
+
+    private void StreamsExpander_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (!ReferenceEquals(e.OriginalSource, StreamsExpander) || _expandingStreams) return;
+        _streamsExpandLatch.UserToggled(StreamsExpander.IsExpanded);
+    }
+
+    // "Clear ▾": the four clear commands live in the button's context menu (also reachable
+    // with Shift+F10 / the Menu key); Enter, Space or a click opens it under the button.
     private async void StreamMatrix_ConfigRequested(object? sender, EventArgs e)
     {
         var window = new SettingsWindow(_config, _serverManager, initialTab: SettingsWindow.StreamsTab) { Owner = this };
