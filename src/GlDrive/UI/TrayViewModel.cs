@@ -352,6 +352,7 @@ public class TrayViewModel : INotifyPropertyChanged
             _config.Downloads.MultiStream.SlowMode = value;
             GlDrive.Config.ConfigManager.Save(_config);
             Log.Information("Downloads slow mode {State}", value ? "on" : "off");
+            _serverManager.RefreshTorrentDownloadRate();
             OnPropertyChanged();
         }
     }

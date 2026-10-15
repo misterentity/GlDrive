@@ -11,7 +11,7 @@ using Serilog;
 
 namespace GlDrive.Services;
 
-public class ServerManager : IDisposable
+public partial class ServerManager : IDisposable
 {
     private readonly AppConfig _config;
     private readonly CertificateManager _certManager;
@@ -582,6 +582,7 @@ public class ServerManager : IDisposable
 
     public void Dispose()
     {
+        StopTorrentDownloads();
         try { _remountCts.Cancel(); } catch { }
         try { _remountLoop?.Wait(TimeSpan.FromSeconds(5)); } catch { }
         _remountCts.Dispose();

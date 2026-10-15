@@ -12,19 +12,21 @@ public sealed partial class AutomationService
         if (op == "downloads.list")
         {
             var filter = Optional(a, "serverId", 128);
-            if (filter != null) Server(filter);
+            if (filter != null && filter != ServerManager.TorrentDownloadQueueId) Server(filter);
             var status = Optional(a, "status", 32);
             var selected = status == null ? (DownloadStatus?)null : EnumValue(a, "status", DownloadStatus.Queued);
-            var all = _servers.GetMountedServers().Where(s => filter == null || s.ServerId == filter)
-                .SelectMany(s => s.Downloads?.Store.Items ?? Array.Empty<DownloadItem>())
-                .Where(d => selected == null || d.Status == selected).OrderByDescending(d => d.QueuedAt).ToArray();
+            var all = _servers.GetDownloadQueues().Where(q => filter == null || q.Id == filter)
+                .SelectMany(q => q.Manager.Store.Items.Select(item => (Item: item, QueueId: q.Id, QueueName: q.Name)))
+                .Where(d => selected == null || d.Item.Status == selected).OrderByDescending(d => d.Item.QueuedAt)
+                .Select(d => DownloadSnapshot(d.Item, d.QueueId, d.QueueName)).ToArray();
             return Page(all, a);
         }
         var serverId = Required(a, "serverId", 128);
-        var server = Server(serverId);
-        var manager = Mounted(serverId).Downloads ?? throw new InvalidOperationException("Download service unavailable.");
         if (op == "downloads.enqueue")
         {
+            // This endpoint remains FTP-specific. Torrent creation belongs to player.download_torrent.
+            var server = Server(serverId);
+            var ftpManager = Mounted(serverId).Downloads ?? throw new InvalidOperationException("Download service unavailable.");
             var path = RemotePath(a, allowRoot: false);
             var name = Line(Optional(a, "releaseName", 512) ?? path.Split('/').Last(), "releaseName");
             var category = Line(Optional(a, "category", 128) ?? "", "category");
@@ -38,9 +40,11 @@ public sealed partial class AutomationService
                 RemotePath = path, ReleaseName = name, Category = category, LocalPath = Path.GetFullPath(destination),
                 ServerId = serverId, ServerName = server.Name, WishlistItemId = wishlistId
             };
-            if (!manager.Enqueue(item)) throw new InvalidOperationException("Download was not queued: it is already active or its destination directory already exists.");
-            return item;
+            if (!ftpManager.Enqueue(item)) throw new InvalidOperationException("Download was not queued: it is already active or its destination directory already exists.");
+            return DownloadSnapshot(item, serverId, server.Name);
         }
+        if (serverId != ServerManager.TorrentDownloadQueueId) Server(serverId);
+        var manager = _servers.GetDownloadManager(serverId) ?? throw new InvalidOperationException("Download service unavailable.");
         if (op == "downloads.clear_finished")
         {
             switch (Optional(a, "status", 32) ?? "all")
@@ -65,7 +69,25 @@ public sealed partial class AutomationService
             case "downloads.retry":
                 if (existing.Status is not (DownloadStatus.Failed or DownloadStatus.Cancelled))
                     throw new InvalidOperationException("Only failed or cancelled downloads can be retried.");
+                if (Flag(a, "skipBlockedFiles"))
+                {
+                    if (serverId != ServerManager.TorrentDownloadQueueId || !_servers.SkipBlockedTorrentFilesAndRetry(id))
+                        throw new InvalidOperationException("Skipping blocked files requires a refused torrent awaiting content approval.");
+                    break;
+                }
+                if (existing.RequiresContentApproval)
+                    throw new InvalidOperationException("This torrent requires explicit skipBlockedFiles=true approval to retry without blocked files.");
                 manager.Retry(id);
+                break;
+            case "downloads.pause":
+                if (existing.Status is not (DownloadStatus.Queued or DownloadStatus.Downloading))
+                    throw new InvalidOperationException("Only queued or downloading items can be paused.");
+                manager.Pause(id);
+                break;
+            case "downloads.resume":
+                if (existing.Status != DownloadStatus.Paused)
+                    throw new InvalidOperationException("Only paused downloads can be resumed.");
+                manager.Resume(id);
                 break;
             case "downloads.remove":
                 if (existing.Status is not (DownloadStatus.Completed or DownloadStatus.Failed or DownloadStatus.Cancelled))
@@ -83,8 +105,21 @@ public sealed partial class AutomationService
                 break;
             default: throw new ArgumentException($"Unknown operation: {op}");
         }
-        return existing;
+        return DownloadSnapshot(existing, serverId,
+            serverId == ServerManager.TorrentDownloadQueueId ? "BitTorrent" : Server(serverId).Name);
     }
+
+    // Explicit public projection: the persisted model includes private tracker-bearing
+    // magnet URIs. Never serialize that model through automation responses.
+    internal static object DownloadSnapshot(DownloadItem item, string? queueId = null, string? queueName = null) => new
+    {
+        item.Id, item.RemotePath, item.ReleaseName, item.LocalPath, item.TotalBytes,
+        item.DownloadedBytes, item.Status, item.QueuedAt, item.StartedAt, item.CompletedAt,
+        item.ErrorMessage, item.WishlistItemId, item.Category,
+        ServerId = queueId ?? item.ServerId, ServerName = queueName ?? item.ServerName,
+        item.RetryCount, item.SourceCompletionPending, item.SourceKind, item.StatusDetail,
+        item.SkipBlockedTorrentFiles, item.RequiresContentApproval
+    };
 
     private async Task<object?> SearchAsync(string op, JsonElement a, CancellationToken ct)
     {

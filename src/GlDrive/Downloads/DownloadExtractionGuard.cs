@@ -56,7 +56,7 @@ internal sealed class DownloadExtractionGuard
 
     internal static bool Blocks(DownloadItem item, string archivePath)
     {
-        if (item.Status is not (DownloadStatus.Queued or DownloadStatus.Downloading or DownloadStatus.Extracting) ||
+        if (item.Status is not (DownloadStatus.Queued or DownloadStatus.Downloading or DownloadStatus.Extracting or DownloadStatus.Paused) ||
             string.IsNullOrWhiteSpace(item.LocalPath)) return false;
         try
         {

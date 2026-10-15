@@ -734,15 +734,19 @@
                             </Border>
                             <Grid>
                                 <DockPanel>
-                                    <!-- Three groups: selection actions | Clear ▾ (all four clear commands) | ordering.
-                                         One row at the minimum width, so nothing wraps onto a line of its own. -->
+                                    <!-- Selection actions | clear history | ordering; wraps on narrow windows. -->
                                     <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
                                             CornerRadius="0" Padding="8,6" Margin="0,0,0,0">
                                         <WrapPanel>
+                                            <Button Content="{Binding SelectedDownloadItem.PauseResumeLabel, TargetNullValue=Pause, FallbackValue=Pause}"
+                                                    Command="{Binding PauseResumeDownloadCommand}" AutomationProperties.Name="Pause or resume selected download"
+                                                    Padding="10,6" Margin="0,0,6,4" Style="{DynamicResource SecondaryButton}"
+                                                    IsEnabled="{Binding SelectedDownloadItem.CanPauseOrResume, FallbackValue=False}"/>
                                             <Button Content="Cancel" Command="{Binding CancelDownloadCommand}"
-                                                    Padding="12,6" Margin="0,0,6,4" Style="{DynamicResource SecondaryButton}" IsEnabled="{Binding SelectedItem, ElementName=DownloadsGrid, Converter={StaticResource HasSelectionConverter}}"/>
-                                            <Button Content="Retry" Command="{Binding RetryDownloadCommand}"
-                                                    Padding="12,6" Margin="0,0,6,4" Style="{DynamicResource SecondaryButton}" IsEnabled="{Binding SelectedItem, ElementName=DownloadsGrid, Converter={StaticResource HasSelectionConverter}}"/>
+                                                    Padding="10,6" Margin="0,0,6,4" Style="{DynamicResource SecondaryButton}" IsEnabled="{Binding SelectedDownloadItem.CanCancel, FallbackValue=False}"/>
+                                            <Button Content="{Binding SelectedDownloadItem.RetryLabel, TargetNullValue=Retry, FallbackValue=Retry}" Command="{Binding RetryDownloadCommand}"
+                                                    ToolTip="Retry a failed or cancelled download; review blocked torrent files before choosing to skip them"
+                                                    Padding="10,6" Margin="0,0,6,4" Style="{DynamicResource SecondaryButton}" IsEnabled="{Binding SelectedDownloadItem.CanRetry, FallbackValue=False}"/>
                                             <Button Content="Open Folder" Command="{Binding OpenFolderCommand}"
                                                     Padding="12,6" Margin="0,0,0,4" Style="{DynamicResource SecondaryButton}"
                                                     ToolTip="Open download folder in Explorer" IsEnabled="{Binding SelectedItem, ElementName=DownloadsGrid, Converter={StaticResource HasSelectionConverter}}"/>
@@ -770,9 +774,11 @@
                               ScrollViewer.VerticalScrollBarVisibility="Auto"
                               ItemContainerStyle="{StaticResource DownloadQueueItemStyle}">
                         <ListBox.ContextMenu>
-                            <ContextMenu>
-                                <MenuItem Header="Cancel" Command="{Binding CancelDownloadCommand}"/>
-                                <MenuItem Header="Retry" Command="{Binding RetryDownloadCommand}"/>
+                            <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                                <MenuItem Header="Pause" Command="{Binding PauseDownloadCommand}" IsEnabled="{Binding SelectedDownloadItem.CanPause, FallbackValue=False}"/>
+                                <MenuItem Header="Resume" Command="{Binding ResumeDownloadCommand}" IsEnabled="{Binding SelectedDownloadItem.CanResume, FallbackValue=False}"/>
+                                <MenuItem Header="Cancel" Command="{Binding CancelDownloadCommand}" IsEnabled="{Binding SelectedDownloadItem.CanCancel, FallbackValue=False}"/>
+                                <MenuItem Header="{Binding SelectedDownloadItem.RetryLabel, TargetNullValue=Retry, FallbackValue=Retry}" Command="{Binding RetryDownloadCommand}" IsEnabled="{Binding SelectedDownloadItem.CanRetry, FallbackValue=False}"/>
                                 <MenuItem Header="Open Folder" Command="{Binding OpenFolderCommand}"/>
                                 <Separator/>
                                 <MenuItem Header="Remove Selected" Command="{Binding RemoveSelectedDownloadsCommand}"/>
@@ -801,7 +807,7 @@
                             </StackPanel.Style>
                             <TextBlock Text="Your download queue is clear" FontSize="18" FontWeight="SemiBold" TextAlignment="Center"
                                        Foreground="{DynamicResource ForegroundBrush}" TextWrapping="Wrap"/>
-                            <TextBlock Text="Find a release in Search or Notifications, then choose Download. You can also drag a release here." FontSize="13" Margin="0,8,0,0" TextAlignment="Center"
+                            <TextBlock Text="Choose Download in Search, Notifications, or the Player's torrent results. FTP and BitTorrent transfers appear here." FontSize="13" Margin="0,8,0,0" TextAlignment="Center"
                                        Foreground="{DynamicResource ForegroundDimBrush}" TextWrapping="Wrap" LineHeight="20"/>
                         </StackPanel>
                     </Grid>
@@ -1261,41 +1267,19 @@
                                             <Button Content="&#x25B6; Play Torrent" Command="{Binding PlayTorrentCommand}"
                                                     Padding="14,5" HorizontalAlignment="Left"
                                                     Style="{DynamicResource PrimaryButton}" FontSize="12"/>
-                                            <Button Content="&#x2B07; Download to folder&#x2026;"
+                                            <Button Content="&#x2B07; Queue download&#x2026;"
                                                     Command="{Binding DownloadTorrentCommand}"
                                                     Padding="14,5" Margin="8,0,0,0" HorizontalAlignment="Left"
                                                     FontSize="12"
-                                                    ToolTip="Download this torrent and keep the files. Stops once complete."/>
+                                                    ToolTip="Choose a folder and add this torrent's content to the main Downloads queue. Stops once complete."/>
                                         </StackPanel>
 
-                                        <!-- Active torrent downloads -->
-                                        <StackPanel Margin="0,10,0,0"
-                                                    Visibility="{Binding HasTorrentDownloads, Converter={StaticResource BoolToVisibility}}">
-                                            <TextBlock Text="Downloading" FontWeight="SemiBold" FontSize="12"
-                                                       Foreground="{DynamicResource ForegroundBrush}" Margin="0,0,0,4"/>
-                                            <DataGrid ItemsSource="{Binding TorrentDownloads}"
-                                                      AutoGenerateColumns="False" IsReadOnly="True"
-                                                      SelectionMode="Single" GridLinesVisibility="Horizontal"
-                                                      HeadersVisibility="Column" CanUserAddRows="False"
-                                                      MaxHeight="120">
-                                                <DataGrid.Columns>
-                                                    <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*" ElementStyle="{StaticResource TruncatedCellText}"/>
-                                                    <DataGridTextColumn Header="%" Binding="{Binding PercentDisplay}" Width="55"/>
-                                                    <DataGridTextColumn Header="Speed" Binding="{Binding SpeedDisplay}" Width="70"/>
-                                                    <DataGridTextColumn Header="Peers" Binding="{Binding PeersDisplay}" Width="60"/>
-                                                    <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="75"/>
-                                                    <DataGridTemplateColumn Header="" Width="60">
-                                                        <DataGridTemplateColumn.CellTemplate>
-                                                            <DataTemplate>
-                                                                <Button Content="Cancel" FontSize="12" Padding="6,2"
-                                                                        Command="{Binding DataContext.CancelTorrentDownloadCommand,
-                                                                                  RelativeSource={RelativeSource AncestorType=DataGrid}}"
-                                                                        CommandParameter="{Binding}"/>
-                                                            </DataTemplate>
-                                                        </DataGridTemplateColumn.CellTemplate>
-                                                    </DataGridTemplateColumn>
-                                                </DataGrid.Columns>
-                                            </DataGrid>
+                                        <StackPanel Margin="0,10,0,0">
+                                            <TextBlock Text="Torrent downloads continue in Downloads when the Player closes."
+                                                       Style="{DynamicResource MicroTextStyle}" TextWrapping="Wrap"/>
+                                            <Button Content="Open Downloads" Command="{Binding ShowDownloadsCommand}"
+                                                    Style="{DynamicResource SecondaryButton}" HorizontalAlignment="Left"
+                                                    Padding="10,5" Margin="0,6,0,0"/>
                                         </StackPanel>
                                     </StackPanel>
                                 </Border>

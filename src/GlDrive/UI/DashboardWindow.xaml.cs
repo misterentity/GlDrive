@@ -240,6 +240,9 @@ public partial class DashboardWindow : Window
             vm.RefreshOverview();  // capacity placeholders share the OverviewServerVm
         }
 
+        if (header == "Downloads" && vm != null)
+            vm.RefreshDownloadQueue();
+
         if (header == "Upcoming" && !_upcomingLoaded)
         {
             _upcomingLoaded = true;
@@ -259,6 +262,12 @@ public partial class DashboardWindow : Window
         {
             _playerLoaded = true;
             _playerVm = new PlayerViewModel(_serverManager, _config);
+            _playerVm.DownloadsRequested += () =>
+            {
+                vm?.RefreshDownloadQueue();
+                var downloads = MainTabControl.Items.OfType<TabItem>().First(t => GetTabName(t) == "Downloads");
+                MainTabControl.SelectedItem = downloads;
+            };
             _playerVm.PlayerStatus = "Initializing player...";
             PlayerTab.DataContext = _playerVm;
 

@@ -27,6 +27,7 @@ public class MountService : IDisposable
     // Process-wide disk reservation shared across all servers' downloads so
     // concurrent releases can't collectively overrun a drive.
     private static readonly DiskReservation _diskReservation = new();
+    internal static DiskReservation SharedDownloadDiskReservation => _diskReservation;
     private FtpSearchService? _searchService;
     private WishlistMatcher? _wishlistMatcher;
     private bool _mounted;

@@ -340,6 +340,7 @@ public partial class App
         try { notificationStore.Load(); }
         catch (Exception ex) { Log.Warning(ex, "Failed to load notification store"); }
         _serverManager = new ServerManager(config, certManager, notificationStore);
+        _serverManager.StartTorrentDownloads();
         HealthRollup = new GlDrive.AiAgent.HealthRollup(TelemetryRecorder, _serverManager);
         SectionActivityRollup = new GlDrive.AiAgent.SectionActivityRollup(
             TelemetryRecorder,
@@ -359,7 +360,7 @@ public partial class App
         // UI (tray automation is unreliable). Off unless explicitly enabled in config.
         _automation = new AutomationRegistry(
             new AutomationService(config, _serverManager, notificationStore),
-            new ConfigurationAutomation(config),
+            new ConfigurationAutomation(config, settingsApplied: _serverManager.RefreshTorrentDownloadRate),
             new DiagnosticAutomation(config),
             new AgentAutomation(config, () => AgentRunner, () => FreezeStore, () => AuditTrail, () => ChangeApplier),
             new UiAutomation(() =>

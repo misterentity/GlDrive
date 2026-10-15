@@ -30,7 +30,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private string _searchStatus = "";
     private bool _isSearching;
     private readonly SearchRequestCoordinator _searchRequests = new();
-    private readonly Dictionary<string, MountService> _subscribedServers = new();
+    private readonly Dictionary<string, DownloadManager> _subscribedDownloads = new();
     private readonly Action<string, string, MountState> _serverStateHandler;
     private readonly Action<string, string, string, string, string> _newReleaseHandler;
     private WishlistItemVm? _selectedWishlistItem;
@@ -412,39 +412,10 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     // Populated by DownloadProgressChanged subscriptions in WireLiveSpeedTracking,
     // cleared on download completion.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, double> _liveItemSpeeds = new();
-    private readonly HashSet<string> _wiredManagerIds = new();
-
     private void EnsureLiveSpeedSubscriptions()
     {
-        // Subscribe to each connected server's DownloadManager.DownloadProgressChanged
-        // exactly once. Cheap to call repeatedly — the HashSet de-dupes.
-        foreach (var srv in _serverManager.GetMountedServers())
-        {
-            var dm = srv.Downloads;
-            if (dm == null) continue;
-            if (!_wiredManagerIds.Add(srv.ServerId)) continue;
-            dm.DownloadProgressChanged += (item, progress) =>
-            {
-                if (item == null) return;
-                if (progress.BytesPerSecond <= 0)
-                    _liveItemSpeeds.TryRemove(item.Id, out _);
-                else
-                    _liveItemSpeeds[item.Id] = progress.BytesPerSecond;
-
-                // Mirror the live speed into the matching DownloadItemVm so
-                // the Downloads grid's SpeedDisplay column shows real
-                // MB/s per row, not just an aggregate.
-                var mbps = progress.BytesPerSecond / (1024.0 * 1024.0);
-                var display = progress.BytesPerSecond <= 0
-                    ? ""
-                    : (mbps >= 1.0 ? $"{mbps:0.0} MiB/s" : $"{progress.BytesPerSecond / 1024.0:0} KB/s");
-                Application.Current?.Dispatcher.BeginInvoke(() =>
-                {
-                    if (_downloadItemById.TryGetValue(item.Id, out var vm))
-                        vm.SpeedDisplay = display;
-                });
-            };
-        }
+        foreach (var queue in _serverManager.GetDownloadQueues())
+            SubscribeToDownloads(queue.Id, queue.Manager);
     }
 
     private void TickOverview()
@@ -931,6 +902,9 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     public ICommand RemoveWishlistCommand { get; }
     public ICommand TogglePauseCommand { get; }
     public ICommand CancelDownloadCommand { get; }
+    public ICommand PauseDownloadCommand { get; }
+    public ICommand ResumeDownloadCommand { get; }
+    public ICommand PauseResumeDownloadCommand { get; }
     public ICommand RetryDownloadCommand { get; }
     public ICommand ClearCompletedCommand { get; }
     public ICommand ClearFailedCommand { get; }
@@ -1026,6 +1000,13 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         RemoveWishlistCommand = new RelayCommand(RemoveWishlistItem);
         TogglePauseCommand = new RelayCommand(TogglePause);
         CancelDownloadCommand = new RelayCommand(CancelDownload);
+        PauseDownloadCommand = new RelayCommand(PauseDownload);
+        ResumeDownloadCommand = new RelayCommand(ResumeDownload);
+        PauseResumeDownloadCommand = new RelayCommand(() =>
+        {
+            if (SelectedDownloadItem?.CanResume == true) ResumeDownload();
+            else PauseDownload();
+        });
         RetryDownloadCommand = new RelayCommand(RetryDownload);
         ClearCompletedCommand = new RelayCommand(ClearCompleted);
         ClearFailedCommand = new RelayCommand(ClearFailed);
@@ -1126,9 +1107,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         RefreshWishlist();
         RefreshDownloads();
 
-        // Subscribe to download progress events from all mounted servers
-        foreach (var server in _serverManager.GetMountedServers())
-            SubscribeToServer(server);
+        EnsureLiveSpeedSubscriptions();
 
         // Also subscribe when new servers come online
         _serverStateHandler = (serverId, _, state) =>
@@ -1138,8 +1117,11 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                 var server = _serverManager.GetServer(serverId);
                 if (server != null)
                 {
-                    SubscribeToServer(server);
-                    Application.Current?.Dispatcher.BeginInvoke(RefreshDownloads);
+                    Application.Current?.Dispatcher.BeginInvoke(() =>
+                    {
+                        if (server.Downloads != null) SubscribeToDownloads(serverId, server.Downloads);
+                        RefreshDownloads();
+                    });
                 }
             }
         };
@@ -1169,30 +1151,27 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         _serverManager.NewReleaseDetected += _newReleaseHandler;
     }
 
-    private void SubscribeToServer(MountService server)
+    private void SubscribeToDownloads(string queueId, DownloadManager manager)
     {
-        if (server.Downloads == null) return;
-        // Detach handlers from any previous MountService for this serverId before re-subscribing,
-        // otherwise remounting leaks two handlers per cycle.
-        if (_subscribedServers.TryGetValue(server.ServerId, out var prev) && prev.Downloads != null)
+        if (_subscribedDownloads.TryGetValue(queueId, out var previous))
         {
-            prev.Downloads.DownloadProgressChanged -= OnDownloadProgress;
-            prev.Downloads.DownloadStatusChanged -= OnDownloadStatusChanged;
+            if (ReferenceEquals(previous, manager)) return;
+            previous.DownloadProgressChanged -= OnDownloadProgress;
+            previous.DownloadStatusChanged -= OnDownloadStatusChanged;
         }
-        _subscribedServers[server.ServerId] = server;
-        server.Downloads.DownloadProgressChanged += OnDownloadProgress;
-        server.Downloads.DownloadStatusChanged += OnDownloadStatusChanged;
+        _subscribedDownloads[queueId] = manager;
+        manager.DownloadProgressChanged += OnDownloadProgress;
+        manager.DownloadStatusChanged += OnDownloadStatusChanged;
     }
 
     private void UnsubscribeAllServers()
     {
-        foreach (var server in _subscribedServers.Values)
+        foreach (var manager in _subscribedDownloads.Values)
         {
-            if (server.Downloads == null) continue;
-            server.Downloads.DownloadProgressChanged -= OnDownloadProgress;
-            server.Downloads.DownloadStatusChanged -= OnDownloadStatusChanged;
+            manager.DownloadProgressChanged -= OnDownloadProgress;
+            manager.DownloadStatusChanged -= OnDownloadStatusChanged;
         }
-        _subscribedServers.Clear();
+        _subscribedDownloads.Clear();
     }
 
     private void AddMedia(MediaType type)
@@ -1230,42 +1209,76 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private void CancelDownload()
     {
         if (SelectedDownloadItem == null) return;
-        var server = _serverManager.GetServer(SelectedDownloadItem.ServerId);
-        server?.Downloads?.Cancel(SelectedDownloadItem.Id);
+        _serverManager.GetDownloadManager(SelectedDownloadItem.ServerId)?.Cancel(SelectedDownloadItem.Id);
+    }
+
+    private void PauseDownload()
+    {
+        if (SelectedDownloadItem == null) return;
+        _serverManager.GetDownloadManager(SelectedDownloadItem.ServerId)?.Pause(SelectedDownloadItem.Id);
+    }
+
+    private void ResumeDownload()
+    {
+        if (SelectedDownloadItem == null) return;
+        _serverManager.GetDownloadManager(SelectedDownloadItem.ServerId)?.Resume(SelectedDownloadItem.Id);
     }
 
     private void RetryDownload()
     {
         if (SelectedDownloadItem == null) return;
-        var server = _serverManager.GetServer(SelectedDownloadItem.ServerId);
-        server?.Downloads?.Retry(SelectedDownloadItem.Id);
+        var manager = _serverManager.GetDownloadManager(SelectedDownloadItem.ServerId);
+        var item = manager?.Store.GetById(SelectedDownloadItem.Id);
+        if (item is { SourceKind: DownloadSourceKind.Torrent, Status: DownloadStatus.Failed, RequiresContentApproval: true })
+        {
+            // This is the same explicit opt-in offered by the former Player-only downloader.
+            // Path-containment refusals never set RequiresContentApproval and cannot be overridden.
+            if (ConfirmBlockedTorrentFiles(item))
+                _serverManager.SkipBlockedTorrentFilesAndRetry(item.Id);
+            else
+                manager!.Cancel(item.Id);
+            return;
+        }
+        manager?.Retry(SelectedDownloadItem.Id);
     }
+
+    internal Func<DownloadItem, bool> ConfirmBlockedTorrentFiles { get; set; } = ConfirmSkipBlockedTorrentFiles;
+
+    internal static bool ConfirmSkipBlockedTorrentFiles(DownloadItem item) => MessageBox.Show(
+        $"{item.ErrorMessage}\n\n" +
+        "Executable files are blocked by default.\n\n" +
+        "Yes — download the rest, skipping the executables\n" +
+        "No — cancel this download\n\n" +
+        "BitTorrent transfers whole pieces, so a skipped file can still receive bytes it shares with a kept file. " +
+        "Those leftovers are deleted when the download stops.",
+        "Torrent contains executable files", MessageBoxButton.YesNo, MessageBoxImage.Warning,
+        MessageBoxResult.No) == MessageBoxResult.Yes;
 
     private void ClearCompleted()
     {
-        foreach (var server in _serverManager.GetMountedServers())
-            server.Downloads?.RemoveCompleted();
+        foreach (var manager in _serverManager.GetDownloadManagers())
+            manager.RemoveCompleted();
         RefreshDownloads();
     }
 
     private void ClearFailed()
     {
-        foreach (var server in _serverManager.GetMountedServers())
-            server.Downloads?.RemoveFailed();
+        foreach (var manager in _serverManager.GetDownloadManagers())
+            manager.RemoveFailed();
         RefreshDownloads();
     }
 
     private void ClearCancelled()
     {
-        foreach (var server in _serverManager.GetMountedServers())
-            server.Downloads?.RemoveCancelled();
+        foreach (var manager in _serverManager.GetDownloadManagers())
+            manager.RemoveCancelled();
         RefreshDownloads();
     }
 
     private void ClearAllFinished()
     {
-        foreach (var server in _serverManager.GetMountedServers())
-            server.Downloads?.RemoveFinished();
+        foreach (var manager in _serverManager.GetDownloadManagers())
+            manager.RemoveFinished();
         RefreshDownloads();
     }
 
@@ -1277,13 +1290,13 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
         foreach (var item in selected)
         {
-            var server = _serverManager.GetServer(item.ServerId);
-            if (server?.Downloads == null) continue;
+            var manager = _serverManager.GetDownloadManager(item.ServerId);
+            if (manager == null) continue;
 
-            if (item.Status is "Queued" or "Downloading" or "Extracting")
-                server.Downloads.Cancel(item.Id);
+            if (item.Status is "Queued" or "Downloading" or "Extracting" or "Paused")
+                manager.Cancel(item.Id);
             else
-                server.Downloads.Store.Remove(item.Id);
+                manager.Store.Remove(item.Id);
         }
         RefreshDownloads();
     }
@@ -1294,15 +1307,13 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private void MoveUpDownload()
     {
         if (SelectedDownloadItem == null) return;
-        var server = _serverManager.GetServer(SelectedDownloadItem.ServerId);
-        server?.Downloads?.MoveUp(SelectedDownloadItem.Id);
+        _serverManager.GetDownloadManager(SelectedDownloadItem.ServerId)?.MoveUp(SelectedDownloadItem.Id);
     }
 
     private void MoveDownDownload()
     {
         if (SelectedDownloadItem == null) return;
-        var server = _serverManager.GetServer(SelectedDownloadItem.ServerId);
-        server?.Downloads?.MoveDown(SelectedDownloadItem.Id);
+        _serverManager.GetDownloadManager(SelectedDownloadItem.ServerId)?.MoveDown(SelectedDownloadItem.Id);
     }
 
     private void CancelSearch()
@@ -1538,6 +1549,8 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             // A queued progress callback may arrive after the item was parked,
             // cancelled, or completed. Keep its waiting reason and inactive state.
             if (item.Status != DownloadStatus.Downloading) return;
+            if (progress.BytesPerSecond > 0) _liveItemSpeeds[item.Id] = progress.BytesPerSecond;
+            else _liveItemSpeeds.TryRemove(item.Id, out _);
             _serverSpeeds[item.ServerId] = progress.BytesPerSecond;
             _activeDownloads[item.Id] = (item.ReleaseName, progress.BytesPerSecond, pct);
             HasActiveDownload = true;
@@ -1547,6 +1560,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             if (_downloadItemById.TryGetValue(item.Id, out var vm))
             {
                 vm.ApplyProgress(item, progress);
+                vm.SpeedDisplay = FormatSpeed(progress.BytesPerSecond);
             }
 
             // Progress hops through two async callbacks, so a last report can land after the
@@ -1570,6 +1584,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             {
                 _activeDownloads.Remove(item.Id);
                 _serverSpeeds.Remove(item.ServerId);
+                _liveItemSpeeds.TryRemove(item.Id, out _);
             }
             if (item.Status != DownloadStatus.Downloading && _streamMatrices.Remove(item.Id))
                 FocusStreamMatrix();
@@ -2200,14 +2215,18 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
+    internal void RefreshDownloadQueue() => RefreshDownloads();
+
     private void RefreshDownloads()
     {
+        EnsureLiveSpeedSubscriptions();
+        var selectedId = SelectedDownloadItem?.Id;
+        var selectedQueue = SelectedDownloadItem?.ServerId;
         DownloadItems.Clear();
         _downloadItemById.Clear();
-        foreach (var server in _serverManager.GetMountedServers())
+        foreach (var queue in _serverManager.GetDownloadQueues())
         {
-            var store = server.Downloads?.Store;
-            if (store == null) continue;
+            var store = queue.Manager.Store;
 
             foreach (var item in store.Items)
             {
@@ -2217,23 +2236,30 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                     ReleaseName = item.ReleaseName,
                     Category = item.Category,
                     Status = item.Status.ToString(),
+                    SourceKind = item.SourceKind,
+                    RequiresContentApproval = item.RequiresContentApproval,
+                    IsIndeterminate = item.SourceKind == DownloadSourceKind.Torrent && item.Status == DownloadStatus.Downloading && item.TotalBytes <= 0,
                     ProgressText = DownloadItemVm.DescribeProgress(item),
                     ProgressPercent = item.Status switch
                     {
-                        DownloadStatus.Downloading when item.TotalBytes > 0
+                        DownloadStatus.Downloading or DownloadStatus.Paused when item.TotalBytes > 0
                             => (double)item.DownloadedBytes / item.TotalBytes * 100.0,
                         DownloadStatus.Completed => 100.0,
                         _ => 0.0
                     },
                     LocalPath = item.LocalPath,
-                    ServerId = server.ServerId,
-                    ServerName = server.ServerName,
+                    ServerId = queue.Id,
+                    ServerName = queue.Name,
+                    SpeedDisplay = item.Status == DownloadStatus.Downloading
+                        ? FormatSpeed(_liveItemSpeeds.GetValueOrDefault(item.Id)) : "",
                     Matrix = _streamMatrices.GetValueOrDefault(item.Id)
                 };
                 DownloadItems.Add(vm);
                 _downloadItemById[item.Id] = vm;
             }
         }
+        if (selectedId != null)
+            SelectedDownloadItem = DownloadItems.FirstOrDefault(d => d.Id == selectedId && d.ServerId == selectedQueue);
         OnPropertyChanged(nameof(ActiveDownloadCount));
         OnPropertyChanged(nameof(QueuedDownloadCount));
         OnPropertyChanged(nameof(FailedDownloadCount));
@@ -2243,8 +2269,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private void OpenFolder()
     {
         if (SelectedDownloadItem == null) return;
-        var server = _serverManager.GetServer(SelectedDownloadItem.ServerId);
-        var item = server?.Downloads?.Store.GetById(SelectedDownloadItem.Id);
+        var item = _serverManager.GetDownloadManager(SelectedDownloadItem.ServerId)?.Store.GetById(SelectedDownloadItem.Id);
         if (item == null || string.IsNullOrEmpty(item.LocalPath)) return;
 
         var path = Directory.Exists(item.LocalPath) ? item.LocalPath : Path.GetDirectoryName(item.LocalPath);
@@ -2328,10 +2353,9 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
         // Queue count
         var queued = 0;
-        foreach (var server in _serverManager.GetMountedServers())
+        foreach (var manager in _serverManager.GetDownloadManagers())
         {
-            var store = server.Downloads?.Store;
-            if (store == null) continue;
+            var store = manager.Store;
             queued += store.Items.Count(i => i.Status == DownloadStatus.Queued || i.Status == DownloadStatus.Downloading);
         }
         StatusBarQueueCount = $"{queued} active";
@@ -2704,13 +2728,35 @@ public class DownloadItemVm : INotifyPropertyChanged
     public string ReleaseName { get; set; } = "";
     public string Category { get; set; } = "";
     public string Status { get; set; } = "";
+    public DownloadSourceKind SourceKind { get; set; }
+    public bool RequiresContentApproval { get; set; }
+    public bool CanPause => Status is "Queued" or "Downloading";
+    public bool CanResume => Status == "Paused";
+    public bool CanPauseOrResume => CanPause || CanResume;
+    public string PauseResumeLabel => CanResume ? "Resume" : "Pause";
+    public bool CanRetry => Status is "Failed" or "Cancelled";
+    public bool CanCancel => Status is "Queued" or "Downloading" or "Extracting" or "Paused"
+        || Status == "Failed" && RequiresContentApproval;
+    public string RetryLabel => RequiresContentApproval && Status == "Failed" ? "Review…" : "Retry";
+    private bool _isIndeterminate;
+    public bool IsIndeterminate
+    {
+        get => _isIndeterminate;
+        set
+        {
+            if (_isIndeterminate == value) return;
+            _isIndeterminate = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsIndeterminate)));
+        }
+    }
 
     internal static string DescribeProgress(DownloadItem item) => item.Status switch
     {
         DownloadStatus.Queued or DownloadStatus.Failed when !string.IsNullOrWhiteSpace(item.ErrorMessage)
             => item.ErrorMessage,
-        DownloadStatus.Downloading when item.TotalBytes > 0
-            => $"{item.DownloadedBytes * 100 / item.TotalBytes}%",
+        DownloadStatus.Downloading => LiveProgressText(item.DownloadedBytes, item.TotalBytes, null, item.StatusDetail),
+        DownloadStatus.Paused when item.TotalBytes > 0 => $"Paused at {ProgressFraction(item.DownloadedBytes, item.TotalBytes) * 100:F0}%",
+        DownloadStatus.Paused => "Paused",
         DownloadStatus.Extracting => "Extracting...",
         DownloadStatus.Completed => "Done",
         _ => ""
@@ -2720,9 +2766,8 @@ public class DownloadItemVm : INotifyPropertyChanged
     {
         if (item.Status != DownloadStatus.Downloading) return;
         var exact = ProgressFraction(progress.DownloadedBytes, progress.TotalBytes) * 100.0;
-        var percent = (int)exact;
-        ProgressText = string.IsNullOrEmpty(progress.CurrentFileName)
-            ? $"{percent}%" : $"{percent}% — {progress.CurrentFileName}";
+        ProgressText = LiveProgressText(progress.DownloadedBytes, progress.TotalBytes, progress.CurrentFileName, progress.StatusDetail);
+        IsIndeterminate = item.SourceKind == DownloadSourceKind.Torrent && progress.TotalBytes <= 0;
         // The bar used to move only when RefreshDownloads rebuilt the row.
         ProgressPercent = exact;
         StreamsText = GlDrive.Downloads.Segmented.LaneSummary.Format(progress.Lanes);
@@ -2730,6 +2775,14 @@ public class DownloadItemVm : INotifyPropertyChanged
 
     internal static double ProgressFraction(long downloaded, long total) =>
         total > 0 ? Math.Clamp((double)downloaded / total, 0.0, 1.0) : 0.0;
+
+    private static string LiveProgressText(long downloaded, long total, string? file, string? detail)
+    {
+        var percent = $"{(int)(ProgressFraction(downloaded, total) * 100)}%";
+        if (!string.IsNullOrWhiteSpace(detail))
+            return total > 0 ? $"{percent} — {detail}" : detail;
+        return string.IsNullOrEmpty(file) ? percent : $"{percent} — {file}";
+    }
     public string ProgressText
     {
         get => _progressText;

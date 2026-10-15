@@ -29,6 +29,7 @@ glftpd sites have several quirks that off-the-shelf FTP clients handle badly. Ea
 - **SOCKS5 proxy** per server, credentials in Credential Manager
 
 ### Downloads
+- **One persistent queue for FTP and player torrent downloads**, with pause/resume, cancel/retry, scheduling and progress. Torrent content keeps downloading when the player closes.
 - Streaming FTP-to-disk with **resume** (REST for CPSV, positional `OpenRead` for standard)
 - **Auto-retry** with exponential backoff, scheduling windows (e.g. 22:00 → 06:00), CRC32 SFV verification before extraction
 - **Auto-extraction** for RAR including multi-volume old-style (`.r00/.r01`) and modern (`.part01.rar`) naming
@@ -77,6 +78,7 @@ glftpd sites have several quirks that off-the-shelf FTP clients handle badly. Ea
 - **RAR-wrapped video** — sequential volume download with 5× retry, on-the-fly extraction, playback as soon as the first `.rar` is ready
 - **Chromecast / DLNA** casting via VLC renderer discoverer; **TMDB** trending/upcoming browser
 - **Torrent search + streaming** (MonoTorrent) — parallel apibay/SolidTorrents/Torrents-CSV, DHT, HTTP streaming with seek
+- **Queue download** saves torrent content through the main Downloads queue in a dedicated folder. Metadata is screened before payload transfer; torrent completion uses piece verification.
 - Resume tracking per release name
 
 ### Search

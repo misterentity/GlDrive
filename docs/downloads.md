@@ -2,7 +2,7 @@
 title: Downloads — manager, search, wishlist, extraction
 domain: downloads
 status: active
-last-reviewed: 2026-10-14
+last-reviewed: 2026-10-15
 verified-against:
   - source: read at git f7b0298 on 2026-07-27
   - source: multi-stream sections read at git fbb2ab9 on 2026-10-14
@@ -17,6 +17,42 @@ verified-against:
 ## Ownership
 
 Owns `src/GlDrive/Downloads/**`. One `DownloadManager` + `DownloadStore` exists per server (a download can run on a server that has no drive letter — see [[services#multi-server-orchestration]]).
+
+Since v3.11.14, `ServerManager.Downloads.cs` also owns the application-wide
+`__torrents` queue. `GetDownloadQueues()` supplies each queue's ID, name and manager
+to the dashboard and automation, including legacy rows without stored server IDs.
+
+## Player torrent downloads
+
+Choose **Queue download…** in the player's torrent results, then select a parent
+folder. The item appears in **Downloads**, in a sanitized title-plus-infohash
+subfolder. Closing the player or starting playback does not cancel that queue.
+Use **Pause/Resume**, **Cancel**, **Retry**, or **Open Folder** from the main queue.
+An item requiring permission to skip blocked file types shows **Review…**; refusing
+keeps it blocked, and unsafe destination paths can never be approved.
+
+`TorrentDownloadSource` implements the whole-item backend contract. Preparation
+screens metadata without starting payload writes. Execution uses a separate,
+lazy MonoTorrent engine and requires hash-verified selected-file bitfields in a
+stable transfer state. It closes writers before the manager marks completion or
+extracts archives. MonoTorrent's fast-resume data and cached metadata are retained
+across pause/retry; cached metadata is screened again. The player keeps its own
+streaming engine.
+
+The common manager persists Paused status, waits for an old writer to finish before
+immediate resume/retry, and retains ownership while cancelled history is removed.
+Watch-folder extraction also respects paused items. Torrent and FTP managers share
+the disk reservation budget, but torrent admission conservatively reserves the
+full selected payload until its prior bytes can be verified. Network concurrency
+is per manager, as it was per FTP server. FTP/HTTP pacing and MonoTorrent rate caps
+are separate budgets; the same configured speed does not impose a combined total.
+MonoTorrent 3.0.2 still cannot bind outgoing peers to the chosen VPN adapter.
+
+Torrent queue state is saved in `downloads-__torrents.json` using restricted file
+permissions. Magnet links may contain private tracker credentials and are omitted
+from public automation snapshots. Automation uses queue ID `__torrents` with the
+regular `downloads.*` lifecycle operations; `player.download_torrent` queues a new
+item and returns its durable ID.
 
 ## Queue and worker loop
 
@@ -62,7 +98,7 @@ Both branches:
 
 ### Speed limiting
 
-Token-bucket pacing (`src/GlDrive/Downloads/Segmented/TransferPacer.cs`). The **global** limit (`Downloads.SpeedLimitKbps`, or Slow mode when on) is now one bucket shared by every download on every server plus HTTP update downloads (`DownloadNetworkServices.TotalBytesPerSecond`, `src/GlDrive/Downloads/Segmented/DownloadNetworkServices.cs:46`) — before multi-stream it applied per server. The per-server limit and per-network limits stack on top (`CompositePacer`). Limits are re-read on every chunk, so Settings / tray Slow mode act mid-transfer.
+Token-bucket pacing (`src/GlDrive/Downloads/Segmented/TransferPacer.cs`). The FTP/HTTP limit (`Downloads.SpeedLimitKbps`, or Slow mode when on) is one bucket shared by FTP downloads on every server plus HTTP update downloads (`DownloadNetworkServices.TotalBytesPerSecond`) — before multi-stream it applied per server. The per-server limit and per-network limits stack on top (`CompositePacer`). Limits are re-read on every chunk, so Settings / tray Slow mode act mid-transfer. Torrent transfers use a separate MonoTorrent engine cap; Settings, automation configuration saves and tray Slow mode refresh it at runtime.
 
 ### Auto-retry
 
@@ -74,9 +110,9 @@ Plan: `docs/superpowers/plans/2026-10-14-multistream-downloads.md` (modelled on 
 
 - **Engine** — `SegmentedTransfer` (`src/GlDrive/Downloads/Segmented/SegmentedTransfer.cs`) runs lanes against a work-stealing `RangeScheduler`: untouched gaps in file order first, then the largest in-flight remainder is split at a 64 KiB-aligned midpoint (both halves ≥ `MinSplitBytes`). FTP lanes therefore mostly take whole RAR volumes and finish on a clean 226; splitting happens only at the tail.
 - **Commit gate** — a file is renamed into place only when every byte is done AND no reader on it is still finishing (`OpenReaders`, `SegmentedTransfer.cs:520`). A failed completion (no 226, extra bytes) invalidates the file and refetches it (`InvalidateFile`, `:509`).
-- **FTP lanes** (`src/GlDrive/Downloads/Segmented/FtpLane.cs`) — lane 1 is the main pool's connection; lane 2 is the site's **race login**, borrowed from the spread pool only while the site has no active/starting/queued race (`SpreadManager.IsRaceIdle`/`TryBorrowAsync`, `src/GlDrive/Spread/SpreadManager.cs:1324`, `:1335`). No new logins are ever created for downloads.
+- **FTP lanes** (`src/GlDrive/Downloads/Segmented/FtpLane.cs`) — lane 1 is the main pool's connection; lane 2 is the site's **race login**, borrowed from the spread pool only while the site has no active/starting/queued race or direct FXP operation (`SpreadManager.IsRaceIdle`/`TryBorrowAsync`, `src/GlDrive/Spread/SpreadManager.cs:1324`, `:1335`). The loan uses the spread pool and remains bounded by the shared account gate.
   - Early stop (split boundary or yield) is CPSV-only: close the .NET `SslStream`, read the 426/226, then require NOOP→200 (`ResyncAfterAbortAsync`, `FtpLane.cs:181`), so the borrowed login goes back through `Return` — the path that wakes a waiting race. Standard-PASV data is GnuTLS and is never cancelled mid-read; those lanes only take ranges that run to EOF.
-  - A per-range watcher cancels a blocked managed read within ~250 ms when the lane must yield, and fails a stoppable lane after 90 s of silence (`WatchAsync`, `SegmentedTransfer.cs:482`).
+  - A per-range watcher covers managed connection setup and reads, polling every ~250 ms when the lane must yield, and fails a stoppable lane after 90 s of silence (`WatchAsync`, `SegmentedTransfer.cs:482`).
   - Resume is validated by `size:MDTM` (`src/GlDrive/Ftp/StreamingDownloader.cs:70`); a staged partial of another version restarts. A refused `REST` refetches the file whole on one lane (`RangeNotSupportedException`).
   - If a discarded connection frees a pool slot, borrowers waiting at capacity are woken and may connect (`_slotFreed`, `src/GlDrive/Ftp/FtpConnectionPool.cs:878`, `:1052`).
 - **Networks** — `NetworkCatalog.Choose` (`src/GlDrive/Downloads/Segmented/NetworkCatalog.cs:72`): no ticked network = default route only (unchanged behavior). FTP binds the CPSV **data** socket to the lane's network (`src/GlDrive/Ftp/CpsvDataHelper.cs:194`); control stays on the default route. HTTP binds whole connections.
@@ -100,7 +136,7 @@ Extract-failure classification — permanent vs transient (`ExtractFailureKind`,
 
 `DownloadStore` (`src/GlDrive/Downloads/DownloadStore.cs:9`) persists to `%AppData%\GlDrive\downloads-{serverId}.json` (`src/GlDrive/Downloads/DownloadStore.cs:28`). Writes are debounced (`ScheduleSave`, `:60`) **except** for events that must survive an immediate crash: `Add` (`:91`) and `Remove` (`:111`) save synchronously, and `Update` saves immediately when the new status is terminal (`:108`). `Items` returns a locked snapshot copy (`:24`).
 
-`DownloadItem` (`src/GlDrive/Downloads/Models.cs:28`) carries `RemotePath`, `LocalPath`, byte counters, `Status` (`DownloadStatus` enum — Queued/Downloading/Extracting/Completed/Failed/Cancelled, `src/GlDrive/Downloads/Models.cs:6`), timestamps, `RetryCount`, `ErrorMessage`, and an optional `WishlistItemId` back-reference (`:41`).
+`DownloadItem` (`src/GlDrive/Downloads/Models.cs:28`) carries `RemotePath`, `LocalPath`, byte counters, `Status` (`DownloadStatus` enum — Queued/Downloading/Extracting/Completed/Failed/Cancelled/Paused, `src/GlDrive/Downloads/Models.cs:6`), timestamps, `RetryCount`, `ErrorMessage`, and an optional `WishlistItemId` back-reference (`:41`).
 
 ## Search
 

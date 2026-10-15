@@ -3,7 +3,8 @@ namespace GlDrive.Downloads;
 public enum MediaType { Movie, TvShow }
 public enum WishlistStatus { Watching, Completed, Paused }
 public enum QualityProfile { Any, SD, Q720p, Q1080p, Q2160p }
-public enum DownloadStatus { Queued, Downloading, Extracting, Completed, Failed, Cancelled }
+public enum DownloadStatus { Queued, Downloading, Extracting, Completed, Failed, Cancelled, Paused }
+public enum DownloadSourceKind { Ftp, Torrent }
 
 public class WishlistItem
 {
@@ -28,6 +29,12 @@ public class WishlistItem
 public class DownloadItem
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public DownloadSourceKind SourceKind { get; set; }
+    // Keep tracker-bearing magnet URIs out of RemotePath, which is used in telemetry.
+    public string? TorrentMagnet { get; set; }
+    public bool SkipBlockedTorrentFiles { get; set; }
+    public bool RequiresContentApproval { get; set; }
+    public string? StatusDetail { get; set; }
     public string RemotePath { get; set; } = "";
     public string ReleaseName { get; set; } = "";
     public string LocalPath { get; set; } = "";
@@ -71,7 +78,8 @@ public record ParsedRelease(
 
 public record DownloadProgress(long DownloadedBytes, long TotalBytes, double BytesPerSecond, string? CurrentFileName = null,
     IReadOnlyList<GlDrive.Downloads.Segmented.LaneStats>? Lanes = null,
-    GlDrive.Downloads.Segmented.TransferMap? Map = null);
+    GlDrive.Downloads.Segmented.TransferMap? Map = null,
+    string? StatusDetail = null);
 
 /// <summary>
 /// Sanitizes a string for use as a Windows path segment (file or folder name).
