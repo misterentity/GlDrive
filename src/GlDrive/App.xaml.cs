@@ -567,19 +567,17 @@ public partial class App
             sw.WriteLine(ex?.ToString() ?? "<no exception object>");
             sw.WriteLine("--- recent log tail ---");
 
-            var todayLogPath = Path.Combine(logsDir, $"gldrive-{now:yyyyMMdd}.log");
             try
             {
-                if (File.Exists(todayLogPath))
+                // The live sink holds the file open: read it shared, and follow its size rolls.
+                if (ActiveLogFile.Find(logsDir, now) is { } todayLogPath)
                 {
-                    var lines = File.ReadAllLines(todayLogPath);
-                    var tail = lines.Length > 100 ? lines[(lines.Length - 100)..] : lines;
-                    foreach (var line in tail)
-                        sw.WriteLine(line);
+                    sw.WriteLine($"<{Path.GetFileName(todayLogPath)}>");
+                    sw.WriteLine(DiagnosticAutomation.ReadTail(todayLogPath, 100, 256 * 1024).Text);
                 }
                 else
                 {
-                    sw.WriteLine($"<today's log not found at {todayLogPath}>");
+                    sw.WriteLine($"<no gldrive-{now:yyyyMMdd}*.log in {logsDir}>");
                 }
             }
             catch (Exception logEx)

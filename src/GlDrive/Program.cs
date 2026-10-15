@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using GlDrive.Logging;
 using GlDrive.Services;
 
 namespace GlDrive;
@@ -97,10 +98,7 @@ public static class Program
             var logDir = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GlDrive", "logs");
             if (!Directory.Exists(logDir)) return;
-            var path = Path.Combine(logDir, $"gldrive-{DateTime.Now:yyyyMMdd}.log");
-            using var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
-            using var writer = new StreamWriter(stream);
-            writer.WriteLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{level}] {message}");
+            ActiveLogFile.AppendLine(logDir, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{level}] {message}");
         }
         catch { }
     }
@@ -279,15 +277,14 @@ public static class Program
         // system is entering sleep", with no 1026/1000 event anywhere. Report the
         // evidence (unclean exit) and let the reason stand on its own.
         var logDir = Path.Combine(appData, "logs");
-        var logFile = Path.Combine(logDir, $"gldrive-{DateTime.Now:yyyyMMdd}.log");
 
         void AppendLog(string level, string message)
         {
             try
             {
                 if (!Directory.Exists(logDir)) return;
-                File.AppendAllText(logFile,
-                    $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{level}] WATCHDOG: {message}{Environment.NewLine}");
+                ActiveLogFile.AppendLine(logDir,
+                    $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{level}] WATCHDOG: {message}");
             }
             catch { /* logging must never take the watchdog down */ }
         }
@@ -349,8 +346,8 @@ public static class Program
         {
             var logDir = Path.Combine(appData, "logs");
             if (!Directory.Exists(logDir)) return;
-            File.AppendAllText(Path.Combine(logDir, $"gldrive-{DateTime.Now:yyyyMMdd}.log"),
-                $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{level}] WATCHDOG: {message}{Environment.NewLine}");
+            ActiveLogFile.AppendLine(logDir,
+                $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{level}] WATCHDOG: {message}");
         }
         catch { }
     }

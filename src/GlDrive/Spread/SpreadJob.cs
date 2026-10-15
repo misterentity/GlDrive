@@ -234,6 +234,8 @@ public class SpreadJob : IDisposable
     // Scan debouncing
     private DateTime _lastScanTime = DateTime.MinValue;
     private Task? _backgroundScan;
+    // Stops background reads from borrowing once RunAsync exits. See BackgroundReadLifetime.
+    private BackgroundReadLifetime? _backgroundReads;
 
     // Source re-LIST throttle. The SOURCE's file set is static once discovered (it HAS
     // the release), but re-LISTing it on the fast 2s dest cadence borrows a source login
@@ -914,6 +916,7 @@ public class SpreadJob : IDisposable
                     : 0);
             hardTimeout.CancelAfter(TimeSpan.FromSeconds(ceilingSeconds));
             var token = hardTimeout.Token;
+            _backgroundReads = new BackgroundReadLifetime(token);
 
             var lastActivity = DateTime.UtcNow;
             var scorer = new SpreadScorer(_speedTracker);
@@ -1315,6 +1318,18 @@ public class SpreadJob : IDisposable
         }
         finally
         {
+            // The background scan / SFV read outlived the race: they kept borrowing the
+            // account's logins out from under the next race and fed ProcessFiles after the
+            // cleanup below had judged the dir. Refuse their new borrows and let any read
+            // already on the wire finish (cancelling it mid-stream would poison the login).
+            // Exchange: a re-run that exits before creating its own must not re-drain this one.
+            if (Interlocked.Exchange(ref _backgroundReads, null) is { } backgroundReads)
+            {
+                if (!await backgroundReads.StopAndDrainAsync(TimeSpan.FromSeconds(30), _backgroundScan, _sfvParseTask))
+                    Log.Information("Spread: background read still running 30s after {Release} ended — " +
+                        "not waiting further", ReleaseName);
+            }
+
             // Let in-flight fire-and-forget transfers settle before the cleanup
             // decision — late deliveries used to land AFTER the wipe judged the
             // dir partial and were destroyed (200MB on 2026-06-08). On cancel
@@ -1556,6 +1571,7 @@ public class SpreadJob : IDisposable
     private async Task ScanSites(Dictionary<string, string> sitePaths, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
+        var readStop = _backgroundReads?.StopToken ?? CancellationToken.None;
         // Merge in any alternate sources discovered by failover (read-only snapshot).
         // sitePaths itself is NEVER mutated (the dispatch loop enumerates it elsewhere);
         // we build a separate map for this scan only.
@@ -1664,13 +1680,18 @@ public class SpreadJob : IDisposable
                 {
                     Log.Debug("Spread scan: listing {Server} at {Path} (using main pool)...",
                         serverName, basePath);
-                    await ScanDirectoryRecursive(mainPool, basePath, basePath, files, signals, 0, ct);
+                    await ScanDirectoryRecursive(mainPool, basePath, basePath, files, signals, 0, ct, readStop);
                     scanDone = true;
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
                     // Stopping the job must not become a fallback login attempt.
                     throw;
+                }
+                catch (OperationCanceledException) when (readStop.IsCancellationRequested)
+                {
+                    // Nor must the race ending. Not a failure: there is nothing left to scan for.
+                    return;
                 }
                 catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
                 {
@@ -1713,6 +1734,7 @@ public class SpreadJob : IDisposable
             // 30s while this scan re-runs every ~2s, so an unconditional fallback starves
             // transfers forever. See CandidatePredicates.ScanMayBorrowSpreadPool.
             ct.ThrowIfCancellationRequested();
+            if (readStop.IsCancellationRequested) return;
             var yieldedToTransfers = false;
             if (!scanDone && spreadPool != null)
             {
@@ -1733,12 +1755,16 @@ public class SpreadJob : IDisposable
                     {
                         Log.Debug("Spread scan: listing {Server} at {Path} (using spread pool fallback)...",
                             serverName, basePath);
-                        await ScanDirectoryRecursive(spreadPool, basePath, basePath, files, signals, 0, ct);
+                        await ScanDirectoryRecursive(spreadPool, basePath, basePath, files, signals, 0, ct, readStop);
                         scanDone = true;
                     }
                     catch (OperationCanceledException) when (ct.IsCancellationRequested)
                     {
                         throw;
+                    }
+                    catch (OperationCanceledException) when (readStop.IsCancellationRequested)
+                    {
+                        return;
                     }
                     catch (Exception ex)
                     {
@@ -1770,8 +1796,8 @@ public class SpreadJob : IDisposable
                 else
                 {
                     Interlocked.Increment(ref hardFailureCount);
-                    Log.Warning(lastError, "Spread scan FAILED for {Server} at {Path} (both pools unavailable)",
-                        serverName, basePath);
+                    Log.Warning(lastError, "Spread scan FAILED for {Server} at {Path} ({Cause})",
+                        serverName, basePath, ScanFailureClassifier.DescribeHardFailure(lastError));
                 }
             }
             else
@@ -1782,6 +1808,8 @@ public class SpreadJob : IDisposable
 
         await Task.WhenAll(tasks);
         ct.ThrowIfCancellationRequested();
+        // The race ended while we listed: its cleanup and history already judged the dirs.
+        if (readStop.IsCancellationRequested) return;
 
         // A successful, completely empty listing from a source that previously owned
         // files is the earliest observable signal of glftpd moving /incoming -> /recent.
@@ -1928,7 +1956,8 @@ public class SpreadJob : IDisposable
     }
 
     private async Task ScanDirectoryRecursive(FtpConnectionPool pool, string basePath,
-        string currentPath, List<SpreadFileInfo> files, ScanSignals signals, int depth, CancellationToken ct)
+        string currentPath, List<SpreadFileInfo> files, ScanSignals signals, int depth, CancellationToken ct,
+        CancellationToken readStop)
     {
         if (depth > 3) return; // Max recursion depth
 
@@ -1945,7 +1974,10 @@ public class SpreadJob : IDisposable
         // caps concurrent connections per scan at exactly 1.
         FtpListItem[] items;
         {
-            using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            // readStop gates only the BORROW: the race has ended, so take no new login.
+            // The LIST below keeps ct, so a read already on the wire is never torn mid-stream.
+            readStop.ThrowIfCancellationRequested();
+            using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct, readStop);
             borrowCts.CancelAfter(TimeSpan.FromSeconds(20));
             await using var conn = await pool.Borrow(borrowCts.Token);
 
@@ -2062,7 +2094,7 @@ public class SpreadJob : IDisposable
             // A nuke marker found in an earlier subtree aborts the rest, matching
             // the mid-loop early-return the interleaved walk used to do.
             if (_isNuked) return;
-            await ScanDirectoryRecursive(pool, basePath, subdir, files, signals, depth + 1, ct);
+            await ScanDirectoryRecursive(pool, basePath, subdir, files, signals, depth + 1, ct, readStop);
         }
     }
 
@@ -2157,7 +2189,10 @@ public class SpreadJob : IDisposable
             var token = readTimeout.Token;
             var pool = ResolveSpreadPool(serverId);
             if (pool == null) return;
-            await using var conn = await pool.Borrow(token);
+            // Same rule as the scan: no new login once the race has ended; the read keeps token.
+            var readStop = _backgroundReads?.StopToken ?? CancellationToken.None;
+            using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(token, readStop);
+            await using var conn = await pool.Borrow(borrowCts.Token);
 
             byte[] data;
             if (pool.UseCpsv)

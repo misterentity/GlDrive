@@ -43,7 +43,9 @@ public sealed class SecondInstanceIsolationTests
         // The blocked branch must leave a trace in the log file. Serilog is not initialised
         // this early, so it has to be a direct append (same mechanism the watchdog uses).
         Assert.Contains("Second GlDrive instance", program, StringComparison.Ordinal);
-        Assert.Contains("FileShare.ReadWrite", program, StringComparison.Ordinal);
+        // v3.11.9: the shared append lives in ActiveLogFile so it also follows size rolls.
+        Assert.Contains("ActiveLogFile.AppendLine(", program, StringComparison.Ordinal);
+        Assert.Contains("FileShare.ReadWrite", ReadSource("src/GlDrive/Logging/ActiveLogFile.cs"), StringComparison.Ordinal);
 
         // The live primary holds the rolling file open, so the sink must explicitly permit
         // the rejected process's direct audit append.
