@@ -443,6 +443,79 @@ public sealed class SegmentedTransferTests : IDisposable
         Assert.IsAssignableFrom<OperationCanceledException>(lane.Faults.Single());
     }
 
+    [Fact]
+    public async Task Yield_InterruptsBlockedOpen_AndReleasesLaneForWaitingWork()
+    {
+        var file = AddFile("opening.r00", 100_000);
+        var raceWantsLogin = 0;
+        var borrowed = new FakeLane(_source, "race login")
+        {
+            BlockOpens = true,
+            YieldWhen = () => Volatile.Read(ref raceWantsLogin) != 0,
+        };
+        var replacement = new FakeLane(_source, "replacement");
+        var source = new GatedLaneSource(() => borrowed.Disposed.Task.IsCompleted, replacement);
+        using var cts = new CancellationTokenSource();
+        var run = new SegmentedTransfer([file], Opts()).RunAsync([borrowed], source, null, cts.Token);
+        try
+        {
+            await borrowed.OpenEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Volatile.Write(ref raceWantsLogin, 1);
+
+            // The overall download stays alive. A failed open must quarantine/dispose
+            // the borrowed lane promptly so waiting work can acquire its released slot.
+            await borrowed.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await run.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.False(cts.IsCancellationRequested);
+            Assert.Single(borrowed.Opens);
+            Assert.Single(borrowed.Faults);
+            Assert.IsAssignableFrom<OperationCanceledException>(borrowed.Faults.Single());
+            Assert.Empty(borrowed.Finishes); // no reader exists to finish cleanly
+            Assert.Equal(1, borrowed.DisposeCount);
+            Assert.NotEmpty(replacement.Opens);
+            AssertOnDisk(file);
+        }
+        finally
+        {
+            cts.Cancel();
+            try { await run.WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch (OperationCanceledException) { }
+        }
+    }
+
+    [Fact]
+    public async Task Yield_DoesNotInterruptNonStoppableOpen()
+    {
+        var file = AddFile("native-open.r00", 100_000);
+        var raceWantsLogin = 0;
+        var native = new FakeLane(_source, "standard PASV", canStopEarly: false)
+        {
+            BlockOpens = true,
+            YieldWhen = () => Volatile.Read(ref raceWantsLogin) != 0,
+        };
+        using var cts = new CancellationTokenSource();
+        var run = new SegmentedTransfer([file], Opts()).RunAsync([native], null, null, cts.Token);
+        try
+        {
+            await native.OpenEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Volatile.Write(ref raceWantsLogin, 1);
+            await Task.Delay(TimeSpan.FromMilliseconds(750));
+
+            Assert.False(run.IsCompleted);
+            Assert.False(native.Disposed.Task.IsCompleted);
+            Assert.Empty(native.Faults);
+        }
+        finally
+        {
+            cts.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+                await run.WaitAsync(TimeSpan.FromSeconds(5)));
+        }
+        Assert.Single(native.Faults);
+        Assert.Equal(1, native.DisposeCount);
+    }
+
     // ---- Codex review round 2 regressions ----
 
     [Fact]
@@ -501,6 +574,13 @@ public sealed class SegmentedTransferTests : IDisposable
             Task.FromResult(_lanes.TryDequeue(out var l) ? l : null);
     }
 
+    private sealed class GatedLaneSource(Func<bool> available, ISegmentLane lane) : ILaneSource
+    {
+        private ISegmentLane? _lane = lane;
+        public Task<ISegmentLane?> TryAcquireAsync(CancellationToken ct) =>
+            Task.FromResult(available() ? Interlocked.Exchange(ref _lane, null) : null);
+    }
+
     internal sealed class FakeLane(Dictionary<string, byte[]> source, string label, bool canStopEarly = true) : ISegmentLane
     {
         public string Label => label;
@@ -525,10 +605,13 @@ public sealed class SegmentedTransferTests : IDisposable
         public readonly ConcurrentQueue<bool> Finishes = new();
         public long BytesRead;
         public int DisposeCount;
+        public TaskCompletionSource OpenEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Disposed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task<ISegmentReader> OpenAsync(TransferFile file, long offset, long end, CancellationToken ct)
         {
             Opens.Enqueue((file.Key, offset, end));
+            OpenEntered.TrySetResult();
             if (OpenFault?.Invoke(file) is { } ex) throw ex;
             if (OpenFaultAt?.Invoke(file, offset) is { } ex2) throw ex2;
             if (BlockOpens) return Task.Delay(Timeout.Infinite, ct).ContinueWith<ISegmentReader>(_ => throw new OperationCanceledException(ct));
@@ -540,6 +623,7 @@ public sealed class SegmentedTransferTests : IDisposable
         public ValueTask DisposeAsync()
         {
             Interlocked.Increment(ref DisposeCount);
+            Disposed.TrySetResult();
             return ValueTask.CompletedTask;
         }
 

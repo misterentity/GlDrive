@@ -1,5 +1,27 @@
 # Local release verification
 
+The separate native sharing check runs with `dotnet run --project tools/ReleaseCheck -c Release -- --sharing-only <evidence-directory>`.
+It creates its own fixture and needs no state JSON or Python server. It exercises actual GnuTLS control sessions, CPSV data TLS,
+separate main/spread pools and their shared login gate, idle lending, blocked-read and blocked-TLS-setup yield,
+double-reply abort synchronization, same-session reuse by a waiting race, reacquisition, exact payload bytes,
+and poisoned-slot wake/deferred reclamation. A real `StartFxp` call reclaims a download loan while its destination
+pool remains deliberately occupied, then cancellation releases its activity and source lease before any remote
+transfer command. Opposite-direction pair acquisitions use real one-slot pools and must both complete without
+deadlock or extra logins. This tests pair acquisition, not a complete server-to-server file copy.
+Its control listener binds only to loopback. Because the production CPSV target guard rejects loopback addresses, its temporary
+data endpoints bind an existing local RFC1918 IPv4 interface (virtual preferred), accept only that same host address, and pin
+the application's CPSV TLS certificate. They serve only generated in-memory bytes, never files or production credentials.
+The check fails explicitly when no suitable local interface exists; it is opt-in and does not change the normal unit suite.
+The evidence directory contains assertion results and sanitized protocol traces; unique temporary trust/staging directories
+are retained for diagnosis. It does not load production application configuration or mount a drive. Queued race state is
+synthetic; this validates the sharing boundary, not a complete remote glftpd FXP race.
+Clean handoff must reuse the same two physical sessions. Failed setup deliberately quarantines the old native
+session while releasing its accounted login permit; the evidence distinguishes the temporary third physical
+connection from the two accounted permits. Cleanup cancels and drains its own transfers and waiting borrowers
+with an independent deadline. If they cannot settle, the isolated process fails without disposing live native
+sessions. Run through `dotnet run` or the generated `ReleaseCheck.exe` apphost so the native DLL search path is
+correct; invoking `dotnet ReleaseCheck.dll` can fail to locate the bundled GnuTLS DLLs on Windows.
+
 Run on Windows with .NET 10, installed WinFsp, Python, pyftpdlib and pyOpenSSL. The [pyftpdlib FTPS fixture](https://pyftpdlib.readthedocs.io/en/latest/tutorial.html#ftps-ftp-over-tls-ssl-server) binds only to loopback and serves a newly created temporary directory. It never reads the app's server configuration. Certificate trust is pinned to the generated fixture fingerprint in a separate temporary store.
 
 1. Start `python tools/ReleaseCheck/local_ftps.py <temporary-state-json-path>`.

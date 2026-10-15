@@ -12,6 +12,7 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
 {
     private readonly AppConfig _config;
     private readonly Dictionary<string, FtpConnectionPool> _spreadPools = new();
+    private readonly Dictionary<string, int> _directFxpActivity = new();
     private readonly Dictionary<string, FtpClientFactory> _factories = new();
     private readonly List<SpreadJob> _activeJobs = new();
     private readonly List<PersistedRace> _raceQueue = new();
@@ -1275,6 +1276,7 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
     {
         srcPath = SanitizeFtpPath(srcPath);
         dstPath = SanitizeFtpPath(dstPath);
+        using var activity = BeginDirectFxpActivity(srcServerId, dstServerId);
 
         FtpConnectionPool srcPool, dstPool;
         lock (_lock)
@@ -1286,8 +1288,9 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
         }
 
         var mode = FxpModeDetector.Detect(srcPool, dstPool);
-        await using var srcConn = await srcPool.Borrow(ct);
-        await using var dstConn = await dstPool.Borrow(ct);
+        var pair = await BorrowDirectFxpPair(srcServerId, srcPool.Borrow, dstServerId, dstPool.Borrow, ct);
+        await using var srcConn = pair.Source;
+        await using var dstConn = pair.Destination;
 
         var transfer = new FxpTransfer();
         var ok = await transfer.ExecuteAsync(srcConn, dstConn, srcPath, dstPath, mode,
@@ -1312,6 +1315,7 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
     {
         srcPath = SanitizeFtpPath(srcPath);
         dstPath = SanitizeFtpPath(dstPath);
+        using var activity = BeginDirectFxpActivity(srcServerId, dstServerId);
 
         FtpConnectionPool srcPool, dstPool;
         lock (_lock)
@@ -1335,8 +1339,9 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
         {
             var destFile = dstPath.TrimEnd('/') + "/" + relativePath;
 
-            await using var srcConn = await srcPool.Borrow(ct);
-            await using var dstConn = await dstPool.Borrow(ct);
+            var pair = await BorrowDirectFxpPair(srcServerId, srcPool.Borrow, dstServerId, dstPool.Borrow, ct);
+            await using var srcConn = pair.Source;
+            await using var dstConn = pair.Destination;
 
             var transfer = new FxpTransfer();
             // Defer directory creation until just before STOR
@@ -1413,6 +1418,86 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
         lock (_lock) return _spreadPools.Keys.ToList();
     }
 
+    internal static async Task<(T Source, T Destination)> BorrowDirectFxpPair<T>(
+        string sourceId, Func<CancellationToken, Task<T>> borrowSource,
+        string destinationId, Func<CancellationToken, Task<T>> borrowDestination,
+        CancellationToken ct, TimeSpan? borrowTimeout = null) where T : class, IAsyncDisposable
+    {
+        ValidateDirectFxpSites(sourceId, destinationId);
+        // Every direct transfer uses the same site order, including the reverse
+        // direction. Otherwise one-slot pools can each be held while awaiting the other.
+        var sourceFirst = StringComparer.Ordinal.Compare(sourceId, destinationId) < 0;
+        var borrowFirst = sourceFirst ? borrowSource : borrowDestination;
+        var borrowSecond = sourceFirst ? borrowDestination : borrowSource;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(borrowTimeout ?? TimeSpan.FromSeconds(30));
+        T? first = null;
+        var handedOff = false;
+        try
+        {
+            first = await borrowFirst(deadline.Token);
+            var second = await borrowSecond(deadline.Token);
+            handedOff = true;
+            return sourceFirst ? (first, second) : (second, first);
+        }
+        catch (Exception ex) when (ct.IsCancellationRequested)
+        {
+            // The login gate reports an unavailable permit even when its wait was
+            // cancelled. Preserve caller cancellation regardless of that wrapper.
+            throw new OperationCanceledException("Direct FXP connection wait cancelled.", ex, ct);
+        }
+        catch (Exception ex) when (deadline.IsCancellationRequested)
+        {
+            throw new TimeoutException("Timed out waiting for direct FXP connections.", ex);
+        }
+        finally
+        {
+            // No FTP commands have been issued on the first lease yet, so returning
+            // it is safe when its peer fails, times out or is cancelled.
+            if (!handedOff && first != null) await first.DisposeAsync();
+        }
+    }
+
+    private static void ValidateDirectFxpSites(string sourceId, string destinationId)
+    {
+        if (sourceId == destinationId)
+            throw new ArgumentException("Direct FXP requires two distinct servers.", nameof(destinationId));
+    }
+
+    private IDisposable BeginDirectFxpActivity(string sourceId, string destinationId)
+    {
+        ValidateDirectFxpSites(sourceId, destinationId);
+        string[] sites = [sourceId, destinationId];
+        lock (_lock)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            foreach (var site in sites)
+                _directFxpActivity[site] = _directFxpActivity.GetValueOrDefault(site) + 1;
+        }
+        return new DirectFxpActivity(this, sites);
+    }
+
+    // A directory owns its activity across listing and every file, including the
+    // gaps between borrows. Overlapping direct transfers release only their share.
+    private sealed class DirectFxpActivity(SpreadManager owner, string[] sites) : IDisposable
+    {
+        private SpreadManager? _owner = owner;
+
+        public void Dispose()
+        {
+            var manager = Interlocked.Exchange(ref _owner, null);
+            if (manager == null) return;
+            lock (manager._lock)
+            {
+                foreach (var site in sites)
+                {
+                    if (manager._directFxpActivity[site] == 1) manager._directFxpActivity.Remove(site);
+                    else manager._directFxpActivity[site]--;
+                }
+            }
+        }
+    }
+
     // IRaceLoginLender — lets a download use this site's idle race login as a second stream.
     // Racing state is only READ here; the borrowed lane polls IsRaceIdle and hands the
     // connection back (clean Return, which wakes a waiting race Borrow) within ~1s.
@@ -1420,7 +1505,7 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
     {
         lock (_lock)
         {
-            if (_disposed) return false;
+            if (_disposed || _directFxpActivity.ContainsKey(serverId)) return false;
             if (_activeJobs.Any(j => j.Sites.ContainsKey(serverId))) return false;
             if (_startingRequests.Any(r => r.ServerIds.Contains(serverId))) return false;
             return !_raceQueue.Any(r => r.ServerIds.Contains(serverId));
