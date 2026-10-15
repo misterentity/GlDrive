@@ -112,13 +112,13 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     /// <summary>Header tagline shown in the dashboard chrome — bound from XAML.
     /// Computed from the running assembly version so it stops going stale every
-    /// release. Previously hardcoded as "v1.71 // KERNEL.MOUNT" in XAML.</summary>
+    /// release; the compact terminal header shows only the actual version.</summary>
     public string VersionTagline
     {
         get
         {
             var v = Services.UpdateChecker.CurrentVersion;
-            return $"v{v.Major}.{v.Minor}.{v.Build} // KERNEL.MOUNT";
+            return $"v{v.Major}.{v.Minor}.{v.Build}";
         }
     }
 

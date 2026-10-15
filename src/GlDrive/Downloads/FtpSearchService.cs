@@ -97,6 +97,9 @@ public class FtpSearchService : IDisposable
 
     private sealed class SearchRun
     {
+        // Ending a race stops traversal/borrowing, but must not tear an FTP
+        // command already on the wire. Caller cancellation and deadlines still do.
+        public CancellationToken OperationToken;
         public readonly List<SearchResult> Results = [];
         public string Method = "Search";
         public DateTime? IndexBuiltAtUtc;
@@ -126,18 +129,25 @@ public class FtpSearchService : IDisposable
         return (await SearchDetailed(keyword, progress, ct)).Results.ToList();
     }
 
-    public async Task<SearchOutcome> SearchDetailed(string keyword, IProgress<string>? progress = null, CancellationToken ct = default)
+    public Task<SearchOutcome> SearchDetailed(string keyword, IProgress<string>? progress = null, CancellationToken ct = default)
+        => SearchDetailed(keyword, progress, ct, CancellationToken.None);
+
+    /// <summary>Stop before the next command while allowing the current command to drain.</summary>
+    public async Task<SearchOutcome> SearchDetailed(string keyword, IProgress<string>? progress,
+        CancellationToken ct, CancellationToken stopToken)
     {
         ct.ThrowIfCancellationRequested();
+        stopToken.ThrowIfCancellationRequested();
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(_searchDeadline);
-        var run = new SearchRun();
+        using var traversal = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token, stopToken);
+        var run = new SearchRun { OperationToken = deadline.Token };
         try
         {
-            await SearchOnce(keyword, progress, run, deadline.Token);
-            deadline.Token.ThrowIfCancellationRequested();
+            await SearchOnce(keyword, progress, run, traversal.Token);
+            traversal.Token.ThrowIfCancellationRequested();
         }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && !stopToken.IsCancellationRequested)
         {
             run.TimedOut = true;
             progress?.Report($"Search time limit reached — {run.Results.Count} partial result(s)");
@@ -150,6 +160,7 @@ public class FtpSearchService : IDisposable
             Log.Warning(ex, "Search incomplete for {Keyword}", keyword);
         }
         ct.ThrowIfCancellationRequested();
+        stopToken.ThrowIfCancellationRequested();
         return run.Snapshot();
     }
 
@@ -192,7 +203,7 @@ public class FtpSearchService : IDisposable
         if (_siteSearchSupported != false)
         {
             run.Method = "SITE SEARCH";
-            var site = await TrySiteSearch(keyword, progress, ct);
+            var site = await TrySiteSearch(keyword, progress, ct, run.OperationToken);
             if (site is { Results.Count: > 0 })
             {
                 run.Method = "SITE SEARCH";
@@ -215,7 +226,7 @@ public class FtpSearchService : IDisposable
     private async Task RunSiteSearch(string keyword, IProgress<string>? progress, SearchRun run, CancellationToken ct)
     {
         run.Method = "SITE SEARCH";
-        var site = await TrySiteSearch(keyword, progress, ct);
+        var site = await TrySiteSearch(keyword, progress, ct, run.OperationToken);
         if (site is { Results.Count: > 0 })
         {
             run.Results.AddRange(site.Results);
@@ -233,7 +244,8 @@ public class FtpSearchService : IDisposable
     /// Tries SITE SEARCH. Returns null if the server doesn't support it.
     /// Only marks unsupported on explicit server rejection (5xx), not on transient errors.
     /// </summary>
-    private async Task<SiteSearchMatches?> TrySiteSearch(string keyword, IProgress<string>? progress, CancellationToken ct)
+    private async Task<SiteSearchMatches?> TrySiteSearch(string keyword, IProgress<string>? progress,
+        CancellationToken ct, CancellationToken operationToken)
     {
         try
         {
@@ -242,7 +254,8 @@ public class FtpSearchService : IDisposable
             // for one discriminating term and apply the same AND matcher locally.
             var query = Normalize(keyword).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
                 .OrderByDescending(term => term.Length).FirstOrDefault() ?? "";
-            var reply = await ExecuteSiteSearch(SanitizeFtpInput(query), ct);
+            var reply = await ExecuteSiteSearch(SanitizeFtpInput(query), ct, operationToken);
+            ct.ThrowIfCancellationRequested();
 
             if (!reply.Success)
             {
@@ -278,16 +291,17 @@ public class FtpSearchService : IDisposable
         }
     }
 
-    private async Task<FtpReply> ExecuteSiteSearch(string query, CancellationToken ct)
+    private async Task<FtpReply> ExecuteSiteSearch(string query, CancellationToken ct, CancellationToken operationToken)
     {
-        if (_siteSearchOverride != null) return await _siteSearchOverride(query, ct);
+        ct.ThrowIfCancellationRequested();
+        if (_siteSearchOverride != null) return await _siteSearchOverride(query, operationToken);
         using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         borrowCts.CancelAfter(BorrowTimeout);
         await using var conn = await _pool.Borrow(borrowCts.Token);
         ct.ThrowIfCancellationRequested();
         try
         {
-            var reply = await conn.Client.Execute($"SITE SEARCH {query}", ct);
+            var reply = await conn.Client.Execute($"SITE SEARCH {query}", operationToken);
             if (reply.Code == "421") conn.Poison("SITE SEARCH server closed control connection (421)");
             return reply;
         }
@@ -664,7 +678,8 @@ public class FtpSearchService : IDisposable
                 var path = _searchConfig.SearchPaths[rootIndex];
                 ct.ThrowIfCancellationRequested();
                 if (results.Count >= MaxResults) { report.Truncated = true; break; }
-                await SearchRecursive(ListForLiveSearch, NormalizeSearchRoot(path), keyword,
+                await SearchRecursive((listingPath, token) => ListForLiveSearch(listingPath, token, run.OperationToken),
+                    NormalizeSearchRoot(path), keyword,
                     0, _searchConfig.MaxDepth, results, progress, ct, report, queryTerms: terms);
                 if (results.Count >= MaxResults || report.Aborted)
                 {
@@ -689,12 +704,14 @@ public class FtpSearchService : IDisposable
         }
     }
 
-    private Task<FtpListItem[]> ListForLiveSearch(string path, CancellationToken ct) =>
-        ListWithTransientRetry(ListForLiveSearchOnce, path, ct, _listingRetryDelay);
+    private Task<FtpListItem[]> ListForLiveSearch(string path, CancellationToken ct, CancellationToken operationToken) =>
+        ListWithTransientRetry((listingPath, token) => ListForLiveSearchOnce(listingPath, token, operationToken),
+            path, ct, _listingRetryDelay);
 
-    private async Task<FtpListItem[]> ListForLiveSearchOnce(string path, CancellationToken ct)
+    private async Task<FtpListItem[]> ListForLiveSearchOnce(string path, CancellationToken ct, CancellationToken operationToken)
     {
-        if (_listOverride != null) return await _listOverride(path, ct);
+        ct.ThrowIfCancellationRequested();
+        if (_listOverride != null) return await _listOverride(path, operationToken);
         using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         borrowCts.CancelAfter(BorrowTimeout);
         PooledConnection conn;
@@ -704,7 +721,8 @@ public class FtpSearchService : IDisposable
             throw new TimeoutException("FTP connection busy; timed out waiting for a free connection");
         }
         await using var borrowed = conn;
-        return await ListBorrowed(conn, path, ct);
+        ct.ThrowIfCancellationRequested();
+        return await ListBorrowed(conn, path, operationToken);
     }
 
     internal static async Task<FtpListItem[]> ListWithTransientRetry(

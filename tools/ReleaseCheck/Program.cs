@@ -859,7 +859,7 @@ static async Task CheckSourceRelocation(FtpClientFactory factory, string fixture
         new() { [fallback.Id] = fallback }, new SpeedTracker(), new SkiplistEvaluator()))
     {
         var task = (Task<string?>)typeof(SpreadJob).GetMethod("FindRelocatedSourcePath", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(job, [fallback.Id, fallback.SpreadSite.Sections["TV_HD"] + "/" + fallbackRelease, ct])!;
+            .Invoke(job, [fallback.Id, fallback.SpreadSite.Sections["TV_HD"] + "/" + fallbackRelease, ct, CancellationToken.None])!;
         Check(await task == fallbackPath, "native relocation falls back through missing watch and section directories");
     }
     await using (var connection = await sourcePool.Borrow(ct))

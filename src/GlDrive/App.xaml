@@ -8,6 +8,9 @@
                 <ResourceDictionary Source="UI/Themes/DarkTheme.xaml"/>
             </ResourceDictionary.MergedDictionaries>
 
+            <CornerRadius x:Key="InputCornerRadius">4</CornerRadius>
+            <CornerRadius x:Key="CheckBoxCornerRadius">2</CornerRadius>
+
             <!-- Consistent keyboard focus for custom control templates. -->
             <Style x:Key="KeyboardFocusStyle" TargetType="Control">
                 <Setter Property="Template">
@@ -58,7 +61,7 @@
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
                                 <Border x:Name="Box" Width="16" Height="16" Margin="0,1,8,1"
-                                        CornerRadius="2" VerticalAlignment="Center"
+                                        CornerRadius="{DynamicResource CheckBoxCornerRadius}" VerticalAlignment="Center"
                                         Background="{DynamicResource SurfaceBrush}"
                                         BorderBrush="{DynamicResource ForegroundDimBrush}" BorderThickness="1">
                                     <Grid>
@@ -115,7 +118,7 @@
                         <ControlTemplate TargetType="TextBox">
                             <Border x:Name="Bd" Background="{TemplateBinding Background}"
                                     BorderBrush="{TemplateBinding BorderBrush}"
-                                    BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="4"
+                                    BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{DynamicResource InputCornerRadius}"
                                     Padding="{TemplateBinding Padding}">
                                 <ScrollViewer x:Name="PART_ContentHost"/>
                             </Border>
@@ -151,7 +154,7 @@
                         <ControlTemplate TargetType="PasswordBox">
                             <Border x:Name="Bd" Background="{TemplateBinding Background}"
                                     BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
-                                    CornerRadius="4" Padding="{TemplateBinding Padding}">
+                                    CornerRadius="{DynamicResource InputCornerRadius}" Padding="{TemplateBinding Padding}">
                                 <ScrollViewer x:Name="PART_ContentHost"/>
                             </Border>
                             <ControlTemplate.Triggers>
@@ -185,7 +188,7 @@
                         <ControlTemplate TargetType="ToggleButton">
                             <Border x:Name="Bd" Background="{TemplateBinding Background}"
                                     BorderBrush="{TemplateBinding BorderBrush}"
-                                    BorderThickness="1" CornerRadius="4">
+                                    BorderThickness="1" CornerRadius="{DynamicResource InputCornerRadius}">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition/>
@@ -244,7 +247,7 @@
                                         <Border x:Name="DropDownBorder"
                                                 Background="{DynamicResource SurfaceBrush}"
                                                 BorderBrush="{DynamicResource BorderBrush}"
-                                                BorderThickness="1" CornerRadius="4"
+                                                BorderThickness="1" CornerRadius="{DynamicResource InputCornerRadius}"
                                                 Margin="0,2,0,0">
                                             <ScrollViewer SnapsToDevicePixels="True">
                                                 <StackPanel IsItemsHost="True"
