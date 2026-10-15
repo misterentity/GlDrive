@@ -334,7 +334,7 @@ public sealed class SegmentedTransfer
         ISegmentReader? reader = null;
         bool finished = false;
 
-        // Reads and pacing waits on a stoppable lane run under readCts, which the watcher cancels
+        // Opens, reads and pacing waits on a stoppable lane run under readCts, which the watcher cancels
         // when the lane must yield (the race wants its login back) or the data stops flowing —
         // a blocked read would otherwise hold a borrowed race login indefinitely. Only managed
         // streams (CPSV SslStream, HTTP) are interrupted this way; a GnuTLS data read must never
@@ -348,20 +348,31 @@ public sealed class SegmentedTransfer
         try
         {
             lr.State = LaneState.Connecting;
+            // A borrowed login can block while establishing its managed data channel too.
+            // Start watching before OpenAsync, or a new race cannot reclaim that lane
+            // until setup times out. Non-stoppable native data opens retain the caller token.
+            if (lane.CanStopEarly)
+                watcher = WatchAsync();
             try
             {
-                reader = await lane.OpenAsync(file, a.Position, a.End, token);
+                reader = await lane.OpenAsync(file, a.Position, a.End, readToken);
             }
             catch (Exception ex)
             {
                 // Any failed open may have left a control reply unread — cancellation included.
+                // Fault quarantines the FTP connection with deferred native teardown;
+                // there is no reader to cleanly finish and return to the pool here.
                 lane.Fault(token.IsCancellationRequested ? new OperationCanceledException(token) : ex);
+                if (ex is OperationCanceledException && !token.IsCancellationRequested &&
+                    Volatile.Read(ref interrupt) == 1)
+                {
+                    Log.Information("Download lane {Label} yielded while opening {File}", lane.Label, file.LocalPath);
+                    return RangeOutcome.Yielded;
+                }
                 throw;
             }
             lr.State = LaneState.Active;
-
-            if (lane.CanStopEarly)
-                watcher = WatchAsync();
+            Volatile.Write(ref lastActivity, Environment.TickCount64);
 
             // A file's LAST bytes only count as done once the server has confirmed end of file
             // (no extra bytes, 226). Until then the file can't look complete, so it is never

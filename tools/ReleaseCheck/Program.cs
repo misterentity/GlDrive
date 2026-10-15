@@ -16,6 +16,12 @@ using GlDrive.Spread;
 using Serilog;
 using Microsoft.Win32.SafeHandles;
 
+if (args.Length > 0 && args[0] == "--sharing-only")
+{
+    await CpsvSharingCheck.Run(args.Length > 1 ? args[1] : throw new ArgumentException("Supply an evidence directory"));
+    return;
+}
+
 // This harness only connects to the disposable loopback fixture, with an isolated trust store.
 var state = JsonDocument.Parse(File.ReadAllText(args[0])).RootElement;
 // Debug log beside the state file: a failed step must show what the app did, not just that it failed.
