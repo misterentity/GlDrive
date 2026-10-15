@@ -24,12 +24,15 @@ public sealed class ConfigurationAutomation : IAutomationModule
     private readonly AppConfig _config;
     private readonly Action<AppConfig> _persist;
     private readonly Func<AppConfig> _readCurrent;
+    private readonly Action? _settingsApplied;
     private readonly object _gate = new();
     private const string Redacted = "[redacted]";
 
-    public ConfigurationAutomation(AppConfig config, Action<AppConfig>? persist = null, Func<AppConfig>? readCurrent = null)
+    public ConfigurationAutomation(AppConfig config, Action<AppConfig>? persist = null, Func<AppConfig>? readCurrent = null,
+        Action? settingsApplied = null)
     {
         _config = config;
+        _settingsApplied = settingsApplied;
         _persist = persist ?? ConfigManager.Save;
         _readCurrent = readCurrent ?? (persist == null ? () =>
             File.Exists(ConfigManager.ConfigPath)
@@ -127,6 +130,8 @@ public sealed class ConfigurationAutomation : IAutomationModule
                 // ConfigManager uses SecureFile's restricted, flushed, atomic rename.
                 _persist(candidate);
                 Reconcile(_config, candidate);
+                try { _settingsApplied?.Invoke(); }
+                catch (Exception ex) { Serilog.Log.Warning(ex, "Settings saved, but applying live download rate settings failed"); }
             }
             return new { saved = changed, revision = Revision(canonical), restartRequired = changed,
                 message = changed ? "Saved. Restart GlDrive to fully apply runtime settings." : "No settings changed." };

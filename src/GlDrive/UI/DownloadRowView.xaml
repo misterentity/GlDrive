@@ -25,6 +25,9 @@
                 <DataTrigger Binding="{Binding Status}" Value="Queued">
                     <Setter Property="Fill" Value="{DynamicResource WarnBrush}"/>
                 </DataTrigger>
+                <DataTrigger Binding="{Binding Status}" Value="Paused">
+                    <Setter Property="Fill" Value="{DynamicResource WarnBrush}"/>
+                </DataTrigger>
                 <DataTrigger Binding="{Binding Status}" Value="Cancelled">
                     <Setter Property="Fill" Value="{DynamicResource TextFaintBrush}"/>
                 </DataTrigger>
@@ -107,6 +110,7 @@
                              Foreground="{Binding Fill, ElementName=StatusRail}"
                              AutomationProperties.Name="Download progress"
                              ToolTip="{Binding ProgressText}"
+                             IsIndeterminate="{Binding IsIndeterminate}"
                              Value="{Binding ProgressPercent, FallbackValue=0}"/>
             </Grid>
         </DockPanel>

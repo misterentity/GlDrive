@@ -59,10 +59,12 @@ public sealed partial class AutomationService
         Add("ftp.delete", "Delete an FTP file or directory. Nonempty directories require recursive=true; the FTP root is protected.", false, true, "serverId", "path", "recursive?:boolean");
         Add("ftp.command", "Execute a single FTP control command, including SITE commands. The borrowed connection is discarded afterward to isolate protocol state. Data-transfer commands are rejected; use ftp tools for data.", false, true, "serverId", "command");
 
-        Add("downloads.list", "Read download queues/history across mounted servers, optionally filtered by server and status.", true, false, "serverId?", "status?:Queued|Downloading|Extracting|Completed|Failed|Cancelled", "offset?:integer", "limit?:integer");
+        Add("downloads.list", "Read FTP and BitTorrent download queues/history. Use serverId=__torrents for the application torrent queue. Magnet links and private tracker URLs are omitted.", true, false, "serverId?", "status?:Queued|Downloading|Extracting|Completed|Failed|Cancelled|Paused", "offset?:integer", "limit?:integer");
         Add("downloads.enqueue", "Queue an FTP release directory for download. Omit localPath to use the configured category destination.", false, false, "serverId", "path", "releaseName?", "category?", "localPath?", "wishlistItemId?");
-        Add("downloads.cancel", "Cancel a queued, downloading or extracting item.", false, true, "serverId", "id");
-        Add("downloads.retry", "Retry a failed or cancelled download, retaining partial bytes for resume.", false, false, "serverId", "id");
+        Add("downloads.cancel", "Cancel a queued, downloading, paused or extracting item. Use serverId=__torrents for torrents.", false, true, "serverId", "id");
+        Add("downloads.retry", "Retry a failed or cancelled download, retaining partial bytes for resume. A refused torrent needs explicit skipBlockedFiles=true to exclude blocked files; escaping paths cannot be approved.", false, false, "serverId", "id", "skipBlockedFiles?:boolean");
+        Add("downloads.pause", "Pause a queued or downloading item and retain partial data. Use serverId=__torrents for torrents. Extraction cannot be paused.", false, false, "serverId", "id");
+        Add("downloads.resume", "Resume a paused download after its previous writer has closed. Use serverId=__torrents for torrents.", false, false, "serverId", "id");
         Add("downloads.remove", "Remove a finished download from history. Does not delete its local files; cancel active work first.", false, true, "serverId", "id");
         Add("downloads.clear_finished", "Clear completed, failed, cancelled, or all finished download history, leaving local files in place.", false, true, "serverId", "status?:Completed|Failed|Cancelled|all");
         Add("downloads.reorder", "Move a queued download one position up or down in the processing queue.", false, false, "serverId", "id", "direction:up|down");

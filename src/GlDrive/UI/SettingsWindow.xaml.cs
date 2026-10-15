@@ -333,6 +333,7 @@ public partial class SettingsWindow : Window
         }
 
         if (Application.Current is App app) app.RefreshControlApi(_config);
+        _serverManager.RefreshTorrentDownloadRate();
 
         // Apply log level change at runtime
         SerilogSetup.SetLevel(_config.Logging.Level);

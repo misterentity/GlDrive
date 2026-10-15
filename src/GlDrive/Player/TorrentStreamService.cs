@@ -8,7 +8,7 @@ using Serilog;
 
 namespace GlDrive.Player;
 
-public class TorrentStreamService : IDisposable
+public partial class TorrentStreamService : IDisposable
 {
     private readonly string _downloadPath;
     private readonly ClientEngine _engine;

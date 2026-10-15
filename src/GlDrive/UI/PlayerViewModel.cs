@@ -66,8 +66,6 @@ public partial class PlayerViewModel : INotifyPropertyChanged, IDisposable
     public ObservableCollection<TmdbSeasonSummary> Seasons { get; } = new();
     public ObservableCollection<TmdbEpisode> Episodes { get; } = new();
     public ObservableCollection<TorrentResultVm> TorrentResults { get; } = new();
-    public ObservableCollection<TorrentDownloadVm> TorrentDownloads { get; } = new();
-    public bool HasTorrentDownloads => TorrentDownloads.Count > 0;
     public ObservableCollection<TrackInfo> AudioTracks { get; } = new();
     public ObservableCollection<TrackInfo> SubtitleTracks { get; } = new();
     public ObservableCollection<RendererItemVm> Renderers { get; } = new();
@@ -276,7 +274,8 @@ public partial class PlayerViewModel : INotifyPropertyChanged, IDisposable
     public ICommand SearchTorrentCommand { get; }
     public ICommand PlayTorrentCommand { get; }
     public ICommand DownloadTorrentCommand { get; }
-    public ICommand CancelTorrentDownloadCommand { get; }
+    public ICommand ShowDownloadsCommand { get; }
+    public event Action? DownloadsRequested;
     public ICommand CastToDeviceCommand { get; }
     public ICommand StopCastingCommand { get; }
 
@@ -318,7 +317,7 @@ public partial class PlayerViewModel : INotifyPropertyChanged, IDisposable
         SearchTorrentCommand = new RelayCommand(async () => await SearchTorrent());
         PlayTorrentCommand = new RelayCommand(async () => await PlaySelectedTorrent());
         DownloadTorrentCommand = new RelayCommand(async () => await DownloadSelectedTorrent());
-        CancelTorrentDownloadCommand = new RelayCommand<TorrentDownloadVm>(CancelTorrentDownload);
+        ShowDownloadsCommand = new RelayCommand(() => DownloadsRequested?.Invoke());
         CastToDeviceCommand = new RelayCommand<RendererItemVm>(CastToDevice);
         StopCastingCommand = new RelayCommand(StopCasting);
     }
@@ -855,35 +854,15 @@ public partial class PlayerViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
-    /// <summary>
-    /// Download the selected torrent to a folder of the user's choosing and keep it there.
-    ///
-    /// Runs alongside streaming and other downloads — <see cref="TorrentStreamService"/> keeps
-    /// downloads in their own dictionary rather than the single manager streaming uses, so
-    /// starting playback does not cancel a download in progress.
-    /// </summary>
+    /// <summary>Queue durable torrent content in the application-owned Downloads manager.</summary>
     private async Task DownloadSelectedTorrent()
     {
         if (_selectedTorrentResult == null || _torrentSearch == null) return;
-        if (_torrentStream == null)
-        {
-            PlayerStatus = "Torrent engine not initialized";
-            return;
-        }
-
         var result = _selectedTorrentResult;
-
-        var dlg = new Microsoft.Win32.OpenFolderDialog
-        {
-            Title = $"Save \"{result.Title}\" to…",
-        };
-        if (!string.IsNullOrWhiteSpace(_config.Torrent.LastDownloadFolder) &&
-            Directory.Exists(_config.Torrent.LastDownloadFolder))
-            dlg.InitialDirectory = _config.Torrent.LastDownloadFolder;
-
-        if (dlg.ShowDialog() != true) return;
-        var saveDir = dlg.FolderName;
-
+        var dialog = new Microsoft.Win32.OpenFolderDialog { Title = $"Save \"{result.Title}\" to…" };
+        if (!string.IsNullOrWhiteSpace(_config.Torrent.LastDownloadFolder) && Directory.Exists(_config.Torrent.LastDownloadFolder))
+            dialog.InitialDirectory = _config.Torrent.LastDownloadFolder;
+        if (dialog.ShowDialog() != true) return;
         try
         {
             var magnet = await _torrentSearch.GetMagnetLinkAsync(result.DetailUrl);
@@ -892,130 +871,20 @@ public partial class PlayerViewModel : INotifyPropertyChanged, IDisposable
                 PlayerStatus = "Could not get magnet link";
                 return;
             }
-
-            var item = new TorrentDownloadVm { Name = result.Title, Status = "Starting…" };
-            TorrentDownloads.Add(item);
-            OnPropertyChanged(nameof(HasTorrentDownloads));
-
-            // Remember the folder so the next dialog opens where the last one did.
-            _config.Torrent.LastDownloadFolder = saveDir;
-
-            var hash = await StartDownloadWithScreeningAsync(magnet, saveDir, item);
-
-            if (hash == null)
-            {
-                if (item.Status is not ("Blocked" or "Cancelled")) item.Status = "Failed";
-                return;
-            }
-
-            item.Hash = hash;
-            PlayerStatus = $"Downloading to {saveDir}";
+            var item = QueueTorrentDownload(magnet, result.Title, dialog.FolderName);
+            _config.Torrent.LastDownloadFolder = dialog.FolderName;
+            PlayerStatus = $"Queued in Downloads: {item.ReleaseName}";
+            DownloadsRequested?.Invoke();
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "Torrent download failed to start");
+            Log.Warning(ex, "Torrent download failed to queue");
             PlayerStatus = $"Download error: {ex.Message}";
         }
     }
 
-    /// <summary>
-    /// Start a download, and if the torrent carries executable files put the decision to the
-    /// user rather than silently doing either thing.
-    ///
-    /// Refusing is the default because the failure modes are asymmetric: a wrong block costs
-    /// one extra click, a wrong allow drops an executable into a folder that is about to be
-    /// browsed in Explorer. The "skip them" option exists because a software torrent whose
-    /// setup.exe is the point is a real case, not a hypothetical.
-    /// </summary>
-    private async Task<string?> StartDownloadWithScreeningAsync(
-        string magnet, string saveDir, TorrentDownloadVm item)
-    {
-        var hash = await RunDownloadAsync(magnet, saveDir, item, allowBlocked: false);
-        if (hash != null || item.Status is not "Blocked") return hash;
-
-        // A containment violation is never overridable — that is a malicious torrent, not an
-        // inconvenient one.
-        if (item.BlockReason.StartsWith("Refused", StringComparison.Ordinal))
-        {
-            MessageBox.Show(
-                "This torrent declares file paths outside the folder you chose, which is how a " +
-                "malicious torrent writes to places you did not pick. It has been refused.",
-                "Torrent refused", MessageBoxButton.OK, MessageBoxImage.Error);
-            PlayerStatus = "Refused: torrent declares unsafe paths";
-            return null;
-        }
-
-        var choice = MessageBox.Show(
-            $"{item.BlockReason}\n\n" +
-            "Executable files are blocked by default — GlDrive does not run them, but they would " +
-            "sit in the save folder where they could be opened by mistake.\n\n" +
-            "Yes — download the rest, skipping the executables\n" +
-            "No — cancel this download\n\n" +
-            "Note: BitTorrent transfers whole pieces, so a skipped file can still receive bytes " +
-            "it shares with a kept file. Those leftovers are deleted when the download stops.",
-            "Torrent contains executable files",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Warning,
-            MessageBoxResult.No);
-
-        if (choice != MessageBoxResult.Yes)
-        {
-            item.Status = "Cancelled";
-            PlayerStatus = "Download cancelled — torrent contained executable files";
-            return null;
-        }
-
-        return await RunDownloadAsync(magnet, saveDir, item, allowBlocked: true);
-    }
-
-    private async Task<string?> RunDownloadAsync(
-        string magnet, string saveDir, TorrentDownloadVm item, bool allowBlocked)
-    {
-        return await _torrentStream!.StartDownloadAsync(magnet, saveDir,
-                onProgress: p => Application.Current?.Dispatcher.Invoke(() =>
-                {
-                    item.Hash = p.Hash;
-                    item.Name = p.Name;
-                    item.Percent = p.Percent;
-                    item.Status = p.State;
-                    item.SpeedDisplay = FormatRate(p.DownloadRateBytes);
-                    item.PeersDisplay = $"{p.Seeds}S/{p.Leeches}L";
-
-                    if (p.State == "Complete")
-                    {
-                        item.Status = "Done";
-                        item.SpeedDisplay = "";
-                    }
-                    else if (p.State.StartsWith("Blocked", StringComparison.Ordinal) ||
-                             p.State.StartsWith("Refused", StringComparison.Ordinal))
-                    {
-                        // Carry the reason through for the dialog, but keep Status a stable
-                        // token the caller can branch on.
-                        item.BlockReason = p.State;
-                        item.Status = "Blocked";
-                    }
-                }),
-                allowBlockedContent: allowBlocked);
-    }
-
-    private void CancelTorrentDownload(TorrentDownloadVm? item)
-    {
-        if (item == null || _torrentStream == null) return;
-
-        if (!string.IsNullOrEmpty(item.Hash))
-            _ = _torrentStream.CancelDownloadAsync(item.Hash);
-
-        TorrentDownloads.Remove(item);
-        OnPropertyChanged(nameof(HasTorrentDownloads));
-    }
-
-    private static string FormatRate(long bytesPerSecond)
-    {
-        if (bytesPerSecond <= 0) return "";
-        if (bytesPerSecond >= 1 << 20) return $"{bytesPerSecond / (double)(1 << 20):F1} MB/s";
-        if (bytesPerSecond >= 1 << 10) return $"{bytesPerSecond / (double)(1 << 10):F0} KB/s";
-        return $"{bytesPerSecond} B/s";
-    }
+    internal DownloadItem QueueTorrentDownload(string magnet, string title, string directory, bool skipBlockedFiles = false)
+        => _serverManager.EnqueueTorrentDownload(magnet, title, directory, skipBlockedFiles);
 
     private async Task PlaySelectedTorrent()
     {
@@ -1669,62 +1538,6 @@ public class LibraryItemVm
     public string FileName { get; set; } = "";
     public string SizeText { get; set; } = "";
     public string ResumePercent { get; set; } = "";
-}
-
-/// <summary>
-/// One in-flight "download and keep" torrent. Implements INotifyPropertyChanged because the
-/// progress callback mutates it once a second on a live-bound grid — a plain POCO would need
-/// Items.Refresh() on every tick, the trap SectionMapping already documents in CLAUDE.md.
-/// </summary>
-public class TorrentDownloadVm : INotifyPropertyChanged
-{
-    private string _name = "";
-    private string _status = "";
-    private double _percent;
-    private string _speedDisplay = "";
-    private string _peersDisplay = "";
-
-    public string Hash { get; set; } = "";
-
-    /// <summary>Full "Blocked: 2 executable file(s) — setup.exe" text, for the dialog.</summary>
-    public string BlockReason { get; set; } = "";
-
-    public string Name
-    {
-        get => _name;
-        set { _name = value; OnPropertyChanged(); }
-    }
-
-    public string Status
-    {
-        get => _status;
-        set { _status = value; OnPropertyChanged(); }
-    }
-
-    public double Percent
-    {
-        get => _percent;
-        set { _percent = value; OnPropertyChanged(); OnPropertyChanged(nameof(PercentDisplay)); }
-    }
-
-    public string PercentDisplay => $"{_percent:F1}%";
-
-    public string SpeedDisplay
-    {
-        get => _speedDisplay;
-        set { _speedDisplay = value; OnPropertyChanged(); }
-    }
-
-    public string PeersDisplay
-    {
-        get => _peersDisplay;
-        set { _peersDisplay = value; OnPropertyChanged(); }
-    }
-
-    public event PropertyChangedEventHandler? PropertyChanged;
-
-    private void OnPropertyChanged([CallerMemberName] string? name = null) =>
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
 
 public class TorrentResultVm

@@ -120,7 +120,17 @@ internal static class ScreenshotCapture
         using var demoBrowse = new BrowseViewModel(serverManager, config);
         ((TabItem)dashboard.FindName("BrowseTab")).DataContext = demoBrowse;
         using var demoPlayer = new PlayerViewModel(serverManager, config);
+        demoPlayer.SelectedMovie = new MediaCardVm { Title = "Sample Open Film", Year = "2026" };
+        demoPlayer.TorrentResults.Add(new TorrentResultVm
+        {
+            Title = "Sample.Open.Film.2026.1080p.WEB-GROUP", Seeds = 24, Leeches = 3,
+            Size = "1.2 GiB", Uploader = "Demo indexer", DetailUrl = "https://example.invalid/demo"
+        });
+        demoPlayer.SelectedTorrentResult = demoPlayer.TorrentResults[0];
+        demoPlayer.PlayerStatus = "Choose Play Torrent or queue its content in Downloads";
         ((Grid)dashboard.FindName("PlayerTab")).DataContext = demoPlayer;
+        if (dashboard.FindName("NowPlayingMode") is System.Windows.Controls.Primitives.ToggleButton nowPlaying)
+            nowPlaying.IsChecked = true;
         using var demoSpread = new SpreadViewModel(serverManager, config);
         demoSpread.RaceHistory.Clear();
         demoSpread.SessionSummary = "Demo session: 1 active race";
@@ -182,6 +192,7 @@ internal static class ScreenshotCapture
             }
             if (dashboard.DataContext is DashboardViewModel demoVm)
             {
+                CaptureTorrentQueue(dashboard, tabControl, demoVm);
                 demoVm.DownloadItems.Clear();
                 demoVm.WishlistItems.Clear();
                 demoVm.SearchResults.Clear();
@@ -198,6 +209,55 @@ internal static class ScreenshotCapture
         }
         dashboard.Close();
         serverManager.Dispose();
+    }
+
+    private static void CaptureTorrentQueue(DashboardWindow dashboard, TabControl tabs, DashboardViewModel vm)
+    {
+        // In-memory presentation only: never start a torrent engine or persist sample items.
+        vm.DownloadItems.Clear();
+        var ftp = BuildDemoDownloads().First();
+        vm.DownloadItems.Add(ftp);
+        var samples = new[]
+        {
+            new DownloadItemVm { Id = "torrent-metadata", ReleaseName = "Sample.Open.Film.2026.1080p.WEB-GROUP", Status = "Downloading", IsIndeterminate = true, ProgressText = "Fetching metadata — waiting for peers" },
+            new DownloadItemVm { Id = "torrent-active", ReleaseName = "Sample.Documentary.2026.2160p.WEB-GROUP", Status = "Downloading", ProgressPercent = 38.4, ProgressText = "38% — Downloading · 8 peers", SpeedDisplay = "12.4 MiB/s" },
+            new DownloadItemVm { Id = "torrent-paused", ReleaseName = "Sample.Series.S01E02.1080p.WEB-GROUP", Status = "Paused", ProgressPercent = 62, ProgressText = "Paused at 62%" },
+            new DownloadItemVm { Id = "torrent-blocked", ReleaseName = "Sample.Archive.2026-GROUP", Status = "Failed", RequiresContentApproval = true, ProgressText = "Blocked: 1 executable file — choose Review to skip it or Cancel" },
+            new DownloadItemVm { Id = "torrent-completed", ReleaseName = "Sample.Open.Album.2026.FLAC-GROUP", Status = "Completed", ProgressPercent = 100, ProgressText = "Done" }
+        };
+        foreach (var row in samples)
+        {
+            row.SourceKind = DownloadSourceKind.Torrent;
+            row.ServerId = ServerManager.TorrentDownloadQueueId;
+            row.ServerName = "BitTorrent";
+            row.Category = "Torrents";
+            row.LocalPath = @"C:\Downloads\GlDrive\Synthetic-torrent-demo";
+            vm.DownloadItems.Add(row);
+        }
+        dashboard.DataContext = null;
+        dashboard.DataContext = vm;
+        SelectTabByHeader(tabs, "Downloads");
+        var list = (ListBox)dashboard.FindName("DownloadsGrid");
+        dashboard.Width = Math.Min(1440, SystemParameters.WorkArea.Width);
+        dashboard.Height = Math.Min(900, SystemParameters.WorkArea.Height);
+        list.SelectedItem = samples[3];
+        dashboard.UpdateLayout();
+        DoEvents();
+        RenderToFile(dashboard, "dashboard-torrents.png");
+        list.SelectedItem = samples[2];
+        DoEvents();
+        RenderToFile(dashboard, "dashboard-torrents-paused.png");
+        dashboard.Width = dashboard.MinWidth;
+        dashboard.Height = dashboard.MinHeight;
+        list.SelectedItem = samples[3];
+        dashboard.UpdateLayout();
+        list.ScrollIntoView(samples[^1]);
+        DoEvents();
+        RenderToFile(dashboard, "dashboard-torrents-narrow.png");
+        list.SelectedItem = samples[1];
+        FindVisualChild<ScrollViewer>(list)?.ScrollToTop();
+        DoEvents();
+        RenderToFile(dashboard, "dashboard-torrents-narrow-top.png");
     }
 
     /// <summary>

@@ -19,7 +19,7 @@ public sealed class UiAutomation(Func<DashboardWindow> getDashboard) : IAutomati
         "SearchPreDbOnServersCommand", "SearchNotificationOnServersCommand", "RefreshMetadataCommand",
         "SearchAndPlayCommand", "PlayResultCommand", "PlayPauseCommand", "StopCommand", "RefreshTrendingCommand", "ToggleLibraryCommand",
         "PlayLibraryItemCommand", "PlayEpisodeCommand", "SeekForwardCommand", "SeekBackwardCommand",
-        "ClearSearchCommand", "SearchTorrentCommand", "PlayTorrentCommand", "CancelTorrentDownloadCommand",
+        "ClearSearchCommand", "SearchTorrentCommand", "PlayTorrentCommand", "PauseDownloadCommand", "ResumeDownloadCommand",
         "CastToDeviceCommand", "StopCastingCommand", "LeftGoCommand", "RightGoCommand",
         "LeftDoubleClickCommand", "RightDoubleClickCommand", "PauseJobCommand", "ResumeJobCommand",
         "DismissJobCommand", "ClearFinishedCommand", "RefreshServersCommand", "RefreshCommand", "TestConnectionCommand"
@@ -42,7 +42,7 @@ public sealed class UiAutomation(Func<DashboardWindow> getDashboard) : IAutomati
         AutomationToolDefinition.Create("ui.invoke", "Await an available command from ui.state. Optional parameter may be scalar, or select a collection/index for commands taking a row. Inspect state afterward for UI status and errors.", Schema(new { screen = Screen, command = Text, parameter = new { }, collection = Text, index = new { type = "integer", minimum = 0 } }, ["screen", "command"])),
         AutomationToolDefinition.Create("player.seek", "Seek the desktop player to a position from 0 to 1.", Schema(new { position = new { type = "number", minimum = 0, maximum = 1 } }, ["position"])),
         AutomationToolDefinition.Create("player.play_local", "Play a local media file in the desktop player.", Schema(new { path = new { type = "string", minLength = 1, maxLength = 4096 } }, ["path"])),
-        AutomationToolDefinition.Create("player.download_torrent", "Download a magnet to a specified local folder using the player's existing torrent engine and content screening. skipBlockedFiles explicitly allows downloading remaining files while skipping executables.", Schema(new { magnet = new { type = "string", maxLength = 16384 }, directory = new { type = "string", maxLength = 4096 }, skipBlockedFiles = new { type = "boolean" } }, ["magnet", "directory"]))
+        AutomationToolDefinition.Create("player.download_torrent", "Queue a magnet in the main Downloads list and return its durable id and queueId. The item uses a dedicated subfolder of directory. Follow and control it with downloads tools; skipBlockedFiles explicitly approves downloading only permitted files.", Schema(new { magnet = new { type = "string", maxLength = 16384 }, directory = new { type = "string", maxLength = 4096 }, skipBlockedFiles = new { type = "boolean" } }, ["magnet", "directory"]))
     ];
 
     public async Task<object?> ExecuteAsync(string operation, JsonElement args, CancellationToken ct)
