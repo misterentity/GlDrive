@@ -74,7 +74,7 @@ public static class CyberpunkChrome
             var overlay = new Rectangle
             {
                 IsHitTestVisible = false,
-                Opacity = 0.18,
+                Opacity = 0.08,
                 Tag = OverlayNameTag,
             };
             overlay.SetValue(Panel.ZIndexProperty, 9999);

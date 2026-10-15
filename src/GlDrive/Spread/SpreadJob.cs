@@ -31,6 +31,10 @@ public class SpreadJob : IDisposable
     private readonly SkiplistEvaluator _skiplist;
     private readonly SectionBlacklistStore? _blacklist;
     private readonly CancellationTokenSource _cts = new();
+    private readonly BackgroundReadLifetime _migrationReads;
+    private readonly Lock _migrationLock = new();
+    private Task? _sourceMigrationTask;
+    private bool _migrationClosed;
 
     // Split locks by concern to reduce contention
     private readonly Lock _ownershipLock = new();   // _fileOwnership, _fileInfos, _expectedFileCount
@@ -387,6 +391,7 @@ public class SpreadJob : IDisposable
         _knownSourceServerId = knownSourceServerId;
         _knownSourcePath = knownSourcePath;
         _mainPools = mainPools;
+        _migrationReads = new BackgroundReadLifetime(_cts.Token);
 
         foreach (var (serverId, pool) in pools)
         {
@@ -460,7 +465,7 @@ public class SpreadJob : IDisposable
 
     /// <summary>Set by SpreadManager: search connected sites (excluding given ids) for
     /// an alternate source of this release. Returns (serverId, path, category) or null.</summary>
-    public Func<string, IReadOnlyCollection<string>, CancellationToken, Task<(string serverId, string path, string category)?>>? SourceSearch { get; set; }
+    public Func<string, IReadOnlyCollection<string>, CancellationToken, CancellationToken, Task<(string serverId, string path, string category)?>>? SourceSearch { get; set; }
 
     /// <summary>Set by SpreadManager: resolve a server's config from the live registry.
     /// Needed when an alternate source (not an original participant) is spliced in —
@@ -1318,6 +1323,15 @@ public class SpreadJob : IDisposable
         }
         finally
         {
+            // Close admission and capture the actual single-flight task atomically. A second
+            // migration request must never replace an active task with a completed no-op.
+            Task<bool> migrationDrain;
+            lock (_migrationLock)
+            {
+                _migrationClosed = true;
+                migrationDrain = _migrationReads.StopAndDrainAsync(
+                    TimeSpan.FromSeconds(30), _sourceMigrationTask);
+            }
             // The background scan / SFV read outlived the race: they kept borrowing the
             // account's logins out from under the next race and fed ProcessFiles after the
             // cleanup below had judged the dir. Refuse their new borrows and let any read
@@ -1329,6 +1343,9 @@ public class SpreadJob : IDisposable
                     Log.Information("Spread: background read still running 30s after {Release} ended — " +
                         "not waiting further", ReleaseName);
             }
+            if (!await migrationDrain)
+                Log.Information("Spread: source migration still draining 30s after {Release} ended — " +
+                    "late results will be ignored", ReleaseName);
 
             // Let in-flight fire-and-forget transfers settle before the cleanup
             // decision — late deliveries used to land AFTER the wipe judged the
@@ -2205,7 +2222,8 @@ public class SpreadJob : IDisposable
                 data = ms.ToArray();
             }
 
-            ApplySfvInventory(relName, System.Text.Encoding.UTF8.GetString(data));
+            if (!readStop.IsCancellationRequested)
+                ApplySfvInventory(relName, System.Text.Encoding.UTF8.GetString(data));
         }
         catch (Exception ex)
         {
@@ -3027,7 +3045,18 @@ public class SpreadJob : IDisposable
     /// search connected sites for an alternate source and splice it (its spread pool +
     /// scan path) into the running race. Nuke-guarded; single-flighted.
     /// </summary>
-    private async Task HandleSourceMigration(string srcId, CancellationToken ct)
+    private Task HandleSourceMigration(string srcId, CancellationToken ct)
+    {
+        lock (_migrationLock)
+        {
+            if (_migrationClosed || _migrationReads.IsStopped || ct.IsCancellationRequested)
+                return Task.CompletedTask;
+            if (_sourceMigrationTask is { IsCompleted: false }) return _sourceMigrationTask;
+            return _sourceMigrationTask = HandleSourceMigrationCore(srcId, ct, _migrationReads.StopToken);
+        }
+    }
+
+    private async Task HandleSourceMigrationCore(string srcId, CancellationToken ct, CancellationToken readStop)
     {
         if (_isNuked) return;
         if (Interlocked.CompareExchange(ref _failoverInFlight, 1, 0) != 0) return; // already running
@@ -3045,7 +3074,8 @@ public class SpreadJob : IDisposable
             var srcName = _serverConfigs.TryGetValue(srcId, out var sc0) ? sc0.Name : srcId;
 
             // 1. Confirming re-probe: does the source still have its release dir?
-            var oldDirPresent = await SourceStillHasRelease(srcId, srcPath, ct);
+            var oldDirPresent = await SourceStillHasRelease(srcId, srcPath, ct, readStop);
+            readStop.ThrowIfCancellationRequested();
 
             // 1b. glftpd MOVES a finished release between sections (/incoming/x -> /recent/x)
             //     without deleting it. That is a relocation, not a loss: probe the same
@@ -3057,38 +3087,42 @@ public class SpreadJob : IDisposable
             //     Calling that "transient" kept RETRing vanished files until the next scan
             //     saw an empty listing (Take.Charge.of.My.Heart.S01E08, 2026-10-09: 5 dead
             //     transfers, 25s stall).
-            var relocated = await FindRelocatedSourcePath(srcId, srcPath, ct);
-            if (relocated != null)
+            var relocated = await FindRelocatedSourcePath(srcId, srcPath, ct, readStop);
+            lock (_migrationLock)
             {
-                _extraSourcePaths[srcId] = relocated;    // honoured by ScanSites AND ResolveSourcePath
-                _lastSourceScanTime = DateTime.MinValue; // re-LIST the source now, not in 20s
-                _forceScan = true;
-                Log.Warning("Spread: source {Src} relocated the release to {Path}{MidMove} — following ({Release})",
-                    srcName, relocated, oldDirPresent ? " (mid-move: old dir still listed)" : "", ReleaseName);
-                return;
-            }
+                if (_migrationClosed || readStop.IsCancellationRequested) return;
+                if (relocated != null)
+                {
+                    _extraSourcePaths[srcId] = relocated;    // honoured by ScanSites AND ResolveSourcePath
+                    _lastSourceScanTime = DateTime.MinValue; // re-LIST the source now, not in 20s
+                    _forceScan = true;
+                    Log.Warning("Spread: source {Src} relocated the release to {Path}{MidMove} — following ({Release})",
+                        srcName, relocated, oldDirPresent ? " (mid-move: old dir still listed)" : "", ReleaseName);
+                    return;
+                }
 
-            if (oldDirPresent)
-            {
-                Log.Information("Spread: source {Src} 550'd but release dir still present — transient, not migrating",
-                    srcName);
-                return;
-            }
+                if (oldDirPresent)
+                {
+                    Log.Information("Spread: source {Src} 550'd but release dir still present — transient, not migrating ({Release})",
+                        srcName, ReleaseName);
+                    return;
+                }
 
-            // 2. Purge the dead source's ownership (keep it in _sourceServersField so it
-            //    stays excluded from dest-completion eval; FindBestTransfer routes by
-            //    ownership, which is now empty for it).
-            lock (_ownershipLock)
-            {
-                _sourceMigratedAway.Add(srcId);
-                foreach (var owners in _fileOwnership.Values) owners.Remove(srcId);
-                _serverFileCount[srcId] = 0;
-            }
-            Log.Warning("Spread: source {Src} migrated the release away mid-race — searching for an alternate source ({Release})",
-                _serverConfigs.TryGetValue(srcId, out var sc) ? sc.Name : srcId, ReleaseName);
+                // 2. Purge the dead source's ownership (keep it in _sourceServersField so it
+                //    stays excluded from dest-completion eval; FindBestTransfer routes by
+                //    ownership, which is now empty for it).
+                lock (_ownershipLock)
+                {
+                    _sourceMigratedAway.Add(srcId);
+                    foreach (var owners in _fileOwnership.Values) owners.Remove(srcId);
+                    _serverFileCount[srcId] = 0;
+                }
+                Log.Warning("Spread: source {Src} migrated the release away mid-race — searching for an alternate source ({Release})",
+                    _serverConfigs.TryGetValue(srcId, out var sc) ? sc.Name : srcId, ReleaseName);
 
-            // 3. If another known source still has the missing files, just let the loop reroute.
-            if (HasRemainingSourceForMissingFiles()) { _forceScan = true; return; }
+                // 3. If another known source still has the missing files, just let the loop reroute.
+                if (HasRemainingSourceForMissingFiles()) { _forceScan = true; return; }
+            }
 
             // 4. Search connected sites for an alternate source.
             if (SourceSearch == null) return;
@@ -3102,58 +3136,64 @@ public class SpreadJob : IDisposable
                     if (!isSrc) exclude.Add(id);
                 }
 
-            var alt = await SourceSearch(ReleaseName, exclude, ct);
-            if (alt is not { } a)
+            readStop.ThrowIfCancellationRequested();
+            var alt = await SourceSearch(ReleaseName, exclude, ct, readStop);
+            lock (_migrationLock)
             {
-                Log.Information("Spread: no alternate source found for {Release} — affected dests will time out", ReleaseName);
-                return;
-            }
+                if (_migrationClosed || readStop.IsCancellationRequested) return;
+                if (alt is not { } a)
+                {
+                    Log.Information("Spread: no alternate source found for {Release} — affected dests will time out", ReleaseName);
+                    return;
+                }
 
-            // 5. Splice the alternate source in: inject its spread pool into _pools so
-            //    ExecuteTransfer can RETR from it, register its scan path, mark it a source.
-            var live = LivePoolResolver?.Invoke(a.serverId);
-            if (live == null)
-            {
-                Log.Warning("Spread: alternate source {Src} has no live spread pool — cannot use", a.serverId);
-                return;
+                // 5. Splice the alternate source in: inject its spread pool into _pools so
+                //    ExecuteTransfer can RETR from it, register its scan path, mark it a source.
+                var live = LivePoolResolver?.Invoke(a.serverId);
+                if (live == null)
+                {
+                    Log.Warning("Spread: alternate source {Src} has no live spread pool — cannot use", a.serverId);
+                    return;
+                }
+                // _serverConfigs only holds the original participants — ProcessFiles,
+                // TryClaimSlots and FindBestTransfer all index it by serverId, so the alt
+                // source's config MUST be registered before the next scan routes through it.
+                // Added under _ownershipLock (the lock ProcessFiles/FindBestTransfer hold for
+                // their reads) and BEFORE _forceScan, so the next scan sees a complete entry.
+                var altConfig = ServerConfigResolver?.Invoke(a.serverId);
+                if (altConfig == null)
+                {
+                    Log.Warning("Spread: alternate source {Src} has no resolvable config — cannot use", a.serverId);
+                    return;
+                }
+                lock (_ownershipLock)
+                {
+                    if (!_serverConfigs.ContainsKey(a.serverId))
+                        _serverConfigs[a.serverId] = altConfig;
+                }
+                var merged = new Dictionary<string, FtpConnectionPool>(_pools) { [a.serverId] = live };
+                UpdatePools(merged);
+                _extraSourcePaths[a.serverId] = a.path;
+                lock (_ownershipLock) _sourceServersField.Add(a.serverId);
+                // Ensure a progress entry exists so TryClaimSlots can route through the alt
+                // source (it indexes _siteProgress[srcId] directly). Sources don't otherwise
+                // get a progress entry from ProcessFiles.
+                lock (_progressLock)
+                {
+                    if (!_siteProgress.ContainsKey(a.serverId))
+                        _siteProgress[a.serverId] = new SiteProgress
+                        {
+                            ServerId = a.serverId,
+                            ServerName = altConfig.Name,
+                            IsSource = true
+                        };
+                }
+                Log.Information("Spread: alternate source {Src} found at {Path} — resuming {Release}",
+                    _serverConfigs.TryGetValue(a.serverId, out var sc2) ? sc2.Name : a.serverId, a.path, ReleaseName);
+                _forceScan = true; // next scan populates ownership from the new source
             }
-            // _serverConfigs only holds the original participants — ProcessFiles,
-            // TryClaimSlots and FindBestTransfer all index it by serverId, so the alt
-            // source's config MUST be registered before the next scan routes through it.
-            // Added under _ownershipLock (the lock ProcessFiles/FindBestTransfer hold for
-            // their reads) and BEFORE _forceScan, so the next scan sees a complete entry.
-            var altConfig = ServerConfigResolver?.Invoke(a.serverId);
-            if (altConfig == null)
-            {
-                Log.Warning("Spread: alternate source {Src} has no resolvable config — cannot use", a.serverId);
-                return;
-            }
-            lock (_ownershipLock)
-            {
-                if (!_serverConfigs.ContainsKey(a.serverId))
-                    _serverConfigs[a.serverId] = altConfig;
-            }
-            var merged = new Dictionary<string, FtpConnectionPool>(_pools) { [a.serverId] = live };
-            UpdatePools(merged);
-            _extraSourcePaths[a.serverId] = a.path;
-            lock (_ownershipLock) _sourceServersField.Add(a.serverId);
-            // Ensure a progress entry exists so TryClaimSlots can route through the alt
-            // source (it indexes _siteProgress[srcId] directly). Sources don't otherwise
-            // get a progress entry from ProcessFiles.
-            lock (_progressLock)
-            {
-                if (!_siteProgress.ContainsKey(a.serverId))
-                    _siteProgress[a.serverId] = new SiteProgress
-                    {
-                        ServerId = a.serverId,
-                        ServerName = altConfig.Name,
-                        IsSource = true
-                    };
-            }
-            Log.Information("Spread: alternate source {Src} found at {Path} — resuming {Release}",
-                _serverConfigs.TryGetValue(a.serverId, out var sc2) ? sc2.Name : a.serverId, a.path, ReleaseName);
-            _forceScan = true; // next scan populates ownership from the new source
         }
+        catch (OperationCanceledException) when (readStop.IsCancellationRequested || ct.IsCancellationRequested) { }
         catch (Exception ex)
         {
             Log.Debug(ex, "Spread: source-migration handling failed for {Release}", ReleaseName);
@@ -3170,17 +3210,19 @@ public class SpreadJob : IDisposable
 
     /// <summary>DirectoryExists probe of a source's release dir (confirming re-probe).
     /// Probe failure is NOT treated as proof of migration (returns true = assume present).</summary>
-    private async Task<bool> SourceStillHasRelease(string serverId, string path, CancellationToken ct)
+    private async Task<bool> SourceStillHasRelease(string serverId, string path, CancellationToken ct, CancellationToken readStop)
     {
         var pool = ResolveMainPool(serverId) ?? ResolveSpreadPool(serverId);
         if (pool == null) return true;
         try
         {
-            using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct, readStop);
             borrowCts.CancelAfter(TimeSpan.FromSeconds(15));
             await using var conn = await pool.Borrow(borrowCts.Token);
+            readStop.ThrowIfCancellationRequested();
             return await conn.Client.DirectoryExists(path, ct);
         }
+        catch (OperationCanceledException) when (readStop.IsCancellationRequested || ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
             Log.Debug(ex, "Spread: source re-probe failed for {Server} {Path} — assuming present", serverId, path);
@@ -3199,7 +3241,8 @@ public class SpreadJob : IDisposable
     /// <summary>Probe the same site's OTHER candidate release dirs (section paths + the
     /// notification watch path) for a release that 550'd at <paramref name="currentPath"/>.
     /// Returns the first dir that exists, or null. Probe failures are not evidence.</summary>
-    private async Task<string?> FindRelocatedSourcePath(string serverId, string currentPath, CancellationToken ct)
+    private async Task<string?> FindRelocatedSourcePath(string serverId, string currentPath, CancellationToken ct,
+        CancellationToken readStop = default)
     {
         if (!_serverConfigs.TryGetValue(serverId, out var config)) return null;
         var pool = ResolveMainPool(serverId) ?? ResolveSpreadPool(serverId);
@@ -3214,15 +3257,17 @@ public class SpreadJob : IDisposable
             {
                 try
                 {
+                    readStop.ThrowIfCancellationRequested();
                     if (conn == null)
                     {
-                        using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                        using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct, readStop);
                         borrowCts.CancelAfter(TimeSpan.FromSeconds(15));
                         conn = await pool.Borrow(borrowCts.Token);
                     }
+                    readStop.ThrowIfCancellationRequested();
                     if (await conn.Client.DirectoryExists(candidate, ct)) return candidate;
                 }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested || readStop.IsCancellationRequested) { throw; }
                 catch (Exception ex)
                 {
                     Log.Debug(ex, "Spread: relocation probe failed on {Server} at {Path}", config.Name, candidate);

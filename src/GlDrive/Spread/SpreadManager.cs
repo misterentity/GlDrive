@@ -547,9 +547,9 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
         };
         job.LivePoolResolver = id => { lock (_lock) { _spreadPools.TryGetValue(id, out var p); return p; } };
         job.LiveMainPoolResolver = _getMainPool;
-        job.SourceSearch = async (release, exclude, ct) =>
+        job.SourceSearch = async (release, exclude, ct, stopToken) =>
         {
-            var r = await SearchReleaseOnServers(release, exclude, ct);
+            var r = await SearchReleaseOnServers(release, exclude, ct, stopToken);
             return r == null ? null : (r.ServerId, r.RemotePath, r.Category);
         };
         job.ServerConfigResolver = id => _config.Servers.FirstOrDefault(s => s.Id == id);
@@ -1464,9 +1464,15 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
     /// dropped. Returns null when nothing usable is found. Reused by RequestFiller and
     /// by SpreadJob's mid-race source-migration failover.
     /// </summary>
-    public async Task<SearchResult?> SearchReleaseOnServers(
+    public Task<SearchResult?> SearchReleaseOnServers(
         string release, IReadOnlyCollection<string> excludeIds, CancellationToken ct)
+        => SearchReleaseOnServers(release, excludeIds, ct, CancellationToken.None);
+
+    public async Task<SearchResult?> SearchReleaseOnServers(
+        string release, IReadOnlyCollection<string> excludeIds, CancellationToken ct, CancellationToken stopToken)
     {
+        ct.ThrowIfCancellationRequested();
+        stopToken.ThrowIfCancellationRequested();
         if (_getSearchService == null) return null;
         var candidates = GetConnectedServerIds()
             .Where(id => !excludeIds.Contains(id))
@@ -1481,9 +1487,11 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
             if (svc == null) return (SearchResult?)null;
             try
             {
+                stopToken.ThrowIfCancellationRequested();
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 cts.CancelAfter(timeout);
-                var search = await svc.SearchDetailed(release, null, cts.Token);
+                var search = await svc.SearchDetailed(release, null, cts.Token, stopToken);
+                stopToken.ThrowIfCancellationRequested();
                 if (search.IsPartial)
                     Log.Information("Alternate-source search incomplete on {Server}: {Count} matches, {Failed} failed listings, timed out={TimedOut}, truncated={Truncated}",
                         id, search.Results.Count, search.FailedListings, search.TimedOut, search.Truncated);
@@ -1493,6 +1501,10 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
                 exact.ServerId = id; // ensure attribution
                 return exact;
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested || stopToken.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 Log.Debug(ex, "Alternate-source search failed on {Server}", id);
@@ -1501,6 +1513,8 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
         });
 
         var found = (await Task.WhenAll(searches)).Where(r => r != null).Select(r => r!).ToList();
+        ct.ThrowIfCancellationRequested();
+        stopToken.ThrowIfCancellationRequested();
         if (found.Count == 0) return null;
 
         // Filter by rules + blacklist; prefer the candidate with the most files.

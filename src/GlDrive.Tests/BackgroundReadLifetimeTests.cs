@@ -124,7 +124,7 @@ public class BackgroundReadLifetimeTests
         var settle = run.IndexOf("Let in-flight fire-and-forget transfers settle", StringComparison.Ordinal);
         Assert.True(settle >= 0, "RunAsync's transfer drain moved — re-anchor this test");
         var fin = run[run.LastIndexOf("finally", settle, StringComparison.Ordinal)..];
-        var drain = fin.IndexOf("StopAndDrainAsync(", StringComparison.Ordinal);
+        var drain = fin.IndexOf("backgroundReads.StopAndDrainAsync(", StringComparison.Ordinal);
         Assert.True(drain >= 0, "RunAsync's finally no longer drains background reads");
         Assert.Contains("_backgroundScan, _sfvParseTask)", fin[drain..(drain + 120)]);
         // ...before the dir cleanup and history consume ownership.

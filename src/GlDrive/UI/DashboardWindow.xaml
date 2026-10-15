@@ -8,12 +8,19 @@
         MinWidth="1200" MinHeight="700"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource BackgroundBrush}"
-        Foreground="{DynamicResource ForegroundBrush}">
+        Foreground="{DynamicResource ForegroundBrush}"
+        FontFamily="{DynamicResource MonoFontFamily}">
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
         <ui:ImageUrlConverter x:Key="ImageUrlConverter"/>
         <ui:JoinListConverter x:Key="JoinList"/>
         <ui:HasSelectionConverter x:Key="HasSelectionConverter"/>
+        <Style x:Key="OptionalConsoleTextStyle" TargetType="TextBlock">
+            <Style.Triggers>
+                <Trigger Property="Text" Value=""><Setter Property="Visibility" Value="Collapsed"/></Trigger>
+                <Trigger Property="Text" Value="{x:Null}"><Setter Property="Visibility" Value="Collapsed"/></Trigger>
+            </Style.Triggers>
+        </Style>
         <Style x:Key="TruncatedCellText" TargetType="TextBlock">
             <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
@@ -35,7 +42,7 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="RadioButton">
-                        <Border x:Name="Bd" Background="Transparent" CornerRadius="4"
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="0"
                                 Padding="{TemplateBinding Padding}" Cursor="Hand"
                                 BorderThickness="1" BorderBrush="Transparent">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
@@ -93,36 +100,28 @@
                 <Border Grid.Column="0" Background="{DynamicResource TopBarLogoBrush}"
                         BorderBrush="{DynamicResource LineBrush}" BorderThickness="0,0,1,0"
                         Padding="16,0">
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <Grid Width="22" Height="22" Margin="0,0,10,0">
-                            <Path Stroke="{DynamicResource AccentBrush}" StrokeThickness="1.5"
-                                  Effect="{DynamicResource SignatureGlowEffect}"
-                                  Data="M 2,12 L 12,2 L 22,12 L 12,22 Z"/>
-                            <Path Stroke="{DynamicResource AccentBrush}" StrokeThickness="1"
-                                  Fill="#6600E5FF"
-                                  Data="M 7,12 L 12,7 L 17,12 L 12,17 Z"/>
-                            <Ellipse Width="3" Height="3" Fill="{DynamicResource Signature2Brush}"
-                                     HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Grid>
-                        <StackPanel VerticalAlignment="Center">
-                            <TextBlock Text="GLDRIVE" Style="{DynamicResource DisplayTextGlowStyle}"
-                                       FontSize="16" Foreground="{DynamicResource AccentBrush}"
-                                       LineHeight="14"/>
-                            <TextBlock Text="{Binding VersionTagline}" Style="{DynamicResource MicroTextStyle}"
-                                       FontSize="12" Foreground="{DynamicResource TextFaintBrush}"
-                                       Margin="0,2,0,0"/>
+                    <Grid VerticalAlignment="Center">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="26"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock Text="&gt;_" FontFamily="{DynamicResource MonoFontFamily}" FontSize="17" FontWeight="Bold"
+                                   Foreground="{DynamicResource Signature2Brush}" VerticalAlignment="Top" Margin="0,2,0,0"/>
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Text="GLDRIVE" FontFamily="{DynamicResource MonoFontFamily}" FontSize="16" FontWeight="Bold"
+                                       Foreground="{DynamicResource ForegroundBrush}"/>
+                            <TextBlock Text="{Binding VersionTagline}" ToolTip="{Binding VersionTagline}"
+                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                                       Foreground="{DynamicResource TextFaintBrush}" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
                         </StackPanel>
-                    </StackPanel>
+                    </Grid>
                 </Border>
 
-                <StackPanel Grid.Column="1" Margin="20,0" VerticalAlignment="Center">
-                    <TextBlock x:Name="CurrentSectionText" Text="Overview" FontSize="18" FontWeight="SemiBold"
+                <StackPanel Grid.Column="1" Margin="16,0" VerticalAlignment="Center">
+                    <TextBlock x:Name="CurrentSectionText" Text="Overview" FontFamily="{DynamicResource MonoFontFamily}" FontSize="17" FontWeight="SemiBold"
                                Foreground="{DynamicResource ForegroundBrush}"/>
                     <TextBlock x:Name="CurrentSectionHint" Text="Connections, transfers, and app activity at a glance."
                                FontSize="12" Foreground="{DynamicResource ForegroundDimBrush}" TextTrimming="CharacterEllipsis"/>
                 </StackPanel>
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,16,0">
-                    <TextBlock x:Name="UtcClockText" Text="--:--:-- UTC" FontSize="12"
+                    <TextBlock x:Name="UtcClockText" Text="--:--:-- UTC" FontFamily="{DynamicResource MonoFontFamily}" FontSize="11"
                                Foreground="{DynamicResource ForegroundDimBrush}" VerticalAlignment="Center" Margin="0,0,16,0"/>
                     <Button Content="Shortcuts" Click="Shortcuts_Click" Padding="12,7" Margin="0,0,8,0"
                             Style="{DynamicResource SecondaryButton}" ToolTip="Keyboard shortcuts (?)"/>
@@ -135,10 +134,10 @@
         <TabControl x:Name="MainTabControl" Grid.Row="1" Padding="0" Style="{DynamicResource SidebarTabControlStyle}">
 
             <!-- ===== DASHBOARD group ===== -->
-            <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,12,14,4">
+            <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,5,14,2">
                 <TabItem.Header>
-                    <TextBlock Text="&#x25B8; DASHBOARD" FontFamily="{DynamicResource MonoFontFamily}"
-                               FontSize="12" Foreground="{DynamicResource TextFaintBrush}" Margin="0,8,0,0"/>
+                    <TextBlock Text="// DASHBOARD" FontFamily="{DynamicResource MonoFontFamily}"
+                               FontSize="10" Foreground="{DynamicResource TextFaintBrush}" Margin="0,3,0,0"/>
                 </TabItem.Header>
             </TabItem>
 
@@ -161,11 +160,7 @@
                         <UniformGrid Columns="4">
                             <Border Style="{DynamicResource StatCardStyle}">
                                 <Grid>
-                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
-                                    <StackPanel Margin="4">
+                                    <StackPanel Margin="0">
                                         <TextBlock Text="CONNECTED SERVERS" Style="{DynamicResource StatCardLabelStyle}"/>
                                         <StackPanel Orientation="Horizontal">
                                             <TextBlock Text="{Binding MountedServerCount}" Style="{DynamicResource StatCardValueStyle}"/>
@@ -177,11 +172,7 @@
                             </Border>
                             <Border Style="{DynamicResource StatCardStyle}">
                                 <Grid>
-                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
-                                    <StackPanel Margin="4">
+                                    <StackPanel Margin="0">
                                         <TextBlock Text="ACTIVE DOWNLOADS" Style="{DynamicResource StatCardLabelStyle}"/>
                                         <TextBlock Text="{Binding ActiveDownloadCount, FallbackValue=0}" Style="{DynamicResource StatCardValueStyle}"/>
                                     </StackPanel>
@@ -189,141 +180,71 @@
                             </Border>
                             <Border Style="{DynamicResource StatCardStyle}">
                                 <Grid>
-                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
-                                    <StackPanel Margin="4">
+                                    <StackPanel Margin="0">
                                         <TextBlock Text="QUEUED" Style="{DynamicResource StatCardLabelStyle}"/>
-                                        <TextBlock Text="{Binding QueuedDownloadCount, FallbackValue=0}" Style="{DynamicResource StatCardValueStyle}"/>
+                                        <TextBlock Text="{Binding QueuedDownloadCount, FallbackValue=0}" Style="{DynamicResource StatCardValueStyle}" Foreground="{DynamicResource WarnBrush}"/>
                                     </StackPanel>
                                 </Grid>
                             </Border>
                             <Border Style="{DynamicResource StatCardStyle}">
                                 <Grid>
-                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
-                                    <StackPanel Margin="4">
+                                    <StackPanel Margin="0">
                                         <TextBlock Text="COMPLETED" Style="{DynamicResource StatCardLabelStyle}"/>
-                                        <TextBlock Text="{Binding CompletedTodayCount, FallbackValue=0}" Style="{DynamicResource StatCardValueStyle}"/>
+                                        <TextBlock Text="{Binding CompletedTodayCount, FallbackValue=0}" Style="{DynamicResource StatCardValueStyle}" Foreground="{DynamicResource GoodBrush}"/>
                                     </StackPanel>
                                 </Grid>
                             </Border>
                         </UniformGrid>
                     </Border>
-                    <!-- Main 2x2 body: volumes (TL), throughput (TR), telemetry (BL), ops log (BR) -->
+                    <!-- Connection inventory and throughput sit above the compact telemetry strip. -->
                     <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="2*"/>
-                            <ColumnDefinition Width="3*"/>
-                        </Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="3*"/>
-                            <RowDefinition Height="2*"/>
-                        </Grid.RowDefinitions>
-
-                        <!-- Top-left: Mounted Volumes -->
-                        <Border Grid.Row="0" Grid.Column="0" Style="{DynamicResource HudPanelStyle}" Margin="0,0,6,6">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="3*"/></Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions><RowDefinition Height="220"/><RowDefinition Height="76"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                        <Border Grid.Row="0" Grid.Column="0" Style="{DynamicResource HudPanelStyle}" Margin="0,0,4,8">
                             <DockPanel>
                                 <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                    <TextBlock Text="YOUR SERVERS" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                    <TextBlock Text="SERVER CONNECTIONS" Style="{DynamicResource SectionHeaderTextStyle}"/>
                                 </Border>
-                                <Grid>
-                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
-                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                        <ItemsControl ItemsSource="{Binding MountedServerStatus}" Margin="14">
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate>
-                                                    <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource LineBrush}"
-                                                            BorderThickness="1" Padding="14" Margin="0,0,0,12">
+                                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                    <ItemsControl ItemsSource="{Binding MountedServerStatus}" Margin="12">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border BorderBrush="{DynamicResource LineBrush}" BorderThickness="0,0,0,1" Padding="0,0,0,10" Margin="0,0,0,10">
+                                                    <StackPanel>
+                                                        <DockPanel>
+                                                            <Border DockPanel.Dock="Right" Style="{DynamicResource ServerStatusTagStyle}" Margin="8,0,0,0">
+                                                                <TextBlock Text="{Binding SiteTag}" Style="{DynamicResource ServerStatusTextStyle}"/>
+                                                            </Border>
+                                                            <TextBlock Text="{Binding Name}" FontFamily="{DynamicResource MonoFontFamily}" FontSize="14" FontWeight="SemiBold"
+                                                                       Foreground="{DynamicResource ForegroundBrush}" TextTrimming="CharacterEllipsis"/>
+                                                        </DockPanel>
+                                                        <TextBlock Text="{Binding Host}" Style="{DynamicResource MicroTextStyle}" Margin="0,4,0,8"/>
                                                         <Grid>
-                                                            <Grid.ColumnDefinitions>
-                                                                <ColumnDefinition Width="100"/>
-                                                                <ColumnDefinition Width="*"/>
-                                                            </Grid.ColumnDefinitions>
-                                                            <!-- Large filled-arc capacity disc -->
-                                                            <Grid Grid.Column="0" Width="86" Height="86" VerticalAlignment="Center">
-                                                                <Ellipse Width="86" Height="86" Stroke="{DynamicResource LineDimBrush}" StrokeThickness="2"/>
-                                                                <Ellipse Width="86" Height="86" Stroke="{DynamicResource AccentBrush}" StrokeThickness="3"
-                                                                         StrokeDashArray="2,1" RenderTransformOrigin="0.5,0.5">
-                                                                    <Ellipse.Effect>
-                                                                        <DropShadowEffect Color="#00E5FF" BlurRadius="10" ShadowDepth="0" Opacity="0.6"/>
-                                                                    </Ellipse.Effect>
-                                                                    <Ellipse.RenderTransform>
-                                                                        <RotateTransform Angle="0"/>
-                                                                    </Ellipse.RenderTransform>
-                                                                    <Ellipse.Triggers>
-                                                                        <EventTrigger RoutedEvent="FrameworkElement.Loaded">
-                                                                            <BeginStoryboard>
-                                                                                <Storyboard>
-                                                                                    <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
-                                                                                                     From="0" To="360" Duration="0:0:14" RepeatBehavior="Forever"/>
-                                                                                </Storyboard>
-                                                                            </BeginStoryboard>
-                                                                        </EventTrigger>
-                                                                    </Ellipse.Triggers>
-                                                                </Ellipse>
-                                                                <Ellipse Width="64" Height="64" Stroke="{DynamicResource LineDimBrush}" StrokeThickness="1"/>
-                                                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                                                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                                                                        <TextBlock Text="{Binding CapacityPercent, StringFormat=N0}" Style="{DynamicResource DisplayTextStyle}"
-                                                                                   HorizontalAlignment="Center" FontSize="20"/>
-                                                                        <TextBlock Text="%" Style="{DynamicResource DisplayTextStyle}" FontSize="14" VerticalAlignment="Bottom" Margin="2,0,0,3"/>
-                                                                    </StackPanel>
-                                                                    <TextBlock Text="POOL" Style="{DynamicResource MicroTextStyle}" HorizontalAlignment="Center"/>
-                                                                </StackPanel>
-                                                            </Grid>
-                                                            <DockPanel Grid.Column="1" Margin="16,0,0,0" LastChildFill="True">
-                                                                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal">
-                                                                    <TextBlock Text="{Binding Name}" Style="{DynamicResource DisplayTextStyle}" FontSize="15"/>
-                                                                    <Border Margin="10,0,0,0" Style="{DynamicResource ServerStatusTagStyle}" VerticalAlignment="Center">
-                                                                        <TextBlock Text="{Binding SiteTag}" Style="{DynamicResource ServerStatusTextStyle}"/>
-                                                                    </Border>
-                                                                </StackPanel>
-                                                                <TextBlock DockPanel.Dock="Top" Text="{Binding Host}" Style="{DynamicResource MicroTextStyle}" Margin="0,2,0,8"/>
-                                                                <ProgressBar DockPanel.Dock="Top" Height="6" Background="{DynamicResource SurfaceLightBrush}" Margin="0,0,0,6" Minimum="0" Maximum="100" Value="{Binding CapacityPercent, Mode=OneWay}" Foreground="{DynamicResource AccentBrush}" AutomationProperties.Name="Connection usage"/>
-                                                                <Grid DockPanel.Dock="Top">
-                                                                    <Grid.ColumnDefinitions>
-                                                                        <ColumnDefinition Width="*"/>
-                                                                        <ColumnDefinition Width="Auto"/>
-                                                                    </Grid.ColumnDefinitions>
-                                                                    <TextBlock Grid.Column="0" FontFamily="{DynamicResource MonoFontFamily}" FontSize="12">
-                                                                        <Run Text="{Binding CapacityUsedDisplay}" Foreground="{DynamicResource ForegroundBrush}"/>
-                                                                        <Run Text=" / " Foreground="{DynamicResource TextFaintBrush}"/>
-                                                                        <Run Text="{Binding CapacityTotalDisplay}" Foreground="{DynamicResource TextDimBrush}"/>
-                                                                    </TextBlock>
-                                                                    <Border Grid.Column="1" Style="{DynamicResource TagStyle}">
-                                                                        <TextBlock Text="{Binding StatusLine}" Style="{DynamicResource TagTextStyle}"/>
-                                                                    </Border>
-                                                                </Grid>
-                                                            </DockPanel>
+                                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                                            <TextBlock FontFamily="{DynamicResource MonoFontFamily}" FontSize="11" Foreground="{DynamicResource TextDimBrush}">
+                                                                <Run Text="POOL "/><Run Text="{Binding CapacityUsedDisplay}"/><Run Text=" / "/><Run Text="{Binding CapacityTotalDisplay}"/>
+                                                                <Run Text="    "/><Run Text="{Binding CapacityPercent, StringFormat=N0}"/><Run Text="%"/>
+                                                            </TextBlock>
+                                                            <TextBlock Grid.Column="1" Text="{Binding StatusLine}" Style="{DynamicResource MicroTextStyle}" FontSize="10"/>
                                                         </Grid>
-                                                    </Border>
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
-                                    </ScrollViewer>
-                                </Grid>
+                                                        <ProgressBar Height="4" Margin="0,6,0,0" Minimum="0" Maximum="100" Value="{Binding CapacityPercent, Mode=OneWay}"
+                                                                     Foreground="{DynamicResource AccentBrush}" Background="{DynamicResource SurfaceLightBrush}" AutomationProperties.Name="Connection usage"/>
+                                                    </StackPanel>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
                             </DockPanel>
                         </Border>
-
                         <!-- Top-right: Throughput -->
-                        <Border Grid.Row="0" Grid.Column="1" Style="{DynamicResource HudPanelStyle}" Margin="6,0,0,6">
+                        <Border Grid.Row="0" Grid.Column="1" Style="{DynamicResource HudPanelStyle}" Margin="4,0,0,8">
                             <DockPanel>
                                 <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
                                     <TextBlock Text="THROUGHPUT" Style="{DynamicResource SectionHeaderTextStyle}"/>
                                 </Border>
                                 <Grid>
-                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
-                                    <DockPanel Margin="14">
+                                    <DockPanel Margin="12">
                                         <!-- Rx / Tx numbers -->
                                         <Grid DockPanel.Dock="Top" Margin="0,0,0,10">
                                             <Grid.ColumnDefinitions>
@@ -333,18 +254,18 @@
                                             <StackPanel Grid.Column="0">
                                                 <TextBlock Text="DOWNLOAD SPEED" Style="{DynamicResource MicroTextStyle}"/>
                                                 <TextBlock Text="{Binding RxRateDisplay}" Style="{DynamicResource DisplayTextStyle}"
-                                                           FontSize="24" Foreground="{DynamicResource AccentBrush}"/>
+                                                           FontSize="22" Foreground="{DynamicResource AccentBrush}"/>
                                             </StackPanel>
                                             <StackPanel Grid.Column="1">
                                                 <TextBlock Text="FXP TRANSFER SPEED" Style="{DynamicResource MicroTextStyle}"/>
                                                 <TextBlock Text="{Binding TxRateDisplay}" Style="{DynamicResource DisplayTextStyle}"
-                                                           FontSize="24" Foreground="{DynamicResource Signature2Brush}"/>
+                                                           FontSize="22" Foreground="{DynamicResource Signature2Brush}"/>
                                             </StackPanel>
                                         </Grid>
                                         <TextBlock DockPanel.Dock="Bottom" Text="Downloads · last 2 minutes · 0–50 MiB/s" FontSize="12"
                                                    Margin="0,6,0,0" Foreground="{DynamicResource ForegroundDimBrush}"/>
                                         <!-- Area chart -->
-                                        <Border Height="120" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1">
+                                        <Border Height="96" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1">
                                             <Border.Resources>
                                                 <DrawingBrush x:Key="ChartGridBrush" TileMode="Tile" Stretch="None"
                                                               Viewport="0,0,24,12" ViewportUnits="Absolute">
@@ -366,7 +287,7 @@
                                                 </DrawingBrush>
                                             </Border.Resources>
                                             <Grid>
-                                                <Rectangle Fill="{StaticResource ChartGridBrush}" Opacity="0.6"/>
+                                                <Rectangle Fill="{StaticResource ChartGridBrush}" Opacity="0.28"/>
                                                 <Viewbox Stretch="Fill" Margin="4" ClipToBounds="True">
                                                     <Canvas Width="60" Height="42">
                                                         <Polyline Points="{Binding ThroughputPoints}" Stroke="{DynamicResource AccentBrush}"
@@ -380,105 +301,47 @@
                             </DockPanel>
                         </Border>
 
-                        <!-- Bottom-left: Kernel Telemetry -->
-                        <Border Grid.Row="1" Grid.Column="0" Style="{DynamicResource HudPanelStyle}" Margin="0,6,6,0">
-                            <DockPanel>
-                                <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                    <TextBlock Text="APP HEALTH" Style="{DynamicResource SectionHeaderTextStyle}"/>
-                                </Border>
-                                <Grid>
-                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
-                                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                                    <StackPanel Margin="14">
-                                        <!-- CPU row -->
-                                        <Grid Margin="0,0,0,10">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="80"/>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="0" Text="CPU" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
-                                            <ProgressBar Grid.Column="1" Height="8" Background="{DynamicResource SurfaceLightBrush}" VerticalAlignment="Center" Minimum="0" Maximum="100" Value="{Binding TelemetryCpuPercent, Mode=OneWay}" Foreground="{DynamicResource AccentBrush}" AutomationProperties.Name="CPU usage"/>
-                                            <TextBlock Grid.Column="2" Margin="8,0,0,0" VerticalAlignment="Center"
-                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
-                                                       Foreground="{DynamicResource ForegroundBrush}">
-                                                <Run Text="{Binding TelemetryCpuPercent, StringFormat=N0}"/><Run Text="%"/>
-                                            </TextBlock>
-                                        </Grid>
-                                        <!-- MEM row (text only) -->
-                                        <Grid Margin="0,0,0,10">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="80"/>
-                                                <ColumnDefinition Width="*"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="0" Text="Memory" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
-                                            <TextBlock Grid.Column="1" VerticalAlignment="Center"
-                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
-                                                       Foreground="{DynamicResource ForegroundBrush}">
-                                                <Run Text="{Binding TelemetryMemoryMb, StringFormat=N0}"/><Run Text=" MB"/>
-                                            </TextBlock>
-                                        </Grid>
-                                        <!-- POOL row -->
-                                        <Grid Margin="0,0,0,14">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="80"/>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="0" Text="Connections" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
-                                            <ProgressBar Grid.Column="1" Height="8" Background="{DynamicResource SurfaceLightBrush}" VerticalAlignment="Center" Minimum="0" Maximum="100" Value="{Binding TelemetryPoolUtilization, Mode=OneWay}" Foreground="{DynamicResource Signature2Brush}" AutomationProperties.Name="Connection usage"/>
-                                            <TextBlock Grid.Column="2" Margin="8,0,0,0" VerticalAlignment="Center"
-                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
-                                                       Foreground="{DynamicResource ForegroundBrush}">
-                                                <Run Text="{Binding TelemetryPoolUtilization, StringFormat=N0}"/><Run Text="%"/>
-                                            </TextBlock>
-                                        </Grid>
-                                        <!-- Uptime + threads -->
-                                        <Grid Margin="0,4,0,0">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="*"/>
-                                            </Grid.ColumnDefinitions>
-                                            <StackPanel Grid.Column="0">
-                                                <TextBlock Text="UPTIME" Style="{DynamicResource MicroTextStyle}"/>
-                                                <TextBlock Text="{Binding TelemetryUptime}"
-                                                           FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
-                                                           Foreground="{DynamicResource ForegroundBrush}"/>
-                                            </StackPanel>
-                                            <StackPanel Grid.Column="1">
-                                                <TextBlock Text="THREADS" Style="{DynamicResource MicroTextStyle}"/>
-                                                <TextBlock Text="{Binding TelemetryThreadCount}"
-                                                           FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
-                                                           Foreground="{DynamicResource ForegroundBrush}"/>
-                                            </StackPanel>
-                                        </Grid>
-                                    </StackPanel>
-                                    </ScrollViewer>
-                                </Grid>
-                            </DockPanel>
+                        <Border Grid.Row="1" Grid.ColumnSpan="2" Style="{DynamicResource HudPanelStyle}" Padding="12,10">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Margin="0,0,16,0">
+                                    <DockPanel><TextBlock Text="CPU" Style="{DynamicResource MicroTextStyle}"/><TextBlock HorizontalAlignment="Right" FontFamily="{DynamicResource MonoFontFamily}" FontSize="13"><Run Text="{Binding TelemetryCpuPercent, StringFormat=N0}"/><Run Text="%"/></TextBlock></DockPanel>
+                                    <ProgressBar Height="4" Margin="0,12,0,0" Minimum="0" Maximum="100" Value="{Binding TelemetryCpuPercent, Mode=OneWay}" Foreground="{DynamicResource AccentBrush}" Background="{DynamicResource SurfaceLightBrush}" AutomationProperties.Name="CPU usage"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Margin="0,0,16,0">
+                                    <TextBlock Text="MEMORY" Style="{DynamicResource MicroTextStyle}"/>
+                                    <TextBlock FontFamily="{DynamicResource MonoFontFamily}" FontSize="16" Margin="0,5,0,0"><Run Text="{Binding TelemetryMemoryMb, StringFormat=N0}"/><Run Text=" MB"/></TextBlock>
+                                </StackPanel>
+                                <StackPanel Grid.Column="2" Margin="0,0,16,0">
+                                    <DockPanel><TextBlock Text="CONNECTIONS" Style="{DynamicResource MicroTextStyle}"/><TextBlock HorizontalAlignment="Right" FontFamily="{DynamicResource MonoFontFamily}" FontSize="13"><Run Text="{Binding TelemetryPoolUtilization, StringFormat=N0}"/><Run Text="%"/></TextBlock></DockPanel>
+                                    <ProgressBar Height="4" Margin="0,12,0,0" Minimum="0" Maximum="100" Value="{Binding TelemetryPoolUtilization, Mode=OneWay}" Foreground="{DynamicResource Signature2Brush}" Background="{DynamicResource SurfaceLightBrush}" AutomationProperties.Name="Connection usage"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="3" Margin="0,0,16,0">
+                                    <TextBlock Text="UPTIME" Style="{DynamicResource MicroTextStyle}"/>
+                                    <TextBlock Text="{Binding TelemetryUptime}" FontFamily="{DynamicResource MonoFontFamily}" FontSize="16" Margin="0,5,0,0"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="4">
+                                    <TextBlock Text="THREADS" Style="{DynamicResource MicroTextStyle}"/>
+                                    <TextBlock Text="{Binding TelemetryThreadCount}" FontFamily="{DynamicResource MonoFontFamily}" FontSize="16" Margin="0,5,0,0"/>
+                                </StackPanel>
+                            </Grid>
                         </Border>
-
                         <!-- Bottom-right: Operations Log -->
-                        <Border Grid.Row="1" Grid.Column="1" Style="{DynamicResource HudPanelStyle}" Margin="6,6,0,0">
+                        <Border Grid.Row="2" Grid.ColumnSpan="2" Style="{DynamicResource HudPanelStyle}" Margin="0,8,0,0">
                             <DockPanel>
                                 <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                    <TextBlock Text="OPERATIONS LOG" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                    <TextBlock Text="OPERATIONS LOG / RECENT EVENTS" Style="{DynamicResource SectionHeaderTextStyle}"/>
                                 </Border>
                                 <Grid>
-                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                                     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
                                         <TextBlock Text="{Binding OperationsLogPreview}"
                                                    FontFamily="{DynamicResource MonoFontFamily}"
                                                    FontSize="12"
                                                    Foreground="{DynamicResource TextDimBrush}"
                                                    TextWrapping="NoWrap"
-                                                   Margin="14"/>
+                                                   Margin="12"/>
                                     </ScrollViewer>
                                 </Grid>
                             </DockPanel>
@@ -503,7 +366,7 @@
                 <DockPanel Margin="12">
                     <!-- Toolbar (preserved as-is) -->
                     <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
-                            CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
+                            CornerRadius="0" Padding="8,6" Margin="0,0,0,10">
                         <WrapPanel ItemHeight="40">
                             <Button Content="Download" Command="{Binding DownloadNotificationCommand}"
                                     Padding="12,6" Margin="0,0,6,0" Style="{DynamicResource PrimaryButton}" IsEnabled="{Binding SelectedItem, ElementName=NotificationsGrid, Converter={StaticResource HasSelectionConverter}}"/>
@@ -533,10 +396,6 @@
                                 <TextBlock Text="DETAIL" Style="{DynamicResource SectionHeaderTextStyle}"/>
                             </Border>
                             <Grid>
-                                <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                                 <DockPanel Margin="14">
                                     <Border DockPanel.Dock="Left" Width="95" Margin="0,0,16,0"
                                             CornerRadius="4" ClipToBounds="True"
@@ -579,10 +438,6 @@
                                 </DockPanel>
                             </Border>
                             <Grid>
-                                <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                                 <Grid>
 <DataGrid ItemsSource="{Binding NotificationItems}"
                                           SelectedItem="{Binding SelectedNotificationItem}"
@@ -654,13 +509,9 @@
                             <TextBlock Text="WISHLIST" Style="{DynamicResource SectionHeaderTextStyle}"/>
                         </Border>
                         <Grid>
-                            <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                            <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                            <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                            <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                             <DockPanel Margin="12">
                     <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
-                            CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
+                            CornerRadius="0" Padding="8,6" Margin="0,0,0,10">
                         <WrapPanel ItemHeight="40">
                             <Button Content="+ Movie" Command="{Binding AddMovieCommand}"
                                     Padding="12,6" Margin="0,0,6,0" Style="{DynamicResource PrimaryButton}"/>
@@ -773,11 +624,7 @@
                         <UniformGrid Columns="4">
                             <Border Style="{DynamicResource StatCardStyle}">
                                 <Grid>
-                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
-                                    <StackPanel Margin="4">
+                                    <StackPanel Margin="0">
                                         <TextBlock Text="ACTIVE" Style="{DynamicResource StatCardLabelStyle}"/>
                                         <TextBlock Text="{Binding ActiveDownloadCount, FallbackValue=—}" Style="{DynamicResource StatCardValueStyle}"/>
                                     </StackPanel>
@@ -785,44 +632,32 @@
                             </Border>
                             <Border Style="{DynamicResource StatCardStyle}">
                                 <Grid>
-                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
-                                    <StackPanel Margin="4">
+                                    <StackPanel Margin="0">
                                         <TextBlock Text="QUEUED" Style="{DynamicResource StatCardLabelStyle}"/>
-                                        <TextBlock Text="{Binding QueuedDownloadCount, FallbackValue=—}" Style="{DynamicResource StatCardValueStyle}"/>
+                                        <TextBlock Text="{Binding QueuedDownloadCount, FallbackValue=—}" Style="{DynamicResource StatCardValueStyle}" Foreground="{DynamicResource WarnBrush}"/>
                                     </StackPanel>
                                 </Grid>
                             </Border>
                             <Border Style="{DynamicResource StatCardStyle}">
                                 <Grid>
-                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
-                                    <StackPanel Margin="4">
+                                    <StackPanel Margin="0">
                                         <TextBlock Text="NEEDS ATTENTION" Style="{DynamicResource StatCardLabelStyle}"/>
-                                        <TextBlock Text="{Binding FailedDownloadCount, FallbackValue=—}" Style="{DynamicResource StatCardValueStyle}"/>
+                                        <TextBlock Text="{Binding FailedDownloadCount, FallbackValue=—}" Style="{DynamicResource StatCardValueStyle}" Foreground="{DynamicResource BadBrush}"/>
                                     </StackPanel>
                                 </Grid>
                             </Border>
                             <Border Style="{DynamicResource StatCardStyle}">
                                 <Grid>
-                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
-                                    <StackPanel Margin="4">
+                                    <StackPanel Margin="0">
                                         <TextBlock Text="COMPLETED" Style="{DynamicResource StatCardLabelStyle}"/>
-                                        <TextBlock Text="{Binding CompletedTodayCount, FallbackValue=—}" Style="{DynamicResource StatCardValueStyle}"/>
+                                        <TextBlock Text="{Binding CompletedTodayCount, FallbackValue=—}" Style="{DynamicResource StatCardValueStyle}" Foreground="{DynamicResource GoodBrush}"/>
                                     </StackPanel>
                                 </Grid>
                             </Border>
                         </UniformGrid>
                     </Border>
                     <Border DockPanel.Dock="Top" Margin="0,0,0,8" Padding="10,6"
-                            Background="{DynamicResource SurfaceBrush}" CornerRadius="4"
+                            Background="{DynamicResource SurfaceBrush}" CornerRadius="0"
                             Visibility="{Binding HasActiveDownload, Converter={StaticResource BoolToVisibility}}">
                         <TextBlock Text="{Binding ActiveDownloadSummary}" FontSize="12"
                                    Foreground="{DynamicResource ForegroundBrush}" TextWrapping="Wrap"/>
@@ -840,13 +675,9 @@
                                 <TextBlock Text="TRANSFER QUEUE" Style="{DynamicResource SectionHeaderTextStyle}"/>
                             </Border>
                             <Grid>
-                                <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                                 <DockPanel>
                                     <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
-                                            CornerRadius="6" Padding="8,6" Margin="0,0,0,0">
+                                            CornerRadius="0" Padding="8,6" Margin="0,0,0,0">
                                         <WrapPanel>
                                             <Button Content="Cancel" Command="{Binding CancelDownloadCommand}"
                                                     Padding="12,6" Margin="0,0,6,4" Style="{DynamicResource SecondaryButton}" IsEnabled="{Binding SelectedItem, ElementName=DownloadsGrid, Converter={StaticResource HasSelectionConverter}}"/>
@@ -932,10 +763,10 @@
             </TabItem>
 
             <!-- ===== MEDIA group ===== -->
-            <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,12,14,4">
+            <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,5,14,2">
                 <TabItem.Header>
-                    <TextBlock Text="&#x25B8; MEDIA" FontFamily="{DynamicResource MonoFontFamily}"
-                               FontSize="12" Foreground="{DynamicResource TextFaintBrush}" Margin="0,8,0,0"/>
+                    <TextBlock Text="// MEDIA" FontFamily="{DynamicResource MonoFontFamily}"
+                               FontSize="10" Foreground="{DynamicResource TextFaintBrush}" Margin="0,3,0,0"/>
                 </TabItem.Header>
             </TabItem>
 
@@ -962,10 +793,6 @@
                             </DockPanel>
                         </Border>
                         <Grid>
-                            <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                            <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                            <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                            <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                             <DockPanel Margin="12">
                     <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
                         <Button DockPanel.Dock="Right" Content="Cancel" Command="{Binding CancelSearchCommand}"
@@ -980,13 +807,13 @@
                             </TextBox.InputBindings>
                         </TextBox>
                     </DockPanel>
-                    <TextBlock DockPanel.Dock="Top" Text="{Binding SearchStatus}" Margin="0,0,0,6"
+                    <TextBlock DockPanel.Dock="Top" Text="{Binding SearchStatus}" Style="{DynamicResource OptionalConsoleTextStyle}" Margin="0,0,0,6"
                                Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"/>
                     <!-- Filter chips row — each chip is a Button bound to
                          ToggleSearchFilterCommand. Visual "active" state is
                          driven by the corresponding VM property via the chip's
                          ControlTemplate DataTrigger. -->
-                    <Border DockPanel.Dock="Top" Padding="14,6" Margin="0,8,0,8">
+                    <Border DockPanel.Dock="Top" Padding="0,2" Margin="0,0,0,8">
                         <Border.Resources>
                             <!-- One Style for all six filter-chip buttons. The
                                  active appearance is set per-button via the
@@ -1570,7 +1397,7 @@
                                 <ItemsControl ItemsSource="{Binding LibraryItems}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
-                                            <Border Background="{DynamicResource SurfaceBrush}" CornerRadius="4"
+                                            <Border Background="{DynamicResource SurfaceBrush}" CornerRadius="0"
                                                     Padding="10,7" Margin="0,0,0,4" Cursor="Hand"
                                                     MouseLeftButtonDown="LibraryItem_Click">
                                                 <DockPanel>
@@ -1682,9 +1509,6 @@
                                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.85">
                                     <TextBlock Text="Choose something to watch" FontFamily="{DynamicResource DisplayFontFamily}" FontWeight="Bold"
                                                FontSize="26" Foreground="{DynamicResource AccentBrush}" HorizontalAlignment="Center">
-                                        <TextBlock.Effect>
-                                            <DropShadowEffect Color="#00E5FF" BlurRadius="18" ShadowDepth="0" Opacity="0.8"/>
-                                        </TextBlock.Effect>
                                     </TextBlock>
                                     <TextBlock Text="Search for a title or open your library to begin." Style="{DynamicResource MicroTextStyle}"
                                                FontSize="12" Foreground="{DynamicResource TextFaintBrush}"
@@ -1729,13 +1553,9 @@
                             <TextBlock Text="UPCOMING RELEASES" Style="{DynamicResource SectionHeaderTextStyle}"/>
                         </Border>
                         <Grid>
-                            <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                            <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                            <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                            <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                             <DockPanel Margin="12">
                     <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
-                            CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
+                            CornerRadius="0" Padding="8,6" Margin="0,0,0,10">
                         <StackPanel Orientation="Horizontal">
                             <Button Content="Refresh" Command="{Binding LoadUpcomingCommand}"
                                     Padding="12,6" Margin="0,0,6,0" Style="{DynamicResource PrimaryButton}"/>
@@ -1911,10 +1731,6 @@
                             </Border>
 
                             <Grid>
-                                <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                                 <Grid Margin="6">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="300"/>
@@ -1998,10 +1814,10 @@
             </TabItem>
 
             <!-- ===== COMMS group ===== -->
-            <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,12,14,4">
+            <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,5,14,2">
                 <TabItem.Header>
-                    <TextBlock Text="&#x25B8; COMMS" FontFamily="{DynamicResource MonoFontFamily}"
-                               FontSize="12" Foreground="{DynamicResource TextFaintBrush}" Margin="0,8,0,0"/>
+                    <TextBlock Text="// COMMS" FontFamily="{DynamicResource MonoFontFamily}"
+                               FontSize="10" Foreground="{DynamicResource TextFaintBrush}" Margin="0,3,0,0"/>
                 </TabItem.Header>
             </TabItem>
 
@@ -2026,10 +1842,6 @@
                                 <TextBlock Text="IRC" Style="{DynamicResource SectionHeaderTextStyle}"/>
                             </Border>
                             <Grid>
-                                <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                                 <DockPanel Margin="6">
                                     <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
                                             BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
@@ -2073,10 +1885,6 @@
                                                     <TextBlock Text="CHANNELS" Style="{DynamicResource SectionHeaderTextStyle}"/>
                                                 </Border>
                                                 <Grid>
-                                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                                                     <ListBox ItemsSource="{Binding Irc.Channels}"
                                                              SelectedItem="{Binding Irc.SelectedChannel}"
                                                              Background="Transparent" BorderThickness="0">
@@ -2102,10 +1910,6 @@
                                                     <TextBlock Text="MESSAGES" Style="{DynamicResource SectionHeaderTextStyle}"/>
                                                 </Border>
                                                 <Grid>
-                                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                                                     <ListBox ItemsSource="{Binding Irc.Messages}"
                                                              x:Name="IrcMessageList" HorizontalContentAlignment="Stretch"
                                                              Background="Transparent" BorderThickness="0"
@@ -2147,10 +1951,6 @@
                                                     <TextBlock Text="USERS" Style="{DynamicResource SectionHeaderTextStyle}"/>
                                                 </Border>
                                                 <Grid>
-                                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                                                     <ListBox ItemsSource="{Binding Irc.NickList}" x:Name="IrcNickList"
                                                              Background="Transparent" BorderThickness="0" FontSize="12">
                                                         <ListBox.ItemTemplate>
@@ -2212,10 +2012,6 @@
                             <TextBlock Text="PREDB" Style="{DynamicResource SectionHeaderTextStyle}"/>
                         </Border>
                         <Grid>
-                            <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                            <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                            <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                            <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                             <DockPanel Margin="12">
                     <!-- Search bar -->
                     <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
@@ -2312,10 +2108,10 @@
             </TabItem>
 
             <!-- ===== TRANSFERS group ===== -->
-            <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,12,14,4">
+            <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,5,14,2">
                 <TabItem.Header>
-                    <TextBlock Text="&#x25B8; TRANSFERS" FontFamily="{DynamicResource MonoFontFamily}"
-                               FontSize="12" Foreground="{DynamicResource TextFaintBrush}" Margin="0,8,0,0"/>
+                    <TextBlock Text="// TRANSFERS" FontFamily="{DynamicResource MonoFontFamily}"
+                               FontSize="10" Foreground="{DynamicResource TextFaintBrush}" Margin="0,3,0,0"/>
                 </TabItem.Header>
             </TabItem>
 
@@ -2363,16 +2159,12 @@
                     </Border>
                     <!-- Main spread UI (shown when sections exist) -->
                     <Border Visibility="{Binding HasSections, Converter={StaticResource BoolToVisibility}}"
-                            Style="{DynamicResource HudPanelStyle}">
+                            Style="{DynamicResource HudPanelStyle}" BorderThickness="0" Background="Transparent">
                         <DockPanel>
                             <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
                                 <TextBlock Text="SPREAD ENGINE" Style="{DynamicResource SectionHeaderTextStyle}"/>
                             </Border>
                             <Grid>
-                                <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                                 <DockPanel Focusable="True">
                     <DockPanel.InputBindings>
                         <KeyBinding Key="Escape" Command="{Binding StopJobCommand}"/>
@@ -2383,11 +2175,7 @@
                         <UniformGrid Columns="4">
                             <Border Style="{DynamicResource StatCardStyle}">
                                 <Grid>
-                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
-                                    <StackPanel Margin="4">
+                                    <StackPanel Margin="0">
                                         <TextBlock Text="ACTIVE RACES" Style="{DynamicResource StatCardLabelStyle}"/>
                                         <TextBlock Text="{Binding ActiveRaceCount, FallbackValue=0}" Style="{DynamicResource StatCardValueStyle}"/>
                                     </StackPanel>
@@ -2395,11 +2183,7 @@
                             </Border>
                             <Border Style="{DynamicResource StatCardStyle}">
                                 <Grid>
-                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
-                                    <StackPanel Margin="4">
+                                    <StackPanel Margin="0">
                                         <TextBlock Text="LEADER" Style="{DynamicResource StatCardLabelStyle}"/>
                                         <TextBlock Text="{Binding LeaderScore, FallbackValue=—}" Style="{DynamicResource StatCardValueStyle}"/>
                                     </StackPanel>
@@ -2407,11 +2191,7 @@
                             </Border>
                             <Border Style="{DynamicResource StatCardStyle}">
                                 <Grid>
-                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
-                                    <StackPanel Margin="4">
+                                    <StackPanel Margin="0">
                                         <TextBlock Text="ACTIVE + QUEUED" Style="{DynamicResource StatCardLabelStyle}"/>
                                         <TextBlock Text="{Binding QueueDepth, FallbackValue=0}" Style="{DynamicResource StatCardValueStyle}"/>
                                     </StackPanel>
@@ -2419,11 +2199,7 @@
                             </Border>
                             <Border Style="{DynamicResource StatCardStyle}">
                                 <Grid>
-                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
-                                    <StackPanel Margin="4">
+                                    <StackPanel Margin="0">
                                         <TextBlock Text="HISTORY" Style="{DynamicResource StatCardLabelStyle}"/>
                                         <TextBlock Text="{Binding RaceHistory.Count, FallbackValue=0}" Style="{DynamicResource StatCardValueStyle}"/>
                                     </StackPanel>
@@ -2433,28 +2209,35 @@
                     </Border>
                     <!-- Toolbar -->
                     <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
-                            CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
-                        <StackPanel Orientation="Horizontal">
-                            <Button Content="New Race" Command="{Binding StartRaceCommand}"
-                                    Padding="12,6" Margin="0,0,6,0" Style="{DynamicResource PrimaryButton}"/>
-                            <Button Content="Stop" Command="{Binding StopJobCommand}"
-                                    Padding="12,6" Margin="0,0,12,0" Style="{DynamicResource SecondaryButton}"/>
-                            <ComboBox ItemsSource="{Binding SpreadSections}"
+                            CornerRadius="0" Padding="8,6" Margin="0,0,0,10">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="120"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <ComboBox Grid.Column="0" ItemsSource="{Binding SpreadSections}"
                                       SelectedItem="{Binding SelectedSection}"
-                                      Width="120" Margin="0,0,6,0" ToolTip="Section"/>
-                            <TextBox Text="{Binding SpreadReleaseName, UpdateSourceTrigger=PropertyChanged}"
-                                     Width="280" VerticalContentAlignment="Center"
+                                      Margin="0,0,6,0" ToolTip="Section"/>
+                            <TextBox Grid.Column="1" Text="{Binding SpreadReleaseName, UpdateSourceTrigger=PropertyChanged}"
+                                     MinWidth="180" VerticalContentAlignment="Center"
                                      ToolTip="Release name" Margin="0,0,6,0">
                                 <TextBox.InputBindings>
                                     <KeyBinding Key="Return" Command="{Binding StartRaceCommand}"/>
                                 </TextBox.InputBindings>
                             </TextBox>
-                            <Button Content="Settings" Command="{Binding OpenSettingsCommand}"
+                            <Button Grid.Column="2" Content="New Race" Command="{Binding StartRaceCommand}"
+                                    Padding="12,6" Margin="0,0,6,0" Style="{DynamicResource PrimaryButton}"/>
+                            <Button Grid.Column="3" Content="Stop" Command="{Binding StopJobCommand}"
+                                    Padding="12,6" Margin="0,0,6,0" Style="{DynamicResource SecondaryButton}"/>
+                            <Button Grid.Column="4" Content="Settings" Command="{Binding OpenSettingsCommand}"
                                     Padding="12,6" Style="{DynamicResource SecondaryButton}"/>
-                        </StackPanel>
+                        </Grid>
                     </Border>
                     <!-- Status -->
-                    <TextBlock DockPanel.Dock="Top" Text="{Binding SpreadStatus}" FontSize="12"
+                    <TextBlock DockPanel.Dock="Top" Text="{Binding SpreadStatus}" Style="{DynamicResource OptionalConsoleTextStyle}" FontSize="12"
                                Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,8"
                                TextWrapping="Wrap"/>
                     <!-- PRD R1/O3 — session success rate + failure taxonomy -->
@@ -2463,11 +2246,11 @@
                                FontFamily="{DynamicResource MonoFontFamily}" Margin="0,0,0,4"
                                TextWrapping="Wrap"/>
                     <!-- PRD O2 — per-server spread-pool health -->
-                    <TextBlock DockPanel.Dock="Top" Text="{Binding PoolHealth}" FontSize="12"
+                    <TextBlock DockPanel.Dock="Top" Text="{Binding PoolHealth}" Style="{DynamicResource OptionalConsoleTextStyle}" FontSize="12"
                                Foreground="{DynamicResource TextFaintBrush}"
                                FontFamily="{DynamicResource MonoFontFamily}" Margin="0,0,0,8"
                                TextWrapping="Wrap"/>
-                    <!-- Main 2-row layout: AUTO RACES (top, 2*) + SITE SCOREBOARD + AUTO-RACE FEED (bottom, 1*) -->
+                    <!-- Active races fill the workspace; detailed site activity expands on demand. -->
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="*"/>
@@ -2487,11 +2270,7 @@
                                     </DockPanel>
                                 </Border>
                                 <Grid>
-                                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
-                                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="14">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="8">
                                         <StackPanel>
                                         <ItemsControl ItemsSource="{Binding QueuedRaces}">
                                             <ItemsControl.ItemTemplate>
@@ -2528,7 +2307,7 @@
                                                 <DataTemplate>
                                                     <Border Margin="0,0,0,10" Background="{DynamicResource SurfaceBrush}"
                                                             BorderBrush="{DynamicResource LineBrush}" BorderThickness="1"
-                                                            Padding="14,12">
+                                                            Padding="12,10">
                                                         <!-- Finished cards stay in the list, dimmed, showing their final score -->
                                                         <Border.Style>
                                                             <Style TargetType="Border">
@@ -2543,28 +2322,25 @@
                                                         <StackPanel>
                                                         <Grid>
                                                             <Grid.ColumnDefinitions>
-                                                                <ColumnDefinition Width="160"/>
+                                                                <ColumnDefinition Width="92"/>
                                                                 <ColumnDefinition Width="*"/>
-                                                                <ColumnDefinition Width="260"/>
+                                                                <ColumnDefinition Width="160"/>
                                                                 <ColumnDefinition Width="Auto"/>
                                                             </Grid.ColumnDefinitions>
                                                             <!-- Big score on the left -->
                                                             <StackPanel Grid.Column="0" VerticalAlignment="Center">
                                                                 <TextBlock Text="{Binding Score, FallbackValue=0, StringFormat=N0}"
-                                                                           FontFamily="{DynamicResource DisplayFontFamily}"
-                                                                           FontWeight="Bold" FontSize="42"
+                                                                           FontFamily="{DynamicResource MonoFontFamily}"
+                                                                           FontWeight="SemiBold" FontSize="26"
                                                                            Foreground="{DynamicResource AccentBrush}">
-                                                                    <TextBlock.Effect>
-                                                                        <DropShadowEffect Color="#00E5FF" BlurRadius="10" ShadowDepth="0" Opacity="0.45"/>
-                                                                    </TextBlock.Effect>
                                                                 </TextBlock>
-                                                                <TextBlock Text="{Binding ScoreLabel, FallbackValue=AUTO RACE}"
+                                                                <TextBlock Text="SCORE" ToolTip="{Binding ScoreLabel, FallbackValue=AUTO RACE}"
                                                                            Style="{DynamicResource MicroTextStyle}"
-                                                                           Margin="0,-4,0,0"/>
+                                                                           Margin="0,2,0,0"/>
                                                             </StackPanel>
                                                             <!-- Center: release + section/files + source/dest + chips -->
                                                             <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="14,0,14,0">
-                                                                <TextBlock Text="{Binding Release}" Style="{DynamicResource DisplayTextStyle}" FontSize="14"/>
+                                                                <TextBlock Text="{Binding Release}" Style="{DynamicResource DisplayTextStyle}" FontSize="13" Foreground="{DynamicResource ForegroundBrush}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Release}"/>
                                                                 <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                                                                     <TextBlock Text="{Binding Section}" Style="{DynamicResource MicroTextStyle}"/>
                                                                     <TextBlock Text=" · " Foreground="{DynamicResource TextFaintBrush}"/>
@@ -2595,14 +2371,11 @@
                                                                 </StackPanel>
                                                             </StackPanel>
                                                             <!-- Sparkline -->
-                                                            <Border Grid.Column="2" Height="60" VerticalAlignment="Center"
-                                                                    Background="#80070F1C" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1" ClipToBounds="True">
+                                                            <Border Grid.Column="2" Height="42" VerticalAlignment="Center"
+                                                                    Background="{DynamicResource BackgroundBrush}" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1" ClipToBounds="True">
                                                                 <Polyline Points="{Binding SparklinePoints}"
                                                                           Stroke="{DynamicResource AccentBrush}" StrokeThickness="1.4"
                                                                           Stretch="Fill">
-                                                                    <Polyline.Effect>
-                                                                        <DropShadowEffect Color="#00E5FF" BlurRadius="6" ShadowDepth="0" Opacity="0.7"/>
-                                                                    </Polyline.Effect>
                                                                 </Polyline>
                                                             </Border>
                                                             <!-- Actions — gated by card state: live races get PAUSE/RESUME/STOP,
@@ -2634,7 +2407,7 @@
                                                         <!-- Per-race detail: every file, every dest, and why each is or
                                                              isn't moving. Snapshotted only while expanded. -->
                                                         <Expander IsExpanded="{Binding IsExpanded, Mode=TwoWay}"
-                                                                  Margin="0,10,0,0" Foreground="{DynamicResource TextBrush}">
+                                                                  Margin="0,6,0,0" Foreground="{DynamicResource TextBrush}">
                                                             <Expander.Header>
                                                                 <TextBlock Text="FILES + ROUTES" Style="{DynamicResource MicroTextStyle}"/>
                                                             </Expander.Header>
@@ -2689,10 +2462,6 @@
                                         <TextBlock Text="SITE SCOREBOARD" Style="{DynamicResource SectionHeaderTextStyle}"/>
                                     </Border>
                                     <Grid>
-                                        <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                        <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                        <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                        <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                                         <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="14">
                                             <ItemsControl ItemsSource="{Binding SpreadScoreboard}">
                                                 <ItemsControl.ItemTemplate>
@@ -2730,10 +2499,6 @@
                                         <TextBlock Text="AUTO-RACE FEED" Style="{DynamicResource SectionHeaderTextStyle}"/>
                                     </Border>
                                     <Grid>
-                                        <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                        <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                        <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                        <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                                         <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="14">
                                             <ItemsControl ItemsSource="{Binding AutoRaceFeed}">
                                                 <ItemsControl.ItemTemplate>
@@ -2779,10 +2544,6 @@
                             <TextBlock Text="BROWSE" Style="{DynamicResource SectionHeaderTextStyle}"/>
                         </Border>
                         <Grid>
-                            <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                            <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                            <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                            <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                             <DockPanel Margin="12">
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -2909,10 +2670,10 @@
             </TabItem>
 
             <!-- ===== SYSTEM group ===== -->
-            <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,12,14,4">
+            <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,5,14,2">
                 <TabItem.Header>
-                    <TextBlock Text="&#x25B8; SYSTEM" FontFamily="{DynamicResource MonoFontFamily}"
-                               FontSize="12" Foreground="{DynamicResource TextFaintBrush}" Margin="0,8,0,0"/>
+                    <TextBlock Text="// SYSTEM" FontFamily="{DynamicResource MonoFontFamily}"
+                               FontSize="10" Foreground="{DynamicResource TextFaintBrush}" Margin="0,3,0,0"/>
                 </TabItem.Header>
             </TabItem>
 
@@ -2937,10 +2698,6 @@
                                 <TextBlock Text="MOUNT POINTS" Style="{DynamicResource SectionHeaderTextStyle}"/>
                             </Border>
                             <Grid>
-                                <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                                 <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
                                     <ItemsControl ItemsSource="{Binding MountedServerStatus}" Margin="14">
                                         <ItemsControl.ItemsPanel>
@@ -2953,10 +2710,6 @@
                                                 <Border Width="280" Height="280" Margin="0,0,12,0"
                                                         Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1">
                                                     <Grid>
-                                                        <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                                        <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                                        <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                                        <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                                                         <DockPanel Margin="16">
                                                             <!-- Title -->
                                                             <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
@@ -3057,10 +2810,6 @@
                                 <TextBlock Text="TRUSTED CERTS - TOFU" Style="{DynamicResource SectionHeaderTextStyle}"/>
                             </Border>
                             <Grid>
-                                <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                                <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                                <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                                <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                                 <DataGrid ItemsSource="{Binding TrustedCerts}" AutoGenerateColumns="False"
                                           Margin="14" Background="Transparent" HeadersVisibility="Column"
                                           CanUserAddRows="False" CanUserDeleteRows="False" IsReadOnly="True">
@@ -3224,14 +2973,7 @@
                 MouseLeftButtonDown="ShortcutsOverlay_Click">
             <Border MaxWidth="640" Padding="32" VerticalAlignment="Center" HorizontalAlignment="Center"
                     Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource AccentBrush}" BorderThickness="1">
-                <Border.Effect>
-                    <DropShadowEffect Color="#00E5FF" BlurRadius="28" ShadowDepth="0" Opacity="0.55"/>
-                </Border.Effect>
                 <Grid>
-                    <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
-                    <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
-                    <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
-                    <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                     <StackPanel Margin="12">
                         <TextBlock Text="KEYBOARD SHORTCUTS"
                                    Style="{DynamicResource SectionHeaderTextStyle}"

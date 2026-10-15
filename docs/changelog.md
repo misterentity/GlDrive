@@ -12,6 +12,21 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.11.11 — industrial terminal UI and source recovery lifecycle (2026-10-15)
+
+- Redesign Cyberpunk with graphite surfaces, monospace type, restrained mint/lime
+  accents, square inputs and buttons, compact navigation and quieter effects.
+- Reorganize the dashboard around compact connection/throughput panels, a complete
+  health strip and an operations journal. Tighten race/download rows and settings
+  forms, retaining existing actions and bindings at normal and minimum sizes.
+- Track and drain source-relocation work when a race exits. Pending borrows stop,
+  active FTP commands finish, and late results cannot change the retired race.
+- Propagate that lifetime through alternate-source searches without cancelling
+  commands already on the wire. Preserve normal search cancellation and deadlines.
+- Add behavioral regressions for occupied pools, duplicate migration requests,
+  late search results and search traversal shutdown. See the
+  [release report](releases/v3.11.11.md) for the log audit and validation results.
+
 ## v3.11.8 — watched archive recovery after restart (2026-10-14)
 
 - Register persisted skipped archives with the live recovery ledger, so newly

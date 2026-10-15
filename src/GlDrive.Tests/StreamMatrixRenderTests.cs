@@ -1,6 +1,9 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Automation.Peers;
+using System.Windows.Automation.Provider;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -99,6 +102,8 @@ public class StreamMatrixRenderTests
         var application = Application.Current!;
         var originalButtonStyle = application.Resources[typeof(Button)];
         var originalScanline = application.TryFindResource("ScanlineOverlayBrush");
+        var originalInputRadius = (CornerRadius)application.Resources["InputCornerRadius"];
+        var originalCheckRadius = (CornerRadius)application.Resources["CheckBoxCornerRadius"];
         // Switch away from Cyberpunk as well: its theme-only resources must not leak
         // into the light or dark UI after a live theme change.
         foreach (var theme in new[] { "Cyberpunk", "Dark", "Light", "Cyberpunk" })
@@ -108,6 +113,7 @@ public class StreamMatrixRenderTests
             Assert.True(missing.Count == 0, $"{theme} theme is missing: {string.Join(", ", missing)}");
 
             ThemeManager.ApplyTheme(theme);
+            AssertDisclosureAndInputTheme(theme == "Cyberpunk" ? new CornerRadius(0) : originalInputRadius);
             var matrix = BuildMatrix();
             var name = theme.ToLowerInvariant();
 
@@ -121,6 +127,46 @@ public class StreamMatrixRenderTests
         Assert.Same(originalScanline, application.TryFindResource("ScanlineOverlayBrush"));
         Assert.Null(application.TryFindResource("CyberpunkPrimaryButtonStyle"));
         Assert.Same(originalButtonStyle, application.Resources[typeof(Button)]);
+        Assert.Equal(originalInputRadius, application.Resources["InputCornerRadius"]);
+        Assert.Equal(originalCheckRadius, application.Resources["CheckBoxCornerRadius"]);
+    }
+
+    private static void AssertDisclosureAndInputTheme(CornerRadius expectedInputRadius)
+    {
+        // Exercise the rendered control's accessibility toggle rather than just setting
+        // IsExpanded: this catches a header whose two-way binding or body trigger broke.
+        var body = new TextBlock { Text = "Disclosure content" };
+        var disclosure = new Expander { Header = "Details", Content = body };
+        var input = new TextBox { Text = "Theme transition" };
+        var panel = new StackPanel();
+        panel.Children.Add(disclosure);
+        panel.Children.Add(input);
+        var window = new Window
+        {
+            Content = panel, Width = 400, Height = 180,
+            ShowInTaskbar = false, ShowActivated = false, Left = -20000, Top = -20000
+        };
+        try
+        {
+            window.Show();
+            Pump();
+            Assert.False(body.IsVisible);
+            var header = Assert.Single(FindAll<ToggleButton>(disclosure));
+            Assert.True(header.Focusable);
+            var peer = new ToggleButtonAutomationPeer(header);
+            var toggle = Assert.IsAssignableFrom<IToggleProvider>(peer.GetPattern(PatternInterface.Toggle));
+            toggle.Toggle();
+            Pump();
+            Assert.True(disclosure.IsExpanded);
+            Assert.True(body.IsVisible);
+            toggle.Toggle();
+            Pump();
+            Assert.False(disclosure.IsExpanded);
+            Assert.False(body.IsVisible);
+            var border = Assert.IsType<Border>(input.Template.FindName("Bd", input));
+            Assert.Equal(expectedInputRadius, border.CornerRadius);
+        }
+        finally { window.Close(); }
     }
 
     // Settings opens no narrower than MinWidth=900; after the window and tab chrome the panel gets

@@ -98,7 +98,7 @@ public sealed class SpreadSourceRelocationTests
         // A cross-filesystem move deletes files before the dir: RETR 550 while
         // DirectoryExists(old) is still true. The "transient" verdict must come only
         // AFTER the relocation probe found nothing.
-        var handler = Source.IndexOf("private async Task HandleSourceMigration(", StringComparison.Ordinal);
+        var handler = Source.IndexOf("private async Task HandleSourceMigrationCore(", StringComparison.Ordinal);
         var end = Source.IndexOf("private async Task<bool> SourceStillHasRelease", handler, StringComparison.Ordinal);
         var body = Source[handler..end];
 
@@ -158,7 +158,7 @@ public sealed class SpreadSourceRelocationTests
     [Fact]
     public void Migration_handler_probes_for_a_relocation_before_writing_the_source_off()
     {
-        var handler = Source.IndexOf("private async Task HandleSourceMigration(", StringComparison.Ordinal);
+        var handler = Source.IndexOf("private async Task HandleSourceMigrationCore(", StringComparison.Ordinal);
         Assert.True(handler >= 0, "HandleSourceMigration no longer exists.");
 
         var probe = Source.IndexOf("await FindRelocatedSourcePath(srcId", handler, StringComparison.Ordinal);
@@ -171,7 +171,7 @@ public sealed class SpreadSourceRelocationTests
     [Fact]
     public void Relocation_is_followed_through_the_extra_source_path_map()
     {
-        var handler = Source.IndexOf("private async Task HandleSourceMigration(", StringComparison.Ordinal);
+        var handler = Source.IndexOf("private async Task HandleSourceMigrationCore(", StringComparison.Ordinal);
         var follow = Source.IndexOf("_extraSourcePaths[srcId] = relocated", handler, StringComparison.Ordinal);
         var rescan = Source.IndexOf("_lastSourceScanTime = DateTime.MinValue", handler, StringComparison.Ordinal);
 
@@ -199,7 +199,7 @@ public sealed class SpreadSourceRelocationTests
     public void Previously_populated_source_with_empty_listing_starts_relocation_probe()
     {
         var scan = Source.IndexOf("private async Task ScanSites(", StringComparison.Ordinal);
-        var handler = Source.IndexOf("private async Task HandleSourceMigration(", StringComparison.Ordinal);
+        var handler = Source.IndexOf("private async Task HandleSourceMigrationCore(", StringComparison.Ordinal);
         var body = Source[scan..handler];
 
         Assert.Contains("ShouldProbeSourceRelocation(", body);
@@ -222,7 +222,7 @@ public sealed class SpreadSourceRelocationTests
     [Fact]
     public void Relocation_pending_state_is_bounded_by_handler_lifetime()
     {
-        var handler = Source.IndexOf("private async Task HandleSourceMigration(", StringComparison.Ordinal);
+        var handler = Source.IndexOf("private async Task HandleSourceMigrationCore(", StringComparison.Ordinal);
         var nextMethod = Source.IndexOf(
             "private async Task<bool> SourceStillHasRelease", handler, StringComparison.Ordinal);
         var body = Source[handler..nextMethod];

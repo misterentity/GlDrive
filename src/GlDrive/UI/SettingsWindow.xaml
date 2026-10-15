@@ -7,7 +7,8 @@
         MinWidth="900" MinHeight="600"
         WindowStartupLocation="CenterScreen" ResizeMode="CanResize"
         Background="{DynamicResource BackgroundBrush}"
-        Foreground="{DynamicResource ForegroundBrush}">
+        Foreground="{DynamicResource ForegroundBrush}"
+        FontFamily="{DynamicResource StreamMonoFontFamily}" FontSize="12">
     <Window.Resources>
         <Style x:Key="SelectedServerAction" TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
             <Style.Triggers>
@@ -17,12 +18,12 @@
             </Style.Triggers>
         </Style>
     </Window.Resources>
-    <Border Margin="14" Style="{DynamicResource HudPanelStyle}">
+    <Border Margin="10" Style="{DynamicResource HudPanelStyle}">
         <DockPanel>
             <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                <TextBlock Text="&gt;&gt; SETTINGS" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                <TextBlock Text="SYSTEM / SETTINGS" Style="{DynamicResource SectionHeaderTextStyle}"/>
             </Border>
-            <Grid Margin="12">
+            <Grid Margin="8">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="*"/>
                     <RowDefinition Height="Auto"/>
@@ -46,9 +47,9 @@
                         <TextBlock Grid.Column="1" Text="SERVERS" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
-                <DockPanel Margin="18,14,22,18">
+                <DockPanel Margin="16,12,16,14">
                     <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
-                        <TextBlock Text="Servers" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <TextBlock Text="Servers" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,6"/>
                         <TextBlock Text="Manage connections and mounted drives. Select a server to edit it; use Ctrl or Shift to select several."
                                    TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}"/>
                     </StackPanel>
@@ -71,7 +72,7 @@
                     <Grid>
                     <DataGrid x:Name="ServerGrid"
                               AutoGenerateColumns="False" IsReadOnly="True"
-                              SelectionMode="Extended" GridLinesVisibility="Horizontal"
+                              SelectionMode="Extended" GridLinesVisibility="Horizontal" RowHeight="30" ColumnHeaderHeight="28"
                               HeadersVisibility="Column" CanUserAddRows="False">
                         <DataGrid.Columns>
                             <DataGridCheckBoxColumn Header="Enabled" Binding="{Binding Enabled}" Width="75"/>
@@ -111,30 +112,54 @@
                     </Grid>
                 </TabItem.Header>
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                    <StackPanel Margin="18,14,22,18">
-                        <TextBlock Text="Performance" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                    <StackPanel Margin="16,12,16,14">
+                        <TextBlock Text="Performance" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,6"/>
                         <TextBlock Text="Tune transfer buffers and retry behavior. Speed limits and networks are in Streams &amp; uplinks." TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,18"/>
                         <!-- Downloads Section -->
-                        <TextBlock Text="Downloads" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                        <TextBlock Text="Streaming Buffer Size (KB):" Margin="0,0,0,4"/>
-                        <TextBox Text="{Binding StreamingBufferSize, UpdateSourceTrigger=PropertyChanged}"
-                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
-                        <TextBlock Text="Write Buffer Limit (MB, 0=unlimited):" Margin="0,0,0,4"/>
-                        <TextBox Text="{Binding WriteBufferLimit, UpdateSourceTrigger=PropertyChanged}"
-                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
-                        <TextBlock Text="Max Concurrent Downloads:" Margin="0,0,0,4"/>
-                        <TextBox Text="{Binding MaxConcurrentDownloads, UpdateSourceTrigger=PropertyChanged}"
-                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,12"/>
-                        <TextBlock Text="Speed limits, slow mode and networks live under STREAMS &amp; UPLINKS."
-                                   Foreground="{DynamicResource ForegroundDimBrush}" TextWrapping="Wrap" FontSize="12" Margin="0,0,0,12"/>
+                        <TextBlock Text="01 / TRANSFER BUFFERS" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="250"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="40"/>
+                                <RowDefinition Height="40"/>
+                                <RowDefinition Height="40"/>
+                            </Grid.RowDefinitions>
+                            <TextBlock Text="Streaming buffer (KB)" VerticalAlignment="Center"/>
+                            <TextBox Grid.Column="1" Text="{Binding StreamingBufferSize, UpdateSourceTrigger=PropertyChanged}"
+                                     Width="96" VerticalAlignment="Center" HorizontalAlignment="Left"
+                                     AutomationProperties.Name="Streaming buffer size in kilobytes"/>
+                            <TextBlock Grid.Row="1" Text="Write limit (MB; 0 = unlimited)" VerticalAlignment="Center"/>
+                            <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding WriteBufferLimit, UpdateSourceTrigger=PropertyChanged}"
+                                     Width="96" VerticalAlignment="Center" HorizontalAlignment="Left"
+                                     AutomationProperties.Name="Write buffer limit in megabytes"/>
+                            <TextBlock Grid.Row="2" Text="Concurrent downloads" VerticalAlignment="Center"/>
+                            <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding MaxConcurrentDownloads, UpdateSourceTrigger=PropertyChanged}"
+                                     Width="96" VerticalAlignment="Center" HorizontalAlignment="Left"
+                                     AutomationProperties.Name="Maximum concurrent downloads"/>
+                        </Grid>
                         <Separator Margin="0,0,0,12"/>
-                        <TextBlock Text="Auto-Retry" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                        <TextBlock Text="Max Retries (0=disabled):" Margin="0,0,0,4"/>
-                        <TextBox Text="{Binding MaxRetries, UpdateSourceTrigger=PropertyChanged}"
-                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
-                        <TextBlock Text="Retry Delay (seconds):" Margin="0,0,0,4"/>
-                        <TextBox Text="{Binding RetryDelaySeconds, UpdateSourceTrigger=PropertyChanged}"
-                                 Width="80" HorizontalAlignment="Left" Margin="0,0,0,12"/>
+                        <TextBlock Text="02 / AUTOMATIC RETRY" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="250"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="40"/>
+                                <RowDefinition Height="40"/>
+                            </Grid.RowDefinitions>
+                            <TextBlock Text="Maximum retries (0 = off)" VerticalAlignment="Center"/>
+                            <TextBox Grid.Column="1" Text="{Binding MaxRetries, UpdateSourceTrigger=PropertyChanged}"
+                                     Width="96" VerticalAlignment="Center" HorizontalAlignment="Left"
+                                     AutomationProperties.Name="Maximum retries"/>
+                            <TextBlock Grid.Row="1" Text="Retry delay (seconds)" VerticalAlignment="Center"/>
+                            <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding RetryDelaySeconds, UpdateSourceTrigger=PropertyChanged}"
+                                     Width="96" VerticalAlignment="Center" HorizontalAlignment="Left"
+                                     AutomationProperties.Name="Retry delay in seconds"/>
+                        </Grid>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
@@ -147,7 +172,7 @@
                             <ColumnDefinition Width="28"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="&#x26A1;" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="03" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="STREAMS &amp; UPLINKS" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
@@ -162,13 +187,13 @@
                             <ColumnDefinition Width="28"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="03" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="04" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="DOWNLOADS" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                    <StackPanel Margin="18,14,22,18">
-                        <TextBlock Text="Downloads" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                    <StackPanel Margin="16,12,16,14">
+                        <TextBlock Text="Downloads" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,6"/>
                         <TextBlock Text="Choose where files go, how they are processed, and when downloads can run." TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,18"/>
                         <TextBlock Text="Default Download Folder:" Margin="0,0,0,4"/>
                         <DockPanel Margin="0,0,0,8">
@@ -183,7 +208,7 @@
                                   HorizontalAlignment="Left" Margin="0,0,0,8"/>
 
                         <Separator Margin="0,8,0,14"/>
-                        <TextBlock Text="Search &amp; AI services" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                        <TextBlock Text="Search &amp; AI services" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,10"/>
                         <TextBlock Text="OMDB API Key (for movie search):" Margin="0,0,0,4"/>
                         <TextBox Text="{Binding OmdbApiKey, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
 
@@ -210,7 +235,7 @@
                             </ItemsControl>
                         </StackPanel>
 
-                        <TextBlock Text="After a download" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                        <TextBlock Text="After a download" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,8"/>
                         <CheckBox Content="Auto-download wishlist matches"
                                   IsChecked="{Binding AutoDownloadWishlist}" Margin="0,8,0,4"/>
                         <CheckBox Content="Auto-extract RAR archives after download"
@@ -273,13 +298,13 @@
                             <ColumnDefinition Width="28"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="04" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="05" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="SPREAD" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                    <StackPanel Margin="18,14,22,18">
-                        <TextBlock Text="Spread &amp; FXP" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                    <StackPanel Margin="16,12,16,14">
+                        <TextBlock Text="Spread &amp; FXP" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,6"/>
                         <TextBlock Text="Control server-to-server transfers, connection health, and shared skip rules." TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,18"/>
                         <TextBlock Text="Spread Pool Size (per server):" Margin="0,0,0,4"/>
                         <TextBox Text="{Binding SpreadPoolSize, UpdateSourceTrigger=PropertyChanged}"
@@ -347,13 +372,13 @@
                             <ColumnDefinition Width="28"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="05" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="06" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="AI-AGENT" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
               <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                <StackPanel Margin="18,14,22,18">
-                  <TextBlock Text="Nightly AI agent" FontSize="22" FontWeight="Bold" Margin="0,0,0,8"/>
+                <StackPanel Margin="16,12,16,14">
+                  <TextBlock Text="Nightly AI agent" FontSize="18" FontWeight="Bold" Margin="0,0,0,8"/>
                   <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,12">
                     Reviews recent activity overnight and suggests or applies settings changes. Uses your OpenRouter API key from Downloads.
                   </TextBlock>
@@ -364,7 +389,7 @@
                   <TextBox Text="{Binding AgentRunHourLocal, UpdateSourceTrigger=PropertyChanged}" Width="80" HorizontalAlignment="Left"/>
 
                   <TextBlock Text="Model (OpenRouter id)" Margin="0,10,0,2"/>
-                  <Border BorderBrush="{DynamicResource AccentBrush}" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,4">
+                  <Border BorderBrush="{DynamicResource AccentBrush}" BorderThickness="1" CornerRadius="0" Padding="8" Margin="0,0,0,4">
                     <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource ForegroundDimBrush}">
                       Enter an OpenRouter model ID, such as anthropic/claude-sonnet-4-6. Model availability and cost depend on your OpenRouter account.
                     </TextBlock>
@@ -426,13 +451,13 @@
                             <ColumnDefinition Width="28"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="06" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="07" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="DIAGNOSTICS" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                <StackPanel Margin="18,14,22,18">
-                    <TextBlock Text="Appearance &amp; diagnostics" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                <StackPanel Margin="16,12,16,14">
+                    <TextBlock Text="Appearance &amp; diagnostics" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,6"/>
                     <TextBlock Text="Choose your theme and manage troubleshooting information." TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,18"/>
                     <TextBlock Text="Theme:" Margin="0,0,0,4"/>
                     <ComboBox ItemsSource="{Binding ThemeOptions}"
@@ -460,7 +485,7 @@
                             <ColumnDefinition Width="28"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="07" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="08" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="MCP" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
@@ -470,12 +495,14 @@
                 </Grid>
 
                 <!-- Buttons -->
-                <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+                <Border Grid.Row="1" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0" Padding="0,10,0,0">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                     <Button Content="Save settings" Click="Save_Click" Padding="20,6" Margin="0,0,8,0"
                             Style="{StaticResource PrimaryButton}"/>
                     <Button Content="Cancel" Click="Cancel_Click" IsCancel="True" Padding="20,6"
                             Style="{StaticResource SecondaryButton}"/>
                 </StackPanel>
+                </Border>
             </Grid>
         </DockPanel>
     </Border>
