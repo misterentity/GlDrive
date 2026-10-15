@@ -14,6 +14,7 @@ public partial class MetadataSearchDialog : Window
     private readonly TvMazeClient? _tvMaze;
     private readonly OmdbClient? _omdb;
     private readonly List<MetadataResult> _results = new();
+    private bool _isSearching;
 
     public WishlistItem? SelectedItem { get; private set; }
 
@@ -37,8 +38,19 @@ public partial class MetadataSearchDialog : Window
 
     private async Task DoSearch()
     {
+        if (_isSearching) return;
         var query = SearchBox.Text.Trim();
-        if (string.IsNullOrEmpty(query)) return;
+        if (string.IsNullOrEmpty(query))
+        {
+            SearchStatusText.Text = "Enter a title, then choose Search.";
+            SearchBox.Focus();
+            return;
+        }
+
+        _isSearching = true;
+        SearchButton.IsEnabled = false;
+        SearchStatusText.Text = $"Searching for “{query}”…";
+        OkButton.IsEnabled = false;
 
         _results.Clear();
         ResultsList.Items.Clear();
@@ -74,6 +86,7 @@ public partial class MetadataSearchDialog : Window
             {
                 if (!_omdb.HasApiKey)
                 {
+                    SearchStatusText.Text = "Movie search needs an OMDB API key. Add it in Settings → Downloads.";
                     MessageBox.Show("OMDB API key not configured. Set it in Settings > Downloads.", "No API Key",
                         MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
@@ -102,11 +115,20 @@ public partial class MetadataSearchDialog : Window
 
             foreach (var r in _results)
                 ResultsList.Items.Add(r);
+            SearchStatusText.Text = _results.Count == 0
+                ? "No titles found. Try a shorter title or a different spelling."
+                : $"{_results.Count} result{(_results.Count == 1 ? "" : "s")}. Select a title to view its details.";
         }
         catch (Exception ex)
         {
+            SearchStatusText.Text = "Search could not be completed. Check your connection and try again.";
             Log.Warning(ex, "Metadata search failed");
             MessageBox.Show($"Search failed: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            _isSearching = false;
+            SearchButton.IsEnabled = true;
         }
     }
 
@@ -143,7 +165,8 @@ public partial class MetadataSearchDialog : Window
             }
         }
 
-        UpdateDetailPanel(selected);
+        if (ReferenceEquals(ResultsList.SelectedItem, selected))
+            UpdateDetailPanel(selected);
     }
 
     private void UpdateDetailPanel(MetadataResult result)

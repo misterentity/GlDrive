@@ -40,6 +40,7 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
 
     // Leader/queue stats reflect LIVE races only — retained finished cards (always 65,535 on a
     // clean race) would otherwise pin LeaderScore and inflate the queue depth.
+    public int ActiveRaceCount => SpreadJobs.Count(j => !j.IsFinished);
     public int LeaderScore => SpreadJobs.Where(j => !j.IsFinished).Select(j => j.Score).DefaultIfEmpty(0).Max();
     public int QueueDepth => SpreadJobs.Count(j => !j.IsFinished) + QueuedRaces.Count;
 
@@ -310,6 +311,7 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         }
 
         OnPropertyChanged(nameof(LeaderScore));
+        OnPropertyChanged(nameof(ActiveRaceCount));
         OnPropertyChanged(nameof(QueueDepth));
 
         // Update scoreboard and transfers only if a job is selected
@@ -579,6 +581,7 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         SpreadJobs.Remove(vm);
         OnPropertyChanged(nameof(QueueDepth));
         OnPropertyChanged(nameof(LeaderScore));
+        OnPropertyChanged(nameof(ActiveRaceCount));
     }
 
     private void ClearFinished()
@@ -593,6 +596,7 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         }
         OnPropertyChanged(nameof(QueueDepth));
         OnPropertyChanged(nameof(LeaderScore));
+        OnPropertyChanged(nameof(ActiveRaceCount));
     }
 
     public void SetOpenSettingsAction(Action action) => _openSettingsAction = action;

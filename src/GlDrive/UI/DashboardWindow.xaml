@@ -4,7 +4,7 @@
         xmlns:ui="clr-namespace:GlDrive.UI"
         xmlns:sm="clr-namespace:GlDrive.UI.StreamMatrix"
         xmlns:vlc="clr-namespace:LibVLCSharp.WPF;assembly=LibVLCSharp.WPF"
-        Title="GlDrive Dashboard" Width="1860" Height="1000"
+        Title="GlDrive Dashboard" Width="1440" Height="900"
         MinWidth="1200" MinHeight="700"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource BackgroundBrush}"
@@ -13,6 +13,12 @@
         <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
         <ui:ImageUrlConverter x:Key="ImageUrlConverter"/>
         <ui:JoinListConverter x:Key="JoinList"/>
+        <ui:HasSelectionConverter x:Key="HasSelectionConverter"/>
+        <Style x:Key="TruncatedCellText" TargetType="TextBlock">
+            <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="ToolTip" Value="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+        </Style>
         <Style TargetType="DataGrid" BasedOn="{StaticResource {x:Type DataGrid}}">
             <Setter Property="EnableRowVirtualization" Value="True"/>
             <Setter Property="EnableColumnVirtualization" Value="True"/>
@@ -38,7 +44,7 @@
                             <Trigger Property="IsChecked" Value="True">
                                 <Setter TargetName="Bd" Property="Background"
                                         Value="{DynamicResource AccentBrush}"/>
-                                <Setter Property="Foreground" Value="White"/>
+                                <Setter Property="Foreground" Value="{DynamicResource AccentForegroundBrush}"/>
                                 <Setter Property="FontWeight" Value="SemiBold"/>
                             </Trigger>
                             <Trigger Property="IsChecked" Value="False">
@@ -65,7 +71,7 @@
     </Window.Resources>
     <Grid Margin="0">
         <Grid.RowDefinitions>
-            <RowDefinition Height="44"/>
+            <RowDefinition Height="56"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="26"/>
@@ -78,7 +84,7 @@
                 BorderBrush="{DynamicResource LineBrush}" BorderThickness="0,0,0,1">
             <Grid>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="220"/>
+                    <ColumnDefinition Width="200"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
@@ -103,87 +109,41 @@
                                        FontSize="16" Foreground="{DynamicResource AccentBrush}"
                                        LineHeight="14"/>
                             <TextBlock Text="{Binding VersionTagline}" Style="{DynamicResource MicroTextStyle}"
-                                       FontSize="9" Foreground="{DynamicResource TextFaintBrush}"
+                                       FontSize="12" Foreground="{DynamicResource TextFaintBrush}"
                                        Margin="0,2,0,0"/>
                         </StackPanel>
                     </StackPanel>
                 </Border>
 
-                <!-- Breadcrumb + status tags -->
-                <Grid Grid.Column="1" Margin="16,0">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-
-                    <TextBlock Grid.Column="0" Text="NODE:" Style="{DynamicResource MicroTextStyle}"
-                               Foreground="{DynamicResource TextFaintBrush}" VerticalAlignment="Center"
-                               Margin="0,0,6,0"/>
-                    <Border Grid.Column="1" BorderBrush="{DynamicResource LineDimBrush}" BorderThickness="1"
-                            Padding="6,2" VerticalAlignment="Center">
-                        <TextBlock Text="NODE.GLFTPD" Foreground="{DynamicResource AccentBrush}"
-                                   FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"/>
-                    </Border>
-                    <TextBlock Grid.Column="2" Text="SECT/" Style="{DynamicResource MicroTextStyle}"
-                               Foreground="{DynamicResource TextFaintBrush}" VerticalAlignment="Center"
-                               Margin="14,0,8,0"/>
-                    <TextBlock Grid.Column="3" Style="{DynamicResource DisplayTextStyle}"
-                               FontSize="14" Foreground="{DynamicResource ForegroundBrush}"
-                               VerticalAlignment="Center"
-                               Text="DASHBOARD"/>
-
-                    <StackPanel Grid.Column="5" Orientation="Horizontal" VerticalAlignment="Center"
-                                Margin="0,0,10,0">
-                        <Border Style="{DynamicResource TagGoodStyle}" Padding="7,2" Margin="0,0,6,0">
-                            <StackPanel Orientation="Horizontal">
-                                <Ellipse Width="6" Height="6" Fill="{DynamicResource GoodBrush}"
-                                         VerticalAlignment="Center" Margin="0,0,5,0"/>
-                                <TextBlock Text="FTPS" Style="{DynamicResource TagTextStyle}"
-                                           Foreground="{DynamicResource GoodBrush}"/>
-                            </StackPanel>
-                        </Border>
-                        <Border Style="{DynamicResource TagAccentStyle}" Padding="7,2">
-                            <TextBlock Text="FXP" Style="{DynamicResource TagTextStyle}"
-                                       Foreground="{DynamicResource AccentBrush}"/>
-                        </Border>
-                    </StackPanel>
-                </Grid>
-
-                <!-- Clock + window-control glyphs -->
-                <Border Grid.Column="2" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1,0,0,0"
-                        Padding="16,0">
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock x:Name="UtcClockText" Text="--:--:-- UTC" Style="{DynamicResource AccentTextStyle}"
-                                   FontSize="12" VerticalAlignment="Center" Margin="0,0,14,0"
-                                   FontFamily="{DynamicResource MonoFontFamily}"/>
-                        <Rectangle Width="10" Height="10" Stroke="{DynamicResource TextFaintBrush}"
-                                   StrokeThickness="1" Margin="0,0,5,0"/>
-                        <Rectangle Width="10" Height="10" Stroke="{DynamicResource TextFaintBrush}"
-                                   StrokeThickness="1" Margin="0,0,5,0"/>
-                        <Rectangle Width="10" Height="10" Stroke="{DynamicResource BadBrush}"
-                                   StrokeThickness="1"/>
-                    </StackPanel>
-                </Border>
+                <StackPanel Grid.Column="1" Margin="20,0" VerticalAlignment="Center">
+                    <TextBlock x:Name="CurrentSectionText" Text="Overview" FontSize="18" FontWeight="SemiBold"
+                               Foreground="{DynamicResource ForegroundBrush}"/>
+                    <TextBlock x:Name="CurrentSectionHint" Text="Connections, transfers, and app activity at a glance."
+                               FontSize="12" Foreground="{DynamicResource ForegroundDimBrush}" TextTrimming="CharacterEllipsis"/>
+                </StackPanel>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,16,0">
+                    <TextBlock x:Name="UtcClockText" Text="--:--:-- UTC" FontSize="12"
+                               Foreground="{DynamicResource ForegroundDimBrush}" VerticalAlignment="Center" Margin="0,0,16,0"/>
+                    <Button Content="Shortcuts" Click="Shortcuts_Click" Padding="12,7" Margin="0,0,8,0"
+                            Style="{DynamicResource SecondaryButton}" ToolTip="Keyboard shortcuts (?)"/>
+                    <Button Content="Settings" Click="Settings_Click" Padding="12,7"
+                            Style="{DynamicResource SecondaryButton}"/>
+                </StackPanel>
             </Grid>
         </Border>
 
-        <TabControl x:Name="MainTabControl" Grid.Row="1" Padding="0">
+        <TabControl x:Name="MainTabControl" Grid.Row="1" Padding="0" Style="{DynamicResource SidebarTabControlStyle}">
 
             <!-- ===== DASHBOARD group ===== -->
             <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,12,14,4">
                 <TabItem.Header>
                     <TextBlock Text="&#x25B8; DASHBOARD" FontFamily="{DynamicResource MonoFontFamily}"
-                               FontSize="9" Foreground="{DynamicResource TextFaintBrush}" Margin="0,8,0,0"/>
+                               FontSize="12" Foreground="{DynamicResource TextFaintBrush}" Margin="0,8,0,0"/>
                 </TabItem.Header>
             </TabItem>
 
             <!-- Overview Tab -->
-            <TabItem x:Name="OverviewTab" AutomationProperties.Name="Overview">
+            <TabItem x:Name="OverviewTab" AutomationProperties.Name="Overview" IsSelected="True">
                 <TabItem.Header>
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -198,7 +158,7 @@
                 <DockPanel Margin="12">
                     <!-- Stat cards row -->
                     <Border DockPanel.Dock="Top" Margin="0,0,0,12">
-                        <StackPanel Orientation="Horizontal">
+                        <UniformGrid Columns="4">
                             <Border Style="{DynamicResource StatCardStyle}">
                                 <Grid>
                                     <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -206,7 +166,7 @@
                                     <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
                                     <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                                     <StackPanel Margin="4">
-                                        <TextBlock Text="SERVERS" Style="{DynamicResource StatCardLabelStyle}"/>
+                                        <TextBlock Text="CONNECTED SERVERS" Style="{DynamicResource StatCardLabelStyle}"/>
                                         <StackPanel Orientation="Horizontal">
                                             <TextBlock Text="{Binding MountedServerCount}" Style="{DynamicResource StatCardValueStyle}"/>
                                             <TextBlock Text="/" Style="{DynamicResource StatCardValueStyle}" Foreground="{DynamicResource TextFaintBrush}" Margin="6,0"/>
@@ -222,7 +182,7 @@
                                     <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
                                     <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                                     <StackPanel Margin="4">
-                                        <TextBlock Text="ACTIVE DL" Style="{DynamicResource StatCardLabelStyle}"/>
+                                        <TextBlock Text="ACTIVE DOWNLOADS" Style="{DynamicResource StatCardLabelStyle}"/>
                                         <TextBlock Text="{Binding ActiveDownloadCount, FallbackValue=0}" Style="{DynamicResource StatCardValueStyle}"/>
                                     </StackPanel>
                                 </Grid>
@@ -246,12 +206,12 @@
                                     <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
                                     <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                                     <StackPanel Margin="4">
-                                        <TextBlock Text="DONE TODAY" Style="{DynamicResource StatCardLabelStyle}"/>
+                                        <TextBlock Text="COMPLETED" Style="{DynamicResource StatCardLabelStyle}"/>
                                         <TextBlock Text="{Binding CompletedTodayCount, FallbackValue=0}" Style="{DynamicResource StatCardValueStyle}"/>
                                     </StackPanel>
                                 </Grid>
                             </Border>
-                        </StackPanel>
+                        </UniformGrid>
                     </Border>
                     <!-- Main 2x2 body: volumes (TL), throughput (TR), telemetry (BL), ops log (BR) -->
                     <Grid>
@@ -268,7 +228,7 @@
                         <Border Grid.Row="0" Grid.Column="0" Style="{DynamicResource HudPanelStyle}" Margin="0,0,6,6">
                             <DockPanel>
                                 <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                    <TextBlock Text="&gt;&gt; MOUNTED VOLUMES" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                    <TextBlock Text="YOUR SERVERS" Style="{DynamicResource SectionHeaderTextStyle}"/>
                                 </Border>
                                 <Grid>
                                     <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -279,7 +239,7 @@
                                         <ItemsControl ItemsSource="{Binding MountedServerStatus}" Margin="14">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate>
-                                                    <Border Background="#80050F1A" BorderBrush="{DynamicResource LineBrush}"
+                                                    <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource LineBrush}"
                                                             BorderThickness="1" Padding="14" Margin="0,0,0,12">
                                                         <Grid>
                                                             <Grid.ColumnDefinitions>
@@ -326,20 +286,13 @@
                                                                     </Border>
                                                                 </StackPanel>
                                                                 <TextBlock DockPanel.Dock="Top" Text="{Binding Host}" Style="{DynamicResource MicroTextStyle}" Margin="0,2,0,8"/>
-                                                                <Border DockPanel.Dock="Top" Height="6" Background="{DynamicResource Background3Brush}" Margin="0,0,0,6">
-                                                                    <Border HorizontalAlignment="Left" Background="{DynamicResource AccentBrush}"
-                                                                            Width="{Binding CapacityPercent}">
-                                                                        <Border.Effect>
-                                                                            <DropShadowEffect Color="#00E5FF" BlurRadius="6" ShadowDepth="0" Opacity="0.7"/>
-                                                                        </Border.Effect>
-                                                                    </Border>
-                                                                </Border>
+                                                                <ProgressBar DockPanel.Dock="Top" Height="6" Background="{DynamicResource SurfaceLightBrush}" Margin="0,0,0,6" Minimum="0" Maximum="100" Value="{Binding CapacityPercent, Mode=OneWay}" Foreground="{DynamicResource AccentBrush}" AutomationProperties.Name="Connection usage"/>
                                                                 <Grid DockPanel.Dock="Top">
                                                                     <Grid.ColumnDefinitions>
                                                                         <ColumnDefinition Width="*"/>
                                                                         <ColumnDefinition Width="Auto"/>
                                                                     </Grid.ColumnDefinitions>
-                                                                    <TextBlock Grid.Column="0" FontFamily="{DynamicResource MonoFontFamily}" FontSize="11">
+                                                                    <TextBlock Grid.Column="0" FontFamily="{DynamicResource MonoFontFamily}" FontSize="12">
                                                                         <Run Text="{Binding CapacityUsedDisplay}" Foreground="{DynamicResource ForegroundBrush}"/>
                                                                         <Run Text=" / " Foreground="{DynamicResource TextFaintBrush}"/>
                                                                         <Run Text="{Binding CapacityTotalDisplay}" Foreground="{DynamicResource TextDimBrush}"/>
@@ -363,7 +316,7 @@
                         <Border Grid.Row="0" Grid.Column="1" Style="{DynamicResource HudPanelStyle}" Margin="6,0,0,6">
                             <DockPanel>
                                 <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                    <TextBlock Text="&gt;&gt; THROUGHPUT" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                    <TextBlock Text="THROUGHPUT" Style="{DynamicResource SectionHeaderTextStyle}"/>
                                 </Border>
                                 <Grid>
                                     <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -378,18 +331,20 @@
                                                 <ColumnDefinition Width="*"/>
                                             </Grid.ColumnDefinitions>
                                             <StackPanel Grid.Column="0">
-                                                <TextBlock Text="RX" Style="{DynamicResource MicroTextStyle}"/>
+                                                <TextBlock Text="DOWNLOAD SPEED" Style="{DynamicResource MicroTextStyle}"/>
                                                 <TextBlock Text="{Binding RxRateDisplay}" Style="{DynamicResource DisplayTextStyle}"
                                                            FontSize="24" Foreground="{DynamicResource AccentBrush}"/>
                                             </StackPanel>
                                             <StackPanel Grid.Column="1">
-                                                <TextBlock Text="TX" Style="{DynamicResource MicroTextStyle}"/>
+                                                <TextBlock Text="FXP TRANSFER SPEED" Style="{DynamicResource MicroTextStyle}"/>
                                                 <TextBlock Text="{Binding TxRateDisplay}" Style="{DynamicResource DisplayTextStyle}"
                                                            FontSize="24" Foreground="{DynamicResource Signature2Brush}"/>
                                             </StackPanel>
                                         </Grid>
+                                        <TextBlock DockPanel.Dock="Bottom" Text="Downloads · last 2 minutes · 0–50 MiB/s" FontSize="12"
+                                                   Margin="0,6,0,0" Foreground="{DynamicResource ForegroundDimBrush}"/>
                                         <!-- Area chart -->
-                                        <Border Height="120" Background="#80050F1A" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1">
+                                        <Border Height="120" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1">
                                             <Border.Resources>
                                                 <DrawingBrush x:Key="ChartGridBrush" TileMode="Tile" Stretch="None"
                                                               Viewport="0,0,24,12" ViewportUnits="Absolute">
@@ -412,13 +367,12 @@
                                             </Border.Resources>
                                             <Grid>
                                                 <Rectangle Fill="{StaticResource ChartGridBrush}" Opacity="0.6"/>
-                                                <Polyline Points="{Binding ThroughputPoints}"
-                                                          Stroke="{DynamicResource AccentBrush}" StrokeThickness="1.6"
-                                                          Stretch="Fill">
-                                                    <Polyline.Effect>
-                                                        <DropShadowEffect Color="#00E5FF" BlurRadius="8" ShadowDepth="0" Opacity="0.7"/>
-                                                    </Polyline.Effect>
-                                                </Polyline>
+                                                <Viewbox Stretch="Fill" Margin="4" ClipToBounds="True">
+                                                    <Canvas Width="60" Height="42">
+                                                        <Polyline Points="{Binding ThroughputPoints}" Stroke="{DynamicResource AccentBrush}"
+                                                                  StrokeThickness="0.4" Stretch="None"/>
+                                                    </Canvas>
+                                                </Viewbox>
                                             </Grid>
                                         </Border>
                                     </DockPanel>
@@ -430,13 +384,14 @@
                         <Border Grid.Row="1" Grid.Column="0" Style="{DynamicResource HudPanelStyle}" Margin="0,6,6,0">
                             <DockPanel>
                                 <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                    <TextBlock Text="&gt;&gt; KERNEL TELEMETRY" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                    <TextBlock Text="APP HEALTH" Style="{DynamicResource SectionHeaderTextStyle}"/>
                                 </Border>
                                 <Grid>
                                     <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
                                     <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
                                     <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
                                     <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                                     <StackPanel Margin="14">
                                         <!-- CPU row -->
                                         <Grid Margin="0,0,0,10">
@@ -446,16 +401,9 @@
                                                 <ColumnDefinition Width="Auto"/>
                                             </Grid.ColumnDefinitions>
                                             <TextBlock Grid.Column="0" Text="CPU" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
-                                            <Border Grid.Column="1" Height="8" Background="{DynamicResource Background3Brush}" VerticalAlignment="Center">
-                                                <Border HorizontalAlignment="Left" Background="{DynamicResource AccentBrush}"
-                                                        Width="{Binding TelemetryCpuPercent}">
-                                                    <Border.Effect>
-                                                        <DropShadowEffect Color="#00E5FF" BlurRadius="6" ShadowDepth="0" Opacity="0.6"/>
-                                                    </Border.Effect>
-                                                </Border>
-                                            </Border>
+                                            <ProgressBar Grid.Column="1" Height="8" Background="{DynamicResource SurfaceLightBrush}" VerticalAlignment="Center" Minimum="0" Maximum="100" Value="{Binding TelemetryCpuPercent, Mode=OneWay}" Foreground="{DynamicResource AccentBrush}" AutomationProperties.Name="CPU usage"/>
                                             <TextBlock Grid.Column="2" Margin="8,0,0,0" VerticalAlignment="Center"
-                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="11"
+                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
                                                        Foreground="{DynamicResource ForegroundBrush}">
                                                 <Run Text="{Binding TelemetryCpuPercent, StringFormat=N0}"/><Run Text="%"/>
                                             </TextBlock>
@@ -466,9 +414,9 @@
                                                 <ColumnDefinition Width="80"/>
                                                 <ColumnDefinition Width="*"/>
                                             </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="0" Text="MEM" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                                            <TextBlock Grid.Column="0" Text="Memory" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                                             <TextBlock Grid.Column="1" VerticalAlignment="Center"
-                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="11"
+                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
                                                        Foreground="{DynamicResource ForegroundBrush}">
                                                 <Run Text="{Binding TelemetryMemoryMb, StringFormat=N0}"/><Run Text=" MB"/>
                                             </TextBlock>
@@ -480,17 +428,10 @@
                                                 <ColumnDefinition Width="*"/>
                                                 <ColumnDefinition Width="Auto"/>
                                             </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="0" Text="POOL" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
-                                            <Border Grid.Column="1" Height="8" Background="{DynamicResource Background3Brush}" VerticalAlignment="Center">
-                                                <Border HorizontalAlignment="Left" Background="{DynamicResource Signature2Brush}"
-                                                        Width="{Binding TelemetryPoolUtilization}">
-                                                    <Border.Effect>
-                                                        <DropShadowEffect Color="#FF2AB8" BlurRadius="6" ShadowDepth="0" Opacity="0.6"/>
-                                                    </Border.Effect>
-                                                </Border>
-                                            </Border>
+                                            <TextBlock Grid.Column="0" Text="Connections" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                                            <ProgressBar Grid.Column="1" Height="8" Background="{DynamicResource SurfaceLightBrush}" VerticalAlignment="Center" Minimum="0" Maximum="100" Value="{Binding TelemetryPoolUtilization, Mode=OneWay}" Foreground="{DynamicResource Signature2Brush}" AutomationProperties.Name="Connection usage"/>
                                             <TextBlock Grid.Column="2" Margin="8,0,0,0" VerticalAlignment="Center"
-                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="11"
+                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
                                                        Foreground="{DynamicResource ForegroundBrush}">
                                                 <Run Text="{Binding TelemetryPoolUtilization, StringFormat=N0}"/><Run Text="%"/>
                                             </TextBlock>
@@ -515,6 +456,7 @@
                                             </StackPanel>
                                         </Grid>
                                     </StackPanel>
+                                    </ScrollViewer>
                                 </Grid>
                             </DockPanel>
                         </Border>
@@ -523,7 +465,7 @@
                         <Border Grid.Row="1" Grid.Column="1" Style="{DynamicResource HudPanelStyle}" Margin="6,6,0,0">
                             <DockPanel>
                                 <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                    <TextBlock Text="&gt;&gt; OPERATIONS LOG" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                    <TextBlock Text="OPERATIONS LOG" Style="{DynamicResource SectionHeaderTextStyle}"/>
                                 </Border>
                                 <Grid>
                                     <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -533,7 +475,7 @@
                                     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
                                         <TextBlock Text="{Binding OperationsLogPreview}"
                                                    FontFamily="{DynamicResource MonoFontFamily}"
-                                                   FontSize="11"
+                                                   FontSize="12"
                                                    Foreground="{DynamicResource TextDimBrush}"
                                                    TextWrapping="NoWrap"
                                                    Margin="14"/>
@@ -562,15 +504,16 @@
                     <!-- Toolbar (preserved as-is) -->
                     <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
                             CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
-                        <StackPanel Orientation="Horizontal">
+                        <WrapPanel ItemHeight="40">
                             <Button Content="Download" Command="{Binding DownloadNotificationCommand}"
-                                    Padding="12,6" Margin="0,0,6,0" Style="{StaticResource PrimaryButton}"/>
+                                    Padding="12,6" Margin="0,0,6,0" Style="{DynamicResource PrimaryButton}" IsEnabled="{Binding SelectedItem, ElementName=NotificationsGrid, Converter={StaticResource HasSelectionConverter}}"/>
                             <Button Content="Race" Command="{Binding RaceNotificationCommand}"
-                                    Padding="12,6" Margin="0,0,6,0" Style="{StaticResource PrimaryButton}"
-                                    ToolTip="Start FXP race for selected release across all configured servers"/>
+                                    Padding="12,6" Margin="0,0,6,0" Style="{DynamicResource PrimaryButton}"
+                                    ToolTip="Start FXP race for selected release across all configured servers" IsEnabled="{Binding SelectedItem, ElementName=NotificationsGrid, Converter={StaticResource HasSelectionConverter}}"/>
                             <Button Content="Clear All" Command="{Binding ClearNotificationsCommand}"
-                                    Padding="12,6" Margin="0,0,12,0" Style="{StaticResource SecondaryButton}"/>
-                            <TextBox Text="{Binding NotificationFilterText, UpdateSourceTrigger=PropertyChanged}"
+                                    Padding="12,6" Margin="0,0,12,0" Style="{DynamicResource SecondaryButton}"/>
+                            <TextBlock Text="Filter releases" VerticalAlignment="Center" Margin="4,0,8,0" Foreground="{DynamicResource ForegroundDimBrush}"/>
+                            <TextBox AutomationProperties.Name="Filter notifications by release name" Text="{Binding NotificationFilterText, UpdateSourceTrigger=PropertyChanged}"
                                      Width="160" VerticalContentAlignment="Center" Margin="0,0,6,0"
                                      ToolTip="Filter by release name"/>
                             <ComboBox ItemsSource="{Binding NotificationCategories}"
@@ -579,7 +522,7 @@
                             <ComboBox ItemsSource="{Binding NotificationServers}"
                                       SelectedItem="{Binding NotificationFilterServer}"
                                       Width="110" ToolTip="Filter by server"/>
-                        </StackPanel>
+                        </WrapPanel>
                     </Border>
                     <!-- DETAIL HUD panel -->
                     <Border DockPanel.Dock="Bottom" Height="180" Margin="0,10,0,0"
@@ -587,7 +530,7 @@
                             Visibility="{Binding HasNotificationSelection, Converter={StaticResource BoolToVisibility}}">
                         <DockPanel>
                             <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                <TextBlock Text="&gt;&gt; DETAIL" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                <TextBlock Text="DETAIL" Style="{DynamicResource SectionHeaderTextStyle}"/>
                             </Border>
                             <Grid>
                                 <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -605,7 +548,7 @@
                                     </Border>
                                     <StackPanel VerticalAlignment="Top">
                                         <TextBlock FontWeight="Bold" FontSize="16"
-                                                   Foreground="White"
+                                                   Foreground="{DynamicResource ForegroundBrush}"
                                                    Text="{Binding SelectedNotificationItem.ReleaseName}"/>
                                         <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
                                             <TextBlock Text="{Binding NotificationRating}" FontSize="13"
@@ -629,14 +572,19 @@
                     <Border Style="{DynamicResource HudPanelStyle}">
                         <DockPanel>
                             <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                <TextBlock Text="&gt;&gt; NEW RELEASE FEED" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Right" Text="{Binding Items.Count, ElementName=NotificationsGrid, StringFormat={}{0} releases}"
+                                               Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"/>
+                                    <TextBlock Text="NEW RELEASE FEED" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                </DockPanel>
                             </Border>
                             <Grid>
                                 <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
                                 <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
                                 <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
                                 <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
-                                <DataGrid ItemsSource="{Binding NotificationItems}"
+                                <Grid>
+<DataGrid ItemsSource="{Binding NotificationItems}"
                                           SelectedItem="{Binding SelectedNotificationItem}"
                                           AutoGenerateColumns="False" IsReadOnly="True"
                                           SelectionMode="Single" GridLinesVisibility="Horizontal"
@@ -658,12 +606,29 @@
                                         <KeyBinding Key="Return" Command="{Binding DownloadNotificationCommand}"/>
                                     </DataGrid.InputBindings>
                                     <DataGrid.Columns>
-                                        <DataGridTextColumn Header="Time" Binding="{Binding TimeDisplay}" Width="130"/>
+                                        <DataGridTextColumn Header="Time" Binding="{Binding TimeDisplay}" Width="160"/>
                                         <DataGridTextColumn Header="Server" Binding="{Binding ServerName}" Width="90"/>
                                         <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="100"/>
-                                        <DataGridTextColumn Header="Release" Binding="{Binding ReleaseName}" Width="*"/>
+                                        <DataGridTextColumn Header="Release" Binding="{Binding ReleaseName}" Width="*" ElementStyle="{StaticResource TruncatedCellText}"/>
                                     </DataGrid.Columns>
                                 </DataGrid>
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24,48,24,24" MaxWidth="460" IsHitTestVisible="False">
+                            <StackPanel.Style>
+                                <Style TargetType="StackPanel">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding HasItems, ElementName=NotificationsGrid}" Value="False">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </StackPanel.Style>
+                            <TextBlock Text="No releases to show" FontSize="18" FontWeight="SemiBold" TextAlignment="Center"
+                                       Foreground="{DynamicResource ForegroundBrush}" TextWrapping="Wrap"/>
+                            <TextBlock Text="New releases from connected servers appear here. If you have filters applied, try another category or server." FontSize="13" Margin="0,8,0,0" TextAlignment="Center"
+                                       Foreground="{DynamicResource ForegroundDimBrush}" TextWrapping="Wrap" LineHeight="20"/>
+                        </StackPanel>
+                    </Grid>
                             </Grid>
                         </DockPanel>
                     </Border>
@@ -686,7 +651,7 @@
                 <Border Margin="14" Style="{DynamicResource HudPanelStyle}">
                     <DockPanel>
                         <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                            <TextBlock Text="&gt;&gt; WISHLIST" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                            <TextBlock Text="WISHLIST" Style="{DynamicResource SectionHeaderTextStyle}"/>
                         </Border>
                         <Grid>
                             <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -696,23 +661,23 @@
                             <DockPanel Margin="12">
                     <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
                             CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
-                        <StackPanel Orientation="Horizontal">
+                        <WrapPanel ItemHeight="40">
                             <Button Content="+ Movie" Command="{Binding AddMovieCommand}"
-                                    Padding="12,6" Margin="0,0,6,0" Style="{StaticResource PrimaryButton}"/>
+                                    Padding="12,6" Margin="0,0,6,0" Style="{DynamicResource PrimaryButton}"/>
                             <Button Content="+ TV Show" Command="{Binding AddTvShowCommand}"
-                                    Padding="12,6" Margin="0,0,12,0" Style="{StaticResource PrimaryButton}"/>
+                                    Padding="12,6" Margin="0,0,12,0" Style="{DynamicResource PrimaryButton}"/>
                             <Button Content="Remove" Command="{Binding RemoveWishlistCommand}"
-                                    Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"/>
-                            <Button Content="Pause" Command="{Binding TogglePauseCommand}"
-                                    Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"/>
+                                    Padding="12,6" Margin="0,0,6,0" Style="{DynamicResource SecondaryButton}" IsEnabled="{Binding SelectedItem, ElementName=WishlistGrid, Converter={StaticResource HasSelectionConverter}}"/>
+                            <Button Content="Pause / Resume" Command="{Binding TogglePauseCommand}"
+                                    Padding="12,6" Margin="0,0,6,0" Style="{DynamicResource SecondaryButton}" IsEnabled="{Binding SelectedItem, ElementName=WishlistGrid, Converter={StaticResource HasSelectionConverter}}"/>
                             <Button Content="Refresh Info" Command="{Binding RefreshMetadataCommand}"
-                                    Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"
+                                    Padding="12,6" Margin="0,0,6,0" Style="{DynamicResource SecondaryButton}"
                                     ToolTip="Fetch posters, ratings, and plots for all items"/>
                             <Button Content="Export" Command="{Binding ExportWishlistCommand}"
-                                    Padding="12,6" Margin="0,0,6,0" Style="{StaticResource SecondaryButton}"/>
+                                    Padding="12,6" Margin="0,0,6,0" Style="{DynamicResource SecondaryButton}"/>
                             <Button Content="Import" Command="{Binding ImportWishlistCommand}"
-                                    Padding="12,6" Style="{StaticResource SecondaryButton}"/>
-                        </StackPanel>
+                                    Padding="12,6" Style="{DynamicResource SecondaryButton}"/>
+                        </WrapPanel>
                     </Border>
                     <Border DockPanel.Dock="Bottom" Height="155"
                             Background="{DynamicResource SurfaceBrush}"
@@ -729,7 +694,7 @@
                                        Source="{Binding SelectedPosterUrl, Converter={StaticResource ImageUrlConverter}, ConverterParameter=120}"/>
                             </Border>
                             <StackPanel VerticalAlignment="Top">
-                                <TextBlock FontWeight="Bold" FontSize="16" Foreground="White">
+                                <TextBlock FontWeight="Bold" FontSize="16" Foreground="{DynamicResource ForegroundBrush}">
                                     <Run Text="{Binding SelectedWishlistItem.Title, Mode=OneWay}"/>
                                     <Run Text=" ("/>
                                     <Run Text="{Binding SelectedWishlistItem.Year, Mode=OneWay}"/>
@@ -751,20 +716,38 @@
                             </StackPanel>
                         </DockPanel>
                     </Border>
-                    <DataGrid ItemsSource="{Binding WishlistItems}"
+                    <Grid>
+<DataGrid x:Name="WishlistGrid" ItemsSource="{Binding WishlistItems}"
                               SelectedItem="{Binding SelectedWishlistItem}"
                               AutoGenerateColumns="False" IsReadOnly="True"
                               SelectionMode="Single" GridLinesVisibility="Horizontal"
                               HeadersVisibility="Column" CanUserAddRows="False">
                         <DataGrid.Columns>
-                            <DataGridTextColumn Header="Title" Binding="{Binding Title}" Width="*"/>
+                            <DataGridTextColumn Header="Title" Binding="{Binding Title}" Width="*" ElementStyle="{StaticResource TruncatedCellText}"/>
                             <DataGridTextColumn Header="Type" Binding="{Binding Type}" Width="70"/>
                             <DataGridTextColumn Header="Year" Binding="{Binding Year}" Width="60"/>
                             <DataGridTextColumn Header="Quality" Binding="{Binding Quality}" Width="80"/>
                             <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="80"/>
-                            <DataGridTextColumn Header="Grabbed" Binding="{Binding GrabbedCount}" Width="65"/>
+                            <DataGridTextColumn Header="Downloaded" Binding="{Binding GrabbedCount}" Width="100"/>
                         </DataGrid.Columns>
                     </DataGrid>
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24,48,24,24" MaxWidth="460" IsHitTestVisible="False">
+                            <StackPanel.Style>
+                                <Style TargetType="StackPanel">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding HasItems, ElementName=WishlistGrid}" Value="False">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </StackPanel.Style>
+                            <TextBlock Text="Build your wishlist" FontSize="18" FontWeight="SemiBold" TextAlignment="Center"
+                                       Foreground="{DynamicResource ForegroundBrush}" TextWrapping="Wrap"/>
+                            <TextBlock Text="Add a movie or TV show above to track releases and download matching titles automatically." FontSize="13" Margin="0,8,0,0" TextAlignment="Center"
+                                       Foreground="{DynamicResource ForegroundDimBrush}" TextWrapping="Wrap" LineHeight="20"/>
+                        </StackPanel>
+                    </Grid>
                             </DockPanel>
                         </Grid>
                     </DockPanel>
@@ -787,7 +770,7 @@
                 <DockPanel Margin="12">
                     <!-- Stats cards row -->
                     <Border DockPanel.Dock="Top" Margin="0,0,0,10">
-                        <StackPanel Orientation="Horizontal">
+                        <UniformGrid Columns="4">
                             <Border Style="{DynamicResource StatCardStyle}">
                                 <Grid>
                                     <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -819,7 +802,7 @@
                                     <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
                                     <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                                     <StackPanel Margin="4">
-                                        <TextBlock Text="ERRORS" Style="{DynamicResource StatCardLabelStyle}"/>
+                                        <TextBlock Text="NEEDS ATTENTION" Style="{DynamicResource StatCardLabelStyle}"/>
                                         <TextBlock Text="{Binding FailedDownloadCount, FallbackValue=—}" Style="{DynamicResource StatCardValueStyle}"/>
                                     </StackPanel>
                                 </Grid>
@@ -831,12 +814,12 @@
                                     <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
                                     <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                                     <StackPanel Margin="4">
-                                        <TextBlock Text="TODAY" Style="{DynamicResource StatCardLabelStyle}"/>
+                                        <TextBlock Text="COMPLETED" Style="{DynamicResource StatCardLabelStyle}"/>
                                         <TextBlock Text="{Binding CompletedTodayCount, FallbackValue=—}" Style="{DynamicResource StatCardValueStyle}"/>
                                     </StackPanel>
                                 </Grid>
                             </Border>
-                        </StackPanel>
+                        </UniformGrid>
                     </Border>
                     <Border DockPanel.Dock="Top" Margin="0,0,0,8" Padding="10,6"
                             Background="{DynamicResource SurfaceBrush}" CornerRadius="4"
@@ -844,51 +827,17 @@
                         <TextBlock Text="{Binding ActiveDownloadSummary}" FontSize="12"
                                    Foreground="{DynamicResource ForegroundBrush}" TextWrapping="Wrap"/>
                     </Border>
-                    <Border DockPanel.Dock="Top" Height="56" Margin="0,0,0,6"
-                            Background="{DynamicResource Background1Brush}"
-                            BorderBrush="{DynamicResource LineBrush}" BorderThickness="1"
-                            ClipToBounds="True"
-                            Visibility="{Binding HasActiveDownload, Converter={StaticResource BoolToVisibility}}">
-                        <Grid>
-                            <Rectangle>
-                                <Rectangle.Fill>
-                                    <DrawingBrush TileMode="Tile" Viewport="0,0,24,12" ViewportUnits="Absolute" Stretch="None">
-                                        <DrawingBrush.Drawing>
-                                            <DrawingGroup>
-                                                <GeometryDrawing>
-                                                    <GeometryDrawing.Pen>
-                                                        <Pen Brush="#1C4368" Thickness="1"/>
-                                                    </GeometryDrawing.Pen>
-                                                    <GeometryDrawing.Geometry>
-                                                        <GeometryGroup>
-                                                            <LineGeometry StartPoint="24,0" EndPoint="24,12"/>
-                                                            <LineGeometry StartPoint="0,12" EndPoint="24,12"/>
-                                                        </GeometryGroup>
-                                                    </GeometryDrawing.Geometry>
-                                                </GeometryDrawing>
-                                            </DrawingGroup>
-                                        </DrawingBrush.Drawing>
-                                    </DrawingBrush>
-                                </Rectangle.Fill>
-                            </Rectangle>
-                            <Polyline Points="{Binding SpeedGraphPoints}" Stroke="{DynamicResource AccentBrush}"
-                                      StrokeThickness="1.6" StrokeLineJoin="Round">
-                                <Polyline.Effect>
-                                    <DropShadowEffect Color="#00E5FF" BlurRadius="6" ShadowDepth="0" Opacity="0.85"/>
-                                </Polyline.Effect>
-                            </Polyline>
-                        </Grid>
-                    </Border>
-                    <!-- STREAM MATRIX: live per-lane view of the selected (or busiest) active download -->
-                    <sm:StreamMatrixView DockPanel.Dock="Top" Margin="0,0,0,8"
-                                         DataContext="{Binding StreamMatrix}"
-                                         ConfigRequested="StreamMatrix_ConfigRequested"
-                                         Visibility="{Binding DataContext.HasStreamMatrix, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVisibility}}"/>
+                    <Expander DockPanel.Dock="Top" Header="Connection streams and throughput" IsExpanded="False" Margin="0,0,0,8"
+                              Visibility="{Binding HasStreamMatrix, Converter={StaticResource BoolToVisibility}}">
+                        <ScrollViewer MaxHeight="240" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                            <sm:StreamMatrixView DataContext="{Binding StreamMatrix}" ConfigRequested="StreamMatrix_ConfigRequested"/>
+                        </ScrollViewer>
+                    </Expander>
                     <!-- Transfer Queue HUD panel wrapping the toolbar + DataGrid -->
                     <Border Style="{DynamicResource HudPanelStyle}">
                         <DockPanel>
                             <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                <TextBlock Text="&gt;&gt; TRANSFER QUEUE" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                <TextBlock Text="TRANSFER QUEUE" Style="{DynamicResource SectionHeaderTextStyle}"/>
                             </Border>
                             <Grid>
                                 <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -900,28 +849,29 @@
                                             CornerRadius="6" Padding="8,6" Margin="0,0,0,0">
                                         <WrapPanel>
                                             <Button Content="Cancel" Command="{Binding CancelDownloadCommand}"
-                                                    Padding="12,6" Margin="0,0,6,4" Style="{StaticResource SecondaryButton}"/>
+                                                    Padding="12,6" Margin="0,0,6,4" Style="{DynamicResource SecondaryButton}" IsEnabled="{Binding SelectedItem, ElementName=DownloadsGrid, Converter={StaticResource HasSelectionConverter}}"/>
                                             <Button Content="Retry" Command="{Binding RetryDownloadCommand}"
-                                                    Padding="12,6" Margin="0,0,6,4" Style="{StaticResource SecondaryButton}"/>
+                                                    Padding="12,6" Margin="0,0,6,4" Style="{DynamicResource SecondaryButton}" IsEnabled="{Binding SelectedItem, ElementName=DownloadsGrid, Converter={StaticResource HasSelectionConverter}}"/>
                                             <Button Content="Open Folder" Command="{Binding OpenFolderCommand}"
-                                                    Padding="12,6" Margin="0,0,12,4" Style="{StaticResource SecondaryButton}"
-                                                    ToolTip="Open download folder in Explorer"/>
+                                                    Padding="12,6" Margin="0,0,12,4" Style="{DynamicResource SecondaryButton}"
+                                                    ToolTip="Open download folder in Explorer" IsEnabled="{Binding SelectedItem, ElementName=DownloadsGrid, Converter={StaticResource HasSelectionConverter}}"/>
                                             <Button Content="Clear Completed" Command="{Binding ClearCompletedCommand}"
-                                                    Padding="12,6" Margin="0,0,6,4" Style="{StaticResource SecondaryButton}"/>
+                                                    Padding="12,6" Margin="0,0,6,4" Style="{DynamicResource SecondaryButton}"/>
                                             <Button Content="Clear Failed" Command="{Binding ClearFailedCommand}"
-                                                    Padding="12,6" Margin="0,0,6,4" Style="{StaticResource SecondaryButton}"/>
+                                                    Padding="12,6" Margin="0,0,6,4" Style="{DynamicResource SecondaryButton}"/>
                                             <Button Content="Clear Cancelled" Command="{Binding ClearCancelledCommand}"
-                                                    Padding="12,6" Margin="0,0,6,4" Style="{StaticResource SecondaryButton}"/>
+                                                    Padding="12,6" Margin="0,0,6,4" Style="{DynamicResource SecondaryButton}"/>
                                             <Button Content="Clear All Finished" Command="{Binding ClearAllFinishedCommand}"
-                                                    Padding="12,6" Margin="0,0,12,4" Style="{StaticResource SecondaryButton}"
+                                                    Padding="12,6" Margin="0,0,12,4" Style="{DynamicResource SecondaryButton}"
                                                     ToolTip="Clear completed, failed, and cancelled"/>
                                             <Button Content="Move Up" Command="{Binding MoveUpCommand}"
-                                                    Padding="12,6" Margin="0,0,6,4" Style="{StaticResource SecondaryButton}"/>
+                                                    Padding="12,6" Margin="0,0,6,4" Style="{DynamicResource SecondaryButton}" IsEnabled="{Binding SelectedItem, ElementName=DownloadsGrid, Converter={StaticResource HasSelectionConverter}}"/>
                                             <Button Content="Move Down" Command="{Binding MoveDownCommand}"
-                                                    Padding="12,6" Margin="0,0,0,4" Style="{StaticResource SecondaryButton}"/>
+                                                    Padding="12,6" Margin="0,0,0,4" Style="{DynamicResource SecondaryButton}" IsEnabled="{Binding SelectedItem, ElementName=DownloadsGrid, Converter={StaticResource HasSelectionConverter}}"/>
                                         </WrapPanel>
                                     </Border>
-                                    <ListBox ItemsSource="{Binding DownloadItems}"
+                                    <Grid>
+<ListBox ItemsSource="{Binding DownloadItems}"
                               SelectedItem="{Binding SelectedDownloadItem}"
                               SelectionMode="Extended"
                               AllowDrop="True" Drop="Downloads_Drop"
@@ -957,6 +907,23 @@
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24,48,24,24" MaxWidth="460" IsHitTestVisible="False">
+                            <StackPanel.Style>
+                                <Style TargetType="StackPanel">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding HasItems, ElementName=DownloadsGrid}" Value="False">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </StackPanel.Style>
+                            <TextBlock Text="Your download queue is clear" FontSize="18" FontWeight="SemiBold" TextAlignment="Center"
+                                       Foreground="{DynamicResource ForegroundBrush}" TextWrapping="Wrap"/>
+                            <TextBlock Text="Find a release in Search or Notifications, then choose Download. You can also drag a release here." FontSize="13" Margin="0,8,0,0" TextAlignment="Center"
+                                       Foreground="{DynamicResource ForegroundDimBrush}" TextWrapping="Wrap" LineHeight="20"/>
+                        </StackPanel>
+                    </Grid>
                                 </DockPanel>
                             </Grid>
                         </DockPanel>
@@ -968,7 +935,7 @@
             <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,12,14,4">
                 <TabItem.Header>
                     <TextBlock Text="&#x25B8; MEDIA" FontFamily="{DynamicResource MonoFontFamily}"
-                               FontSize="9" Foreground="{DynamicResource TextFaintBrush}" Margin="0,8,0,0"/>
+                               FontSize="12" Foreground="{DynamicResource TextFaintBrush}" Margin="0,8,0,0"/>
                 </TabItem.Header>
             </TabItem>
 
@@ -988,7 +955,11 @@
                 <Border Margin="14" Style="{DynamicResource HudPanelStyle}">
                     <DockPanel>
                         <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                            <TextBlock Text="&gt;&gt; SEARCH" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Right" Text="{Binding Items.Count, ElementName=SearchGrid, StringFormat={}{0} results}"
+                                           Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"/>
+                                <TextBlock Text="SEARCH" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                            </DockPanel>
                         </Border>
                         <Grid>
                             <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -998,11 +969,11 @@
                             <DockPanel Margin="12">
                     <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
                         <Button DockPanel.Dock="Right" Content="Cancel" Command="{Binding CancelSearchCommand}"
-                                Padding="12,6" Margin="6,0,0,0" Style="{StaticResource SecondaryButton}"
+                                Padding="12,6" Margin="6,0,0,0" Style="{DynamicResource SecondaryButton}"
                                 Visibility="{Binding IsSearching, Converter={StaticResource BoolToVisibility}}"/>
                         <Button DockPanel.Dock="Right" Content="Search" Command="{Binding SearchCommand}"
-                                Padding="18,6" Margin="10,0,0,0" Style="{StaticResource PrimaryButton}"/>
-                        <TextBox Text="{Binding SearchQuery, UpdateSourceTrigger=PropertyChanged}"
+                                Padding="18,6" Margin="10,0,0,0" Style="{DynamicResource PrimaryButton}"/>
+                        <TextBox x:Name="SearchQueryBox" AutomationProperties.Name="Search connected servers" ToolTip="Enter a release, movie, or show name, then press Enter" Text="{Binding SearchQuery, UpdateSourceTrigger=PropertyChanged}"
                                  VerticalContentAlignment="Center">
                             <TextBox.InputBindings>
                                 <KeyBinding Key="Return" Command="{Binding SearchCommand}"/>
@@ -1029,21 +1000,21 @@
                                 <Setter Property="Command" Value="{Binding ToggleSearchFilterCommand}"/>
                             </Style>
                         </Border.Resources>
-                        <StackPanel Orientation="Horizontal">
+                        <WrapPanel ItemHeight="36">
                             <TextBlock Text="FILTERS" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center" Margin="0,0,12,0"/>
                             <!-- ALL QUALITIES — clears filter state -->
-                            <Button Style="{StaticResource FilterChipBase}" CommandParameter="clear">
+                            <Button Style="{StaticResource FilterChipBase}" CommandParameter="clear" AutomationProperties.Name="Clear all search filters">
                                 <Button.Template>
                                     <ControlTemplate TargetType="Button">
-                                        <Border x:Name="bd" Padding="9,3" BorderThickness="1"
-                                                Background="#1500E5FF" BorderBrush="#8000E5FF">
-                                            <TextBlock x:Name="tb" Text="ALL QUALITIES"
-                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                                        <Border x:Name="bd" Padding="12,6" BorderThickness="1"
+                                                Background="{DynamicResource AccentSubtleBrush}" BorderBrush="{DynamicResource AccentBrush}">
+                                            <TextBlock x:Name="tb" Text="CLEAR FILTERS"
+                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
                                                        Foreground="{DynamicResource AccentBrush}"/>
                                         </Border>
                                         <ControlTemplate.Triggers>
                                             <DataTrigger Binding="{Binding SearchFilterAnyActive}" Value="True">
-                                                <Setter TargetName="bd" Property="Background" Value="#660F2238"/>
+                                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource SurfaceLightBrush}"/>
                                                 <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource LineDimBrush}"/>
                                                 <Setter TargetName="tb" Property="Foreground" Value="{DynamicResource TextDimBrush}"/>
                                             </DataTrigger>
@@ -1051,109 +1022,110 @@
                                     </ControlTemplate>
                                 </Button.Template>
                             </Button>
-                            <Button Style="{StaticResource FilterChipBase}" CommandParameter="quality:1080p">
+                            <Button Style="{StaticResource FilterChipBase}" CommandParameter="quality:1080p" AutomationProperties.Name="Filter 1080p">
                                 <Button.Template>
                                     <ControlTemplate TargetType="Button">
-                                        <Border x:Name="bd" Padding="9,3" BorderThickness="1"
-                                                Background="#660F2238" BorderBrush="{DynamicResource LineDimBrush}">
+                                        <Border x:Name="bd" Padding="12,6" BorderThickness="1"
+                                                Background="{DynamicResource SurfaceLightBrush}" BorderBrush="{DynamicResource LineDimBrush}">
                                             <TextBlock x:Name="tb" Text="1080p"
-                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
                                                        Foreground="{DynamicResource TextDimBrush}"/>
                                         </Border>
                                         <ControlTemplate.Triggers>
                                             <DataTrigger Binding="{Binding SearchFilterQuality}" Value="1080p">
-                                                <Setter TargetName="bd" Property="Background" Value="#1500E5FF"/>
-                                                <Setter TargetName="bd" Property="BorderBrush" Value="#8000E5FF"/>
+                                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource AccentSubtleBrush}"/>
+                                                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
                                                 <Setter TargetName="tb" Property="Foreground" Value="{DynamicResource AccentBrush}"/>
                                             </DataTrigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>
                                 </Button.Template>
                             </Button>
-                            <Button Style="{StaticResource FilterChipBase}" CommandParameter="quality:2160p">
+                            <Button Style="{StaticResource FilterChipBase}" CommandParameter="quality:2160p" AutomationProperties.Name="Filter 2160p">
                                 <Button.Template>
                                     <ControlTemplate TargetType="Button">
-                                        <Border x:Name="bd" Padding="9,3" BorderThickness="1"
-                                                Background="#660F2238" BorderBrush="{DynamicResource LineDimBrush}">
+                                        <Border x:Name="bd" Padding="12,6" BorderThickness="1"
+                                                Background="{DynamicResource SurfaceLightBrush}" BorderBrush="{DynamicResource LineDimBrush}">
                                             <TextBlock x:Name="tb" Text="2160p"
-                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
                                                        Foreground="{DynamicResource TextDimBrush}"/>
                                         </Border>
                                         <ControlTemplate.Triggers>
                                             <DataTrigger Binding="{Binding SearchFilterQuality}" Value="2160p">
-                                                <Setter TargetName="bd" Property="Background" Value="#1500E5FF"/>
-                                                <Setter TargetName="bd" Property="BorderBrush" Value="#8000E5FF"/>
+                                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource AccentSubtleBrush}"/>
+                                                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
                                                 <Setter TargetName="tb" Property="Foreground" Value="{DynamicResource AccentBrush}"/>
                                             </DataTrigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>
                                 </Button.Template>
                             </Button>
-                            <Button Style="{StaticResource FilterChipBase}" CommandParameter="source:WEB">
+                            <Button Style="{StaticResource FilterChipBase}" CommandParameter="source:WEB" AutomationProperties.Name="Filter WEB">
                                 <Button.Template>
                                     <ControlTemplate TargetType="Button">
-                                        <Border x:Name="bd" Padding="9,3" BorderThickness="1"
-                                                Background="#660F2238" BorderBrush="{DynamicResource LineDimBrush}">
+                                        <Border x:Name="bd" Padding="12,6" BorderThickness="1"
+                                                Background="{DynamicResource SurfaceLightBrush}" BorderBrush="{DynamicResource LineDimBrush}">
                                             <TextBlock x:Name="tb" Text="WEB"
-                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
                                                        Foreground="{DynamicResource TextDimBrush}"/>
                                         </Border>
                                         <ControlTemplate.Triggers>
                                             <DataTrigger Binding="{Binding SearchFilterSource}" Value="WEB">
-                                                <Setter TargetName="bd" Property="Background" Value="#1500E5FF"/>
-                                                <Setter TargetName="bd" Property="BorderBrush" Value="#8000E5FF"/>
+                                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource AccentSubtleBrush}"/>
+                                                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
                                                 <Setter TargetName="tb" Property="Foreground" Value="{DynamicResource AccentBrush}"/>
                                             </DataTrigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>
                                 </Button.Template>
                             </Button>
-                            <Button Style="{StaticResource FilterChipBase}" CommandParameter="source:BLURAY">
+                            <Button Style="{StaticResource FilterChipBase}" CommandParameter="source:BLURAY" AutomationProperties.Name="Filter Blu-ray">
                                 <Button.Template>
                                     <ControlTemplate TargetType="Button">
-                                        <Border x:Name="bd" Padding="9,3" BorderThickness="1"
-                                                Background="#660F2238" BorderBrush="{DynamicResource LineDimBrush}">
+                                        <Border x:Name="bd" Padding="12,6" BorderThickness="1"
+                                                Background="{DynamicResource SurfaceLightBrush}" BorderBrush="{DynamicResource LineDimBrush}">
                                             <TextBlock x:Name="tb" Text="BLURAY"
-                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
                                                        Foreground="{DynamicResource TextDimBrush}"/>
                                         </Border>
                                         <ControlTemplate.Triggers>
                                             <DataTrigger Binding="{Binding SearchFilterSource}" Value="BLURAY">
-                                                <Setter TargetName="bd" Property="Background" Value="#1500E5FF"/>
-                                                <Setter TargetName="bd" Property="BorderBrush" Value="#8000E5FF"/>
+                                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource AccentSubtleBrush}"/>
+                                                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
                                                 <Setter TargetName="tb" Property="Foreground" Value="{DynamicResource AccentBrush}"/>
                                             </DataTrigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>
                                 </Button.Template>
                             </Button>
-                            <Button Style="{StaticResource FilterChipBase}" CommandParameter="size:1GB">
+                            <Button Style="{StaticResource FilterChipBase}" CommandParameter="size:1GB" AutomationProperties.Name="Filter larger than 1 GB">
                                 <Button.Template>
                                     <ControlTemplate TargetType="Button">
-                                        <Border x:Name="bd" Padding="9,3" BorderThickness="1"
-                                                Background="#660F2238" BorderBrush="{DynamicResource LineDimBrush}">
+                                        <Border x:Name="bd" Padding="12,6" BorderThickness="1"
+                                                Background="{DynamicResource SurfaceLightBrush}" BorderBrush="{DynamicResource LineDimBrush}">
                                             <TextBlock x:Name="tb" Text="&gt; 1GB"
-                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
                                                        Foreground="{DynamicResource TextDimBrush}"/>
                                         </Border>
                                         <ControlTemplate.Triggers>
                                             <DataTrigger Binding="{Binding SearchFilterBigSize}" Value="True">
-                                                <Setter TargetName="bd" Property="Background" Value="#1500E5FF"/>
-                                                <Setter TargetName="bd" Property="BorderBrush" Value="#8000E5FF"/>
+                                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource AccentSubtleBrush}"/>
+                                                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
                                                 <Setter TargetName="tb" Property="Foreground" Value="{DynamicResource AccentBrush}"/>
                                             </DataTrigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>
                                 </Button.Template>
                             </Button>
-                        </StackPanel>
+                        </WrapPanel>
                     </Border>
                     <DockPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
-                        <Button Content="Download Selected" Command="{Binding DownloadSearchResultCommand}"
-                                Padding="16,6" Style="{StaticResource PrimaryButton}"
-                                ToolTip="Download all selected results (Ctrl+click to multi-select)"/>
+                        <Button Content="Download Selected" HorizontalAlignment="Left" Command="{Binding DownloadSearchResultCommand}"
+                                Padding="16,6" Style="{DynamicResource PrimaryButton}"
+                                ToolTip="Download all selected results (Ctrl+click to multi-select)" IsEnabled="{Binding SelectedItem, ElementName=SearchGrid, Converter={StaticResource HasSelectionConverter}}"/>
                     </DockPanel>
-                    <DataGrid ItemsSource="{Binding SearchResults}"
+                    <Grid>
+<DataGrid ItemsSource="{Binding SearchResults}"
                               SelectedItem="{Binding SelectedSearchResult}"
                               AutoGenerateColumns="False" IsReadOnly="True"
                               SelectionMode="Extended" GridLinesVisibility="Horizontal"
@@ -1172,12 +1144,29 @@
                             <KeyBinding Key="Return" Command="{Binding DownloadSearchResultCommand}"/>
                         </DataGrid.InputBindings>
                         <DataGrid.Columns>
-                            <DataGridTextColumn Header="Release" Binding="{Binding ReleaseName}" Width="*"/>
+                            <DataGridTextColumn Header="Release" Binding="{Binding ReleaseName}" Width="*" ElementStyle="{StaticResource TruncatedCellText}"/>
                             <DataGridTextColumn Header="Server" Binding="{Binding ServerName}" Width="90"/>
                             <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="100"/>
                             <DataGridTextColumn Header="Size" Binding="{Binding SizeText}" Width="80"/>
                         </DataGrid.Columns>
                     </DataGrid>
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24,48,24,24" MaxWidth="460" IsHitTestVisible="False">
+                            <StackPanel.Style>
+                                <Style TargetType="StackPanel">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding HasItems, ElementName=SearchGrid}" Value="False">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </StackPanel.Style>
+                            <TextBlock Text="No results to show" FontSize="18" FontWeight="SemiBold" TextAlignment="Center"
+                                       Foreground="{DynamicResource ForegroundBrush}" TextWrapping="Wrap"/>
+                            <TextBlock Text="Search by release, movie, or show name. Try fewer keywords or clear the filters to broaden your results." FontSize="13" Margin="0,8,0,0" TextAlignment="Center"
+                                       Foreground="{DynamicResource ForegroundDimBrush}" TextWrapping="Wrap" LineHeight="20"/>
+                        </StackPanel>
+                    </Grid>
                             </DockPanel>
                         </Grid>
                     </DockPanel>
@@ -1210,10 +1199,10 @@
                         <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
                                 Padding="6,5" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
                             <DockPanel>
-                                <Button DockPanel.Dock="Right" Content="&#x1F50D;"
+                                <Button DockPanel.Dock="Right" Content="Search"
                                         Command="{Binding SearchCommand}"
-                                        Padding="7,4" Margin="4,0,0,0" Style="{StaticResource PrimaryButton}" FontSize="10"/>
-                                <TextBox x:Name="PlayerSearchBox" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                                        Padding="7,4" Margin="4,0,0,0" Style="{DynamicResource PrimaryButton}" FontSize="12"/>
+                                <TextBox x:Name="PlayerSearchBox" AutomationProperties.Name="Search movies and TV shows" ToolTip="Search movies and TV shows" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
                                          Padding="6,4" FontSize="11.5" VerticalContentAlignment="Center"
                                          Background="{DynamicResource SurfaceLightBrush}"
                                          Foreground="{DynamicResource ForegroundBrush}"
@@ -1227,13 +1216,13 @@
                             <StackPanel Orientation="Horizontal" Margin="4,3">
                                 <RadioButton x:Name="BrowseMode" Content="Browse" IsChecked="True"
                                              Style="{StaticResource ModeTabStyle}"
-                                             Padding="12,5" Margin="0,0,4,0" FontSize="11"/>
+                                             Padding="12,5" Margin="0,0,4,0" FontSize="12"/>
                                 <RadioButton x:Name="NowPlayingMode" Content="Now Playing"
                                              Style="{StaticResource ModeTabStyle}"
-                                             Padding="12,5" Margin="0,0,4,0" FontSize="11"/>
+                                             Padding="12,5" Margin="0,0,4,0" FontSize="12"/>
                                 <RadioButton x:Name="LibraryMode" Content="Library"
                                              Style="{StaticResource ModeTabStyle}"
-                                             Padding="12,5" FontSize="11"
+                                             Padding="12,5" FontSize="12"
                                              Checked="LibraryMode_Checked"/>
                             </StackPanel>
                         </Border>
@@ -1242,7 +1231,7 @@
                         <Border DockPanel.Dock="Bottom" Background="{DynamicResource SurfaceBrush}"
                                 Padding="8,3" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0">
                             <TextBlock Text="{Binding PlayerStatus}"
-                                       Foreground="{DynamicResource ForegroundDimBrush}" FontSize="10"
+                                       Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"
                                        VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
                         </Border>
 
@@ -1254,9 +1243,9 @@
                                 <!-- Search results (only when search has results) -->
                                 <StackPanel Visibility="{Binding HasSearchResults, Converter={StaticResource BoolToVisibility}}">
                                     <DockPanel Margin="0,0,0,4">
-                                        <Button DockPanel.Dock="Right" Content="Clear" FontSize="10"
+                                        <Button DockPanel.Dock="Right" Content="Clear" FontSize="12"
                                                 Command="{Binding ClearSearchCommand}"
-                                                Style="{StaticResource SecondaryButton}" Padding="8,2"/>
+                                                Style="{DynamicResource SecondaryButton}" Padding="8,2"/>
                                         <TextBlock Text="Search Results" FontWeight="SemiBold" FontSize="12"
                                                    Foreground="{DynamicResource ForegroundBrush}" VerticalAlignment="Center"/>
                                     </DockPanel>
@@ -1281,9 +1270,9 @@
                                                                        Foreground="{DynamicResource ForegroundBrush}"
                                                                        TextTrimming="CharacterEllipsis" MaxHeight="24"/>
                                                             <StackPanel Orientation="Horizontal" Margin="0,1,0,0">
-                                                                <TextBlock Text="{Binding RatingDisplay}" FontSize="9"
+                                                                <TextBlock Text="{Binding RatingDisplay}" FontSize="12"
                                                                            Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold"/>
-                                                                <TextBlock Text="{Binding Year}" FontSize="9" Margin="4,0,0,0"
+                                                                <TextBlock Text="{Binding Year}" FontSize="12" Margin="4,0,0,0"
                                                                            Foreground="{DynamicResource ForegroundDimBrush}"/>
                                                             </StackPanel>
                                                         </StackPanel>
@@ -1297,9 +1286,9 @@
 
                                 <!-- Trending Movies -->
                                 <DockPanel Margin="0,0,0,4">
-                                    <Button DockPanel.Dock="Right" Content="&#x21BB;" FontSize="10"
+                                    <Button DockPanel.Dock="Right" Content="&#x21BB;" FontSize="12"
                                             Command="{Binding RefreshTrendingCommand}"
-                                            Style="{StaticResource SecondaryButton}" Padding="6,2"
+                                            Style="{DynamicResource SecondaryButton}" Padding="6,2"
                                             ToolTip="Refresh trending"/>
                                     <TextBlock Text="&#x1F3AC; Trending Movies" FontWeight="SemiBold" FontSize="12"
                                                Foreground="{DynamicResource ForegroundBrush}" VerticalAlignment="Center"/>
@@ -1325,9 +1314,9 @@
                                                                    Foreground="{DynamicResource ForegroundBrush}"
                                                                    TextTrimming="CharacterEllipsis" MaxHeight="24"/>
                                                         <StackPanel Orientation="Horizontal" Margin="0,1,0,0">
-                                                            <TextBlock Text="{Binding RatingDisplay}" FontSize="9"
+                                                            <TextBlock Text="{Binding RatingDisplay}" FontSize="12"
                                                                        Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold"/>
-                                                            <TextBlock Text="{Binding Year}" FontSize="9" Margin="4,0,0,0"
+                                                            <TextBlock Text="{Binding Year}" FontSize="12" Margin="4,0,0,0"
                                                                        Foreground="{DynamicResource ForegroundDimBrush}"/>
                                                         </StackPanel>
                                                     </StackPanel>
@@ -1361,9 +1350,9 @@
                                                                    Foreground="{DynamicResource ForegroundBrush}"
                                                                    TextTrimming="CharacterEllipsis" MaxHeight="24"/>
                                                         <StackPanel Orientation="Horizontal" Margin="0,1,0,0">
-                                                            <TextBlock Text="{Binding RatingDisplay}" FontSize="9"
+                                                            <TextBlock Text="{Binding RatingDisplay}" FontSize="12"
                                                                        Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold"/>
-                                                            <TextBlock Text="{Binding Year}" FontSize="9" Margin="4,0,0,0"
+                                                            <TextBlock Text="{Binding Year}" FontSize="12" Margin="4,0,0,0"
                                                                        Foreground="{DynamicResource ForegroundDimBrush}"/>
                                                         </StackPanel>
                                                     </StackPanel>
@@ -1395,7 +1384,7 @@
                                             </Border>
                                             <StackPanel>
                                                 <TextBlock Text="{Binding DetailTitle}" FontWeight="Bold" FontSize="15"
-                                                           Foreground="White" TextWrapping="Wrap" MaxHeight="40"/>
+                                                           Foreground="{DynamicResource ForegroundBrush}" TextWrapping="Wrap" MaxHeight="40"/>
                                                 <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                                                     <TextBlock Text="{Binding DetailRating}" FontSize="12" FontWeight="SemiBold"
                                                                Foreground="{DynamicResource AccentBrush}"/>
@@ -1405,14 +1394,14 @@
                                                 <TextBlock Text="{Binding DetailGenres}" FontSize="10.5" Margin="0,2,0,0"
                                                            Foreground="{DynamicResource ForegroundDimBrush}"/>
                                                 <TextBlock Text="{Binding DetailPlot}" TextWrapping="Wrap"
-                                                           MaxHeight="48" FontSize="11" Margin="0,5,0,0"
+                                                           MaxHeight="48" FontSize="12" Margin="0,5,0,0"
                                                            LineHeight="15"
                                                            Foreground="{DynamicResource ForegroundDimBrush}"
                                                            TextTrimming="CharacterEllipsis"/>
                                                 <Button Content="&#x1F50D; Search" Margin="0,8,0,0"
                                                         Command="{Binding SearchAndPlayCommand}"
-                                                        Padding="14,6" Style="{StaticResource PrimaryButton}"
-                                                        HorizontalAlignment="Left" FontSize="11"/>
+                                                        Padding="14,6" Style="{DynamicResource PrimaryButton}"
+                                                        HorizontalAlignment="Left" FontSize="12"/>
                                             </StackPanel>
                                         </DockPanel>
                                     </StackPanel>
@@ -1433,14 +1422,14 @@
                                                   MaxHeight="160"
                                                   MouseDoubleClick="PlayerResult_DoubleClick">
                                             <DataGrid.Columns>
-                                                <DataGridTextColumn Header="Release" Binding="{Binding ReleaseName}" Width="*"/>
+                                                <DataGridTextColumn Header="Release" Binding="{Binding ReleaseName}" Width="*" ElementStyle="{StaticResource TruncatedCellText}"/>
                                                 <DataGridTextColumn Header="Server" Binding="{Binding ServerName}" Width="60"/>
                                                 <DataGridTextColumn Header="Size" Binding="{Binding SizeText}" Width="55"/>
                                             </DataGrid.Columns>
                                         </DataGrid>
                                         <Button Content="&#x25B6; Play Selected" Command="{Binding PlayResultCommand}"
                                                 Padding="14,5" Margin="0,6,0,0" HorizontalAlignment="Left"
-                                                Style="{StaticResource PrimaryButton}" FontSize="11"/>
+                                                Style="{DynamicResource PrimaryButton}" FontSize="12"/>
                                     </StackPanel>
                                 </Border>
 
@@ -1459,7 +1448,7 @@
                                                   MaxHeight="160"
                                                   MouseDoubleClick="TorrentResult_DoubleClick">
                                             <DataGrid.Columns>
-                                                <DataGridTextColumn Header="Name" Binding="{Binding Title}" Width="*"/>
+                                                <DataGridTextColumn Header="Name" Binding="{Binding Title}" Width="*" ElementStyle="{StaticResource TruncatedCellText}"/>
                                                 <DataGridTextColumn Header="S" Binding="{Binding SeedsDisplay}" Width="35">
                                                     <DataGridTextColumn.ElementStyle>
                                                         <Style TargetType="TextBlock">
@@ -1482,18 +1471,18 @@
                                         <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                                             <Button Content="&#x25B6; Play Torrent" Command="{Binding PlayTorrentCommand}"
                                                     Padding="14,5" HorizontalAlignment="Left"
-                                                    Style="{StaticResource PrimaryButton}" FontSize="11"/>
+                                                    Style="{DynamicResource PrimaryButton}" FontSize="12"/>
                                             <Button Content="&#x2B07; Download to folder&#x2026;"
                                                     Command="{Binding DownloadTorrentCommand}"
                                                     Padding="14,5" Margin="8,0,0,0" HorizontalAlignment="Left"
-                                                    FontSize="11"
+                                                    FontSize="12"
                                                     ToolTip="Download this torrent and keep the files. Stops once complete."/>
                                         </StackPanel>
 
                                         <!-- Active torrent downloads -->
                                         <StackPanel Margin="0,10,0,0"
                                                     Visibility="{Binding HasTorrentDownloads, Converter={StaticResource BoolToVisibility}}">
-                                            <TextBlock Text="Downloading" FontWeight="SemiBold" FontSize="11"
+                                            <TextBlock Text="Downloading" FontWeight="SemiBold" FontSize="12"
                                                        Foreground="{DynamicResource ForegroundBrush}" Margin="0,0,0,4"/>
                                             <DataGrid ItemsSource="{Binding TorrentDownloads}"
                                                       AutoGenerateColumns="False" IsReadOnly="True"
@@ -1501,7 +1490,7 @@
                                                       HeadersVisibility="Column" CanUserAddRows="False"
                                                       MaxHeight="120">
                                                 <DataGrid.Columns>
-                                                    <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*"/>
+                                                    <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*" ElementStyle="{StaticResource TruncatedCellText}"/>
                                                     <DataGridTextColumn Header="%" Binding="{Binding PercentDisplay}" Width="55"/>
                                                     <DataGridTextColumn Header="Speed" Binding="{Binding SpeedDisplay}" Width="70"/>
                                                     <DataGridTextColumn Header="Peers" Binding="{Binding PeersDisplay}" Width="60"/>
@@ -1509,7 +1498,7 @@
                                                     <DataGridTemplateColumn Header="" Width="60">
                                                         <DataGridTemplateColumn.CellTemplate>
                                                             <DataTemplate>
-                                                                <Button Content="Cancel" FontSize="10" Padding="6,2"
+                                                                <Button Content="Cancel" FontSize="12" Padding="6,2"
                                                                         Command="{Binding DataContext.CancelTorrentDownloadCommand,
                                                                                   RelativeSource={RelativeSource AncestorType=DataGrid}}"
                                                                         CommandParameter="{Binding}"/>
@@ -1530,7 +1519,7 @@
                                                    Foreground="{DynamicResource ForegroundDimBrush}"
                                                    HorizontalAlignment="Center" Margin="0,0,0,4"/>
                                         <TextBlock Text="Click a movie or TV show in Browse to see details."
-                                                   FontSize="11" Foreground="{DynamicResource ForegroundDimBrush}"
+                                                   FontSize="12" Foreground="{DynamicResource ForegroundDimBrush}"
                                                    TextWrapping="Wrap" TextAlignment="Center" MaxWidth="250"/>
                                     </StackPanel>
                                 </Border>
@@ -1545,7 +1534,7 @@
                                                        Foreground="{DynamicResource ForegroundBrush}" VerticalAlignment="Center"/>
                                             <ComboBox DockPanel.Dock="Right" ItemsSource="{Binding Seasons}"
                                                       SelectedItem="{Binding SelectedSeason}"
-                                                      DisplayMemberPath="Name" Width="150" FontSize="11"
+                                                      DisplayMemberPath="Name" Width="150" FontSize="12"
                                                       HorizontalAlignment="Right"/>
                                         </DockPanel>
                                         <ItemsControl ItemsSource="{Binding Episodes}" MaxHeight="200">
@@ -1556,9 +1545,9 @@
                                                             MouseLeftButtonDown="Episode_Click">
                                                         <DockPanel>
                                                             <TextBlock DockPanel.Dock="Right" Text="{Binding Runtime, StringFormat={}{0}m}"
-                                                                       FontSize="10" Foreground="{DynamicResource ForegroundDimBrush}"
+                                                                       FontSize="12" Foreground="{DynamicResource ForegroundDimBrush}"
                                                                        VerticalAlignment="Center" Margin="8,0,0,0"/>
-                                                            <TextBlock Text="{Binding DisplayName}" FontSize="11" FontWeight="SemiBold"
+                                                            <TextBlock Text="{Binding DisplayName}" FontSize="12" FontWeight="SemiBold"
                                                                        Foreground="{DynamicResource ForegroundBrush}"
                                                                        TextTrimming="CharacterEllipsis"/>
                                                         </DockPanel>
@@ -1586,18 +1575,18 @@
                                                     MouseLeftButtonDown="LibraryItem_Click">
                                                 <DockPanel>
                                                     <StackPanel DockPanel.Dock="Right" VerticalAlignment="Center" Margin="8,0,0,0">
-                                                        <TextBlock Text="{Binding SizeText}" FontSize="10"
+                                                        <TextBlock Text="{Binding SizeText}" FontSize="12"
                                                                    Foreground="{DynamicResource ForegroundDimBrush}"
                                                                    HorizontalAlignment="Right"/>
-                                                        <TextBlock Text="{Binding ResumePercent}" FontSize="10"
+                                                        <TextBlock Text="{Binding ResumePercent}" FontSize="12"
                                                                    Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold"
                                                                    HorizontalAlignment="Right"/>
                                                     </StackPanel>
                                                     <StackPanel>
-                                                        <TextBlock Text="{Binding ReleaseName}" FontWeight="SemiBold" FontSize="11"
+                                                        <TextBlock Text="{Binding ReleaseName}" FontWeight="SemiBold" FontSize="12"
                                                                    Foreground="{DynamicResource ForegroundBrush}"
                                                                    TextTrimming="CharacterEllipsis"/>
-                                                        <TextBlock Text="{Binding FileName}" FontSize="10" Margin="0,2,0,0"
+                                                        <TextBlock Text="{Binding FileName}" FontSize="12" Margin="0,2,0,0"
                                                                    Foreground="{DynamicResource ForegroundDimBrush}"
                                                                    TextTrimming="CharacterEllipsis"/>
                                                     </StackPanel>
@@ -1628,28 +1617,28 @@
                                 <DockPanel>
                                     <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
                                         <Button Content="&#x25B6;&#xFE0E;" Command="{Binding PlayPauseCommand}"
-                                                Padding="6,3" Margin="0,0,4,0" Style="{StaticResource PrimaryButton}"
+                                                Padding="6,3" Margin="0,0,4,0" Style="{DynamicResource PrimaryButton}"
                                                 FontSize="13" Width="32" ToolTip="Play / Pause (Space)"/>
                                         <Button Content="&#x25A0;" Command="{Binding StopCommand}"
-                                                Padding="6,3" Margin="0,0,8,0" Style="{StaticResource SecondaryButton}"
-                                                FontSize="11" Width="32" ToolTip="Stop"/>
-                                        <TextBlock Text="{Binding TimeDisplay}" FontSize="11" FontFamily="Consolas"
+                                                Padding="6,3" Margin="0,0,8,0" Style="{DynamicResource SecondaryButton}"
+                                                FontSize="12" Width="32" ToolTip="Stop"/>
+                                        <TextBlock Text="{Binding TimeDisplay}" FontSize="12" FontFamily="Consolas"
                                                    Foreground="{DynamicResource ForegroundDimBrush}"
                                                    VerticalAlignment="Center"/>
                                     </StackPanel>
                                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
                                         <ComboBox ItemsSource="{Binding AudioTracks}"
                                                   SelectedIndex="{Binding AudioTrackIndex}"
-                                                  Width="75" FontSize="9" Margin="0,0,4,0"
+                                                  Width="75" FontSize="12" Margin="0,0,4,0"
                                                   ToolTip="Audio track"/>
                                         <ComboBox ItemsSource="{Binding SubtitleTracks}"
                                                   SelectedIndex="{Binding SubtitleTrackIndex}"
-                                                  Width="75" FontSize="9" Margin="0,0,6,0"
+                                                  Width="75" FontSize="12" Margin="0,0,6,0"
                                                   ToolTip="Subtitle track"/>
                                         <!-- Cast button -->
                                         <Button x:Name="CastButton" Content="&#x1F4E1;&#xFE0E;" FontSize="12"
                                                 Padding="4,2" Margin="0,0,6,0" VerticalAlignment="Center"
-                                                Style="{StaticResource SecondaryButton}"
+                                                Style="{DynamicResource SecondaryButton}"
                                                 Click="CastButton_Click">
                                             <Button.ToolTip>
                                                 <MultiBinding StringFormat="{}{0}">
@@ -1677,7 +1666,7 @@
                                                 </ContextMenu>
                                             </Button.ContextMenu>
                                         </Button>
-                                        <TextBlock Text="&#x1F50A;" VerticalAlignment="Center" Margin="0,0,3,0" FontSize="10"/>
+                                        <TextBlock Text="&#x1F50A;" VerticalAlignment="Center" Margin="0,0,3,0" FontSize="12"/>
                                         <Slider Value="{Binding Volume}" Minimum="0" Maximum="100" Width="70" MinWidth="50"
                                                 VerticalAlignment="Center"/>
                                     </StackPanel>
@@ -1691,14 +1680,14 @@
                             <!-- NO SIGNAL overlay (rendered behind VideoView; visible when video is idle) -->
                             <Grid IsHitTestVisible="False">
                                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.85">
-                                    <TextBlock Text="NO SIGNAL" FontFamily="{DynamicResource DisplayFontFamily}" FontWeight="Bold"
-                                               FontSize="48" Foreground="{DynamicResource AccentBrush}" HorizontalAlignment="Center">
+                                    <TextBlock Text="Choose something to watch" FontFamily="{DynamicResource DisplayFontFamily}" FontWeight="Bold"
+                                               FontSize="26" Foreground="{DynamicResource AccentBrush}" HorizontalAlignment="Center">
                                         <TextBlock.Effect>
                                             <DropShadowEffect Color="#00E5FF" BlurRadius="18" ShadowDepth="0" Opacity="0.8"/>
                                         </TextBlock.Effect>
                                     </TextBlock>
-                                    <TextBlock Text="WAITING FOR A SOURCE..." Style="{DynamicResource MicroTextStyle}"
-                                               FontSize="11" Foreground="{DynamicResource TextFaintBrush}"
+                                    <TextBlock Text="Search for a title or open your library to begin." Style="{DynamicResource MicroTextStyle}"
+                                               FontSize="12" Foreground="{DynamicResource TextFaintBrush}"
                                                HorizontalAlignment="Center" Margin="0,8,0,0"/>
                                 </StackPanel>
                             </Grid>
@@ -1708,7 +1697,7 @@
                                     Visibility="{Binding IsBuffering, Converter={StaticResource BoolToVisibility}}">
                                 <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
                                     <TextBlock Text="&#x23F3; Buffering..." FontSize="18" FontWeight="SemiBold"
-                                               Foreground="White" HorizontalAlignment="Center" Margin="0,0,0,8"/>
+                                               Foreground="{DynamicResource ForegroundBrush}" HorizontalAlignment="Center" Margin="0,0,0,8"/>
                                     <ProgressBar Value="{Binding BufferProgress}" Maximum="100"
                                                  Width="200" Height="6" Foreground="{DynamicResource AccentBrush}"/>
                                     <TextBlock Text="{Binding PlayerStatus}" FontSize="12"
@@ -1737,7 +1726,7 @@
                 <Border Margin="14" Style="{DynamicResource HudPanelStyle}">
                     <DockPanel>
                         <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                            <TextBlock Text="&gt;&gt; UPCOMING RELEASES" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                            <TextBlock Text="UPCOMING RELEASES" Style="{DynamicResource SectionHeaderTextStyle}"/>
                         </Border>
                         <Grid>
                             <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -1749,9 +1738,9 @@
                             CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
                         <StackPanel Orientation="Horizontal">
                             <Button Content="Refresh" Command="{Binding LoadUpcomingCommand}"
-                                    Padding="12,6" Margin="0,0,6,0" Style="{StaticResource PrimaryButton}"/>
+                                    Padding="12,6" Margin="0,0,6,0" Style="{DynamicResource PrimaryButton}"/>
                             <Button Content="Add to Wishlist" Command="{Binding AddUpcomingToWishlistCommand}"
-                                    Padding="12,6" Margin="0,0,12,0" Style="{StaticResource PrimaryButton}"/>
+                                    Padding="12,6" Margin="0,0,12,0" Style="{DynamicResource PrimaryButton}"/>
                             <TextBlock Text="Quality:" VerticalAlignment="Center" Margin="0,0,6,0"/>
                             <ComboBox ItemsSource="{Binding QualityOptions}"
                                       SelectedItem="{Binding UpcomingQualityText}" Width="90"/>
@@ -1775,7 +1764,7 @@
                             </Border>
                             <StackPanel VerticalAlignment="Top">
                                 <TextBlock Text="{Binding UpcomingDetailTitle}" FontWeight="Bold" FontSize="16"
-                                           Foreground="White"/>
+                                           Foreground="{DynamicResource ForegroundBrush}"/>
                                 <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
                                     <TextBlock Text="{Binding UpcomingRating}" FontSize="13"
                                                FontWeight="SemiBold"
@@ -1805,7 +1794,7 @@
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                     <ComboBox ItemsSource="{Binding TvTypeOptions}"
                                               SelectedItem="{Binding TvTypeFilter}"
-                                              Width="90" FontSize="11" Margin="0,0,6,0"
+                                              Width="90" FontSize="12" Margin="0,0,6,0"
                                               ToolTip="Filter by show type"/>
                                     <TextBox Text="{Binding ShowSearchQuery, UpdateSourceTrigger=PropertyChanged}"
                                              Width="140" VerticalContentAlignment="Center" FontSize="11.5"
@@ -1815,10 +1804,10 @@
                                         </TextBox.InputBindings>
                                     </TextBox>
                                     <Button Content="Search" Command="{Binding SearchShowScheduleCommand}"
-                                            Padding="8,3" FontSize="11" Style="{StaticResource PrimaryButton}"/>
+                                            Padding="8,3" FontSize="12" Style="{DynamicResource PrimaryButton}"/>
                                     <Button Content="X" Command="{Binding ClearShowSearchCommand}"
-                                            Padding="6,3" Margin="4,0,0,0" FontSize="11"
-                                            Style="{StaticResource SecondaryButton}"
+                                            Padding="6,3" Margin="4,0,0,0" FontSize="12"
+                                            Style="{DynamicResource SecondaryButton}"
                                             Visibility="{Binding IsShowSearchActive, Converter={StaticResource BoolToVisibility}}"/>
                                 </StackPanel>
                             </DockPanel>
@@ -1829,7 +1818,7 @@
                                       HeadersVisibility="Column" CanUserAddRows="False">
                                 <DataGrid.Columns>
                                     <DataGridTextColumn Header="Date" Binding="{Binding DateDisplay}" Width="75"/>
-                                    <DataGridTextColumn Header="Show" Binding="{Binding ShowName}" Width="*"/>
+                                    <DataGridTextColumn Header="Show" Binding="{Binding ShowName}" Width="*" ElementStyle="{StaticResource TruncatedCellText}"/>
                                     <DataGridTextColumn Header="Network" Binding="{Binding NetworkDisplay}" Width="80"/>
                                     <DataGridTextColumn Header="Episode" Binding="{Binding EpisodeInfo}" Width="140"/>
                                     <DataGridTextColumn Header="Time" Binding="{Binding TimeDisplay}" Width="55"/>
@@ -1842,7 +1831,7 @@
                             <TextBlock DockPanel.Dock="Top" FontWeight="SemiBold" Margin="0,0,0,6">
                                 <Run Text="Movie Releases"/>
                             </TextBlock>
-                            <TextBlock DockPanel.Dock="Top" Margin="0,0,0,6" FontSize="11"
+                            <TextBlock DockPanel.Dock="Top" Margin="0,0,0,6" FontSize="12"
                                        Foreground="{DynamicResource ForegroundDimBrush}"
                                        Visibility="{Binding HasNoTmdbKey, Converter={StaticResource BoolToVisibility}}">
                                 <Run Text="Configure TMDb API key in Settings &#x2192; Downloads to see movie releases."/>
@@ -1853,7 +1842,7 @@
                                       SelectionMode="Single" GridLinesVisibility="Horizontal"
                                       HeadersVisibility="Column" CanUserAddRows="False">
                                 <DataGrid.Columns>
-                                    <DataGridTextColumn Header="Title" Binding="{Binding Title}" Width="*"/>
+                                    <DataGridTextColumn Header="Title" Binding="{Binding Title}" Width="*" ElementStyle="{StaticResource TruncatedCellText}"/>
                                     <DataGridTextColumn Header="Year" Binding="{Binding Year}" Width="50"/>
                                     <DataGridTextColumn Header="Date" Binding="{Binding ReleaseDateDisplay}" Width="85"/>
                                     <DataGridTextColumn Header="Genres" Binding="{Binding Genres}" Width="110"/>
@@ -1876,7 +1865,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="17" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="08" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="Plex" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
@@ -1884,7 +1873,7 @@
                     <Border Style="{DynamicResource HudPanelStyle}">
                         <DockPanel>
                             <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                <TextBlock Text="&gt;&gt; PLEX INVITE MANAGER" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                <TextBlock Text="PLEX INVITE MANAGER" Style="{DynamicResource SectionHeaderTextStyle}"/>
                             </Border>
 
                             <!-- Toolbar: connection + server picker -->
@@ -1893,27 +1882,27 @@
                                     Padding="8,6" Margin="0,0,0,6">
                                 <DockPanel>
                                     <Button DockPanel.Dock="Right" Content="Login to Plex" Command="{Binding LoginCommand}"
-                                            Padding="14,4" Margin="6,0,0,0" Style="{StaticResource PrimaryButton}"
+                                            Padding="14,4" Margin="6,0,0,0" Style="{DynamicResource PrimaryButton}"
                                             Visibility="{Binding IsLoggedOut, Converter={StaticResource BoolToVisibility}}"/>
                                     <Button DockPanel.Dock="Right" Content="Logout" Command="{Binding LogoutCommand}"
-                                            Padding="10,4" Margin="6,0,0,0" Style="{StaticResource SecondaryButton}" FontSize="11"
+                                            Padding="10,4" Margin="6,0,0,0" Style="{DynamicResource SecondaryButton}" FontSize="12"
                                             Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVisibility}}"/>
                                     <Button DockPanel.Dock="Right" Content="Test" Command="{Binding TestConnectionCommand}"
-                                            Padding="10,4" Margin="6,0,0,0" Style="{StaticResource SecondaryButton}" FontSize="11"
+                                            Padding="10,4" Margin="6,0,0,0" Style="{DynamicResource SecondaryButton}" FontSize="12"
                                             Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVisibility}}"/>
                                     <Button DockPanel.Dock="Right" Content="Refresh" Command="{Binding RefreshCommand}"
-                                            Padding="10,4" Margin="6,0,0,0" Style="{StaticResource SecondaryButton}" FontSize="11"
+                                            Padding="10,4" Margin="6,0,0,0" Style="{DynamicResource SecondaryButton}" FontSize="12"
                                             Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVisibility}}"/>
                                     <ComboBox DockPanel.Dock="Right" Width="200" Margin="6,0,0,0"
                                               ItemsSource="{Binding Servers}" SelectedItem="{Binding SelectedServer}"
                                               DisplayMemberPath="Name"
                                               Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVisibility}}"/>
                                     <Button DockPanel.Dock="Right" Content="Load Servers" Command="{Binding RefreshServersCommand}"
-                                            Padding="10,4" Margin="6,0,0,0" Style="{StaticResource SecondaryButton}" FontSize="11"
+                                            Padding="10,4" Margin="6,0,0,0" Style="{DynamicResource SecondaryButton}" FontSize="12"
                                             Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVisibility}}"/>
                                     <Button DockPanel.Dock="Right" Content="Use" Command="{Binding SelectServerCommand}"
                                             CommandParameter="{Binding SelectedServer}"
-                                            Padding="10,4" Margin="6,0,0,0" Style="{StaticResource SecondaryButton}" FontSize="11"
+                                            Padding="10,4" Margin="6,0,0,0" Style="{DynamicResource SecondaryButton}" FontSize="12"
                                             Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVisibility}}"/>
                                     <TextBlock Text="{Binding StatusMessage}" TextTrimming="CharacterEllipsis"
                                                Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"
@@ -1936,21 +1925,21 @@
                                     <Border Grid.Column="0" Margin="0,0,6,0" Style="{DynamicResource HudPanelStyle}">
                                         <DockPanel>
                                             <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                                <TextBlock Text="&gt;&gt; INVITE USER" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                                <TextBlock Text="INVITE USER" Style="{DynamicResource SectionHeaderTextStyle}"/>
                                             </Border>
                                             <StackPanel DockPanel.Dock="Top" Margin="8">
-                                                <TextBlock Text="Plex username or email" FontSize="11"
+                                                <TextBlock Text="Plex username or email" FontSize="12"
                                                            Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,2"/>
                                                 <TextBox Text="{Binding InviteTarget, UpdateSourceTrigger=PropertyChanged}"
                                                          VerticalContentAlignment="Center" Margin="0,0,0,8"/>
                                                 <CheckBox Content="Allow downloads / sync" IsChecked="{Binding AllowDownloads}"
                                                           Foreground="{DynamicResource ForegroundBrush}" Margin="0,0,0,8"/>
-                                                <TextBlock Text="Libraries (none = all)" FontSize="11"
+                                                <TextBlock Text="Libraries (none = all)" FontSize="12"
                                                            Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,2"/>
                                             </StackPanel>
                                             <Button DockPanel.Dock="Bottom" Content="Send Invite" Command="{Binding InviteCommand}"
                                                     IsEnabled="{Binding IsNotBusy}" Margin="8" Padding="0,8"
-                                                    Style="{StaticResource PrimaryButton}"/>
+                                                    Style="{DynamicResource PrimaryButton}"/>
                                             <Border Margin="8,0,8,8" Style="{DynamicResource HudPanelStyle}">
                                                 <ListBox ItemsSource="{Binding Libraries}" Background="Transparent" BorderThickness="0">
                                                     <ListBox.ItemTemplate>
@@ -1960,7 +1949,7 @@
                                                                 <StackPanel Orientation="Horizontal">
                                                                     <TextBlock Text="{Binding Title}"/>
                                                                     <TextBlock Text="{Binding Type}" Margin="6,0,0,0"
-                                                                               Foreground="{DynamicResource ForegroundDimBrush}" FontSize="10"
+                                                                               Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"
                                                                                VerticalAlignment="Center"/>
                                                                 </StackPanel>
                                                             </CheckBox>
@@ -1975,7 +1964,7 @@
                                     <Border Grid.Column="1" Style="{DynamicResource HudPanelStyle}">
                                         <DockPanel>
                                             <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                                <TextBlock Text="&gt;&gt; CURRENT ACCESS" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                                <TextBlock Text="CURRENT ACCESS" Style="{DynamicResource SectionHeaderTextStyle}"/>
                                             </Border>
                                             <DataGrid ItemsSource="{Binding SharedUsers}" SelectedItem="{Binding SelectedSharedUser}"
                                                       AutoGenerateColumns="False" IsReadOnly="True"
@@ -1990,8 +1979,8 @@
                                                     <DataGridTemplateColumn Header="" Width="80">
                                                         <DataGridTemplateColumn.CellTemplate>
                                                             <DataTemplate>
-                                                                <Button Content="Revoke" Padding="8,2" FontSize="11"
-                                                                        Style="{StaticResource SecondaryButton}"
+                                                                <Button Content="Revoke" Padding="8,2" FontSize="12"
+                                                                        Style="{DynamicResource SecondaryButton}"
                                                                         Command="{Binding DataContext.Plex.RevokeCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                                         CommandParameter="{Binding}"/>
                                                             </DataTemplate>
@@ -2012,7 +2001,7 @@
             <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,12,14,4">
                 <TabItem.Header>
                     <TextBlock Text="&#x25B8; COMMS" FontFamily="{DynamicResource MonoFontFamily}"
-                               FontSize="9" Foreground="{DynamicResource TextFaintBrush}" Margin="0,8,0,0"/>
+                               FontSize="12" Foreground="{DynamicResource TextFaintBrush}" Margin="0,8,0,0"/>
                 </TabItem.Header>
             </TabItem>
 
@@ -2025,7 +2014,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="08" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="09" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="IRC" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
@@ -2034,7 +2023,7 @@
                     <Border Style="{DynamicResource HudPanelStyle}">
                         <DockPanel>
                             <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                <TextBlock Text="&gt;&gt; IRC" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                <TextBlock Text="IRC" Style="{DynamicResource SectionHeaderTextStyle}"/>
                             </Border>
                             <Grid>
                                 <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -2047,9 +2036,9 @@
                                             Padding="8,4" Margin="0,0,0,6">
                                         <DockPanel>
                                             <Button DockPanel.Dock="Right" Content="Reconnect" Command="{Binding Irc.ReconnectCommand}"
-                                                    Padding="10,2" Margin="4,0,0,0" Style="{StaticResource SecondaryButton}" FontSize="11"/>
+                                                    Padding="10,2" Margin="4,0,0,0" Style="{DynamicResource SecondaryButton}" FontSize="12"/>
                                             <Button DockPanel.Dock="Right" Content="Disconnect" Command="{Binding Irc.DisconnectCommand}"
-                                                    Padding="10,2" Margin="8,0,0,0" Style="{StaticResource SecondaryButton}" FontSize="11"/>
+                                                    Padding="10,2" Margin="8,0,0,0" Style="{DynamicResource SecondaryButton}" FontSize="12"/>
                                             <TextBlock Text="{Binding Irc.TopicText}" TextTrimming="CharacterEllipsis"
                                                        Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"
                                                        VerticalAlignment="Center"/>
@@ -2061,8 +2050,8 @@
                                                 Padding="8,6">
                                             <DockPanel>
                                                 <Button DockPanel.Dock="Right" Content="Send" Command="{Binding Irc.SendCommand}"
-                                                        Padding="16,6" Margin="6,0,0,0" Style="{StaticResource PrimaryButton}"/>
-                                                <TextBox Text="{Binding Irc.InputText, UpdateSourceTrigger=PropertyChanged}"
+                                                        Padding="16,6" Margin="6,0,0,0" Style="{DynamicResource PrimaryButton}"/>
+                                                <TextBox AutomationProperties.Name="IRC message" ToolTip="Message the selected channel. Enter sends; Tab completes a nickname." Text="{Binding Irc.InputText, UpdateSourceTrigger=PropertyChanged}"
                                                          VerticalContentAlignment="Center" x:Name="IrcInputBox">
                                                     <TextBox.InputBindings>
                                                         <KeyBinding Key="Return" Command="{Binding Irc.SendCommand}"/>
@@ -2081,7 +2070,7 @@
                                         <Border Grid.Column="0" Margin="0,0,6,0" Style="{DynamicResource HudPanelStyle}">
                                             <DockPanel>
                                                 <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                                    <TextBlock Text="&gt;&gt; CHANNELS" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                                    <TextBlock Text="CHANNELS" Style="{DynamicResource SectionHeaderTextStyle}"/>
                                                 </Border>
                                                 <Grid>
                                                     <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -2094,7 +2083,7 @@
                                                         <ListBox.ItemTemplate>
                                                             <DataTemplate>
                                                                 <StackPanel Orientation="Horizontal">
-                                                                    <TextBlock Text="&#x1F512;" FontSize="10" Margin="0,0,4,0"
+                                                                    <TextBlock Text="&#x1F512;" FontSize="12" Margin="0,0,4,0"
                                                                                Visibility="{Binding HasFishKey, Converter={StaticResource BoolToVisibility}}"/>
                                                                     <TextBlock Text="{Binding SidebarDisplay}" Foreground="{DynamicResource ForegroundBrush}"/>
                                                                     <TextBlock Text="{Binding UnreadDisplay}" Foreground="{DynamicResource AccentBrush}"
@@ -2110,7 +2099,7 @@
                                         <Border Grid.Column="1" Margin="0,0,6,0" Style="{DynamicResource HudPanelStyle}">
                                             <DockPanel>
                                                 <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                                    <TextBlock Text="&gt;&gt; MESSAGES" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                                    <TextBlock Text="MESSAGES" Style="{DynamicResource SectionHeaderTextStyle}"/>
                                                 </Border>
                                                 <Grid>
                                                     <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -2118,16 +2107,16 @@
                                                     <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
                                                     <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                                                     <ListBox ItemsSource="{Binding Irc.Messages}"
-                                                             x:Name="IrcMessageList"
+                                                             x:Name="IrcMessageList" HorizontalContentAlignment="Stretch"
                                                              Background="Transparent" BorderThickness="0"
                                                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                                              VirtualizingPanel.ScrollUnit="Pixel">
                                                         <ListBox.ItemTemplate>
                                                             <DataTemplate>
-                                                                <StackPanel Orientation="Horizontal" Margin="4,1">
+                                                                <DockPanel Margin="4,3" LastChildFill="True">
                                                                     <TextBlock Text="{Binding Timestamp}" Foreground="{DynamicResource ForegroundDimBrush}"
-                                                                               FontSize="11" Margin="0,0,6,0" FontFamily="Consolas"/>
-                                                                    <TextBlock Text="&#x1F512;" FontSize="9" Margin="0,0,3,0"
+                                                                               FontSize="12" Margin="0,0,6,0" FontFamily="Consolas"/>
+                                                                    <TextBlock Text="&#x1F512;" FontSize="12" Margin="0,0,3,0"
                                                                                Visibility="{Binding WasEncrypted, Converter={StaticResource BoolToVisibility}}"/>
                                                                     <TextBlock ui:ReleaseTextHelper.Message="{Binding}"
                                                                                ui:ReleaseTextHelper.ClickCommand="{Binding DataContext.Irc.ReleaseLinkClickedCommand, RelativeSource={RelativeSource AncestorType=Window}}"
@@ -2144,7 +2133,7 @@
                                                                             </Style>
                                                                         </TextBlock.Style>
                                                                     </TextBlock>
-                                                                </StackPanel>
+                                                                </DockPanel>
                                                             </DataTemplate>
                                                         </ListBox.ItemTemplate>
                                                     </ListBox>
@@ -2155,7 +2144,7 @@
                                         <Border Grid.Column="2" Style="{DynamicResource HudPanelStyle}">
                                             <DockPanel>
                                                 <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                                    <TextBlock Text="&gt;&gt; USERS" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                                    <TextBlock Text="USERS" Style="{DynamicResource SectionHeaderTextStyle}"/>
                                                 </Border>
                                                 <Grid>
                                                     <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -2213,14 +2202,14 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="09" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="10" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="PreDB" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
                 <Border Margin="14" Style="{DynamicResource HudPanelStyle}">
                     <DockPanel>
                         <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                            <TextBlock Text="&gt;&gt; PREDB" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                            <TextBlock Text="PREDB" Style="{DynamicResource SectionHeaderTextStyle}"/>
                         </Border>
                         <Grid>
                             <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -2231,16 +2220,16 @@
                     <!-- Search bar -->
                     <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
                         <Button DockPanel.Dock="Right" Content="Cancel" Command="{Binding CancelPreDbSearchCommand}"
-                                Padding="12,6" Margin="6,0,0,0" Style="{StaticResource SecondaryButton}"
+                                Padding="12,6" Margin="6,0,0,0" Style="{DynamicResource SecondaryButton}"
                                 Visibility="{Binding IsPreDbSearching, Converter={StaticResource BoolToVisibility}}"/>
                         <Button DockPanel.Dock="Right" Content="Search" Command="{Binding SearchPreDbCommand}"
-                                Padding="18,6" Margin="6,0,0,0" Style="{StaticResource PrimaryButton}"/>
+                                Padding="18,6" Margin="6,0,0,0" Style="{DynamicResource PrimaryButton}"/>
                         <ComboBox DockPanel.Dock="Right" Width="90" Margin="6,0,0,0"
                                   ItemsSource="{Binding PreDbSectionFilters}"
                                   SelectedItem="{Binding PreDbSectionFilter}"
                                   Background="{DynamicResource SurfaceBrush}"
                                   Foreground="{DynamicResource ForegroundBrush}" FontSize="12"/>
-                        <TextBox Text="{Binding PreDbQuery, UpdateSourceTrigger=PropertyChanged}"
+                        <TextBox AutomationProperties.Name="Search release database" ToolTip="Search release names in PreDB" Text="{Binding PreDbQuery, UpdateSourceTrigger=PropertyChanged}"
                                  VerticalContentAlignment="Center">
                             <TextBox.InputBindings>
                                 <KeyBinding Key="Return" Command="{Binding SearchPreDbCommand}"/>
@@ -2256,7 +2245,8 @@
                                      Background="{DynamicResource SurfaceBrush}"/>
                     </DockPanel>
                     <!-- Results grid -->
-                    <DataGrid ItemsSource="{Binding PreDbItems}" SelectedItem="{Binding SelectedPreDbItem}"
+                    <Grid>
+<DataGrid x:Name="PreDbGrid" ItemsSource="{Binding PreDbItems}" SelectedItem="{Binding SelectedPreDbItem}"
                               AutoGenerateColumns="False" IsReadOnly="True"
                               SelectionMode="Single" GridLinesVisibility="Horizontal"
                               HeadersVisibility="Column" CanUserAddRows="False">
@@ -2298,6 +2288,23 @@
                             <DataGridTextColumn Header="Time" Binding="{Binding Time}" Width="90"/>
                         </DataGrid.Columns>
                     </DataGrid>
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24,48,24,24" MaxWidth="460" IsHitTestVisible="False">
+                            <StackPanel.Style>
+                                <Style TargetType="StackPanel">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding HasItems, ElementName=PreDbGrid}" Value="False">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </StackPanel.Style>
+                            <TextBlock Text="No releases to show" FontSize="18" FontWeight="SemiBold" TextAlignment="Center"
+                                       Foreground="{DynamicResource ForegroundBrush}" TextWrapping="Wrap"/>
+                            <TextBlock Text="Search the release database above. Search status and any connection errors appear above this list." FontSize="13" Margin="0,8,0,0" TextAlignment="Center"
+                                       Foreground="{DynamicResource ForegroundDimBrush}" TextWrapping="Wrap" LineHeight="20"/>
+                        </StackPanel>
+                    </Grid>
                             </DockPanel>
                         </Grid>
                     </DockPanel>
@@ -2308,7 +2315,7 @@
             <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,12,14,4">
                 <TabItem.Header>
                     <TextBlock Text="&#x25B8; TRANSFERS" FontFamily="{DynamicResource MonoFontFamily}"
-                               FontSize="9" Foreground="{DynamicResource TextFaintBrush}" Margin="0,8,0,0"/>
+                               FontSize="12" Foreground="{DynamicResource TextFaintBrush}" Margin="0,8,0,0"/>
                 </TabItem.Header>
             </TabItem>
 
@@ -2321,7 +2328,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="10" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="11" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="Spread" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
@@ -2351,7 +2358,7 @@
                             <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" FontSize="13" Margin="12,0,0,16"
                                        Text="7. Come back here, pick a section, type a release name, and click New Race."/>
                             <Button Content="Open Settings" Command="{Binding OpenSettingsCommand}"
-                                    Padding="16,8" HorizontalAlignment="Left" Style="{StaticResource PrimaryButton}"/>
+                                    Padding="16,8" HorizontalAlignment="Left" Style="{DynamicResource PrimaryButton}"/>
                         </StackPanel>
                     </Border>
                     <!-- Main spread UI (shown when sections exist) -->
@@ -2359,7 +2366,7 @@
                             Style="{DynamicResource HudPanelStyle}">
                         <DockPanel>
                             <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                <TextBlock Text="&gt;&gt; SPREAD ENGINE" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                <TextBlock Text="SPREAD ENGINE" Style="{DynamicResource SectionHeaderTextStyle}"/>
                             </Border>
                             <Grid>
                                 <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -2373,7 +2380,7 @@
                     </DockPanel.InputBindings>
                     <!-- Stats cards row -->
                     <Border DockPanel.Dock="Top" Margin="0,0,0,12">
-                        <StackPanel Orientation="Horizontal">
+                        <UniformGrid Columns="4">
                             <Border Style="{DynamicResource StatCardStyle}">
                                 <Grid>
                                     <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -2382,7 +2389,7 @@
                                     <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                                     <StackPanel Margin="4">
                                         <TextBlock Text="ACTIVE RACES" Style="{DynamicResource StatCardLabelStyle}"/>
-                                        <TextBlock Text="{Binding ActiveJobs.Count, FallbackValue=0}" Style="{DynamicResource StatCardValueStyle}"/>
+                                        <TextBlock Text="{Binding ActiveRaceCount, FallbackValue=0}" Style="{DynamicResource StatCardValueStyle}"/>
                                     </StackPanel>
                                 </Grid>
                             </Border>
@@ -2405,7 +2412,7 @@
                                     <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
                                     <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                                     <StackPanel Margin="4">
-                                        <TextBlock Text="QUEUE" Style="{DynamicResource StatCardLabelStyle}"/>
+                                        <TextBlock Text="ACTIVE + QUEUED" Style="{DynamicResource StatCardLabelStyle}"/>
                                         <TextBlock Text="{Binding QueueDepth, FallbackValue=0}" Style="{DynamicResource StatCardValueStyle}"/>
                                     </StackPanel>
                                 </Grid>
@@ -2418,20 +2425,20 @@
                                     <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                                     <StackPanel Margin="4">
                                         <TextBlock Text="HISTORY" Style="{DynamicResource StatCardLabelStyle}"/>
-                                        <TextBlock Text="{Binding History.Count, FallbackValue=0}" Style="{DynamicResource StatCardValueStyle}"/>
+                                        <TextBlock Text="{Binding RaceHistory.Count, FallbackValue=0}" Style="{DynamicResource StatCardValueStyle}"/>
                                     </StackPanel>
                                 </Grid>
                             </Border>
-                        </StackPanel>
+                        </UniformGrid>
                     </Border>
                     <!-- Toolbar -->
                     <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
                             CornerRadius="6" Padding="8,6" Margin="0,0,0,10">
                         <StackPanel Orientation="Horizontal">
                             <Button Content="New Race" Command="{Binding StartRaceCommand}"
-                                    Padding="12,6" Margin="0,0,6,0" Style="{StaticResource PrimaryButton}"/>
+                                    Padding="12,6" Margin="0,0,6,0" Style="{DynamicResource PrimaryButton}"/>
                             <Button Content="Stop" Command="{Binding StopJobCommand}"
-                                    Padding="12,6" Margin="0,0,12,0" Style="{StaticResource SecondaryButton}"/>
+                                    Padding="12,6" Margin="0,0,12,0" Style="{DynamicResource SecondaryButton}"/>
                             <ComboBox ItemsSource="{Binding SpreadSections}"
                                       SelectedItem="{Binding SelectedSection}"
                                       Width="120" Margin="0,0,6,0" ToolTip="Section"/>
@@ -2443,7 +2450,7 @@
                                 </TextBox.InputBindings>
                             </TextBox>
                             <Button Content="Settings" Command="{Binding OpenSettingsCommand}"
-                                    Padding="12,6" Style="{StaticResource SecondaryButton}"/>
+                                    Padding="12,6" Style="{DynamicResource SecondaryButton}"/>
                         </StackPanel>
                     </Border>
                     <!-- Status -->
@@ -2451,20 +2458,20 @@
                                Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,8"
                                TextWrapping="Wrap"/>
                     <!-- PRD R1/O3 — session success rate + failure taxonomy -->
-                    <TextBlock DockPanel.Dock="Top" Text="{Binding SessionSummary}" FontSize="11"
+                    <TextBlock DockPanel.Dock="Top" Text="{Binding SessionSummary}" FontSize="12"
                                Foreground="{DynamicResource AccentBrush}"
                                FontFamily="{DynamicResource MonoFontFamily}" Margin="0,0,0,4"
                                TextWrapping="Wrap"/>
                     <!-- PRD O2 — per-server spread-pool health -->
-                    <TextBlock DockPanel.Dock="Top" Text="{Binding PoolHealth}" FontSize="10"
+                    <TextBlock DockPanel.Dock="Top" Text="{Binding PoolHealth}" FontSize="12"
                                Foreground="{DynamicResource TextFaintBrush}"
                                FontFamily="{DynamicResource MonoFontFamily}" Margin="0,0,0,8"
                                TextWrapping="Wrap"/>
                     <!-- Main 2-row layout: AUTO RACES (top, 2*) + SITE SCOREBOARD + AUTO-RACE FEED (bottom, 1*) -->
                     <Grid>
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="2*"/>
-                            <RowDefinition Height="1*"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <!-- AUTO RACES panel -->
                         <Border Grid.Row="0" Style="{DynamicResource HudPanelStyle}" Margin="0,0,0,10">
@@ -2473,10 +2480,10 @@
                                     <DockPanel LastChildFill="True">
                                         <!-- Removes all retained finished (DONE/FAILED/STOPPED) race cards -->
                                         <Button DockPanel.Dock="Right" Content="CLEAR DONE" Padding="8,2" Margin="8,0,0,0"
-                                                FontSize="10" VerticalAlignment="Center"
+                                                FontSize="12" VerticalAlignment="Center"
                                                 Command="{Binding ClearFinishedCommand}"
                                                 ToolTip="Remove all finished race cards from the list"/>
-                                        <TextBlock Text="&gt;&gt; AUTO RACES" Style="{DynamicResource SectionHeaderTextStyle}" VerticalAlignment="Center"/>
+                                        <TextBlock Text="AUTO RACES" Style="{DynamicResource SectionHeaderTextStyle}" VerticalAlignment="Center"/>
                                     </DockPanel>
                                 </Border>
                                 <Grid>
@@ -2501,13 +2508,13 @@
                                                                 <TextBlock Text="{Binding ReleaseName}" FontSize="12"
                                                                            Foreground="{DynamicResource ForegroundBrush}"
                                                                            TextTrimming="CharacterEllipsis" ToolTip="{Binding ReleaseName}"/>
-                                                                <TextBlock Text="{Binding StatusText}" FontSize="11"
+                                                                <TextBlock Text="{Binding StatusText}" FontSize="12"
                                                                            Foreground="{DynamicResource AccentBrush}"
                                                                            TextTrimming="CharacterEllipsis" ToolTip="{Binding StatusText}"/>
                                                                 <StackPanel Orientation="Horizontal">
-                                                                    <TextBlock Text="{Binding Section}" FontSize="10"
+                                                                    <TextBlock Text="{Binding Section}" FontSize="12"
                                                                                Foreground="{DynamicResource TextFaintBrush}" Margin="0,0,12,0"/>
-                                                                    <TextBlock Text="{Binding RetryText}" FontSize="10"
+                                                                    <TextBlock Text="{Binding RetryText}" FontSize="12"
                                                                                Foreground="{DynamicResource TextFaintBrush}"/>
                                                                 </StackPanel>
                                                             </StackPanel>
@@ -2519,7 +2526,7 @@
                                         <ItemsControl ItemsSource="{Binding SpreadJobs}">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate>
-                                                    <Border Margin="0,0,0,10" Background="#80050F1A"
+                                                    <Border Margin="0,0,0,10" Background="{DynamicResource SurfaceBrush}"
                                                             BorderBrush="{DynamicResource LineBrush}" BorderThickness="1"
                                                             Padding="14,12">
                                                         <!-- Finished cards stay in the list, dimmed, showing their final score -->
@@ -2564,9 +2571,9 @@
                                                                     <TextBlock Text="{Binding FilesDoneTotalDisplay, FallbackValue=0 / 0}" Style="{DynamicResource MicroTextStyle}"/>
                                                                 </StackPanel>
                                                                 <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                                                                    <TextBlock Text="{Binding SourceDisplay, FallbackValue=—}" Style="{DynamicResource AccentTextStyle}" FontSize="11"/>
+                                                                    <TextBlock Text="{Binding SourceDisplay, FallbackValue=—}" Style="{DynamicResource AccentTextStyle}" FontSize="12"/>
                                                                     <TextBlock Text=" → " Foreground="{DynamicResource TextDimBrush}" Margin="6,0"/>
-                                                                    <TextBlock Text="{Binding DestDisplay, FallbackValue=—}" Style="{DynamicResource AccentTextStyle}" FontSize="11" Foreground="{DynamicResource Signature2Brush}"/>
+                                                                    <TextBlock Text="{Binding DestDisplay, FallbackValue=—}" Style="{DynamicResource AccentTextStyle}" FontSize="12" Foreground="{DynamicResource Signature2Brush}"/>
                                                                 </StackPanel>
                                                                 <!-- Tag chips row -->
                                                                 <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
@@ -2643,7 +2650,7 @@
                                                                           AutoGenerateColumns="False" IsReadOnly="True"
                                                                           HeadersVisibility="Column" GridLinesVisibility="Horizontal"
                                                                           Background="Transparent" BorderThickness="0"
-                                                                          MaxHeight="320" FontSize="11"
+                                                                          MaxHeight="320" FontSize="12"
                                                                           HorizontalScrollBarVisibility="Auto">
                                                                     <DataGrid.Columns>
                                                                         <DataGridTextColumn Header="File" Binding="{Binding Name}" Width="2.4*"/>
@@ -2669,7 +2676,8 @@
                             </DockPanel>
                         </Border>
                         <!-- Bottom split: Scoreboard + AutoRaceFeed -->
-                        <Grid Grid.Row="1">
+                        <Expander Grid.Row="1" Header="Site scoreboard and race activity" IsExpanded="False">
+                        <Grid Height="190">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="*"/>
@@ -2678,7 +2686,7 @@
                             <Border Grid.Column="0" Style="{DynamicResource HudPanelStyle}" Margin="0,0,5,0">
                                 <DockPanel>
                                     <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                        <TextBlock Text="&gt;&gt; SITE SCOREBOARD" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                        <TextBlock Text="SITE SCOREBOARD" Style="{DynamicResource SectionHeaderTextStyle}"/>
                                     </Border>
                                     <Grid>
                                         <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -2719,7 +2727,7 @@
                             <Border Grid.Column="1" Style="{DynamicResource HudPanelStyle}" Margin="5,0,0,0">
                                 <DockPanel>
                                     <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                        <TextBlock Text="&gt;&gt; AUTO-RACE FEED" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                        <TextBlock Text="AUTO-RACE FEED" Style="{DynamicResource SectionHeaderTextStyle}"/>
                                     </Border>
                                     <Grid>
                                         <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -2732,7 +2740,7 @@
                                                     <DataTemplate>
                                                         <StackPanel Orientation="Horizontal" Margin="0,2,0,2">
                                                             <TextBlock Text="{Binding Timestamp}" Style="{DynamicResource MicroTextStyle}" Width="70"/>
-                                                            <TextBlock Text="{Binding Action}" Style="{DynamicResource AccentTextStyle}" FontSize="11" Width="80"/>
+                                                            <TextBlock Text="{Binding Action}" Style="{DynamicResource AccentTextStyle}" FontSize="12" Width="80"/>
                                                             <TextBlock Text="{Binding Release}" Style="{DynamicResource MicroTextStyle}" Foreground="{DynamicResource ForegroundBrush}"/>
                                                         </StackPanel>
                                                     </DataTemplate>
@@ -2743,6 +2751,7 @@
                                 </DockPanel>
                             </Border>
                         </Grid>
+                        </Expander>
                     </Grid>
                                 </DockPanel>
                             </Grid>
@@ -2760,14 +2769,14 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="11" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="12" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="Browse" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
                 <Border Margin="14" Style="{DynamicResource HudPanelStyle}">
                     <DockPanel>
                         <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                            <TextBlock Text="&gt;&gt; BROWSE" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                            <TextBlock Text="BROWSE" Style="{DynamicResource SectionHeaderTextStyle}"/>
                         </Border>
                         <Grid>
                             <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -2783,16 +2792,20 @@
                         </Grid.ColumnDefinitions>
                         <!-- Left Pane -->
                         <DockPanel Grid.Column="0" Margin="0,0,6,0">
-                            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
-                                <ComboBox ItemsSource="{Binding ServerList}"
-                                          SelectedItem="{Binding LeftServer}"
-                                          Width="140" Margin="0,0,6,0"/>
-                                <TextBox Text="{Binding LeftPath, UpdateSourceTrigger=PropertyChanged}"
-                                         Width="200" VerticalContentAlignment="Center" Margin="0,0,6,0"/>
-                                <Button Content="Go" Command="{Binding LeftGoCommand}"
-                                        Padding="12,4" Style="{StaticResource SecondaryButton}"/>
-                            </StackPanel>
-                            <DataGrid ItemsSource="{Binding LeftItems}"
+                            <Grid DockPanel.Dock="Top" Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                <ComboBox Grid.ColumnSpan="2" ItemsSource="{Binding ServerList}" SelectedItem="{Binding LeftServer}"
+                                          AutomationProperties.Name="Left server" Margin="0,0,0,6"/>
+                                <TextBox Grid.Row="1" Text="{Binding LeftPath, UpdateSourceTrigger=PropertyChanged}"
+                                         AutomationProperties.Name="Left folder path" VerticalContentAlignment="Center" Margin="0,0,6,0">
+                                    <TextBox.InputBindings><KeyBinding Key="Return" Command="{Binding LeftGoCommand}"/></TextBox.InputBindings>
+                                </TextBox>
+                                <Button Grid.Row="1" Grid.Column="1" Content="Go" Command="{Binding LeftGoCommand}"
+                                        Padding="12,6" Style="{DynamicResource SecondaryButton}"/>
+                            </Grid>
+                            <Grid>
+<DataGrid x:Name="BrowseLeftGrid" ItemsSource="{Binding LeftItems}"
                                       SelectedItem="{Binding SelectedLeftItem}"
                                       AutoGenerateColumns="False" IsReadOnly="True"
                                       SelectionMode="Extended" GridLinesVisibility="Horizontal"
@@ -2806,31 +2819,52 @@
                                                   CommandParameter="{Binding SelectedItem, RelativeSource={RelativeSource AncestorType=DataGrid}}"/>
                                 </DataGrid.InputBindings>
                                 <DataGrid.Columns>
-                                    <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*"/>
+                                    <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*" ElementStyle="{StaticResource TruncatedCellText}"/>
                                     <DataGridTextColumn Header="Size" Binding="{Binding SizeFormatted}" Width="80"/>
                                     <DataGridTextColumn Header="Modified" Binding="{Binding ModifiedFormatted}" Width="120"/>
                                 </DataGrid.Columns>
                             </DataGrid>
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24,48,24,24" MaxWidth="460" IsHitTestVisible="False">
+                            <StackPanel.Style>
+                                <Style TargetType="StackPanel">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding HasItems, ElementName=BrowseLeftGrid}" Value="False">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </StackPanel.Style>
+                            <TextBlock Text="Choose a source server" FontSize="18" FontWeight="SemiBold" TextAlignment="Center"
+                                       Foreground="{DynamicResource ForegroundBrush}" TextWrapping="Wrap"/>
+                            <TextBlock Text="Select a server above and enter a folder path. Double-click a folder to open it." FontSize="13" Margin="0,8,0,0" TextAlignment="Center"
+                                       Foreground="{DynamicResource ForegroundDimBrush}" TextWrapping="Wrap" LineHeight="20"/>
+                        </StackPanel>
+                    </Grid>
                         </DockPanel>
                         <!-- Center Buttons -->
                         <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="6">
                             <Button Content="FXP &#x2192;" Command="{Binding FxpRightCommand}"
-                                    Padding="12,8" Margin="0,0,0,6" Style="{StaticResource PrimaryButton}"/>
+                                    Padding="12,8" Margin="0,0,0,6" Style="{DynamicResource PrimaryButton}"/>
                             <Button Content="&#x2190; FXP" Command="{Binding FxpLeftCommand}"
-                                    Padding="12,8" Style="{StaticResource PrimaryButton}"/>
+                                    Padding="12,8" Style="{DynamicResource PrimaryButton}"/>
                         </StackPanel>
                         <!-- Right Pane -->
                         <DockPanel Grid.Column="2" Margin="6,0,0,0">
-                            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
-                                <ComboBox ItemsSource="{Binding ServerList}"
-                                          SelectedItem="{Binding RightServer}"
-                                          Width="140" Margin="0,0,6,0"/>
-                                <TextBox Text="{Binding RightPath, UpdateSourceTrigger=PropertyChanged}"
-                                         Width="200" VerticalContentAlignment="Center" Margin="0,0,6,0"/>
-                                <Button Content="Go" Command="{Binding RightGoCommand}"
-                                        Padding="12,4" Style="{StaticResource SecondaryButton}"/>
-                            </StackPanel>
-                            <DataGrid ItemsSource="{Binding RightItems}"
+                            <Grid DockPanel.Dock="Top" Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                <ComboBox Grid.ColumnSpan="2" ItemsSource="{Binding ServerList}" SelectedItem="{Binding RightServer}"
+                                          AutomationProperties.Name="Right server" Margin="0,0,0,6"/>
+                                <TextBox Grid.Row="1" Text="{Binding RightPath, UpdateSourceTrigger=PropertyChanged}"
+                                         AutomationProperties.Name="Right folder path" VerticalContentAlignment="Center" Margin="0,0,6,0">
+                                    <TextBox.InputBindings><KeyBinding Key="Return" Command="{Binding RightGoCommand}"/></TextBox.InputBindings>
+                                </TextBox>
+                                <Button Grid.Row="1" Grid.Column="1" Content="Go" Command="{Binding RightGoCommand}"
+                                        Padding="12,6" Style="{DynamicResource SecondaryButton}"/>
+                            </Grid>
+                            <Grid>
+<DataGrid x:Name="BrowseRightGrid" ItemsSource="{Binding RightItems}"
                                       SelectedItem="{Binding SelectedRightItem}"
                                       AutoGenerateColumns="False" IsReadOnly="True"
                                       SelectionMode="Extended" GridLinesVisibility="Horizontal"
@@ -2844,11 +2878,28 @@
                                                   CommandParameter="{Binding SelectedItem, RelativeSource={RelativeSource AncestorType=DataGrid}}"/>
                                 </DataGrid.InputBindings>
                                 <DataGrid.Columns>
-                                    <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*"/>
+                                    <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*" ElementStyle="{StaticResource TruncatedCellText}"/>
                                     <DataGridTextColumn Header="Size" Binding="{Binding SizeFormatted}" Width="80"/>
                                     <DataGridTextColumn Header="Modified" Binding="{Binding ModifiedFormatted}" Width="120"/>
                                 </DataGrid.Columns>
                             </DataGrid>
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24,48,24,24" MaxWidth="460" IsHitTestVisible="False">
+                            <StackPanel.Style>
+                                <Style TargetType="StackPanel">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding HasItems, ElementName=BrowseRightGrid}" Value="False">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </StackPanel.Style>
+                            <TextBlock Text="Choose a destination server" FontSize="18" FontWeight="SemiBold" TextAlignment="Center"
+                                       Foreground="{DynamicResource ForegroundBrush}" TextWrapping="Wrap"/>
+                            <TextBlock Text="Select a server and folder, then use the transfer arrows to copy selected files between servers." FontSize="13" Margin="0,8,0,0" TextAlignment="Center"
+                                       Foreground="{DynamicResource ForegroundDimBrush}" TextWrapping="Wrap" LineHeight="20"/>
+                        </StackPanel>
+                    </Grid>
                         </DockPanel>
                     </Grid>
                             </DockPanel>
@@ -2861,7 +2912,7 @@
             <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,12,14,4">
                 <TabItem.Header>
                     <TextBlock Text="&#x25B8; SYSTEM" FontFamily="{DynamicResource MonoFontFamily}"
-                               FontSize="9" Foreground="{DynamicResource TextFaintBrush}" Margin="0,8,0,0"/>
+                               FontSize="12" Foreground="{DynamicResource TextFaintBrush}" Margin="0,8,0,0"/>
                 </TabItem.Header>
             </TabItem>
 
@@ -2874,7 +2925,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="12" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="13" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="Mounts" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
@@ -2883,7 +2934,7 @@
                     <Border DockPanel.Dock="Top" Margin="0,0,0,12" Style="{DynamicResource HudPanelStyle}">
                         <DockPanel>
                             <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                <TextBlock Text="&gt;&gt; MOUNT POINTS" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                <TextBlock Text="MOUNT POINTS" Style="{DynamicResource SectionHeaderTextStyle}"/>
                             </Border>
                             <Grid>
                                 <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -2900,7 +2951,7 @@
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
                                                 <Border Width="280" Height="280" Margin="0,0,12,0"
-                                                        Background="#80050F1A" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1">
+                                                        Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1">
                                                     <Grid>
                                                         <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
                                                         <Border Style="{DynamicResource HudCornerBracketTRStyle}"/>
@@ -2986,7 +3037,7 @@
                                                                         <TextBlock Text="%" Style="{DynamicResource DisplayTextStyle}" FontSize="18" VerticalAlignment="Bottom" Margin="3,0,0,4"/>
                                                                     </StackPanel>
                                                                     <TextBlock Text="{Binding CapacityUsedDisplay}" Style="{DynamicResource MicroTextStyle}" HorizontalAlignment="Center"/>
-                                                                    <TextBlock Text="POOL SLOTS" Style="{DynamicResource MicroTextStyle}" HorizontalAlignment="Center" FontSize="9"/>
+                                                                    <TextBlock Text="POOL SLOTS" Style="{DynamicResource MicroTextStyle}" HorizontalAlignment="Center" FontSize="12"/>
                                                                 </StackPanel>
                                                             </Grid>
                                                         </DockPanel>
@@ -3003,7 +3054,7 @@
                     <Border Style="{DynamicResource HudPanelStyle}">
                         <DockPanel>
                             <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                <TextBlock Text="&gt;&gt; TRUSTED CERTS - TOFU" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                <TextBlock Text="TRUSTED CERTS - TOFU" Style="{DynamicResource SectionHeaderTextStyle}"/>
                             </Border>
                             <Grid>
                                 <Border Style="{DynamicResource HudCornerBracketTLStyle}"/>
@@ -3036,7 +3087,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="13" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="14" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="World Monitor" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
@@ -3052,7 +3103,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="14" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="15" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="Discord" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
@@ -3068,7 +3119,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="15" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="16" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="Streems" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
@@ -3084,7 +3135,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="16" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="17" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="AI Agent" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
@@ -3094,27 +3145,14 @@
 
         <!-- Status Bar -->
         <Border Grid.Row="2" Background="{DynamicResource SurfaceBrush}"
-                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0"
-                Padding="12,6">
-            <DockPanel>
-                <Button DockPanel.Dock="Right" Content="&#x2699; Settings" Click="Settings_Click"
-                        Padding="10,3" Style="{StaticResource SecondaryButton}" FontSize="12"
-                        VerticalAlignment="Center"/>
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="{Binding StatusBarSpeed}" Foreground="{DynamicResource AccentBrush}"
-                               FontWeight="SemiBold" Margin="0,0,20,0" FontSize="12"/>
-                    <TextBlock Text="{Binding StatusBarQueueCount}" Foreground="{DynamicResource ForegroundDimBrush}"
-                               Margin="0,0,20,0" FontSize="12"/>
-                    <TextBlock Text="{Binding StatusBarDiskSpace}" Foreground="{DynamicResource ForegroundDimBrush}"
-                               FontSize="12"/>
-                    <TextBlock Text="{Binding Irc.StatusText}" Foreground="{DynamicResource ForegroundDimBrush}"
-                               Margin="20,0,0,0" FontSize="12"/>
-                    <TextBlock Text="{Binding StatusBarConnections}" Foreground="{DynamicResource ForegroundDimBrush}"
-                               Margin="20,0,0,0" FontSize="12"/>
-                    <TextBlock Text="{Binding StatusBarSites}" Foreground="{DynamicResource ForegroundDimBrush}"
-                               Margin="20,0,0,0" FontSize="12"/>
-                </StackPanel>
-            </DockPanel>
+                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0" Padding="16,8">
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding Irc.StatusText}" TextTrimming="CharacterEllipsis" FontSize="12"
+                           ToolTip="{Binding Irc.StatusText}" Foreground="{DynamicResource ForegroundDimBrush}"/>
+                <TextBlock Grid.Column="1" Text="{Binding StatusBarDiskSpace}" Margin="16,0,0,0"
+                           Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"/>
+            </Grid>
         </Border>
 
         <!-- ============================================================== -->
@@ -3132,10 +3170,10 @@
 
                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center"
                             Margin="14,0,0,0">
-                    <Ellipse Width="6" Height="6" Fill="{DynamicResource GoodBrush}" Margin="0,0,6,0"
+                    <Ellipse Width="6" Height="6" Fill="{DynamicResource AccentBrush}" Margin="0,0,6,0"
                              VerticalAlignment="Center"/>
                     <TextBlock Text="STATUS" FontFamily="{DynamicResource MonoFontFamily}"
-                               FontSize="10" Foreground="{DynamicResource TextDimBrush}"/>
+                               FontSize="12" Foreground="{DynamicResource TextDimBrush}"/>
                 </StackPanel>
 
                 <Grid Grid.Column="1" ClipToBounds="True" Margin="18,0">
@@ -3143,7 +3181,7 @@
                                TextWrapping="NoWrap"
                                TextTrimming="CharacterEllipsis"
                                FontFamily="{DynamicResource MonoFontFamily}"
-                               FontSize="10"
+                               FontSize="12"
                                Foreground="{DynamicResource TextDimBrush}">
                         <TextBlock.Text>
                             <MultiBinding StringFormat="{}{0}  //  {1}  //  {2}">
@@ -3163,17 +3201,17 @@
                          active download BytesPerSecond, TxRateDisplay sums all
                          spread-job non-source SpeedBps. StatusBarRtt comes from
                          the ConnectionMonitor average across mounted servers. -->
-                    <TextBlock Text="RTT " FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                    <TextBlock Text="RTT " FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
                                Foreground="{DynamicResource TextDimBrush}"/>
-                    <TextBlock Text="{Binding StatusBarRtt, FallbackValue=--ms}" FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                    <TextBlock Text="{Binding StatusBarRtt, FallbackValue=--ms}" FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
                                Foreground="{DynamicResource AccentBrush}" Margin="0,0,14,0"/>
-                    <TextBlock Text="&#x2193; " FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                    <TextBlock Text="&#x2193; " FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
                                Foreground="{DynamicResource TextDimBrush}"/>
-                    <TextBlock Text="{Binding RxRateDisplay, FallbackValue=0.0 MB/s}" FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                    <TextBlock Text="{Binding RxRateDisplay, FallbackValue=0.0 MB/s}" FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
                                Foreground="{DynamicResource GoodBrush}" Margin="0,0,8,0"/>
-                    <TextBlock Text="&#x2191; " FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                    <TextBlock Text="&#x2191; " FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
                                Foreground="{DynamicResource TextDimBrush}"/>
-                    <TextBlock Text="{Binding TxRateDisplay, FallbackValue=0.0 MB/s}" FontFamily="{DynamicResource MonoFontFamily}" FontSize="10"
+                    <TextBlock Text="{Binding TxRateDisplay, FallbackValue=0.0 MB/s}" FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
                                Foreground="{DynamicResource AccentBrush}"/>
                 </StackPanel>
             </Grid>
@@ -3182,10 +3220,10 @@
         <!-- Keyboard shortcuts overlay (toggle with `?`) -->
         <Border x:Name="ShortcutsOverlay" Grid.RowSpan="4"
                 Background="#CC03070D"
-                Visibility="Collapsed" Panel.ZIndex="9999"
+                Visibility="Collapsed" Panel.ZIndex="9999" Focusable="True" KeyboardNavigation.TabNavigation="Cycle"
                 MouseLeftButtonDown="ShortcutsOverlay_Click">
             <Border MaxWidth="640" Padding="32" VerticalAlignment="Center" HorizontalAlignment="Center"
-                    Background="#F00B1828" BorderBrush="{DynamicResource AccentBrush}" BorderThickness="1">
+                    Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource AccentBrush}" BorderThickness="1">
                 <Border.Effect>
                     <DropShadowEffect Color="#00E5FF" BlurRadius="28" ShadowDepth="0" Opacity="0.55"/>
                 </Border.Effect>
@@ -3195,7 +3233,7 @@
                     <Border Style="{DynamicResource HudCornerBracketBLStyle}"/>
                     <Border Style="{DynamicResource HudCornerBracketBRStyle}"/>
                     <StackPanel Margin="12">
-                        <TextBlock Text="&gt;&gt; KEYBOARD SHORTCUTS"
+                        <TextBlock Text="KEYBOARD SHORTCUTS"
                                    Style="{DynamicResource SectionHeaderTextStyle}"
                                    FontSize="16" Margin="0,0,0,16"/>
                         <Grid>
@@ -3232,12 +3270,13 @@
                             <TextBlock Grid.Row="5" Grid.Column="1" Text="Nick completion / cycle through matches" Style="{DynamicResource DimTextStyle}" Margin="14,4"/>
 
                             <TextBlock Grid.Row="6" Grid.Column="0" Text="Delete (Downloads)" Style="{DynamicResource AccentTextStyle}" Margin="0,4"/>
-                            <TextBlock Grid.Row="6" Grid.Column="1" Text="Cancel selected download(s)" Style="{DynamicResource DimTextStyle}" Margin="14,4"/>
+                            <TextBlock Grid.Row="6" Grid.Column="1" Text="Remove selected download(s)" Style="{DynamicResource DimTextStyle}" Margin="14,4"/>
 
                             <TextBlock Grid.Row="7" Grid.Column="0" Text="R (Downloads)" Style="{DynamicResource AccentTextStyle}" Margin="0,4"/>
                             <TextBlock Grid.Row="7" Grid.Column="1" Text="Retry selected failed download(s)" Style="{DynamicResource DimTextStyle}" Margin="14,4"/>
                         </Grid>
-                        <TextBlock Text="Click anywhere to dismiss"
+                        <Button Content="Close shortcuts" Click="Shortcuts_Click" HorizontalAlignment="Center" Margin="0,18,0,0" Style="{DynamicResource SecondaryButton}"/>
+                        <TextBlock Text="Press Esc or click to dismiss"
                                    Style="{DynamicResource MicroTextStyle}"
                                    HorizontalAlignment="Center"
                                    Margin="0,18,0,0"/>

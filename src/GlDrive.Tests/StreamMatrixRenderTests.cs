@@ -96,9 +96,12 @@ public class StreamMatrixRenderTests
         }
         Directory.CreateDirectory(OutputDir);
 
-        // Cyberpunk last: ThemeManager leaves some Cyberpunk-only keys (the scanline brush) in the
-        // app dictionary after switching away, which would bleed into the other renders.
-        foreach (var theme in new[] { "Dark", "Light", "Cyberpunk" })
+        var application = Application.Current!;
+        var originalButtonStyle = application.Resources[typeof(Button)];
+        var originalScanline = application.TryFindResource("ScanlineOverlayBrush");
+        // Switch away from Cyberpunk as well: its theme-only resources must not leak
+        // into the light or dark UI after a live theme change.
+        foreach (var theme in new[] { "Cyberpunk", "Dark", "Light", "Cyberpunk" })
         {
             var dict = new ResourceDictionary { Source = new Uri($"pack://application:,,,/GlDrive;component/UI/Themes/{theme}Theme.xaml") };
             var missing = NewKeys.Where(k => !dict.Contains(k)).ToList();
@@ -114,6 +117,10 @@ public class StreamMatrixRenderTests
         }
 
         AssertUplinkTableFitsNarrowSettings();
+        ThemeManager.ApplyTheme("Light");
+        Assert.Same(originalScanline, application.TryFindResource("ScanlineOverlayBrush"));
+        Assert.Null(application.TryFindResource("CyberpunkPrimaryButtonStyle"));
+        Assert.Same(originalButtonStyle, application.Resources[typeof(Button)]);
     }
 
     // Settings opens no narrower than MinWidth=900; after the window and tab chrome the panel gets

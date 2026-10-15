@@ -6,7 +6,7 @@
         ResizeMode="CanResize"
         WindowStartupLocation="CenterOwner"
         Background="{DynamicResource BackgroundBrush}"
-        Foreground="{DynamicResource ForegroundBrush}">
+        Foreground="{DynamicResource ForegroundBrush}" FocusManager.FocusedElement="{Binding ElementName=ReleaseBox}">
     <Border Margin="14" Style="{DynamicResource HudPanelStyle}">
         <DockPanel>
             <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
@@ -39,19 +39,21 @@
                             <TextBlock Text="IRC Section (for mapping lookup):" Margin="0,0,0,2"/>
                             <TextBox x:Name="SectionBox" Text="TV-1080P"/>
                         </StackPanel>
-                        <Button Grid.Column="1" Content="Evaluate" Click="Evaluate_Click"
+                        <Button Grid.Column="1" Content="Evaluate rules" Click="Evaluate_Click" IsDefault="True"
                                 Padding="20,6" VerticalAlignment="Bottom"
                                 Style="{StaticResource PrimaryButton}"/>
                     </Grid>
 
                     <TextBox Grid.Row="3" x:Name="ResultBox" IsReadOnly="True"
+                             Text="Enter a release name and IRC section, then choose Evaluate rules to see which rules match."
+                             AutomationProperties.Name="Rule evaluation results"
                              FontFamily="Consolas" FontSize="12"
                              VerticalScrollBarVisibility="Auto"
                              HorizontalScrollBarVisibility="Auto"
-                             AcceptsReturn="True" TextWrapping="NoWrap"
+                             AcceptsReturn="True" TextWrapping="Wrap"
                              Background="{DynamicResource SurfaceBrush}"/>
 
-                    <Button Grid.Row="4" Content="Close" Click="Close_Click"
+                    <Button Grid.Row="4" Content="Close" Click="Close_Click" IsCancel="True"
                             HorizontalAlignment="Right" Padding="20,6" Margin="0,12,0,0"
                             Style="{StaticResource SecondaryButton}"/>
                 </Grid>

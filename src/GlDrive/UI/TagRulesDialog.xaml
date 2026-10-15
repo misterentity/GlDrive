@@ -24,10 +24,10 @@
                     </Grid.RowDefinitions>
 
                     <StackPanel Grid.Row="0" Margin="0,0,0,8">
-                        <TextBlock x:Name="HeaderText" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                        <TextBlock FontSize="11" Foreground="{DynamicResource ForegroundDimBrush}"
+                        <TextBlock x:Name="HeaderText" FontSize="18" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                        <TextBlock FontSize="12" Foreground="{DynamicResource ForegroundDimBrush}"
                                    TextWrapping="Wrap"
-                                   Text="Rules for this mapping. Pattern is a wildcard/regex match against the release name, OR use Expression for RaceTrade-style [key] op value syntax."/>
+                                   Text="Add a rule, then edit its cells. Pattern matches a release name using wildcards; enable Regex for regular expressions. An Expression such as [key] op value takes priority over Pattern."/>
                     </StackPanel>
 
                     <DataGrid Grid.Row="1" x:Name="TagRulesGrid"
@@ -36,16 +36,17 @@
                               HeadersVisibility="Column">
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="Pattern" Binding="{Binding Pattern}" Width="160"/>
-                            <DataGridCheckBoxColumn Header="Rx" Binding="{Binding IsRegex}" Width="40"/>
+                            <DataGridCheckBoxColumn Header="Regex" Binding="{Binding IsRegex}" Width="65"/>
                             <DataGridTextColumn Header="Expression" Binding="{Binding Expression}" Width="*"/>
-                            <DataGridTextColumn Header="Action" Binding="{Binding Action}" Width="70"/>
+                            <DataGridComboBoxColumn Header="Action" SelectedItemBinding="{Binding Action}" Width="100"/>
                         </DataGrid.Columns>
                     </DataGrid>
 
                     <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
-                        <Button Content="Add" Click="Add_Click" Padding="14,4" Margin="0,0,6,0"/>
+                        <Button Content="Add rule" Click="Add_Click" Padding="14,4" Margin="0,0,6,0"/>
                         <Button Content="Remove" Click="Remove_Click" Padding="14,4" Margin="0,0,12,0"/>
-                        <Button Content="OK" Click="Ok_Click" Padding="20,4"
+                        <Button Content="Cancel" IsCancel="True" Padding="20,4" Margin="0,0,8,0" Style="{StaticResource SecondaryButton}"/>
+                        <Button Content="Save rules" Click="Ok_Click" Padding="20,4"
                                 Style="{StaticResource PrimaryButton}"/>
                     </StackPanel>
                 </Grid>

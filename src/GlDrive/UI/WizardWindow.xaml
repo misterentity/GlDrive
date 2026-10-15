@@ -24,17 +24,29 @@
                     </Grid.RowDefinitions>
 
                     <!-- Step indicator -->
-                    <TextBlock Grid.Row="0" x:Name="StepIndicator" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,12"/>
+                    <StackPanel Grid.Row="0" Margin="0,0,0,22">
+                        <TextBlock x:Name="StepIndicator" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,12"/>
+                        <ProgressBar x:Name="StepProgress" Minimum="0" Maximum="5" Height="5" IsHitTestVisible="False"
+                                     AutomationProperties.Name="Setup progress"/>
+                    </StackPanel>
 
                     <!-- Step content -->
-                    <ContentControl Grid.Row="1" x:Name="StepContent"/>
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,12,0">
+                        <ContentControl x:Name="StepContent" HorizontalContentAlignment="Stretch"/>
+                    </ScrollViewer>
 
                     <!-- Navigation -->
-                    <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+                    <StackPanel Grid.Row="2" Margin="0,16,0,0">
+                        <TextBlock x:Name="ValidationText" TextWrapping="Wrap" Foreground="{DynamicResource StreamBadBrush}" Margin="0,0,0,8" AutomationProperties.LiveSetting="Polite"/>
+                    <DockPanel>
+                        <Button Content="Cancel" IsCancel="True" Padding="20,6" HorizontalAlignment="Left" Style="{StaticResource SecondaryButton}"/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                         <Button x:Name="BackButton" Content="Back" Click="Back_Click" Padding="20,6" Margin="0,0,8,0"
                                 Style="{StaticResource SecondaryButton}"/>
-                        <Button x:Name="NextButton" Content="Next" Click="Next_Click" Padding="20,6"
+                        <Button x:Name="NextButton" Content="Next" Click="Next_Click" IsDefault="True" Padding="20,6"
                                 Style="{StaticResource PrimaryButton}"/>
+                    </StackPanel>
+                    </DockPanel>
                     </StackPanel>
                 </Grid>
             </Grid>

@@ -88,7 +88,8 @@ public partial class App
         {
             CredentialStore.AccessDisabled = true;
             ConfigManager.ReadOnly = true;
-            ScreenshotCapture.CaptureAll(ConfigManager.Load());
+            var screenshotTheme = e.Args.FirstOrDefault(a => a.StartsWith("--screenshot-theme=", StringComparison.OrdinalIgnoreCase))?.Split('=', 2)[1];
+            ScreenshotCapture.CaptureAll(ConfigManager.Load(), screenshotTheme);
             Shutdown();
             return;
         }

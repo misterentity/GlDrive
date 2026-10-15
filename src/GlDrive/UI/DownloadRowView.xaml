@@ -7,25 +7,25 @@
         <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
     </UserControl.Resources>
     <Border x:Name="RowRoot" Margin="0,0,0,8" Padding="14,10"
-            Background="#80050F1A"
+            Background="{DynamicResource SurfaceBrush}" CornerRadius="4"
             BorderBrush="{DynamicResource LineBrush}" BorderThickness="1">
         <Grid>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="90"/>
+                <ColumnDefinition Width="Auto" MinWidth="90"/>
             </Grid.ColumnDefinitions>
             <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
             <!-- Top row: release name + status chip -->
-            <TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Text="{Binding ReleaseName}"
-                       Style="{DynamicResource DisplayTextStyle}" FontSize="13"
-                       TextTrimming="CharacterEllipsis"/>
-            <Border Grid.Row="0" Grid.Column="2"
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding ReleaseName}"
+                       Style="{DynamicResource DisplayTextStyle}" FontSize="13" Margin="0,0,12,0"
+                       TextTrimming="CharacterEllipsis" ToolTip="{Binding ReleaseName}"/>
+            <Border Grid.Row="0" Grid.Column="1"
                     Style="{DynamicResource DownloadStatusTagStyle}"
                     HorizontalAlignment="Right">
                 <TextBlock Text="{Binding Status}" Style="{DynamicResource DownloadStatusTextStyle}"/>
@@ -40,24 +40,28 @@
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
-                <TextBlock Text="{Binding ServerName}" Style="{DynamicResource AccentTextStyle}" FontSize="11"/>
+                <TextBlock Text="{Binding ServerName}" Style="{DynamicResource AccentTextStyle}" FontSize="12"
+                           MaxWidth="160" TextTrimming="CharacterEllipsis" ToolTip="{Binding ServerName}"/>
                 <TextBlock Grid.Column="1" Text=" · " Foreground="{DynamicResource TextFaintBrush}"/>
-                <TextBlock Grid.Column="2" Text="{Binding Category}" Style="{DynamicResource MicroTextStyle}"/>
+                <TextBlock Grid.Column="2" Text="{Binding Category}" Style="{DynamicResource MicroTextStyle}"
+                           FontSize="12" MaxWidth="140" TextTrimming="CharacterEllipsis" ToolTip="{Binding Category}"/>
                 <TextBlock Grid.Column="3" Text=" · " Foreground="{DynamicResource TextFaintBrush}"/>
-                <TextBlock Grid.Column="4" Text="{Binding ProgressText}" Style="{DynamicResource MicroTextStyle}"
+                <TextBlock Grid.Column="4" Text="{Binding ProgressText}" Style="{DynamicResource MicroTextStyle}" FontSize="12"
                            TextTrimming="CharacterEllipsis" ToolTip="{Binding ProgressText}"/>
             </Grid>
-            <sm:LaneChipsView Grid.Row="1" Grid.Column="1" DataContext="{Binding Matrix}"
-                              HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,3,8,0"
+            <sm:LaneChipsView Grid.Row="2" Grid.ColumnSpan="2" DataContext="{Binding Matrix}"
+                              HorizontalAlignment="Left" VerticalAlignment="Top" Margin="-6,0,0,6"
                               ToolTip="{Binding DataContext.StreamsText, ElementName=RowRoot}"
                               Visibility="{Binding DataContext.HasStreams, ElementName=RowRoot, Converter={StaticResource BoolToVisibility}}"/>
-            <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding SpeedDisplay}"
+            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SpeedDisplay}" Margin="8,4,0,8"
                        HorizontalAlignment="Right"
-                       Style="{DynamicResource AccentTextStyle}" FontSize="11"/>
+                       Style="{DynamicResource AccentTextStyle}" FontSize="12"/>
 
             <!-- Progress bar -->
-            <ProgressBar Grid.Row="2" Grid.ColumnSpan="3" Height="5"
+            <ProgressBar Grid.Row="3" Grid.ColumnSpan="2" Height="6"
                          Minimum="0" Maximum="100"
+                         AutomationProperties.Name="Download progress"
+                         ToolTip="{Binding ProgressText}"
                          Value="{Binding ProgressPercent, FallbackValue=0}"/>
         </Grid>
     </Border>

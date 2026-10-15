@@ -56,33 +56,57 @@ public partial class WizardWindow : Window
         _welcomePanel.Children.Add(new TextBlock
         {
             Text = "Welcome to GlDrive!",
-            FontSize = 18, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 12)
+            FontSize = 26, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 16)
         });
         _welcomePanel.Children.Add(new TextBlock
         {
             Text = "GlDrive mounts a glftpd FTPS server as a Windows drive letter, " +
                    "allowing you to access remote files directly from Explorer and any application.\n\n" +
-                   "This wizard will help you configure your connection.",
-            TextWrapping = TextWrapping.Wrap
+                   "Have your server address, port, username and password ready. " +
+                   "You will verify the connection, choose a drive letter, and review your settings before saving.",
+            TextWrapping = TextWrapping.Wrap, FontSize = 14, LineHeight = 23
         });
 
         // Step 2: Connection
         _connectionPanel = new StackPanel();
-        _connectionPanel.Children.Add(Label("Host:"));
-        _hostBox = new TextBox { Margin = new Thickness(0, 0, 0, 8) };
-        _connectionPanel.Children.Add(_hostBox);
-        _connectionPanel.Children.Add(Label("Port:"));
-        _portBox = new TextBox { Text = "1337", Margin = new Thickness(0, 0, 0, 8), Width = 100, HorizontalAlignment = HorizontalAlignment.Left };
-        _connectionPanel.Children.Add(_portBox);
-        _connectionPanel.Children.Add(Label("Username:"));
-        _usernameBox = new TextBox { Margin = new Thickness(0, 0, 0, 8) };
-        _connectionPanel.Children.Add(_usernameBox);
-        _connectionPanel.Children.Add(Label("Password:"));
-        _passwordBox = new PasswordBox { Margin = new Thickness(0, 0, 0, 8) };
-        _connectionPanel.Children.Add(_passwordBox);
-        _connectionPanel.Children.Add(Label("Root Path:"));
+        _hostBox = new TextBox();
+        _portBox = new TextBox { Text = "1337", MaxLength = 5 };
+        var addressFields = new Grid { Margin = new Thickness(0, 0, 0, 14) };
+        addressFields.ColumnDefinitions.Add(new ColumnDefinition());
+        addressFields.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(100) });
+        var hostField = Field("Host (required):", _hostBox);
+        hostField.Margin = new Thickness(0, 0, 14, 0);
+        addressFields.Children.Add(hostField);
+        var portField = Field("Port:", _portBox);
+        Grid.SetColumn(portField, 1);
+        addressFields.Children.Add(portField);
+        _connectionPanel.Children.Add(addressFields);
+
+        _usernameBox = new TextBox();
+        _passwordBox = new PasswordBox();
+        var credentials = new Grid { Margin = new Thickness(0, 0, 0, 14) };
+        credentials.ColumnDefinitions.Add(new ColumnDefinition());
+        credentials.ColumnDefinitions.Add(new ColumnDefinition());
+        var usernameField = Field("Username (required):", _usernameBox);
+        usernameField.Margin = new Thickness(0, 0, 14, 0);
+        credentials.Children.Add(usernameField);
+        var passwordField = Field("Password:", _passwordBox);
+        Grid.SetColumn(passwordField, 1);
+        credentials.Children.Add(passwordField);
+        _connectionPanel.Children.Add(credentials);
+
         _rootPathBox = new TextBox { Text = "/", Margin = new Thickness(0, 0, 0, 8) };
-        _connectionPanel.Children.Add(_rootPathBox);
+        _connectionPanel.Children.Add(Field("Root path:", _rootPathBox));
+        _connectionPanel.Children.Add(new TextBlock
+        {
+            Text = "Use / for the server root, or enter the remote folder you want to mount.",
+            TextWrapping = TextWrapping.Wrap, FontSize = 13
+        });
+        System.Windows.Automation.AutomationProperties.SetName(_hostBox, "Server host, required");
+        System.Windows.Automation.AutomationProperties.SetName(_portBox, "Server port");
+        System.Windows.Automation.AutomationProperties.SetName(_usernameBox, "Username, required");
+        System.Windows.Automation.AutomationProperties.SetName(_passwordBox, "Password");
+        System.Windows.Automation.AutomationProperties.SetName(_rootPathBox, "Remote root path");
 
         // Step 3: TLS
         _tlsPanel = new StackPanel();
@@ -91,7 +115,7 @@ public partial class WizardWindow : Window
             Text = "TLS Certificate Verification",
             FontSize = 14, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 12)
         });
-        _certInfo = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) };
+        _certInfo = new TextBlock { FontSize = 13, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) };
         _tlsPanel.Children.Add(_certInfo);
         _trustCertBox = new CheckBox { Content = "Trust this certificate", Margin = new Thickness(0, 0, 0, 8) };
         _tlsPanel.Children.Add(_trustCertBox);
@@ -114,7 +138,7 @@ public partial class WizardWindow : Window
 
         // Step 5: Confirm
         _confirmPanel = new StackPanel();
-        _summaryText = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) };
+        _summaryText = new TextBlock { FontSize = 14, TextWrapping = TextWrapping.Wrap, LineHeight = 28, Margin = new Thickness(0, 0, 0, 12) };
         _confirmPanel.Children.Add(_summaryText);
         _testResultText = new TextBlock { TextWrapping = TextWrapping.Wrap };
         _confirmPanel.Children.Add(_testResultText);
@@ -125,11 +149,20 @@ public partial class WizardWindow : Window
     internal void ShowStep(int step)
     {
         _step = step;
+        ValidationText.Text = "";
         var titles = new[] { "Step 1 of 5 — Welcome", "Step 2 of 5 — Connection", "Step 3 of 5 — TLS Certificate",
-                             "Step 4 of 5 — Mount Options", "Step 5 of 5 — Confirm & Connect" };
+                             "Step 4 of 5 — Mount Options", "Step 5 of 5 — Review settings" };
         StepIndicator.Text = titles[step];
+        StepProgress.Value = step + 1;
         BackButton.IsEnabled = step > 0;
-        NextButton.Content = step == 4 ? "Finish" : "Next";
+        NextButton.Content = step switch
+        {
+            0 => "Get started",
+            1 => "Verify connection",
+            3 => "Review settings",
+            4 => "Save connection",
+            _ => "Continue"
+        };
 
         StepContent.Content = step switch
         {
@@ -207,7 +240,16 @@ public partial class WizardWindow : Window
             // Validate connection fields
             if (string.IsNullOrWhiteSpace(_hostBox.Text) || string.IsNullOrWhiteSpace(_usernameBox.Text))
             {
-                MessageBox.Show("Host and Username are required.", "Validation", MessageBoxButton.OK, MessageBoxImage.Warning);
+                ValidationText.Text = "Enter a server host and username to continue.";
+                if (string.IsNullOrWhiteSpace(_hostBox.Text)) _hostBox.Focus();
+                else _usernameBox.Focus();
+                return;
+            }
+            if (!int.TryParse(_portBox.Text, out var port) || port is < 1 or > 65535)
+            {
+                ValidationText.Text = "Enter a port between 1 and 65535.";
+                _portBox.Focus();
+                _portBox.SelectAll();
                 return;
             }
             _password = _passwordBox.Password;
@@ -266,8 +308,16 @@ public partial class WizardWindow : Window
         _trustCertBox.IsChecked = true;
     }
 
+    private static StackPanel Field(string label, Control control)
+    {
+        var panel = new StackPanel();
+        panel.Children.Add(Label(label));
+        panel.Children.Add(control);
+        return panel;
+    }
+
     private static TextBlock Label(string text) =>
-        new() { Text = text, Margin = new Thickness(0, 0, 0, 4) };
+        new() { Text = text, FontSize = 13, Margin = new Thickness(0, 0, 0, 5) };
 
     private static string FormatFingerprint(string fp) =>
         string.Join(":", Enumerable.Range(0, fp.Length / 2).Select(i => fp.Substring(i * 2, 2)));
