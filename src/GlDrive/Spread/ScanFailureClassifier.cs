@@ -59,6 +59,20 @@ internal static class ScanFailureClassifier
     /// deferrals back into a warning. Warn only when the entire batch produced no
     /// result and at least one scan supplied evidence of a genuine fault.
     /// </summary>
+    /// <summary>
+    /// The cause printed on a hard scan failure. v3.11.9: it was hardcoded "both pools
+    /// unavailable", so a LIST whose data channel timed out AFTER a successful borrow — a
+    /// spent login, the opposite state — was reported as pool exhaustion (2026-10-14 11:51:29,
+    /// DataChannelTimeoutException). The wording must come from the exception, not the branch.
+    /// </summary>
+    internal static string DescribeHardFailure(System.Exception? ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+            if (e is ScanListingFailedException listing)
+                return $"listing failed after borrow: {listing.InnerException?.GetType().Name ?? "unknown"}";
+        return "both pools unavailable";
+    }
+
     internal static bool ShouldWarnEmptyBatch(int successfulScans, int hardFailures)
         => successfulScans == 0 && hardFailures > 0;
 }

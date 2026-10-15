@@ -134,4 +134,43 @@ public class ScanFailureClassifierTests
         var window = source[Math.Max(0, warn - 700)..warn];
         Assert.Contains("IsContention", window);
     }
+    // ---- v3.11.9: the hard-failure line names the cause the exception proves ----
+
+    [Fact]
+    public void A_listing_that_failed_after_borrow_is_not_called_pool_exhaustion()
+    {
+        // 2026-10-14 11:51:29: "Spread scan FAILED ... (both pools unavailable)" over a
+        // ScanListingFailedException whose own message says "failed after borrow".
+        var ex = new ScanListingFailedException("/incoming/tv-hd/X",
+            new IOException("data connection not completed within 10s"));
+        var cause = ScanFailureClassifier.DescribeHardFailure(ex);
+        Assert.Equal("listing failed after borrow: IOException", cause);
+        Assert.DoesNotContain("pools unavailable", cause);
+    }
+
+    [Fact]
+    public void A_wrapped_listing_failure_is_still_named()
+    {
+        var ex = new InvalidOperationException("outer",
+            new ScanListingFailedException("/x", new TimeoutException()));
+        Assert.Equal("listing failed after borrow: TimeoutException", ScanFailureClassifier.DescribeHardFailure(ex));
+    }
+
+    [Fact]
+    public void Other_hard_failures_keep_the_pool_wording()
+    {
+        Assert.Equal("both pools unavailable", ScanFailureClassifier.DescribeHardFailure(new ObjectDisposedException("pool")));
+        Assert.Equal("both pools unavailable", ScanFailureClassifier.DescribeHardFailure(null));
+    }
+
+    [Fact]
+    public void The_warning_takes_its_cause_from_the_exception_not_the_branch()
+    {
+        var source = ReadSpreadJobSource();
+        var warn = source.IndexOf("Spread scan FAILED for {Server}", StringComparison.Ordinal);
+        var line = source[warn..source.IndexOf(';', warn)];
+        Assert.Contains("({Cause})", line);
+        Assert.Contains("ScanFailureClassifier.DescribeHardFailure(lastError)", line);
+        Assert.DoesNotContain("(both pools unavailable)", line);
+    }
 }
