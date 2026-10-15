@@ -177,8 +177,11 @@ internal sealed class TorrentDownloadSource : IWholeDownloadSource, IDisposable,
                     var percent = double.IsFinite(state.Percent) ? Math.Clamp(state.Percent, 0, 100) : 0;
                     var done = (long)Math.Min(total, total * (percent / 100));
                     var rate = double.IsFinite(state.BytesPerSecond) ? Math.Max(0, state.BytesPerSecond) : 0;
+                    var activity = state.State == "Downloading" && state.Seeds + state.Peers == 0 && !state.VerifiedComplete
+                        ? state.AvailablePeers > 0 ? "Connecting to peers" : "Waiting for peers"
+                        : state.State;
                     progress?.Report(new DownloadProgress(done, total, rate,
-                        StatusDetail: $"{state.State} · {state.Seeds} seeds / {state.Peers} peers"));
+                        StatusDetail: $"{activity} · {state.Seeds} seeds / {state.Peers} peers · {state.AvailablePeers} available"));
                     if (state.VerifiedComplete) break;
                     await Task.Delay(pollInterval, token).ConfigureAwait(false);
                 }
@@ -211,7 +214,7 @@ internal sealed class TorrentDownloadSource : IWholeDownloadSource, IDisposable,
 }
 
 internal readonly record struct TorrentDownloadSnapshot(double Percent, double BytesPerSecond,
-    int Seeds, int Peers, string State, bool VerifiedComplete, string? Error = null);
+    int Seeds, int Peers, string State, bool VerifiedComplete, string? Error = null, int AvailablePeers = 0);
 
 internal interface ITorrentDownloadTransfer : IAsyncDisposable
 {
@@ -292,7 +295,13 @@ public partial class TorrentStreamService
     {
         ct.ThrowIfCancellationRequested();
         var manager = await _engine.AddAsync(torrent, directory,
-            new TorrentSettingsBuilder { CreateContainingDirectory = false }.ToSettings()).ConfigureAwait(false);
+            new TorrentSettingsBuilder
+            {
+                CreateContainingDirectory = false,
+                // A single queued torrent can use the available engine budget. The engine
+                // still enforces this aggregate ceiling when several torrents are active.
+                MaximumConnections = _engine.Settings.MaximumConnections
+            }.ToSettings()).ConfigureAwait(false);
         var transfer = new QueueTransfer(_engine, manager);
         try
         {
@@ -339,7 +348,8 @@ public partial class TorrentStreamService
                 return new(manager.PartialProgress, manager.Monitor.DownloadRate, manager.Peers.Seeds,
                     manager.Peers.Leechs, state.ToString(), complete,
                     state == TorrentState.Error ? "MonoTorrent entered its error state." :
-                    state == TorrentState.Stopped && !complete ? "Torrent stopped before verification completed." : null);
+                    state == TorrentState.Stopped && !complete ? "Torrent stopped before verification completed." : null,
+                    manager.Peers.Available);
             }
         }
 

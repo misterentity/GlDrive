@@ -21,6 +21,12 @@ if (args.Length > 0 && args[0] == "--sharing-only")
     await CpsvSharingCheck.Run(args.Length > 1 ? args[1] : throw new ArgumentException("Supply an evidence directory"));
     return;
 }
+if (args.Length > 0 && args[0] == "--network-only")
+{
+    if (args.Length != 4) throw new ArgumentException("Supply an evidence directory and two local adapter names");
+    await CpsvSharingCheck.RunMultiNetwork(args[1], args[2], args[3]);
+    return;
+}
 
 // This harness only connects to the disposable loopback fixture, with an isolated trust store.
 var state = JsonDocument.Parse(File.ReadAllText(args[0])).RootElement;

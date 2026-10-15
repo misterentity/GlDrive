@@ -13,6 +13,31 @@ namespace GlDrive.Tests;
 public sealed class TorrentDownloadSourceTests
 {
     [Theory]
+    [InlineData(7)]
+    [InlineData(100)]
+    public async Task Queued_torrent_can_use_the_engine_connection_budget_without_a_hidden_sixty_peer_cap(int budget)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "gldrive-peer-budget-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var settings = new EngineSettingsBuilder
+            {
+                CacheDirectory = root, DhtEndPoint = null, ListenEndPoints = [],
+                AllowLocalPeerDiscovery = false, AllowPortForwarding = false,
+                MaximumConnections = budget
+            }.ToSettings();
+            using var engine = new ClientEngine(settings);
+            using var service = new TorrentStreamService(engine, new TorrentContentPolicy(true));
+            var torrent = TorrentOf(("video.mkv", 100));
+            var decisions = new TorrentContentPolicy(true).EvaluateAll(torrent.Files.Select(f => f.Path), root).ToArray();
+            await using var transfer = await service.AddQueueDownloadAsync(torrent, root, decisions, CancellationToken.None);
+            Assert.Equal(budget, Assert.Single(engine.Torrents).Settings.MaximumConnections);
+            Assert.Equal(budget, engine.Settings.MaximumConnections);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Owner_and_session_disposal_do_not_hold_one_lock_while_waiting_for_the_other(bool disposeOwner)
@@ -263,6 +288,7 @@ public sealed class TorrentDownloadSourceTests
         caller.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
         Assert.All(reports, p => { Assert.Equal(0, p.DownloadedBytes); Assert.Equal(0, p.BytesPerSecond); Assert.Null(p.Lanes); Assert.Null(p.Map); });
+        Assert.All(reports, p => Assert.StartsWith("Waiting for peers", p.StatusDetail));
     }
 
     [Fact]

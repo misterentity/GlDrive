@@ -28,6 +28,98 @@ internal static class CpsvSharingCheck
     private static readonly List<string> Passed = [];
     private static string Phase = "";
 
+    internal static async Task RunMultiNetwork(string evidenceDirectory, string firstAdapter, string secondAdapter)
+    {
+        Directory.CreateDirectory(evidenceDirectory);
+        var evidence = Path.GetFullPath(evidenceDirectory);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        var started = DateTime.UtcNow;
+        string? failure = null;
+        object? networks = null;
+        try
+        {
+            Phase = "two selected networks";
+            var configured = new[] { firstAdapter, secondAdapter }.Select(name => new NetworkPathConfig { AdapterName = name }).ToList();
+            var selected = NetworkCatalog.Choose(configured, NetworkCatalog.EnumerateAdapters());
+            Check(selected.Count == 2 && selected.All(n => !n.IsDefault) && selected.Select(n => n.BindAddress).Distinct().Count() == 2,
+                "two selected live adapters resolve to distinct bound IPv4 addresses");
+            foreach (var path in selected) path.Settings!.AdapterId = path.Id;
+            networks = selected.Select(n => new { name = n.DisplayName, bound = !n.IsDefault }).ToArray();
+            await using var f = await Fixture.Create(evidence, "two-networks", true, deadline.Token,
+                networkAddresses: selected.Select(n => n.BindAddress!).ToArray());
+            var usage = new NetworkUsageStore(Path.Combine(f.Root, "isolated-network-usage.json"));
+            var usageField = typeof(DownloadNetworkServices).GetField("_usage", BindingFlags.NonPublic | BindingFlags.Static)!;
+            var configField = typeof(DownloadNetworkServices).GetField("_config", BindingFlags.NonPublic | BindingFlags.Static)!;
+            var priorUsage = usageField.GetValue(null);
+            var priorConfig = configField.GetValue(null);
+            usageField.SetValue(null, usage);
+            using var operation = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
+            Task? download = null;
+            try
+            {
+                var config = new DownloadConfig
+                {
+                    MultiStream = new MultiStreamConfig { Enabled = true, BorrowIdleRaceLogin = true, FtpMinSplitMb = 4, Networks = configured }
+                };
+                var downloader = new StreamingDownloader(f.Main, f.ServerId, config, 0, f.Manager);
+                var destination = Path.Combine(f.Root, "multi-network-payload.bin");
+                download = downloader.DownloadFiles([new FtpDownloadFile("/payload.bin", destination, f.Peer.Payload.Length)], null, operation.Token);
+                await Task.WhenAll(f.Peer.FirstMainData.Task, f.Peer.FirstLoanData.Task).WaitAsync(TimeSpan.FromSeconds(20), deadline.Token);
+                Check(!download.IsCompleted && f.Main.ActiveCount == 1 && f.Spread.ActiveCount == 1,
+                    "actual StreamingDownloader opens simultaneous main and borrowed race lanes");
+                Check(f.Peer.ObservedSources.Order().SequenceEqual(new[] { 0, 1 }),
+                    "native fixture observes one data connection from each selected adapter address");
+                Check(f.Gate.Held == 2 && f.Peer.MaxLiveAuthenticated == 2,
+                    "two networks use the existing two-account-permit budget without additional logins");
+                f.Peer.ReleaseMain.TrySetResult();
+                await download.WaitAsync(TimeSpan.FromSeconds(60), deadline.Token);
+                Check(File.ReadAllBytes(destination).SequenceEqual(f.Peer.Payload),
+                    "two bound native CPSV lanes reconstruct the exact 16 MiB payload");
+                var firstBytes = usage.UsedThisPeriod(selected[0].Id, AllowancePeriod.Daily);
+                var secondBytes = usage.UsedThisPeriod(selected[1].Id, AllowancePeriod.Daily);
+                Check(firstBytes > 0 && secondBytes > 0 && firstBytes + secondBytes == f.Peer.Payload.Length,
+                    "both selected adapters carry accounted payload bytes with no duplicate accounting");
+                Check(f.Main.ActiveCount == 0 && f.Spread.ActiveCount == 0 && f.Main.QuarantineSize == 0 && f.Spread.QuarantineSize == 0,
+                    "successful two-network completion returns both leases without quarantine");
+                await using var main = await f.Main.Borrow(deadline.Token);
+                await using var spread = await f.Spread.Borrow(deadline.Token);
+                Check((await Noop(main, deadline.Token)).Code == "200" && (await Noop(spread, deadline.Token)).Code == "200",
+                    "both native control sessions remain synchronized after multi-network data completion");
+            }
+            finally
+            {
+                operation.Cancel();
+                f.Peer.ReleaseMain.TrySetResult();
+                if (download != null && !await Settled(download, TimeSpan.FromSeconds(20)))
+                {
+                    f.SuppressTeardown("Multi-network download did not settle");
+                    throw new TimeoutException("Native teardown suppressed while multi-network work is active");
+                }
+                usageField.SetValue(null, priorUsage);
+                configField.SetValue(null, priorConfig);
+            }
+            await f.DisposeAsync();
+            Check(f.Gate.Held == 0, "fixture disposal releases every login permit");
+            Console.WriteLine("PASS: native CPSV two-network verification complete");
+        }
+        catch (Exception ex)
+        {
+            // Runtime adapter addresses are intentionally excluded from this receipt.
+            failure = ex.GetType().Name;
+            throw;
+        }
+        finally
+        {
+            File.WriteAllText(Path.Combine(evidence, "network-result.json"), JsonSerializer.Serialize(new
+            {
+                startedUtc = started, finishedUtc = DateTime.UtcNow,
+                appVersion = typeof(FtpConnectionPool).Assembly.GetName().Version?.ToString(),
+                success = failure == null, assertions = Passed, failure, networks,
+                scope = "Actual StreamingDownloader, native GnuTLS control and managed CPSV data TLS; two same-host source addresses, shared login gate and isolated usage store. Proves socket binding, not independent WAN bandwidth or physical adapter egress. No production queue or configuration changes."
+            }, new JsonSerializerOptions { WriteIndented = true }));
+        }
+    }
+
     internal static async Task Run(string evidenceDirectory)
     {
         Directory.CreateDirectory(evidenceDirectory);
@@ -360,11 +452,12 @@ internal static class CpsvSharingCheck
             Console.Error.WriteLine(reason + "; native handles retained until this isolated process exits. Evidence: " + Root);
         }
 
-        internal static async Task<Fixture> Create(string evidence, string name, bool pauseFirstTransfers, CancellationToken ct, bool stalledSetup = false)
+        internal static async Task<Fixture> Create(string evidence, string name, bool pauseFirstTransfers, CancellationToken ct, bool stalledSetup = false,
+            IReadOnlyList<IPAddress>? networkAddresses = null)
         {
             var root = Path.Combine(Path.GetTempPath(), "gldrive-sharing-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(root);
-            var peer = new Peer(Path.Combine(evidence, name + "-protocol.json"), pauseFirstTransfers, stalledSetup);
+            var peer = new Peer(Path.Combine(evidence, name + "-protocol.json"), pauseFirstTransfers, stalledSetup, networkAddresses);
             var config = new ServerConfig
             {
                 Id = "fixture-" + Guid.NewGuid().ToString("N"), Name = "same-host sharing fixture",
@@ -427,9 +520,12 @@ internal static class CpsvSharingCheck
         private readonly bool _stalledSetup;
         private readonly string _evidence;
         private readonly IPAddress _dataAddress;
+        private readonly IReadOnlyList<IPAddress>? _networkAddresses;
+        private readonly ConcurrentDictionary<int, byte> _observedSources = new();
         private int _sessionId, _authenticated, _liveAuthenticated, _maximum, _doubleAbort;
         internal string Username { get; } = "fixture-" + Guid.NewGuid().ToString("N");
-        internal byte[] Payload { get; } = Enumerable.Range(0, 2 * 1024 * 1024).Select(i => (byte)(i * 17 + i / 251)).ToArray();
+        internal byte[] Payload { get; }
+        internal IEnumerable<int> ObservedSources => _observedSources.Keys;
         internal X509Certificate2 Certificate { get; }
         internal int Port { get; }
         internal int Authenticated => Volatile.Read(ref _authenticated);
@@ -442,12 +538,14 @@ internal static class CpsvSharingCheck
         internal TaskCompletionSource LoanSetupClosed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource ReleaseMain { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        internal Peer(string evidence, bool pauseFirstTransfers, bool stalledSetup)
+        internal Peer(string evidence, bool pauseFirstTransfers, bool stalledSetup, IReadOnlyList<IPAddress>? networkAddresses = null)
         {
             _evidence = evidence;
             _pause = pauseFirstTransfers;
             _stalledSetup = stalledSetup;
-            _dataAddress = NetworkInterface.GetAllNetworkInterfaces()
+            _networkAddresses = networkAddresses;
+            Payload = Enumerable.Range(0, (networkAddresses == null ? 2 : 16) * 1024 * 1024).Select(i => (byte)(i * 17 + i / 251)).ToArray();
+            _dataAddress = networkAddresses?.FirstOrDefault() ?? NetworkInterface.GetAllNetworkInterfaces()
                 .Where(n => n.OperationalStatus == OperationalStatus.Up)
                 .OrderBy(n => n.Description.Contains("Virtual", StringComparison.OrdinalIgnoreCase) || n.Name.StartsWith("vEthernet") ? 0 : 1)
                 .SelectMany(n => n.GetIPProperties().UnicastAddresses.Select(a => a.Address))
@@ -469,7 +567,11 @@ internal static class CpsvSharingCheck
             return b[0] == 10 || b[0] == 172 && b[1] is >= 16 and <= 31 || b[0] == 192 && b[1] == 168;
         }
 
-        private void Trace(int session, string kind, string value) => _events.Enqueue(new { atUtc = DateTime.UtcNow, session, kind, value });
+        private void Trace(int session, string kind, string value) => _events.Enqueue(new
+        {
+            atUtc = DateTime.UtcNow, session, kind,
+            value = _networkAddresses != null && kind == "reply" && value.StartsWith("227 ") ? "227 [same-host data endpoint]" : value
+        });
 
         private async Task Accept()
         {
@@ -578,8 +680,11 @@ internal static class CpsvSharingCheck
             {
                 using var tcp = await listener.AcceptTcpClientAsync(_stop.Token);
                 listener.Stop();
-                if (!((IPEndPoint)tcp.Client.RemoteEndPoint!).Address.Equals(_dataAddress))
+                var sourceAddress = ((IPEndPoint)tcp.Client.RemoteEndPoint!).Address;
+                var sourceIndex = _networkAddresses?.ToList().FindIndex(address => address.Equals(sourceAddress)) ?? (sourceAddress.Equals(_dataAddress) ? 0 : -1);
+                if (sourceIndex < 0)
                     throw new IOException("Data peer is not the selected same-host address");
+                _observedSources.TryAdd(sourceIndex, 0);
                 if (_stalledSetup && session == 2 && transfer == 1)
                 {
                     Trace(session, "data", "TLS setup deliberately held before ClientHello");
@@ -609,7 +714,7 @@ internal static class CpsvSharingCheck
                 if (session == 2 && transfer == 2 || _stalledSetup && session == 3 && transfer == 1) SecondLoanData.TrySetResult();
                 if (_pause && transfer == 1)
                 {
-                    if (session == 1) await ReleaseMain.Task.WaitAsync(_stop.Token);
+                    if (session == 1 || _networkAddresses != null) await ReleaseMain.Task.WaitAsync(_stop.Token);
                     else if (session == 2)
                     {
                         var probe = new byte[1];
@@ -650,7 +755,8 @@ internal static class CpsvSharingCheck
                 File.WriteAllText(_evidence, JsonSerializer.Serialize(new
                 {
                     controlAddress = "127.0.0.1", controlPort = Port,
-                    dataAddress = _dataAddress.ToString(), sameHostDataPeersOnly = true,
+                    dataAddress = _networkAddresses == null ? _dataAddress.ToString() : null, sameHostDataPeersOnly = true,
+                    observedSourceCount = _observedSources.Count,
                     authenticatedSessions = Authenticated, maximumPhysicalSessions = MaxLiveAuthenticated,
                     remainingPhysicalSessions = Volatile.Read(ref _liveAuthenticated),
                     doubleAbortReplies = DoubleAbortReplies, payloadSha256 = Convert.ToHexString(SHA256.HashData(Payload)), events = _events

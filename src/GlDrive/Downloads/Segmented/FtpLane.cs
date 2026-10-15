@@ -1,4 +1,5 @@
 using System.IO;
+using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
 using FluentFTP;
@@ -29,7 +30,6 @@ internal sealed class FtpLane : ISegmentLane
     private readonly Func<NetworkPath, bool>? _overAllowance;
     private readonly Action? _onDisposed;
     private PooledConnection? _conn;
-    private bool _warnedUnboundData;
 
     /// <param name="reborrowPool">Pool to re-borrow from after a fault; null for a borrowed race login (it leaves instead).</param>
     /// <param name="yieldWhen">Borrowed race login: true once the site wants to race.</param>
@@ -99,18 +99,12 @@ internal sealed class FtpLane : ISegmentLane
         var client = await ClientAsync(ct);
         if (!CanStopEarly)
         {
-            if (!_network.IsDefault && !_warnedUnboundData)
-            {
-                _warnedUnboundData = true;
-                Log.Information("Download: {Server} is not CPSV — its data connections use the default route, not {Network}",
-                    client.Host, _network.DisplayName);
-            }
             Stream stream;
             try
             {
-                stream = offset > 0
+                stream = await OpenStandardDataAsync(client, _network.BindAddress, async () => offset > 0
                     ? await client.OpenRead(file.Key, FtpDataType.Binary, offset, token: ct)
-                    : await client.OpenRead(file.Key, token: ct);
+                    : await client.OpenRead(file.Key, token: ct));
             }
             catch (FtpCommandException ex) when (offset > 0 && ex.CompletionCode is "500" or "501" or "502" or "504")
             {
@@ -145,6 +139,22 @@ internal sealed class FtpLane : ISegmentLane
             tcp.Dispose();
             throw;
         }
+    }
+
+    internal static async Task<Stream> OpenStandardDataAsync(
+        AsyncFtpClient client, IPAddress? localBind, Func<Task<Stream>> open)
+    {
+        // The lane exclusively owns this already-connected pooled client. FluentFTP
+        // reads SocketLocalIp when opening the data socket; no control reconnect or
+        // extra login is needed. Restore it even if setup fails so the next borrower
+        // never inherits this download's adapter selection.
+        var previous = client.Config.SocketLocalIp;
+        try
+        {
+            if (localBind != null) client.Config.SocketLocalIp = localBind;
+            return await open();
+        }
+        finally { client.Config.SocketLocalIp = previous; }
     }
 
     public void Fault(Exception ex)
