@@ -1,8 +1,79 @@
 <UserControl x:Class="GlDrive.UI.McpSettingsPanel"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="clr-namespace:GlDrive.UI"
              Loaded="Panel_Loaded" Unloaded="Panel_Unloaded"
              FontFamily="{DynamicResource StreamMonoFontFamily}" FontSize="12">
+    <UserControl.Resources>
+        <!-- Callout rail + label follow the real connection state: dim off/unknown, mint connected, red error. -->
+        <Style x:Key="ConnectionCalloutStyle" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource LineDimBrush}"/>
+            <Setter Property="BorderThickness" Value="2,0,0,0"/>
+            <Setter Property="Padding" Value="10,8"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding ConnectionState}" Value="{x:Static ui:McpConnectionState.Connected}">
+                    <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding ConnectionState}" Value="{x:Static ui:McpConnectionState.Checking}">
+                    <Setter Property="BorderBrush" Value="{DynamicResource WarnBrush}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding ConnectionState}" Value="{x:Static ui:McpConnectionState.Error}">
+                    <Setter Property="BorderBrush" Value="{DynamicResource BadBrush}"/>
+                    <Setter Property="Background" Value="{DynamicResource ErrorBackgroundBrush}"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="ConnectionLabelStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextDimBrush}"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding ConnectionState}" Value="{x:Static ui:McpConnectionState.Connected}">
+                    <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding ConnectionState}" Value="{x:Static ui:McpConnectionState.Checking}">
+                    <Setter Property="Foreground" Value="{DynamicResource WarnBrush}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding ConnectionState}" Value="{x:Static ui:McpConnectionState.Error}">
+                    <Setter Property="Foreground" Value="{DynamicResource BadBrush}"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <!-- Adapter check: a blocking error when missing, a quiet confirmation when present. -->
+        <Style x:Key="AdapterCalloutStyle" TargetType="Border">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource GoodBrush}"/>
+            <Setter Property="BorderThickness" Value="2,0,0,0"/>
+            <Setter Property="Padding" Value="10,6"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding AdapterMissing}" Value="True">
+                    <Setter Property="BorderBrush" Value="{DynamicResource BadBrush}"/>
+                    <Setter Property="Background" Value="{DynamicResource ErrorBackgroundBrush}"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="AdapterLabelStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Text" Value="✓ ADAPTER FOUND"/>
+            <Setter Property="Foreground" Value="{DynamicResource GoodBrush}"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding AdapterMissing}" Value="True">
+                    <Setter Property="Text" Value="✕ ADAPTER NOT FOUND"/>
+                    <Setter Property="Foreground" Value="{DynamicResource BadBrush}"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="AdapterStatusTextStyle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource ForegroundDimBrush}"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding AdapterMissing}" Value="True">
+                    <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+    </UserControl.Resources>
     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
         <StackPanel Margin="16,12,16,14">
             <TextBlock Text="Connect your assistant" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,6"/>
@@ -13,30 +84,36 @@
             <CheckBox Content="Enable MCP / local control API" IsChecked="{Binding Enabled}"
                       IsEnabled="{Binding IsIdle}" Margin="0,0,0,8"/>
             <WrapPanel Margin="0,0,0,8">
-                <TextBlock Text="Local port" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                <TextBlock x:Name="PortLabel" Text="Local port" VerticalAlignment="Center" Margin="0,0,10,0"/>
                 <TextBox Text="{Binding Port, UpdateSourceTrigger=PropertyChanged}" Width="82" MaxLength="5"
-                         IsEnabled="{Binding IsIdle}" AutomationProperties.Name="MCP local port" Margin="0,0,14,0"/>
-                <Button Content="Apply MCP settings" Click="Apply_Click" IsEnabled="{Binding IsIdle}"
-                        Padding="10,5" Margin="0,0,8,0" Style="{StaticResource PrimaryButton}"/>
-                <Button Content="Check connection" Click="Check_Click" IsEnabled="{Binding IsIdle}" Padding="10,5" Style="{StaticResource SecondaryButton}"/>
+                         IsEnabled="{Binding IsIdle}" AutomationProperties.Name="MCP local port"
+                         AutomationProperties.LabeledBy="{Binding ElementName=PortLabel}" Margin="0,0,14,0"/>
+                <!-- One primary per panel: Apply while edits are pending, otherwise Copy (only with an adapter).
+                     Styles are resource references so an open panel follows theme switches. -->
+                <Button x:Name="ApplyButton" Content="Apply MCP settings" Click="Apply_Click" IsEnabled="{Binding IsIdle}"
+                        Padding="10,5" Margin="0,0,8,0" Style="{DynamicResource SecondaryButton}"
+                        ui:ButtonEmphasis.IsPrimary="{Binding HasPendingChanges}"/>
+                <Button x:Name="CheckButton" Content="Check connection" Click="Check_Click" IsEnabled="{Binding IsIdle}" Padding="10,5" Style="{DynamicResource SecondaryButton}"/>
             </WrapPanel>
             <TextBlock Text="{Binding PendingChangesText}" TextWrapping="Wrap"
                        Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,12"/>
 
-            <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource AccentBrush}"
-                    BorderThickness="2,0,0,0" Padding="10,8" Margin="0,0,0,12">
+            <Border x:Name="ConnectionCallout" Style="{StaticResource ConnectionCalloutStyle}" Margin="0,0,0,12">
                 <StackPanel>
-                    <TextBlock Text="APP CONNECTION" FontSize="11" FontWeight="SemiBold"
-                               Foreground="{DynamicResource AccentBrush}" Margin="0,0,0,5"/>
+                    <TextBlock Text="{Binding ConnectionStateLabel}" Style="{StaticResource ConnectionLabelStyle}" Margin="0,0,0,5"/>
                     <TextBlock Text="{Binding Status}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"/>
                 </StackPanel>
             </Border>
 
-            <TextBlock Text="ADAPTER PATH" FontSize="11" FontWeight="SemiBold" Margin="0,0,0,5"/>
+            <TextBlock x:Name="AdapterPathLabel" Text="ADAPTER PATH" FontSize="11" FontWeight="SemiBold" Margin="0,0,0,5"/>
             <TextBox Text="{Binding Setup.AdapterPath, Mode=OneWay}" IsReadOnly="True"
                      TextWrapping="Wrap" FontSize="11" Padding="8,5" AutomationProperties.Name="MCP adapter path"/>
-            <TextBlock Text="{Binding Setup.Status}" TextWrapping="Wrap"
-                       Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,5,0,12"/>
+            <Border x:Name="AdapterCallout" Style="{StaticResource AdapterCalloutStyle}" Margin="0,6,0,12">
+                <StackPanel>
+                    <TextBlock Style="{StaticResource AdapterLabelStyle}" Margin="0,0,0,4"/>
+                    <TextBlock Text="{Binding Setup.Status}" TextWrapping="Wrap" Style="{StaticResource AdapterStatusTextStyle}"/>
+                </StackPanel>
+            </Border>
 
             <Separator Margin="0,0,0,12"/>
             <TextBlock Text="02 / CLIENT SETUP" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,8"/>
@@ -47,8 +124,9 @@
                      FontFamily="{DynamicResource StreamMonoFontFamily}" FontSize="12" Padding="8" MinHeight="64" MaxHeight="180"
                      VerticalScrollBarVisibility="Auto" AutomationProperties.Name="MCP client configuration"/>
             <WrapPanel Margin="0,10,0,8">
-                <Button Content="{Binding CopyLabel}" Click="Copy_Click" Padding="10,5" Margin="0,0,8,0" Style="{StaticResource PrimaryButton}"/>
-                <Button Content="Setup guide" Click="Guide_Click" Padding="10,5" Style="{StaticResource SecondaryButton}"/>
+                <Button x:Name="CopyButton" Content="{Binding CopyLabel}" Click="Copy_Click" Padding="10,5" Margin="0,0,8,0"
+                        Style="{DynamicResource SecondaryButton}" ui:ButtonEmphasis.IsPrimary="{Binding CopyIsPrimary}"/>
+                <Button Content="Setup guide" Click="Guide_Click" Padding="10,5" Style="{DynamicResource SecondaryButton}"/>
             </WrapPanel>
             <TextBlock Text="{Binding Feedback}" TextWrapping="Wrap" Margin="0,0,0,8"
                        Foreground="{DynamicResource AccentBrush}" AutomationProperties.LiveSetting="Polite"/>

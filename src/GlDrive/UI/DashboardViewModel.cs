@@ -567,22 +567,25 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         !string.IsNullOrEmpty(_searchFilterQuality) || !string.IsNullOrEmpty(_searchFilterSource) || _searchFilterBigSize;
 
     private System.ComponentModel.ICollectionView? _searchResultsView;
+    private SearchFilterToggle.State CurrentSearchFilter => new(_searchFilterQuality, _searchFilterSource, _searchFilterBigSize);
     private void EnsureSearchView()
     {
         if (_searchResultsView != null) return;
-        _searchResultsView = System.Windows.Data.CollectionViewSource.GetDefaultView(SearchResults);
-        _searchResultsView.Filter = obj =>
-        {
-            if (obj is not SearchResultVm vm) return false;
-            var name = vm.ReleaseName?.ToLowerInvariant() ?? "";
-            if (!string.IsNullOrEmpty(_searchFilterQuality) && !name.Contains(_searchFilterQuality.ToLowerInvariant()))
-                return false;
-            if (!string.IsNullOrEmpty(_searchFilterSource) && !name.Contains(_searchFilterSource.ToLowerInvariant()))
-                return false;
-            if (_searchFilterBigSize && vm.Size < 1L * 1024 * 1024 * 1024)
-                return false;
-            return true;
-        };
+        _searchResultsView = SearchResultsView.Attach(SearchResults, () => CurrentSearchFilter);
+    }
+
+    // One chip action is one filter change: notify each changed property, then refresh once.
+    private void ApplySearchFilter(SearchFilterToggle.State next)
+    {
+        var current = CurrentSearchFilter;
+        if (next == current) return;
+        _searchFilterQuality = next.Quality;
+        _searchFilterSource = next.Source;
+        _searchFilterBigSize = next.BigSize;
+        if (next.Quality != current.Quality) OnPropertyChanged(nameof(SearchFilterQuality));
+        if (next.Source != current.Source) OnPropertyChanged(nameof(SearchFilterSource));
+        if (next.BigSize != current.BigSize) OnPropertyChanged(nameof(SearchFilterBigSize));
+        RefreshSearchView();
     }
     private void RefreshSearchView()
     {
@@ -1016,32 +1019,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         });
 
         ToggleSearchFilterCommand = new RelayCommand<string>(arg =>
-        {
-            if (string.IsNullOrEmpty(arg)) return;
-            if (arg == "clear")
-            {
-                SearchFilterQuality = "";
-                SearchFilterSource = "";
-                SearchFilterBigSize = false;
-                return;
-            }
-            var idx = arg.IndexOf(':');
-            if (idx < 0) return;
-            var kind = arg.Substring(0, idx);
-            var value = arg.Substring(idx + 1);
-            switch (kind)
-            {
-                case "quality":
-                    SearchFilterQuality = SearchFilterQuality == value ? "" : value;
-                    break;
-                case "source":
-                    SearchFilterSource = SearchFilterSource == value ? "" : value;
-                    break;
-                case "size":
-                    SearchFilterBigSize = !SearchFilterBigSize;
-                    break;
-            }
-        });
+            ApplySearchFilter(SearchFilterToggle.Apply(CurrentSearchFilter, arg)));
 
         AddMovieCommand = new RelayCommand(() => AddMedia(MediaType.Movie));
         AddTvShowCommand = new RelayCommand(() => AddMedia(MediaType.TvShow));
@@ -1377,18 +1355,16 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                 {
                     // Publish each site's matches as it finishes; a busy site does
                     // not hold back the results already found elsewhere.
-                    using var defer = _searchResultsView?.DeferRefresh();
-                    foreach (var r in outcome.Results)
-                        SearchResults.Add(new SearchResultVm
-                        {
-                            ReleaseName = r.ReleaseName,
-                            Category = r.Category,
-                            RemotePath = r.RemotePath,
-                            Size = r.Size,
-                            SizeText = FormatSize(r.Size),
-                            ServerId = server.ServerId,
-                            ServerName = server.ServerName
-                        });
+                    SearchResultsView.Publish(SearchResults, outcome.Results.Select(r => new SearchResultVm
+                    {
+                        ReleaseName = r.ReleaseName,
+                        Category = r.Category,
+                        RemotePath = r.RemotePath,
+                        Size = r.Size,
+                        SizeText = FormatSize(r.Size),
+                        ServerId = server.ServerId,
+                        ServerName = server.ServerName
+                    }));
                 }
                 SearchStatus = SearchRequestCoordinator.Describe(siteResults, mounted.Count, DateTime.UtcNow);
             });
@@ -2743,12 +2719,17 @@ public class DownloadItemVm : INotifyPropertyChanged
     internal void ApplyProgress(DownloadItem item, DownloadProgress progress)
     {
         if (item.Status != DownloadStatus.Downloading) return;
-        var percent = progress.TotalBytes > 0
-            ? (int)((double)progress.DownloadedBytes / progress.TotalBytes * 100) : 0;
+        var exact = ProgressFraction(progress.DownloadedBytes, progress.TotalBytes) * 100.0;
+        var percent = (int)exact;
         ProgressText = string.IsNullOrEmpty(progress.CurrentFileName)
             ? $"{percent}%" : $"{percent}% — {progress.CurrentFileName}";
+        // The bar used to move only when RefreshDownloads rebuilt the row.
+        ProgressPercent = exact;
         StreamsText = GlDrive.Downloads.Segmented.LaneSummary.Format(progress.Lanes);
     }
+
+    internal static double ProgressFraction(long downloaded, long total) =>
+        total > 0 ? Math.Clamp((double)downloaded / total, 0.0, 1.0) : 0.0;
     public string ProgressText
     {
         get => _progressText;
@@ -2759,11 +2740,13 @@ public class DownloadItemVm : INotifyPropertyChanged
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ProgressText)));
         }
     }
+    /// <summary>Bar position, always 0..100: non-finite input reads as 0 and out-of-range input is clamped.</summary>
     public double ProgressPercent
     {
         get => _progressPercent;
         set
         {
+            value = double.IsFinite(value) ? Math.Clamp(value, 0.0, 100.0) : 0.0;
             if (Math.Abs(_progressPercent - value) < 0.01) return;
             _progressPercent = value;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ProgressPercent)));

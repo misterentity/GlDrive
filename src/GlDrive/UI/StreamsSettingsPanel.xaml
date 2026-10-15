@@ -88,14 +88,20 @@
                         <TextBlock Grid.Row="1" Grid.Column="2" Style="{StaticResource Comment}"
                                    Text="Adds a second FTP stream while racing is idle. Returned when a race needs it."/>
 
-                        <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource Label}" Text="HTTP streams / network"/>
-                        <TextBox Grid.Row="2" Grid.Column="1" Width="70" HorizontalAlignment="Left" Style="{StaticResource Box}"
+                        <TextBlock x:Name="HttpStreamsLabel" Grid.Row="2" Grid.Column="0" Style="{StaticResource Label}" Text="HTTP streams / network"/>
+                        <TextBox x:Name="HttpStreamsBox" Grid.Row="2" Grid.Column="1" Width="70" HorizontalAlignment="Left" Style="{StaticResource Box}"
+                                 AutomationProperties.Name="HTTP streams per network"
+                                 AutomationProperties.LabeledBy="{Binding ElementName=HttpStreamsLabel}"
+                                 AutomationProperties.HelpText="Connections per network for HTTP downloads, 1 to 32."
                                  Text="{Binding HttpLanesPerNetwork, UpdateSourceTrigger=PropertyChanged}"/>
                         <TextBlock Grid.Row="2" Grid.Column="2" Style="{StaticResource Comment}"
                                    Text="Connections per network for HTTP downloads (1–32)."/>
 
-                        <TextBlock Grid.Row="3" Grid.Column="0" Style="{StaticResource Label}" Text="Minimum FTP split (MB)"/>
-                        <TextBox Grid.Row="3" Grid.Column="1" Width="70" HorizontalAlignment="Left" Style="{StaticResource Box}"
+                        <TextBlock x:Name="FtpSplitLabel" Grid.Row="3" Grid.Column="0" Style="{StaticResource Label}" Text="Minimum FTP split (MB)"/>
+                        <TextBox x:Name="FtpSplitBox" Grid.Row="3" Grid.Column="1" Width="70" HorizontalAlignment="Left" Style="{StaticResource Box}"
+                                 AutomationProperties.Name="Minimum FTP split in megabytes"
+                                 AutomationProperties.LabeledBy="{Binding ElementName=FtpSplitLabel}"
+                                 AutomationProperties.HelpText="Split files only when both parts meet this size."
                                  Text="{Binding FtpMinSplitMb, UpdateSourceTrigger=PropertyChanged}"/>
                         <TextBlock Grid.Row="3" Grid.Column="2" Style="{StaticResource Comment}"
                                    Text="Split files only when both parts meet this size."/>
@@ -118,17 +124,22 @@
                             <RowDefinition Height="Auto" MinHeight="40"/>
                         </Grid.RowDefinitions>
 
-                        <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource Label}" Text="Download limit (KB/s)"/>
-                        <TextBox Grid.Row="0" Grid.Column="1" Width="90" HorizontalAlignment="Left" Style="{StaticResource Box}"
+                        <TextBlock x:Name="SpeedLimitLabel" Grid.Row="0" Grid.Column="0" Style="{StaticResource Label}" Text="Download limit (KB/s)"/>
+                        <TextBox x:Name="SpeedLimitBox" Grid.Row="0" Grid.Column="1" Width="90" HorizontalAlignment="Left" Style="{StaticResource Box}"
+                                 AutomationProperties.Name="Download speed limit in kilobytes per second"
+                                 AutomationProperties.LabeledBy="{Binding ElementName=SpeedLimitLabel}"
+                                 AutomationProperties.HelpText="All downloads combined. Enter 0 for unlimited."
                                  Text="{Binding SpeedLimitKbps, UpdateSourceTrigger=PropertyChanged}"/>
                         <TextBlock Grid.Row="0" Grid.Column="2" Style="{StaticResource Comment}"
                                    Text="All downloads combined. Enter 0 for unlimited."/>
 
                         <CheckBox Grid.Row="1" Grid.Column="0" IsChecked="{Binding SlowMode}"
-                                  Style="{StaticResource Check}">
+                                  Style="{StaticResource Check}" AutomationProperties.Name="Slow mode">
                             <TextBlock Text="Slow mode (KB/s)" FontSize="13" FontFamily="{DynamicResource StreamMonoFontFamily}" Foreground="{DynamicResource ForegroundBrush}"/>
                         </CheckBox>
-                        <TextBox Grid.Row="1" Grid.Column="1" Width="90" HorizontalAlignment="Left" Style="{StaticResource Box}"
+                        <TextBox x:Name="SlowModeBox" Grid.Row="1" Grid.Column="1" Width="90" HorizontalAlignment="Left" Style="{StaticResource Box}"
+                                 AutomationProperties.Name="Slow mode speed limit in kilobytes per second"
+                                 AutomationProperties.HelpText="Temporarily overrides the total limit. Also available in the tray."
                                  IsEnabled="{Binding SlowMode}" Text="{Binding SlowModeKbps, UpdateSourceTrigger=PropertyChanged}"/>
                         <TextBlock Grid.Row="1" Grid.Column="2" Style="{StaticResource Comment}"
                                    Text="Temporarily overrides the total limit. Also available in the tray."/>

@@ -11,10 +11,74 @@
         Foreground="{DynamicResource ForegroundBrush}"
         FontFamily="{DynamicResource MonoFontFamily}">
     <Window.Resources>
+        <ResourceDictionary>
+        <ResourceDictionary.MergedDictionaries>
+            <!-- FilterChipStyle, DownloadQueueItemStyle -->
+            <ResourceDictionary Source="/GlDrive;component/UI/DashboardControls.xaml"/>
+        </ResourceDictionary.MergedDictionaries>
         <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
         <ui:ImageUrlConverter x:Key="ImageUrlConverter"/>
         <ui:JoinListConverter x:Key="JoinList"/>
         <ui:HasSelectionConverter x:Key="HasSelectionConverter"/>
+        <ui:StatusGlyphConverter x:Key="StatusGlyph"/>
+        <ui:ValueEqualsConverter x:Key="ValueEquals"/>
+        <ui:InverseBooleanConverter x:Key="InverseBoolean"/>
+        <ui:StatusSegmentsConverter x:Key="StatusSegments"/>
+        <ui:DistinctTextVisibilityConverter x:Key="DistinctTextVisibility"/>
+        <Style x:Key="ToolbarDividerStyle" TargetType="Rectangle">
+            <Setter Property="Width" Value="1"/>
+            <Setter Property="Height" Value="22"/>
+            <Setter Property="Margin" Value="6,0,12,4"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Fill" Value="{DynamicResource LineDimBrush}"/>
+        </Style>
+        <!-- Race card state chip: glyph + word; lime is reserved for live FXP/race transfer. -->
+        <Style x:Key="RaceStatusTagStyle" TargetType="Border">
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="7,2"/>
+            <Setter Property="Background" Value="{DynamicResource SurfaceLightBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Signature2Brush}"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding Status}" Value="Completed">
+                    <Setter Property="BorderBrush" Value="{DynamicResource GoodBrush}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Status}" Value="Failed">
+                    <Setter Property="BorderBrush" Value="{DynamicResource BadBrush}"/>
+                    <Setter Property="Background" Value="{DynamicResource ErrorBackgroundBrush}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Status}" Value="Paused">
+                    <Setter Property="BorderBrush" Value="{DynamicResource WarnBrush}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Status}" Value="Stopped">
+                    <Setter Property="BorderBrush" Value="{DynamicResource LineDimBrush}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Status}" Value="Waiting">
+                    <Setter Property="BorderBrush" Value="{DynamicResource LineDimBrush}"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="RaceStatusTextStyle" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="{DynamicResource MonoFontFamily}"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Foreground" Value="{DynamicResource Signature2Brush}"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding Status}" Value="Completed">
+                    <Setter Property="Foreground" Value="{DynamicResource GoodBrush}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Status}" Value="Failed">
+                    <Setter Property="Foreground" Value="{DynamicResource BadBrush}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Status}" Value="Paused">
+                    <Setter Property="Foreground" Value="{DynamicResource WarnBrush}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Status}" Value="Stopped">
+                    <Setter Property="Foreground" Value="{DynamicResource TextDimBrush}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Status}" Value="Waiting">
+                    <Setter Property="Foreground" Value="{DynamicResource TextDimBrush}"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
         <Style x:Key="OptionalConsoleTextStyle" TargetType="TextBlock">
             <Style.Triggers>
                 <Trigger Property="Text" Value=""><Setter Property="Visibility" Value="Collapsed"/></Trigger>
@@ -75,12 +139,12 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        </ResourceDictionary>
     </Window.Resources>
     <Grid Margin="0">
         <Grid.RowDefinitions>
             <RowDefinition Height="56"/>
             <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
             <RowDefinition Height="26"/>
         </Grid.RowDefinitions>
 
@@ -134,10 +198,10 @@
         <TabControl x:Name="MainTabControl" Grid.Row="1" Padding="0" Style="{DynamicResource SidebarTabControlStyle}">
 
             <!-- ===== DASHBOARD group ===== -->
-            <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,5,14,2">
+            <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,3,14,0">
                 <TabItem.Header>
                     <TextBlock Text="// DASHBOARD" FontFamily="{DynamicResource MonoFontFamily}"
-                               FontSize="10" Foreground="{DynamicResource TextFaintBrush}" Margin="0,3,0,0"/>
+                               FontSize="10" Foreground="{DynamicResource TextFaintBrush}" Margin="0,2,0,0"/>
                 </TabItem.Header>
             </TabItem>
 
@@ -225,10 +289,19 @@
                                                                 <Run Text="POOL "/><Run Text="{Binding CapacityUsedDisplay}"/><Run Text=" / "/><Run Text="{Binding CapacityTotalDisplay}"/>
                                                                 <Run Text="    "/><Run Text="{Binding CapacityPercent, StringFormat=N0}"/><Run Text="%"/>
                                                             </TextBlock>
-                                                            <TextBlock Grid.Column="1" Text="{Binding StatusLine}" Style="{DynamicResource MicroTextStyle}" FontSize="10"/>
+                                                            <!-- Shown only when it adds to the chip (no second "OFFLINE"). -->
+                                                            <TextBlock Grid.Column="1" Text="{Binding StatusLine}" Style="{DynamicResource MicroTextStyle}" FontSize="10">
+                                                                <TextBlock.Visibility>
+                                                                    <MultiBinding Converter="{StaticResource DistinctTextVisibility}">
+                                                                        <Binding Path="StatusLine"/>
+                                                                        <Binding Path="SiteTag"/>
+                                                                    </MultiBinding>
+                                                                </TextBlock.Visibility>
+                                                            </TextBlock>
                                                         </Grid>
-                                                        <ProgressBar Height="4" Margin="0,6,0,0" Minimum="0" Maximum="100" Value="{Binding CapacityPercent, Mode=OneWay}"
-                                                                     Foreground="{DynamicResource AccentBrush}" Background="{DynamicResource SurfaceLightBrush}" AutomationProperties.Name="Connection usage"/>
+                                                        <ProgressBar Margin="0,6,0,0" Minimum="0" Maximum="100" Value="{Binding CapacityPercent, Mode=OneWay}"
+                                                                     Style="{DynamicResource SegmentedMeterStyle}" Height="6"
+                                                                     Foreground="{DynamicResource AccentBrush}" AutomationProperties.Name="Connection pool usage"/>
                                                     </StackPanel>
                                                 </Border>
                                             </DataTemplate>
@@ -264,36 +337,14 @@
                                         </Grid>
                                         <TextBlock DockPanel.Dock="Bottom" Text="Downloads · last 2 minutes · 0–50 MiB/s" FontSize="12"
                                                    Margin="0,6,0,0" Foreground="{DynamicResource ForegroundDimBrush}"/>
-                                        <!-- Area chart -->
-                                        <Border Height="96" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1">
-                                            <Border.Resources>
-                                                <DrawingBrush x:Key="ChartGridBrush" TileMode="Tile" Stretch="None"
-                                                              Viewport="0,0,24,12" ViewportUnits="Absolute">
-                                                    <DrawingBrush.Drawing>
-                                                        <DrawingGroup>
-                                                            <GeometryDrawing>
-                                                                <GeometryDrawing.Pen>
-                                                                    <Pen Brush="{DynamicResource LineDimBrush}" Thickness="1"/>
-                                                                </GeometryDrawing.Pen>
-                                                                <GeometryDrawing.Geometry>
-                                                                    <GeometryGroup>
-                                                                        <LineGeometry StartPoint="0,0" EndPoint="24,0"/>
-                                                                        <LineGeometry StartPoint="0,0" EndPoint="0,12"/>
-                                                                    </GeometryGroup>
-                                                                </GeometryDrawing.Geometry>
-                                                            </GeometryDrawing>
-                                                        </DrawingGroup>
-                                                    </DrawingBrush.Drawing>
-                                                </DrawingBrush>
-                                            </Border.Resources>
+                                        <!-- Area chart: an instrument well in the stream-matrix style -->
+                                        <Border Height="96" Background="{DynamicResource StreamMatrixHeaderBrush}"
+                                                BorderBrush="{DynamicResource StreamGridLineBrush}" BorderThickness="1" ClipToBounds="True">
                                             <Grid>
-                                                <Rectangle Fill="{StaticResource ChartGridBrush}" Opacity="0.28"/>
-                                                <Viewbox Stretch="Fill" Margin="4" ClipToBounds="True">
-                                                    <Canvas Width="60" Height="42">
-                                                        <Polyline Points="{Binding ThroughputPoints}" Stroke="{DynamicResource AccentBrush}"
-                                                                  StrokeThickness="0.4" Stretch="None"/>
-                                                    </Canvas>
-                                                </Viewbox>
+                                                <ui:TelemetrySparkline Points="{Binding ThroughputPoints}" YRange="40" ValueAtTop="50" Unit="MiB/s"
+                                                                       SpanLabel="-2m" Margin="1"
+                                                                       AutomationProperties.Name="Download throughput, last 2 minutes"/>
+                                                <Rectangle Fill="{DynamicResource ScanlineOverlayBrush}" Opacity="0.6" IsHitTestVisible="False"/>
                                             </Grid>
                                         </Border>
                                     </DockPanel>
@@ -306,25 +357,30 @@
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
+                                <!-- Every column: label, value on one baseline, then an optional meter. -->
                                 <StackPanel Margin="0,0,16,0">
-                                    <DockPanel><TextBlock Text="CPU" Style="{DynamicResource MicroTextStyle}"/><TextBlock HorizontalAlignment="Right" FontFamily="{DynamicResource MonoFontFamily}" FontSize="13"><Run Text="{Binding TelemetryCpuPercent, StringFormat=N0}"/><Run Text="%"/></TextBlock></DockPanel>
-                                    <ProgressBar Height="4" Margin="0,12,0,0" Minimum="0" Maximum="100" Value="{Binding TelemetryCpuPercent, Mode=OneWay}" Foreground="{DynamicResource AccentBrush}" Background="{DynamicResource SurfaceLightBrush}" AutomationProperties.Name="CPU usage"/>
+                                    <TextBlock Text="CPU" Style="{DynamicResource MicroTextStyle}"/>
+                                    <TextBlock FontFamily="{DynamicResource MonoFontFamily}" FontSize="16" Margin="0,3,0,0"><Run Text="{Binding TelemetryCpuPercent, StringFormat=N0}"/><Run Text=" %"/></TextBlock>
+                                    <ProgressBar Margin="0,5,0,0" Minimum="0" Maximum="100" Value="{Binding TelemetryCpuPercent, Mode=OneWay}"
+                                                 Style="{DynamicResource SegmentedMeterStyle}" Foreground="{DynamicResource AccentBrush}" AutomationProperties.Name="CPU usage"/>
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" Margin="0,0,16,0">
                                     <TextBlock Text="MEMORY" Style="{DynamicResource MicroTextStyle}"/>
-                                    <TextBlock FontFamily="{DynamicResource MonoFontFamily}" FontSize="16" Margin="0,5,0,0"><Run Text="{Binding TelemetryMemoryMb, StringFormat=N0}"/><Run Text=" MB"/></TextBlock>
+                                    <TextBlock FontFamily="{DynamicResource MonoFontFamily}" FontSize="16" Margin="0,3,0,0"><Run Text="{Binding TelemetryMemoryMb, StringFormat=N0}"/><Run Text=" MB"/></TextBlock>
                                 </StackPanel>
                                 <StackPanel Grid.Column="2" Margin="0,0,16,0">
-                                    <DockPanel><TextBlock Text="CONNECTIONS" Style="{DynamicResource MicroTextStyle}"/><TextBlock HorizontalAlignment="Right" FontFamily="{DynamicResource MonoFontFamily}" FontSize="13"><Run Text="{Binding TelemetryPoolUtilization, StringFormat=N0}"/><Run Text="%"/></TextBlock></DockPanel>
-                                    <ProgressBar Height="4" Margin="0,12,0,0" Minimum="0" Maximum="100" Value="{Binding TelemetryPoolUtilization, Mode=OneWay}" Foreground="{DynamicResource Signature2Brush}" Background="{DynamicResource SurfaceLightBrush}" AutomationProperties.Name="Connection usage"/>
+                                    <TextBlock Text="CONNECTIONS" Style="{DynamicResource MicroTextStyle}"/>
+                                    <TextBlock FontFamily="{DynamicResource MonoFontFamily}" FontSize="16" Margin="0,3,0,0"><Run Text="{Binding TelemetryPoolUtilization, StringFormat=N0}"/><Run Text=" %"/></TextBlock>
+                                    <ProgressBar Margin="0,5,0,0" Minimum="0" Maximum="100" Value="{Binding TelemetryPoolUtilization, Mode=OneWay}"
+                                                 Style="{DynamicResource SegmentedMeterStyle}" Foreground="{DynamicResource AccentBrush}" AutomationProperties.Name="Connection pool utilization"/>
                                 </StackPanel>
                                 <StackPanel Grid.Column="3" Margin="0,0,16,0">
                                     <TextBlock Text="UPTIME" Style="{DynamicResource MicroTextStyle}"/>
-                                    <TextBlock Text="{Binding TelemetryUptime}" FontFamily="{DynamicResource MonoFontFamily}" FontSize="16" Margin="0,5,0,0"/>
+                                    <TextBlock Text="{Binding TelemetryUptime}" FontFamily="{DynamicResource MonoFontFamily}" FontSize="16" Margin="0,3,0,0"/>
                                 </StackPanel>
                                 <StackPanel Grid.Column="4">
                                     <TextBlock Text="THREADS" Style="{DynamicResource MicroTextStyle}"/>
-                                    <TextBlock Text="{Binding TelemetryThreadCount}" FontFamily="{DynamicResource MonoFontFamily}" FontSize="16" Margin="0,5,0,0"/>
+                                    <TextBlock Text="{Binding TelemetryThreadCount}" FontFamily="{DynamicResource MonoFontFamily}" FontSize="16" Margin="0,3,0,0"/>
                                 </StackPanel>
                             </Grid>
                         </Border>
@@ -380,10 +436,10 @@
                                      Width="160" VerticalContentAlignment="Center" Margin="0,0,6,0"
                                      ToolTip="Filter by release name"/>
                             <ComboBox ItemsSource="{Binding NotificationCategories}"
-                                      SelectedItem="{Binding NotificationFilterCategory}"
+                                      SelectedItem="{Binding NotificationFilterCategory}" AutomationProperties.Name="Filter notifications by category"
                                       Width="110" Margin="0,0,6,0" ToolTip="Filter by category"/>
                             <ComboBox ItemsSource="{Binding NotificationServers}"
-                                      SelectedItem="{Binding NotificationFilterServer}"
+                                      SelectedItem="{Binding NotificationFilterServer}" AutomationProperties.Name="Filter notifications by server"
                                       Width="110" ToolTip="Filter by server"/>
                         </WrapPanel>
                     </Border>
@@ -662,7 +718,9 @@
                         <TextBlock Text="{Binding ActiveDownloadSummary}" FontSize="12"
                                    Foreground="{DynamicResource ForegroundBrush}" TextWrapping="Wrap"/>
                     </Border>
-                    <Expander DockPanel.Dock="Top" Header="Connection streams and throughput" IsExpanded="False" Margin="0,0,0,8"
+                    <!-- Opens itself when a multi-stream transfer starts; a manual collapse sticks until it ends. -->
+                    <Expander x:Name="StreamsExpander" DockPanel.Dock="Top" Header="Connection streams and throughput" IsExpanded="False" Margin="0,0,0,8"
+                              Expanded="StreamsExpander_Toggled" Collapsed="StreamsExpander_Toggled"
                               Visibility="{Binding HasStreamMatrix, Converter={StaticResource BoolToVisibility}}">
                         <ScrollViewer MaxHeight="240" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                             <sm:StreamMatrixView DataContext="{Binding StreamMatrix}" ConfigRequested="StreamMatrix_ConfigRequested"/>
@@ -676,6 +734,8 @@
                             </Border>
                             <Grid>
                                 <DockPanel>
+                                    <!-- Three groups: selection actions | Clear ▾ (all four clear commands) | ordering.
+                                         One row at the minimum width, so nothing wraps onto a line of its own. -->
                                     <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
                                             CornerRadius="0" Padding="8,6" Margin="0,0,0,0">
                                         <WrapPanel>
@@ -684,20 +744,16 @@
                                             <Button Content="Retry" Command="{Binding RetryDownloadCommand}"
                                                     Padding="12,6" Margin="0,0,6,4" Style="{DynamicResource SecondaryButton}" IsEnabled="{Binding SelectedItem, ElementName=DownloadsGrid, Converter={StaticResource HasSelectionConverter}}"/>
                                             <Button Content="Open Folder" Command="{Binding OpenFolderCommand}"
-                                                    Padding="12,6" Margin="0,0,12,4" Style="{DynamicResource SecondaryButton}"
+                                                    Padding="12,6" Margin="0,0,0,4" Style="{DynamicResource SecondaryButton}"
                                                     ToolTip="Open download folder in Explorer" IsEnabled="{Binding SelectedItem, ElementName=DownloadsGrid, Converter={StaticResource HasSelectionConverter}}"/>
-                                            <Button Content="Clear Completed" Command="{Binding ClearCompletedCommand}"
-                                                    Padding="12,6" Margin="0,0,6,4" Style="{DynamicResource SecondaryButton}"/>
-                                            <Button Content="Clear Failed" Command="{Binding ClearFailedCommand}"
-                                                    Padding="12,6" Margin="0,0,6,4" Style="{DynamicResource SecondaryButton}"/>
-                                            <Button Content="Clear Cancelled" Command="{Binding ClearCancelledCommand}"
-                                                    Padding="12,6" Margin="0,0,6,4" Style="{DynamicResource SecondaryButton}"/>
-                                            <Button Content="Clear All Finished" Command="{Binding ClearAllFinishedCommand}"
-                                                    Padding="12,6" Margin="0,0,12,4" Style="{DynamicResource SecondaryButton}"
-                                                    ToolTip="Clear completed, failed, and cancelled"/>
-                                            <Button Content="Move Up" Command="{Binding MoveUpCommand}"
+                                            <Rectangle Style="{StaticResource ToolbarDividerStyle}"/>
+                                            <ui:ClearDownloadsMenuButton x:Name="ClearDownloadsMenu"/>
+                                            <Rectangle Style="{StaticResource ToolbarDividerStyle}"/>
+                                            <Button Content="↑ Up" Command="{Binding MoveUpCommand}" AutomationProperties.Name="Move Up"
+                                                    ToolTip="Move the selected download up the queue"
                                                     Padding="12,6" Margin="0,0,6,4" Style="{DynamicResource SecondaryButton}" IsEnabled="{Binding SelectedItem, ElementName=DownloadsGrid, Converter={StaticResource HasSelectionConverter}}"/>
-                                            <Button Content="Move Down" Command="{Binding MoveDownCommand}"
+                                            <Button Content="↓ Down" Command="{Binding MoveDownCommand}" AutomationProperties.Name="Move Down"
+                                                    ToolTip="Move the selected download down the queue"
                                                     Padding="12,6" Margin="0,0,0,4" Style="{DynamicResource SecondaryButton}" IsEnabled="{Binding SelectedItem, ElementName=DownloadsGrid, Converter={StaticResource HasSelectionConverter}}"/>
                                         </WrapPanel>
                                     </Border>
@@ -711,14 +767,8 @@
                               Background="Transparent" BorderThickness="0"
                               HorizontalContentAlignment="Stretch"
                               ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                              ScrollViewer.VerticalScrollBarVisibility="Auto">
-                        <ListBox.ItemContainerStyle>
-                            <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
-                                <Setter Property="Padding" Value="0"/>
-                                <Setter Property="Margin" Value="0"/>
-                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-                            </Style>
-                        </ListBox.ItemContainerStyle>
+                              ScrollViewer.VerticalScrollBarVisibility="Auto"
+                              ItemContainerStyle="{StaticResource DownloadQueueItemStyle}">
                         <ListBox.ContextMenu>
                             <ContextMenu>
                                 <MenuItem Header="Cancel" Command="{Binding CancelDownloadCommand}"/>
@@ -763,10 +813,10 @@
             </TabItem>
 
             <!-- ===== MEDIA group ===== -->
-            <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,5,14,2">
+            <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,3,14,0">
                 <TabItem.Header>
                     <TextBlock Text="// MEDIA" FontFamily="{DynamicResource MonoFontFamily}"
-                               FontSize="10" Foreground="{DynamicResource TextFaintBrush}" Margin="0,3,0,0"/>
+                               FontSize="10" Foreground="{DynamicResource TextFaintBrush}" Margin="0,2,0,0"/>
                 </TabItem.Header>
             </TabItem>
 
@@ -809,141 +859,32 @@
                     </DockPanel>
                     <TextBlock DockPanel.Dock="Top" Text="{Binding SearchStatus}" Style="{DynamicResource OptionalConsoleTextStyle}" Margin="0,0,0,6"
                                Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"/>
-                    <!-- Filter chips row — each chip is a Button bound to
-                         ToggleSearchFilterCommand. Visual "active" state is
-                         driven by the corresponding VM property via the chip's
-                         ControlTemplate DataTrigger. -->
+                    <!-- Filter chips: FilterChip toggles run ToggleSearchFilterCommand once per click,
+                         Space or UIA Toggle; IsChecked follows the view model one-way. Quality and
+                         source stay exclusive. ALL is on when no filter is active and clears them. -->
                     <Border DockPanel.Dock="Top" Padding="0,2" Margin="0,0,0,8">
-                        <Border.Resources>
-                            <!-- One Style for all six filter-chip buttons. The
-                                 active appearance is set per-button via the
-                                 chip's own DataTrigger (see each Button below). -->
-                            <Style x:Key="FilterChipBase" TargetType="Button">
-                                <Setter Property="Margin" Value="0,0,6,0"/>
-                                <Setter Property="Padding" Value="0"/>
-                                <Setter Property="BorderThickness" Value="0"/>
-                                <Setter Property="Background" Value="Transparent"/>
-                                <Setter Property="Cursor" Value="Hand"/>
-                                <Setter Property="Command" Value="{Binding ToggleSearchFilterCommand}"/>
-                            </Style>
-                        </Border.Resources>
                         <WrapPanel ItemHeight="36">
                             <TextBlock Text="FILTERS" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                            <!-- ALL QUALITIES — clears filter state -->
-                            <Button Style="{StaticResource FilterChipBase}" CommandParameter="clear" AutomationProperties.Name="Clear all search filters">
-                                <Button.Template>
-                                    <ControlTemplate TargetType="Button">
-                                        <Border x:Name="bd" Padding="12,6" BorderThickness="1"
-                                                Background="{DynamicResource AccentSubtleBrush}" BorderBrush="{DynamicResource AccentBrush}">
-                                            <TextBlock x:Name="tb" Text="CLEAR FILTERS"
-                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
-                                                       Foreground="{DynamicResource AccentBrush}"/>
-                                        </Border>
-                                        <ControlTemplate.Triggers>
-                                            <DataTrigger Binding="{Binding SearchFilterAnyActive}" Value="True">
-                                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource SurfaceLightBrush}"/>
-                                                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource LineDimBrush}"/>
-                                                <Setter TargetName="tb" Property="Foreground" Value="{DynamicResource TextDimBrush}"/>
-                                            </DataTrigger>
-                                        </ControlTemplate.Triggers>
-                                    </ControlTemplate>
-                                </Button.Template>
-                            </Button>
-                            <Button Style="{StaticResource FilterChipBase}" CommandParameter="quality:1080p" AutomationProperties.Name="Filter 1080p">
-                                <Button.Template>
-                                    <ControlTemplate TargetType="Button">
-                                        <Border x:Name="bd" Padding="12,6" BorderThickness="1"
-                                                Background="{DynamicResource SurfaceLightBrush}" BorderBrush="{DynamicResource LineDimBrush}">
-                                            <TextBlock x:Name="tb" Text="1080p"
-                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
-                                                       Foreground="{DynamicResource TextDimBrush}"/>
-                                        </Border>
-                                        <ControlTemplate.Triggers>
-                                            <DataTrigger Binding="{Binding SearchFilterQuality}" Value="1080p">
-                                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource AccentSubtleBrush}"/>
-                                                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
-                                                <Setter TargetName="tb" Property="Foreground" Value="{DynamicResource AccentBrush}"/>
-                                            </DataTrigger>
-                                        </ControlTemplate.Triggers>
-                                    </ControlTemplate>
-                                </Button.Template>
-                            </Button>
-                            <Button Style="{StaticResource FilterChipBase}" CommandParameter="quality:2160p" AutomationProperties.Name="Filter 2160p">
-                                <Button.Template>
-                                    <ControlTemplate TargetType="Button">
-                                        <Border x:Name="bd" Padding="12,6" BorderThickness="1"
-                                                Background="{DynamicResource SurfaceLightBrush}" BorderBrush="{DynamicResource LineDimBrush}">
-                                            <TextBlock x:Name="tb" Text="2160p"
-                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
-                                                       Foreground="{DynamicResource TextDimBrush}"/>
-                                        </Border>
-                                        <ControlTemplate.Triggers>
-                                            <DataTrigger Binding="{Binding SearchFilterQuality}" Value="2160p">
-                                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource AccentSubtleBrush}"/>
-                                                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
-                                                <Setter TargetName="tb" Property="Foreground" Value="{DynamicResource AccentBrush}"/>
-                                            </DataTrigger>
-                                        </ControlTemplate.Triggers>
-                                    </ControlTemplate>
-                                </Button.Template>
-                            </Button>
-                            <Button Style="{StaticResource FilterChipBase}" CommandParameter="source:WEB" AutomationProperties.Name="Filter WEB">
-                                <Button.Template>
-                                    <ControlTemplate TargetType="Button">
-                                        <Border x:Name="bd" Padding="12,6" BorderThickness="1"
-                                                Background="{DynamicResource SurfaceLightBrush}" BorderBrush="{DynamicResource LineDimBrush}">
-                                            <TextBlock x:Name="tb" Text="WEB"
-                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
-                                                       Foreground="{DynamicResource TextDimBrush}"/>
-                                        </Border>
-                                        <ControlTemplate.Triggers>
-                                            <DataTrigger Binding="{Binding SearchFilterSource}" Value="WEB">
-                                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource AccentSubtleBrush}"/>
-                                                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
-                                                <Setter TargetName="tb" Property="Foreground" Value="{DynamicResource AccentBrush}"/>
-                                            </DataTrigger>
-                                        </ControlTemplate.Triggers>
-                                    </ControlTemplate>
-                                </Button.Template>
-                            </Button>
-                            <Button Style="{StaticResource FilterChipBase}" CommandParameter="source:BLURAY" AutomationProperties.Name="Filter Blu-ray">
-                                <Button.Template>
-                                    <ControlTemplate TargetType="Button">
-                                        <Border x:Name="bd" Padding="12,6" BorderThickness="1"
-                                                Background="{DynamicResource SurfaceLightBrush}" BorderBrush="{DynamicResource LineDimBrush}">
-                                            <TextBlock x:Name="tb" Text="BLURAY"
-                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
-                                                       Foreground="{DynamicResource TextDimBrush}"/>
-                                        </Border>
-                                        <ControlTemplate.Triggers>
-                                            <DataTrigger Binding="{Binding SearchFilterSource}" Value="BLURAY">
-                                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource AccentSubtleBrush}"/>
-                                                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
-                                                <Setter TargetName="tb" Property="Foreground" Value="{DynamicResource AccentBrush}"/>
-                                            </DataTrigger>
-                                        </ControlTemplate.Triggers>
-                                    </ControlTemplate>
-                                </Button.Template>
-                            </Button>
-                            <Button Style="{StaticResource FilterChipBase}" CommandParameter="size:1GB" AutomationProperties.Name="Filter larger than 1 GB">
-                                <Button.Template>
-                                    <ControlTemplate TargetType="Button">
-                                        <Border x:Name="bd" Padding="12,6" BorderThickness="1"
-                                                Background="{DynamicResource SurfaceLightBrush}" BorderBrush="{DynamicResource LineDimBrush}">
-                                            <TextBlock x:Name="tb" Text="&gt; 1GB"
-                                                       FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
-                                                       Foreground="{DynamicResource TextDimBrush}"/>
-                                        </Border>
-                                        <ControlTemplate.Triggers>
-                                            <DataTrigger Binding="{Binding SearchFilterBigSize}" Value="True">
-                                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource AccentSubtleBrush}"/>
-                                                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
-                                                <Setter TargetName="tb" Property="Foreground" Value="{DynamicResource AccentBrush}"/>
-                                            </DataTrigger>
-                                        </ControlTemplate.Triggers>
-                                    </ControlTemplate>
-                                </Button.Template>
-                            </Button>
+                            <ui:FilterChip x:Name="AllResultsChip" Style="{StaticResource FilterChipStyle}" Content="ALL" ToggleCommandParameter="clear"
+                                           IsChecked="{Binding SearchFilterAnyActive, Mode=OneWay, Converter={StaticResource InverseBoolean}}"
+                                           AutomationProperties.Name="All results (clear search filters)"
+                                           ToolTip="Show all results; clears every filter"/>
+                            <Rectangle Style="{StaticResource ToolbarDividerStyle}" Margin="0,0,6,0"/>
+                            <ui:FilterChip Style="{StaticResource FilterChipStyle}" Content="1080p" ToggleCommandParameter="quality:1080p"
+                                           IsChecked="{Binding SearchFilterQuality, Mode=OneWay, Converter={StaticResource ValueEquals}, ConverterParameter=1080p}"
+                                           AutomationProperties.Name="Filter 1080p"/>
+                            <ui:FilterChip Style="{StaticResource FilterChipStyle}" Content="2160p" ToggleCommandParameter="quality:2160p"
+                                           IsChecked="{Binding SearchFilterQuality, Mode=OneWay, Converter={StaticResource ValueEquals}, ConverterParameter=2160p}"
+                                           AutomationProperties.Name="Filter 2160p"/>
+                            <ui:FilterChip Style="{StaticResource FilterChipStyle}" Content="WEB" ToggleCommandParameter="source:WEB"
+                                           IsChecked="{Binding SearchFilterSource, Mode=OneWay, Converter={StaticResource ValueEquals}, ConverterParameter=WEB}"
+                                           AutomationProperties.Name="Filter WEB"/>
+                            <ui:FilterChip Style="{StaticResource FilterChipStyle}" Content="BLURAY" ToggleCommandParameter="source:BLURAY"
+                                           IsChecked="{Binding SearchFilterSource, Mode=OneWay, Converter={StaticResource ValueEquals}, ConverterParameter=BLURAY}"
+                                           AutomationProperties.Name="Filter Blu-ray"/>
+                            <ui:FilterChip Style="{StaticResource FilterChipStyle}" Content="&gt; 1GB" ToggleCommandParameter="size:1GB"
+                                           IsChecked="{Binding SearchFilterBigSize, Mode=OneWay}"
+                                           AutomationProperties.Name="Filter larger than 1 GB"/>
                         </WrapPanel>
                     </Border>
                     <DockPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
@@ -971,10 +912,31 @@
                             <KeyBinding Key="Return" Command="{Binding DownloadSearchResultCommand}"/>
                         </DataGrid.InputBindings>
                         <DataGrid.Columns>
-                            <DataGridTextColumn Header="Release" Binding="{Binding ReleaseName}" Width="*" ElementStyle="{StaticResource TruncatedCellText}"/>
+                            <!-- Coloured scene tokens; copy, sort and tooltip still use the exact ReleaseName. -->
+                            <DataGridTemplateColumn Header="Release" Width="*" SortMemberPath="ReleaseName"
+                                                    ClipboardContentBinding="{Binding ReleaseName}">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock ui:ReleaseNameText.Source="{Binding ReleaseName}" ToolTip="{Binding ReleaseName}"
+                                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                             <DataGridTextColumn Header="Server" Binding="{Binding ServerName}" Width="90"/>
                             <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="100"/>
-                            <DataGridTextColumn Header="Size" Binding="{Binding SizeText}" Width="80"/>
+                            <DataGridTextColumn Header="Size" Binding="{Binding SizeText}" Width="90" SortMemberPath="Size">
+                                <DataGridTextColumn.HeaderStyle>
+                                    <Style TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
+                                        <Setter Property="HorizontalContentAlignment" Value="Right"/>
+                                    </Style>
+                                </DataGridTextColumn.HeaderStyle>
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="HorizontalAlignment" Value="Right"/>
+                                        <Setter Property="VerticalAlignment" Value="Center"/>
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
                         </DataGrid.Columns>
                     </DataGrid>
                         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24,48,24,24" MaxWidth="460" IsHitTestVisible="False">
@@ -1617,6 +1579,7 @@
                                               Width="90" FontSize="12" Margin="0,0,6,0"
                                               ToolTip="Filter by show type"/>
                                     <TextBox Text="{Binding ShowSearchQuery, UpdateSourceTrigger=PropertyChanged}"
+                                             AutomationProperties.Name="Search TV schedule by show"
                                              Width="140" VerticalContentAlignment="Center" FontSize="11.5"
                                              Margin="0,0,4,0">
                                         <TextBox.InputBindings>
@@ -1747,6 +1710,7 @@
                                                 <TextBlock Text="Plex username or email" FontSize="12"
                                                            Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,2"/>
                                                 <TextBox Text="{Binding InviteTarget, UpdateSourceTrigger=PropertyChanged}"
+                                                         AutomationProperties.Name="Plex username or email"
                                                          VerticalContentAlignment="Center" Margin="0,0,0,8"/>
                                                 <CheckBox Content="Allow downloads / sync" IsChecked="{Binding AllowDownloads}"
                                                           Foreground="{DynamicResource ForegroundBrush}" Margin="0,0,0,8"/>
@@ -1814,10 +1778,10 @@
             </TabItem>
 
             <!-- ===== COMMS group ===== -->
-            <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,5,14,2">
+            <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,3,14,0">
                 <TabItem.Header>
                     <TextBlock Text="// COMMS" FontFamily="{DynamicResource MonoFontFamily}"
-                               FontSize="10" Foreground="{DynamicResource TextFaintBrush}" Margin="0,3,0,0"/>
+                               FontSize="10" Foreground="{DynamicResource TextFaintBrush}" Margin="0,2,0,0"/>
                 </TabItem.Header>
             </TabItem>
 
@@ -2108,10 +2072,10 @@
             </TabItem>
 
             <!-- ===== TRANSFERS group ===== -->
-            <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,5,14,2">
+            <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,3,14,0">
                 <TabItem.Header>
                     <TextBlock Text="// TRANSFERS" FontFamily="{DynamicResource MonoFontFamily}"
-                               FontSize="10" Foreground="{DynamicResource TextFaintBrush}" Margin="0,3,0,0"/>
+                               FontSize="10" Foreground="{DynamicResource TextFaintBrush}" Margin="0,2,0,0"/>
                 </TabItem.Header>
             </TabItem>
 
@@ -2185,7 +2149,7 @@
                                 <Grid>
                                     <StackPanel Margin="0">
                                         <TextBlock Text="LEADER" Style="{DynamicResource StatCardLabelStyle}"/>
-                                        <TextBlock Text="{Binding LeaderScore, FallbackValue=—}" Style="{DynamicResource StatCardValueStyle}"/>
+                                        <TextBlock Text="{Binding LeaderScore, FallbackValue=—, StringFormat=N0}" Style="{DynamicResource StatCardValueStyle}"/>
                                     </StackPanel>
                                 </Grid>
                             </Border>
@@ -2219,10 +2183,10 @@
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
                             <ComboBox Grid.Column="0" ItemsSource="{Binding SpreadSections}"
-                                      SelectedItem="{Binding SelectedSection}"
+                                      SelectedItem="{Binding SelectedSection}" AutomationProperties.Name="Race section"
                                       Margin="0,0,6,0" ToolTip="Section"/>
                             <TextBox Grid.Column="1" Text="{Binding SpreadReleaseName, UpdateSourceTrigger=PropertyChanged}"
-                                     MinWidth="180" VerticalContentAlignment="Center"
+                                     MinWidth="180" VerticalContentAlignment="Center" AutomationProperties.Name="Release name to race"
                                      ToolTip="Release name" Margin="0,0,6,0">
                                 <TextBox.InputBindings>
                                     <KeyBinding Key="Return" Command="{Binding StartRaceCommand}"/>
@@ -2340,7 +2304,7 @@
                                                             </StackPanel>
                                                             <!-- Center: release + section/files + source/dest + chips -->
                                                             <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="14,0,14,0">
-                                                                <TextBlock Text="{Binding Release}" Style="{DynamicResource DisplayTextStyle}" FontSize="13" Foreground="{DynamicResource ForegroundBrush}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Release}"/>
+                                                                <TextBlock ui:ReleaseNameText.Source="{Binding Release}" Style="{DynamicResource DisplayTextStyle}" FontSize="13" Foreground="{DynamicResource ForegroundBrush}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Release}"/>
                                                                 <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                                                                     <TextBlock Text="{Binding Section}" Style="{DynamicResource MicroTextStyle}"/>
                                                                     <TextBlock Text=" · " Foreground="{DynamicResource TextFaintBrush}"/>
@@ -2365,18 +2329,23 @@
                                                                             Visibility="{Binding IsPaused, Converter={StaticResource BoolToVisibility}, FallbackValue=Collapsed}">
                                                                         <TextBlock Text="PAUSED" Style="{DynamicResource TagTextStyle}" Foreground="{DynamicResource WarnBrush}"/>
                                                                     </Border>
-                                                                    <Border Style="{DynamicResource TagGoodStyle}">
-                                                                        <TextBlock Text="{Binding Status, FallbackValue=ACTIVE}" Style="{DynamicResource TagTextStyle}" Foreground="{DynamicResource GoodBrush}"/>
+                                                                    <Border Style="{StaticResource RaceStatusTagStyle}">
+                                                                        <StackPanel Orientation="Horizontal">
+                                                                            <TextBlock Text="{Binding Status, Converter={StaticResource StatusGlyph}}" Style="{StaticResource RaceStatusTextStyle}" Margin="0,0,5,0"/>
+                                                                            <TextBlock Text="{Binding Status, FallbackValue=ACTIVE}" Style="{StaticResource RaceStatusTextStyle}"/>
+                                                                        </StackPanel>
                                                                     </Border>
                                                                 </StackPanel>
+                                                                <!-- Files spread across destinations, as discrete blocks -->
+                                                                <ProgressBar Margin="0,8,0,0" Minimum="0" Maximum="100" Height="6"
+                                                                             Value="{Binding ProgressPercent, Mode=OneWay}"
+                                                                             Style="{DynamicResource SegmentedMeterStyle}" Foreground="{DynamicResource Signature2Brush}"
+                                                                             AutomationProperties.Name="Race progress"/>
                                                             </StackPanel>
-                                                            <!-- Sparkline -->
+                                                            <!-- Speed sparkline, relative to this race's own peak -->
                                                             <Border Grid.Column="2" Height="42" VerticalAlignment="Center"
-                                                                    Background="{DynamicResource BackgroundBrush}" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1" ClipToBounds="True">
-                                                                <Polyline Points="{Binding SparklinePoints}"
-                                                                          Stroke="{DynamicResource AccentBrush}" StrokeThickness="1.4"
-                                                                          Stretch="Fill">
-                                                                </Polyline>
+                                                                    Background="{DynamicResource StreamMatrixHeaderBrush}" BorderBrush="{DynamicResource StreamGridLineBrush}" BorderThickness="1" ClipToBounds="True">
+                                                                <ui:TelemetrySparkline Points="{Binding SparklinePoints}" YRange="40" Margin="1"/>
                                                             </Border>
                                                             <!-- Actions — gated by card state: live races get PAUSE/RESUME/STOP,
                                                                  finished (retained) cards get DISMISS -->
@@ -2670,10 +2639,10 @@
             </TabItem>
 
             <!-- ===== SYSTEM group ===== -->
-            <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,5,14,2">
+            <TabItem IsEnabled="False" Focusable="False" IsHitTestVisible="False" Padding="14,3,14,0">
                 <TabItem.Header>
                     <TextBlock Text="// SYSTEM" FontFamily="{DynamicResource MonoFontFamily}"
-                               FontSize="10" Foreground="{DynamicResource TextFaintBrush}" Margin="0,3,0,0"/>
+                               FontSize="10" Foreground="{DynamicResource TextFaintBrush}" Margin="0,2,0,0"/>
                 </TabItem.Header>
             </TabItem>
 
@@ -2892,22 +2861,13 @@
             </TabItem>
         </TabControl>
 
-        <!-- Status Bar -->
-        <Border Grid.Row="2" Background="{DynamicResource SurfaceBrush}"
-                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0" Padding="16,8">
-            <Grid>
-                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                <TextBlock Text="{Binding Irc.StatusText}" TextTrimming="CharacterEllipsis" FontSize="12"
-                           ToolTip="{Binding Irc.StatusText}" Foreground="{DynamicResource ForegroundDimBrush}"/>
-                <TextBlock Grid.Column="1" Text="{Binding StatusBarDiskSpace}" Margin="16,0,0,0"
-                           Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"/>
-            </Grid>
-        </Border>
-
         <!-- ============================================================== -->
         <!-- BOTTOM STATUS STRIP (live status; no simulated metrics)        -->
+        <!-- IRC and disk usage are segments here (full IRC detail in the   -->
+        <!-- tooltip; IRC actions stay on the IRC tab). Empty segments and  -->
+        <!-- their separators are never drawn.                              -->
         <!-- ============================================================== -->
-        <Border Grid.Row="3" Background="{DynamicResource MarqueeBackgroundBrush}"
+        <Border Grid.Row="2" Background="{DynamicResource MarqueeBackgroundBrush}"
                 BorderBrush="{DynamicResource LineBrush}" BorderThickness="0,1,0,0"
                 ClipToBounds="True">
             <Grid>
@@ -2919,26 +2879,59 @@
 
                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center"
                             Margin="14,0,0,0">
-                    <Ellipse Width="6" Height="6" Fill="{DynamicResource AccentBrush}" Margin="0,0,6,0"
-                             VerticalAlignment="Center"/>
+                    <!-- Live (glowing mint) while anything transfers; a dim dot when idle. -->
+                    <Ellipse x:Name="StatusDot" Width="6" Height="6" Margin="0,0,6,0" VerticalAlignment="Center">
+                        <Ellipse.Style>
+                            <Style TargetType="Ellipse">
+                                <Setter Property="Fill" Value="{DynamicResource AccentBrush}"/>
+                                <Setter Property="Effect" Value="{DynamicResource LiveSignalGlowEffect}"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding StatusBarSpeed}" Value="Idle">
+                                        <Setter Property="Fill" Value="{DynamicResource TextFaintBrush}"/>
+                                        <Setter Property="Effect" Value="{x:Null}"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding StatusBarSpeed}" Value="">
+                                        <Setter Property="Fill" Value="{DynamicResource TextFaintBrush}"/>
+                                        <Setter Property="Effect" Value="{x:Null}"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding StatusBarSpeed}" Value="{x:Null}">
+                                        <Setter Property="Fill" Value="{DynamicResource TextFaintBrush}"/>
+                                        <Setter Property="Effect" Value="{x:Null}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Ellipse.Style>
+                    </Ellipse>
                     <TextBlock Text="STATUS" FontFamily="{DynamicResource MonoFontFamily}"
                                FontSize="12" Foreground="{DynamicResource TextDimBrush}"/>
                 </StackPanel>
 
                 <Grid Grid.Column="1" ClipToBounds="True" Margin="18,0">
-                    <TextBlock VerticalAlignment="Center"
+                    <TextBlock x:Name="StatusSegmentsText" VerticalAlignment="Center"
                                TextWrapping="NoWrap"
                                TextTrimming="CharacterEllipsis"
                                FontFamily="{DynamicResource MonoFontFamily}"
                                FontSize="12"
-                               Foreground="{DynamicResource TextDimBrush}">
+                               Foreground="{DynamicResource TextDimBrush}"
+                               AutomationProperties.LiveSetting="Off">
                         <TextBlock.Text>
-                            <MultiBinding StringFormat="{}{0}  //  {1}  //  {2}">
+                            <MultiBinding Converter="{StaticResource StatusSegments}">
                                 <Binding Path="StatusBarSpeed"/>
                                 <Binding Path="StatusBarQueueCount"/>
                                 <Binding Path="StatusBarConnections"/>
+                                <Binding Path="Irc.CompactStatusText"/>
+                                <Binding Path="StatusBarDiskSpace"/>
                             </MultiBinding>
                         </TextBlock.Text>
+                        <TextBlock.ToolTip>
+                            <MultiBinding Converter="{StaticResource StatusSegments}">
+                                <Binding Path="StatusBarSpeed"/>
+                                <Binding Path="StatusBarQueueCount"/>
+                                <Binding Path="StatusBarConnections"/>
+                                <Binding Path="Irc.StatusText"/>
+                                <Binding Path="StatusBarDiskSpace"/>
+                            </MultiBinding>
+                        </TextBlock.ToolTip>
                     </TextBlock>
                 </Grid>
 
@@ -2950,24 +2943,28 @@
                          active download BytesPerSecond, TxRateDisplay sums all
                          spread-job non-source SpeedBps. StatusBarRtt comes from
                          the ConnectionMonitor average across mounted servers. -->
+                    <!-- Fixed-width, right-aligned readouts so values do not shift their labels. -->
                     <TextBlock Text="RTT " FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
                                Foreground="{DynamicResource TextDimBrush}"/>
                     <TextBlock Text="{Binding StatusBarRtt, FallbackValue=--ms}" FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
+                               MinWidth="48" TextAlignment="Right" AutomationProperties.Name="Round-trip time"
                                Foreground="{DynamicResource AccentBrush}" Margin="0,0,14,0"/>
                     <TextBlock Text="&#x2193; " FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
                                Foreground="{DynamicResource TextDimBrush}"/>
                     <TextBlock Text="{Binding RxRateDisplay, FallbackValue=0.0 MB/s}" FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
-                               Foreground="{DynamicResource GoodBrush}" Margin="0,0,8,0"/>
+                               MinWidth="92" TextAlignment="Right" AutomationProperties.Name="Download rate"
+                               Foreground="{DynamicResource AccentBrush}" Margin="0,0,14,0"/>
                     <TextBlock Text="&#x2191; " FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
                                Foreground="{DynamicResource TextDimBrush}"/>
                     <TextBlock Text="{Binding TxRateDisplay, FallbackValue=0.0 MB/s}" FontFamily="{DynamicResource MonoFontFamily}" FontSize="12"
-                               Foreground="{DynamicResource AccentBrush}"/>
+                               MinWidth="92" TextAlignment="Right" AutomationProperties.Name="FXP transfer rate"
+                               Foreground="{DynamicResource Signature2Brush}"/>
                 </StackPanel>
             </Grid>
         </Border>
 
         <!-- Keyboard shortcuts overlay (toggle with `?`) -->
-        <Border x:Name="ShortcutsOverlay" Grid.RowSpan="4"
+        <Border x:Name="ShortcutsOverlay" Grid.RowSpan="3"
                 Background="#CC03070D"
                 Visibility="Collapsed" Panel.ZIndex="9999" Focusable="True" KeyboardNavigation.TabNavigation="Cycle"
                 MouseLeftButtonDown="ShortcutsOverlay_Click">

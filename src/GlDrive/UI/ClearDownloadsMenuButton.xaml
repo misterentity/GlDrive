@@ -1,0 +1,22 @@
+<UserControl x:Class="GlDrive.UI.ClearDownloadsMenuButton"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Transfer queue "Clear ▾": one toolbar button carrying all four clear commands of the
+         DataContext (DashboardViewModel). Left click or right click opens the menu. The menu
+         lives outside the visual tree, so it takes its DataContext from the button it opens on. -->
+    <Button x:Name="MenuButton" Content="Clear ▾" Click="MenuButton_Click"
+            Padding="12,6" Margin="0,0,0,4" Style="{DynamicResource SecondaryButton}"
+            AutomationProperties.Name="Clear finished downloads"
+            ToolTip="Clear completed, failed, or cancelled downloads">
+        <Button.ContextMenu>
+            <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                <MenuItem Header="Clear Completed" Command="{Binding ClearCompletedCommand}"/>
+                <MenuItem Header="Clear Failed" Command="{Binding ClearFailedCommand}"/>
+                <MenuItem Header="Clear Cancelled" Command="{Binding ClearCancelledCommand}"/>
+                <Separator/>
+                <MenuItem Header="Clear All Finished" Command="{Binding ClearAllFinishedCommand}"
+                          ToolTip="Clear completed, failed, and cancelled"/>
+            </ContextMenu>
+        </Button.ContextMenu>
+    </Button>
+</UserControl>

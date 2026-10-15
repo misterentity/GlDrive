@@ -189,8 +189,8 @@
                 </Grid>
             </DockPanel>
 
-            <!-- CRT scanlines (Cyberpunk only; the key is absent elsewhere so this stays empty) -->
-            <Rectangle Fill="{DynamicResource ScanlineOverlayBrush}" Opacity="0.35" IsHitTestVisible="False"/>
+            <!-- Display texture for this instrument only (Cyberpunk; Transparent in other themes) -->
+            <Rectangle Fill="{DynamicResource ScanlineOverlayBrush}" Opacity="0.6" IsHitTestVisible="False"/>
             <!-- HUD corner brackets -->
             <Border Width="10" Height="10" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="-1,-1,0,0"
                     BorderBrush="{DynamicResource StreamSparkBrush}" BorderThickness="1,1,0,0" IsHitTestVisible="False"/>

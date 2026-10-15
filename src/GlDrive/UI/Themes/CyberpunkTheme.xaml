@@ -15,7 +15,8 @@
     <SolidColorBrush x:Key="ErrorBackgroundBrush" Color="#361A23"/>
 
     <!-- Shared control states and semantic surface colors. -->
-    <SolidColorBrush x:Key="FocusRingBrush" Color="#A3F5DC"/>
+    <!-- Near-white so the outer focus ring separates from mint fills and mint hover borders. -->
+    <SolidColorBrush x:Key="FocusRingBrush" Color="#EFFFF9"/>
     <SolidColorBrush x:Key="PrimaryButtonBrush" Color="#65E6C1"/>
     <SolidColorBrush x:Key="PrimaryButtonHoverBrush" Color="#A3F5DC"/>
     <SolidColorBrush x:Key="AccentForegroundBrush" Color="#080D10"/>
@@ -33,12 +34,39 @@
     <SolidColorBrush x:Key="TextFaintBrush" Color="#829B95"/>
     <SolidColorBrush x:Key="SignatureBrush" Color="#65E6C1"/>
     <SolidColorBrush x:Key="Signature2Brush" Color="#B8F36A"/>
-    <SolidColorBrush x:Key="GoodBrush" Color="#9FDC78"/>
+    <SolidColorBrush x:Key="GoodBrush" Color="#84D9A4"/>
     <SolidColorBrush x:Key="BadBrush" Color="#FF6B87"/>
     <SolidColorBrush x:Key="WarnBrush" Color="#E6B76D"/>
 
     <Color x:Key="SignatureColor">#65E6C1</Color>
     <Color x:Key="Signature2Color">#B8F36A</Color>
+
+    <!-- Release-name tokens (presentation only): title keeps ForegroundBrush. -->
+    <SolidColorBrush x:Key="ReleaseTokenMetaBrush" Color="#65E6C1"/>
+    <SolidColorBrush x:Key="ReleaseTokenSourceBrush" Color="#9CB0AC"/>
+    <SolidColorBrush x:Key="ReleaseTokenCodecBrush" Color="#829B95"/>
+    <SolidColorBrush x:Key="ReleaseTokenTagBrush" Color="#E6B76D"/>
+    <SolidColorBrush x:Key="ReleaseTokenGroupBrush" Color="#B8F36A"/>
+    <SolidColorBrush x:Key="ReleaseTokenSeparatorBrush" Color="#62807A"/>
+
+    <!-- Glow is reserved for live signals: the status dot and active transfer rails. -->
+    <DropShadowEffect x:Key="LiveSignalGlowEffect" Color="#65E6C1" BlurRadius="8" ShadowDepth="0" Opacity="0.75"/>
+
+    <!-- Segmented instrument fill: 4px blocks, 2px gaps. Used as an OpacityMask so the
+         meter keeps its Foreground (status/metric colour) and its ProgressBar semantics. -->
+    <DrawingBrush x:Key="MeterSegmentMaskBrush" TileMode="Tile" Viewport="0,0,6,1" ViewportUnits="Absolute"
+                  Viewbox="0,0,6,1" ViewboxUnits="Absolute" Stretch="None">
+        <DrawingBrush.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Brush="#00000000">
+                    <GeometryDrawing.Geometry><RectangleGeometry Rect="0,0,6,1"/></GeometryDrawing.Geometry>
+                </GeometryDrawing>
+                <GeometryDrawing Brush="#FF000000">
+                    <GeometryDrawing.Geometry><RectangleGeometry Rect="0,0,4,1"/></GeometryDrawing.Geometry>
+                </GeometryDrawing>
+            </DrawingGroup>
+        </DrawingBrush.Drawing>
+    </DrawingBrush>
 
     <FontFamily x:Key="MonoFontFamily">Cascadia Mono, Consolas</FontFamily>
     <FontFamily x:Key="DisplayFontFamily">Cascadia Mono, Consolas</FontFamily>
@@ -86,54 +114,6 @@
         </Setter>
     </Style>
 
-    <Style x:Key="CyberpunkButtonStyle" TargetType="Button">
-        <Setter Property="MinHeight" Value="30"/>
-        <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
-        <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource LineDimBrush}"/>
-        <Setter Property="BorderThickness" Value="1"/>
-        <Setter Property="Padding" Value="12,6"/>
-        <Setter Property="FontFamily" Value="{DynamicResource MonoFontFamily}"/>
-        <Setter Property="FontSize" Value="12"/>
-        <Setter Property="FocusVisualStyle" Value="{DynamicResource KeyboardFocusStyle}"/>
-        <Setter Property="Cursor" Value="Hand"/>
-        <Setter Property="Template">
-            <Setter.Value>
-                <ControlTemplate TargetType="Button">
-                    <Border x:Name="Bd"
-                            Background="{TemplateBinding Background}"
-                            BorderBrush="{TemplateBinding BorderBrush}"
-                            BorderThickness="{TemplateBinding BorderThickness}"
-                            Padding="{TemplateBinding Padding}">
-                        <ContentPresenter HorizontalAlignment="Center"
-                                          VerticalAlignment="Center"
-                                          TextBlock.Foreground="{TemplateBinding Foreground}"/>
-                    </Border>
-                    <ControlTemplate.Triggers>
-                        <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
-                            <Setter TargetName="Bd" Property="Effect" Value="{DynamicResource SignatureGlowEffect}"/>
-                        </Trigger>
-                        <Trigger Property="IsPressed" Value="True">
-                            <Setter TargetName="Bd" Property="Opacity" Value="0.76"/>
-                        </Trigger>
-                        <Trigger Property="IsEnabled" Value="False">
-                            <Setter Property="Foreground" Value="{DynamicResource DisabledForegroundBrush}"/>
-                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SurfaceLightBrush}"/>
-                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource LineBrush}"/>
-                        </Trigger>
-                    </ControlTemplate.Triggers>
-                </ControlTemplate>
-            </Setter.Value>
-        </Setter>
-    </Style>
-
-    <Style x:Key="CyberpunkPrimaryButtonStyle" TargetType="Button" BasedOn="{StaticResource CyberpunkButtonStyle}">
-        <Setter Property="Background" Value="{DynamicResource PrimaryButtonBrush}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource PrimaryButtonBrush}"/>
-        <Setter Property="Foreground" Value="{DynamicResource AccentForegroundBrush}"/>
-    </Style>
-
     <Style x:Key="CyberpunkFrameStyle" TargetType="Border">
         <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
         <Setter Property="BorderBrush" Value="{DynamicResource LineBrush}"/>
@@ -163,57 +143,54 @@
         <Setter Property="SnapsToDevicePixels" Value="True"/>
         <Setter Property="Template">
             <Setter.Value>
+                <!-- Hover lightens through a wash (works on secondary and mint primary fills alike)
+                     instead of a glow; glow is kept for live signals. Disabled controls drop their
+                     fill entirely so they read as inactive, never as raised or selected. -->
                 <ControlTemplate TargetType="Button">
                     <Border x:Name="Bd"
                             Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}"
                             BorderThickness="{TemplateBinding BorderThickness}"
-                            Padding="{TemplateBinding Padding}"
                             SnapsToDevicePixels="True">
-                        <Border.Effect>
-                            <DropShadowEffect Color="#65E6C1" BlurRadius="14" ShadowDepth="0" Opacity="0"/>
-                        </Border.Effect>
-                        <ContentPresenter x:Name="cp"
-                                          HorizontalAlignment="Center"
-                                          VerticalAlignment="Center"
-                                          TextBlock.Foreground="{TemplateBinding Foreground}"
-                                          TextBlock.FontFamily="{TemplateBinding FontFamily}"
-                                          TextBlock.FontSize="{TemplateBinding FontSize}"/>
+                        <Grid>
+                            <Rectangle x:Name="Wash" Fill="{DynamicResource ForegroundBrush}" Opacity="0" IsHitTestVisible="False"/>
+                            <ContentPresenter x:Name="cp"
+                                              Margin="{TemplateBinding Padding}"
+                                              HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              RecognizesAccessKey="True"
+                                              TextBlock.Foreground="{TemplateBinding Foreground}"
+                                              TextBlock.FontFamily="{TemplateBinding FontFamily}"
+                                              TextBlock.FontSize="{TemplateBinding FontSize}"/>
+                        </Grid>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
-                            <Trigger.EnterActions>
-                                <BeginStoryboard>
-                                    <Storyboard>
-                                        <DoubleAnimation Storyboard.TargetName="Bd"
-                                                         Storyboard.TargetProperty="(Border.Effect).Opacity"
-                                                         To="0.12" Duration="0:0:0.12"/>
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </Trigger.EnterActions>
-                            <Trigger.ExitActions>
-                                <BeginStoryboard>
-                                    <Storyboard>
-                                        <DoubleAnimation Storyboard.TargetName="Bd"
-                                                         Storyboard.TargetProperty="(Border.Effect).Opacity"
-                                                         To="0" Duration="0:0:0.18"/>
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </Trigger.ExitActions>
+                            <Setter TargetName="Wash" Property="Opacity" Value="0.08"/>
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
-                            <Setter TargetName="Bd" Property="Opacity" Value="0.76"/>
+                            <Setter TargetName="Wash" Property="Opacity" Value="0.16"/>
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter Property="Foreground" Value="{DynamicResource DisabledForegroundBrush}"/>
-                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SurfaceLightBrush}"/>
+                            <Setter Property="Cursor" Value="Arrow"/>
+                            <Setter TargetName="Bd" Property="Background" Value="Transparent"/>
                             <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource LineBrush}"/>
+                            <Setter TargetName="Wash" Property="Opacity" Value="0"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
+    </Style>
+
+    <Style x:Key="CyberpunkButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"/>
+
+    <Style x:Key="CyberpunkPrimaryButtonStyle" TargetType="Button" BasedOn="{StaticResource CyberpunkButtonStyle}">
+        <Setter Property="Background" Value="{DynamicResource PrimaryButtonBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource PrimaryButtonBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource AccentForegroundBrush}"/>
     </Style>
 
 
@@ -357,6 +334,28 @@
                             </Trigger.ExitActions>
                         </Trigger>
                     </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Discrete LED-block meter (stream-matrix vocabulary) for pools, CPU, connections and
+         race progress. Still a ProgressBar: same Value binding, RangeValue automation, names. -->
+    <Style x:Key="SegmentedMeterStyle" TargetType="ProgressBar">
+        <Setter Property="Height" Value="8"/>
+        <Setter Property="Background" Value="{DynamicResource StreamCellPendingBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="SnapsToDevicePixels" Value="True"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ProgressBar">
+                    <Grid ClipToBounds="True">
+                        <Rectangle x:Name="PART_Track" Fill="{TemplateBinding Background}"
+                                   OpacityMask="{DynamicResource MeterSegmentMaskBrush}"/>
+                        <Rectangle x:Name="PART_Indicator" HorizontalAlignment="Left" Fill="{TemplateBinding Foreground}"
+                                   OpacityMask="{DynamicResource MeterSegmentMaskBrush}"/>
+                    </Grid>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
@@ -569,10 +568,12 @@
         <Setter Property="Effect" Value="{x:Null}"/>
     </Style>
 
+    <!-- Frame registration marks: large and solid enough to read as deliberate HUD corners,
+         not as stray pixels. -->
     <Style x:Key="HudCornerBracketTLStyle" TargetType="Border">
-        <Setter Property="Opacity" Value="0.4"/>
-        <Setter Property="Width" Value="6"/>
-        <Setter Property="Height" Value="6"/>
+        <Setter Property="Opacity" Value="0.85"/>
+        <Setter Property="Width" Value="10"/>
+        <Setter Property="Height" Value="10"/>
         <Setter Property="HorizontalAlignment" Value="Left"/>
         <Setter Property="VerticalAlignment" Value="Top"/>
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
@@ -582,9 +583,9 @@
     </Style>
 
     <Style x:Key="HudCornerBracketTRStyle" TargetType="Border">
-        <Setter Property="Opacity" Value="0.4"/>
-        <Setter Property="Width" Value="6"/>
-        <Setter Property="Height" Value="6"/>
+        <Setter Property="Opacity" Value="0.85"/>
+        <Setter Property="Width" Value="10"/>
+        <Setter Property="Height" Value="10"/>
         <Setter Property="HorizontalAlignment" Value="Right"/>
         <Setter Property="VerticalAlignment" Value="Top"/>
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
@@ -594,9 +595,9 @@
     </Style>
 
     <Style x:Key="HudCornerBracketBLStyle" TargetType="Border">
-        <Setter Property="Opacity" Value="0.4"/>
-        <Setter Property="Width" Value="6"/>
-        <Setter Property="Height" Value="6"/>
+        <Setter Property="Opacity" Value="0.85"/>
+        <Setter Property="Width" Value="10"/>
+        <Setter Property="Height" Value="10"/>
         <Setter Property="HorizontalAlignment" Value="Left"/>
         <Setter Property="VerticalAlignment" Value="Bottom"/>
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
@@ -606,9 +607,9 @@
     </Style>
 
     <Style x:Key="HudCornerBracketBRStyle" TargetType="Border">
-        <Setter Property="Opacity" Value="0.4"/>
-        <Setter Property="Width" Value="6"/>
-        <Setter Property="Height" Value="6"/>
+        <Setter Property="Opacity" Value="0.85"/>
+        <Setter Property="Width" Value="10"/>
+        <Setter Property="Height" Value="10"/>
         <Setter Property="HorizontalAlignment" Value="Right"/>
         <Setter Property="VerticalAlignment" Value="Bottom"/>
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
@@ -670,8 +671,8 @@
     </Style>
 
     <Style x:Key="TagGoodStyle" TargetType="Border" BasedOn="{StaticResource TagStyle}">
-        <Setter Property="Background" Value="#159FDC78"/>
-        <Setter Property="BorderBrush" Value="#809FDC78"/>
+        <Setter Property="Background" Value="#1584D9A4"/>
+        <Setter Property="BorderBrush" Value="#8084D9A4"/>
     </Style>
 
     <Style x:Key="TagWarnStyle" TargetType="Border" BasedOn="{StaticResource TagStyle}">
@@ -695,8 +696,8 @@
          for MOUNTED (drive letter active, special); red for OFFLINE / DISABLED.
          Use inside ItemTemplates where the DataContext is an OverviewServerVm. -->
     <Style x:Key="ServerStatusTagStyle" TargetType="Border" BasedOn="{StaticResource TagStyle}">
-        <Setter Property="Background" Value="#159FDC78"/>
-        <Setter Property="BorderBrush" Value="#809FDC78"/>
+        <Setter Property="Background" Value="#1584D9A4"/>
+        <Setter Property="BorderBrush" Value="#8084D9A4"/>
         <Style.Triggers>
             <DataTrigger Binding="{Binding SiteTag}" Value="MOUNTED">
                 <Setter Property="Background" Value="#1565E6C1"/>
@@ -735,7 +736,7 @@
         <Setter Property="Stroke" Value="{DynamicResource GoodBrush}"/>
         <Setter Property="Effect">
             <Setter.Value>
-                <DropShadowEffect Color="#9FDC78" BlurRadius="10" ShadowDepth="0" Opacity="0.55"/>
+                <DropShadowEffect Color="#84D9A4" BlurRadius="10" ShadowDepth="0" Opacity="0.55"/>
             </Setter.Value>
         </Setter>
         <Style.Triggers>
@@ -769,8 +770,8 @@
         <Setter Property="BorderBrush" Value="#8065E6C1"/>
         <Style.Triggers>
             <DataTrigger Binding="{Binding Status}" Value="Completed">
-                <Setter Property="Background" Value="#159FDC78"/>
-                <Setter Property="BorderBrush" Value="#809FDC78"/>
+                <Setter Property="Background" Value="#1584D9A4"/>
+                <Setter Property="BorderBrush" Value="#8084D9A4"/>
             </DataTrigger>
             <DataTrigger Binding="{Binding Status}" Value="Failed">
                 <Setter Property="Background" Value="#15FF6B87"/>
@@ -811,7 +812,7 @@
         <Setter Property="Fill" Value="{DynamicResource GoodBrush}"/>
         <Setter Property="Effect">
             <Setter.Value>
-                <DropShadowEffect Color="#9FDC78" BlurRadius="6" ShadowDepth="0" Opacity="0.9"/>
+                <DropShadowEffect Color="#84D9A4" BlurRadius="6" ShadowDepth="0" Opacity="0.9"/>
             </Setter.Value>
         </Setter>
     </Style>
@@ -873,6 +874,8 @@
                         From="0" To="-2400" Duration="0:1:00"/>
     </Storyboard>
 
+    <!-- Display texture for instrument wells only (stream matrix, throughput chart); there is no
+         window-wide overlay. Other themes define this key as Transparent in App.xaml. -->
     <DrawingBrush x:Key="ScanlineOverlayBrush"
                   TileMode="Tile"
                   Viewport="0,0,1,4"
@@ -885,7 +888,7 @@
                         <RectangleGeometry Rect="0,0,1,2"/>
                     </GeometryDrawing.Geometry>
                 </GeometryDrawing>
-                <GeometryDrawing Brush="#55000000">
+                <GeometryDrawing Brush="#66000000">
                     <GeometryDrawing.Geometry>
                         <RectangleGeometry Rect="0,2,1,1"/>
                     </GeometryDrawing.Geometry>
@@ -986,19 +989,20 @@
     <!-- Multi-stream downloads: lane palette + STREAM MATRIX chrome (full neon). Keys must exist in every theme. -->
     <SolidColorBrush x:Key="LaneBrush0" Color="#65E6C1"/>
     <SolidColorBrush x:Key="LaneBrush1" Color="#B8F36A"/>
-    <SolidColorBrush x:Key="LaneBrush2" Color="#9FDC78"/>
+    <SolidColorBrush x:Key="LaneBrush2" Color="#6CB6FF"/>
     <SolidColorBrush x:Key="LaneBrush3" Color="#E6B76D"/>
     <SolidColorBrush x:Key="LaneBrush4" Color="#B388FF"/>
     <SolidColorBrush x:Key="LaneBrush5" Color="#FF6A3D"/>
     <DropShadowEffect x:Key="LaneGlowEffect" Color="#65E6C1" BlurRadius="12" ShadowDepth="0" Opacity="0.85"/>
     <sys:Double x:Key="LaneGlowOpacity">0.85</sys:Double>
-    <SolidColorBrush x:Key="StreamMatrixBackgroundBrush" Color="#E6050B14"/>
-    <SolidColorBrush x:Key="StreamMatrixHeaderBrush" Color="#CC071321"/>
+    <!-- Graphite-teal instrument wells (formerly navy) so the matrix matches the rest of the shell. -->
+    <SolidColorBrush x:Key="StreamMatrixBackgroundBrush" Color="#F00A1114"/>
+    <SolidColorBrush x:Key="StreamMatrixHeaderBrush" Color="#0D171A"/>
     <SolidColorBrush x:Key="StreamMatrixBorderBrush" Color="#5565E6C1"/>
-    <SolidColorBrush x:Key="StreamCellPendingBrush" Color="#0E2033"/>
-    <SolidColorBrush x:Key="StreamCellCachedBrush" Color="#2A4A66"/>
+    <SolidColorBrush x:Key="StreamCellPendingBrush" Color="#16252A"/>
+    <SolidColorBrush x:Key="StreamCellCachedBrush" Color="#2E4C50"/>
     <SolidColorBrush x:Key="StreamFileSeparatorBrush" Color="#B8F36A"/>
-    <SolidColorBrush x:Key="StreamGridLineBrush" Color="#1A3550"/>
+    <SolidColorBrush x:Key="StreamGridLineBrush" Color="#1E3136"/>
     <SolidColorBrush x:Key="StreamSparkBrush" Color="#65E6C1"/>
     <LinearGradientBrush x:Key="StreamSparkFillBrush" StartPoint="0,0" EndPoint="0,1">
         <GradientStop Offset="0" Color="#6665E6C1"/>
@@ -1008,14 +1012,14 @@
     <SolidColorBrush x:Key="StreamTextDimBrush" Color="#9CB0AC"/>
     <SolidColorBrush x:Key="StreamTextFaintBrush" Color="#829B95"/>
     <SolidColorBrush x:Key="StreamCommentBrush" Color="#4FB07A"/>
-    <SolidColorBrush x:Key="StreamGoodBrush" Color="#9FDC78"/>
+    <SolidColorBrush x:Key="StreamGoodBrush" Color="#84D9A4"/>
     <SolidColorBrush x:Key="StreamWarnBrush" Color="#E6B76D"/>
     <SolidColorBrush x:Key="StreamBadBrush" Color="#FF6B87"/>
-    <SolidColorBrush x:Key="StreamLedOnBrush" Color="#9FDC78"/>
-    <SolidColorBrush x:Key="StreamLedOffBrush" Color="#1C3348"/>
-    <DropShadowEffect x:Key="StreamLedGlowEffect" Color="#9FDC78" BlurRadius="8" ShadowDepth="0" Opacity="0.9"/>
+    <SolidColorBrush x:Key="StreamLedOnBrush" Color="#84D9A4"/>
+    <SolidColorBrush x:Key="StreamLedOffBrush" Color="#1F3236"/>
+    <DropShadowEffect x:Key="StreamLedGlowEffect" Color="#84D9A4" BlurRadius="8" ShadowDepth="0" Opacity="0.9"/>
     <SolidColorBrush x:Key="StreamUsageBarBrush" Color="#65E6C1"/>
-    <SolidColorBrush x:Key="StreamUsageTrackBrush" Color="#0E2033"/>
+    <SolidColorBrush x:Key="StreamUsageTrackBrush" Color="#16252A"/>
     <SolidColorBrush x:Key="StreamChipBackgroundBrush" Color="#140D161A"/>
     <FontFamily x:Key="StreamMonoFontFamily">Cascadia Mono, Consolas</FontFamily>
 
@@ -1090,7 +1094,8 @@
                 <Setter Property="Foreground" Value="{DynamicResource ForegroundDimBrush}"/>
                 <Setter Property="FontFamily" Value="{DynamicResource MonoFontFamily}"/>
                 <Setter Property="FontSize" Value="12"/>
-                <Setter Property="Padding" Value="12,7"/>
+                <!-- 26px rows + 18px group labels: all 17 dashboard targets fit at MinHeight=700. -->
+                <Setter Property="Padding" Value="12,4"/>
                 <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
                 <Setter Property="VerticalContentAlignment" Value="Stretch"/>
                 <Setter Property="FocusVisualStyle" Value="{DynamicResource KeyboardFocusStyle}"/>
@@ -1099,7 +1104,7 @@
                         <ControlTemplate TargetType="TabItem">
                             <Border x:Name="Bd" Background="Transparent" BorderBrush="Transparent"
                                     BorderThickness="2,0,0,0" Padding="{TemplateBinding Padding}"
-                                    Cursor="Hand" MinHeight="32">
+                                    Cursor="Hand" MinHeight="26">
                                 <ContentPresenter ContentSource="Header" RecognizesAccessKey="True"
                                                   HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
                             </Border>
@@ -1115,7 +1120,7 @@
                                     <Setter Property="FontWeight" Value="SemiBold"/>
                                 </Trigger>
                                 <Trigger Property="IsEnabled" Value="False">
-                                    <Setter TargetName="Bd" Property="MinHeight" Value="20"/>
+                                    <Setter TargetName="Bd" Property="MinHeight" Value="18"/>
                                     <Setter Property="Foreground" Value="{DynamicResource DisabledForegroundBrush}"/>
                                 </Trigger>
                             </ControlTemplate.Triggers>

@@ -6,6 +6,9 @@ using GlDrive.Services;
 
 namespace GlDrive.UI;
 
+/// <summary>What the APP CONNECTION callout signals: dim when off, neutral while unknown, mint when connected, red on error.</summary>
+public enum McpConnectionState { Off, Unknown, Checking, Connected, Error }
+
 public sealed class McpSettingsViewModel : INotifyPropertyChanged
 {
     private readonly AppConfig _config;
@@ -16,6 +19,7 @@ public sealed class McpSettingsViewModel : INotifyPropertyChanged
     private string _selectedClient = "Claude Code";
     private string _status;
     private string _feedback = "";
+    private McpConnectionState _connectionState;
 
     public McpSettingsViewModel(AppConfig config, bool readLocalState = true)
     {
@@ -24,19 +28,54 @@ public sealed class McpSettingsViewModel : INotifyPropertyChanged
         _enabled = config.ControlApi.Enabled;
         _port = config.ControlApi.Port.ToString(CultureInfo.InvariantCulture);
         _status = _enabled ? "App connection has not been checked yet." : "MCP is off. Enable it and apply your settings to connect.";
+        _connectionState = _enabled ? McpConnectionState.Unknown : McpConnectionState.Off;
         Setup = McpSetupService.GetSetup();
     }
 
     public McpSetupInfo Setup { get; private set; }
+    public bool AdapterMissing => !Setup.AdapterAvailable;
     public bool Enabled
     {
         get => _enabled;
-        set { if (_enabled == value) return; _enabled = value; Feedback = ""; Changed(); Changed(nameof(PendingChangesText)); }
+        set { if (_enabled == value) return; _enabled = value; Feedback = ""; Changed(); PendingChanged(); }
     }
     public string Port
     {
         get => _port;
-        set { if (_port == value) return; _port = value; Feedback = ""; Changed(); Changed(nameof(PendingChangesText)); }
+        set { if (_port == value) return; _port = value; Feedback = ""; Changed(); PendingChanged(); }
+    }
+
+    public McpConnectionState ConnectionState
+    {
+        get => _connectionState;
+        private set { if (_connectionState == value) return; _connectionState = value; Changed(); Changed(nameof(ConnectionStateLabel)); }
+    }
+
+    public string ConnectionStateLabel => ConnectionState switch
+    {
+        McpConnectionState.Connected => "● APP CONNECTION · CONNECTED",
+        McpConnectionState.Error => "✕ APP CONNECTION · ERROR",
+        McpConnectionState.Checking => "◌ APP CONNECTION · CHECKING",
+        McpConnectionState.Off => "○ APP CONNECTION · OFF",
+        _ => "◌ APP CONNECTION · NOT CHECKED"
+    };
+
+    /// <summary>The panel's single primary action: Apply while edits are pending, otherwise Copy (when there is an adapter to register).</summary>
+    public bool HasPendingChanges => Enabled != _config.ControlApi.Enabled ||
+        !TryGetPort(out var port, out _) || port != _config.ControlApi.Port;
+    public bool CopyIsPrimary => !HasPendingChanges && !AdapterMissing;
+
+    private void PendingChanged()
+    {
+        Changed(nameof(PendingChangesText)); Changed(nameof(HasPendingChanges)); Changed(nameof(CopyIsPrimary));
+    }
+
+    /// <summary>Maps a probe of the saved settings onto the callout state.</summary>
+    internal void ApplyProbeResult(McpProbeResult result)
+    {
+        Status = result.Message;
+        ConnectionState = result.Connected ? McpConnectionState.Connected
+            : _config.ControlApi.Enabled ? McpConnectionState.Error : McpConnectionState.Off;
     }
     public bool IsBusy
     {
@@ -46,8 +85,7 @@ public sealed class McpSettingsViewModel : INotifyPropertyChanged
     public bool IsIdle => !IsBusy;
     public string Status { get => _status; private set { _status = value; Changed(); } }
     public string Feedback { get => _feedback; set { _feedback = value; Changed(); } }
-    public string PendingChangesText => Enabled != _config.ControlApi.Enabled ||
-        !TryGetPort(out var port, out _) || port != _config.ControlApi.Port
+    public string PendingChangesText => HasPendingChanges
         ? "Unsaved MCP changes. Apply below, or use Save at the bottom of Settings."
         : "Connection checks use the applied settings.";
 
@@ -99,7 +137,7 @@ public sealed class McpSettingsViewModel : INotifyPropertyChanged
     public async Task ApplyAsync(CancellationToken ct = default)
     {
         if (IsBusy) return;
-        if (!TryGetPort(out var port, out var error)) { Status = error; return; }
+        if (!TryGetPort(out var port, out var error)) { Status = error; ConnectionState = McpConnectionState.Error; return; }
         if (!_readLocalState || ConfigManager.ReadOnly) { Status = "MCP settings cannot be saved in preview mode."; return; }
         IsBusy = true;
         var saved = false;
@@ -108,18 +146,22 @@ public sealed class McpSettingsViewModel : INotifyPropertyChanged
             ct.ThrowIfCancellationRequested();
             McpSettingsPersistence.Apply(_config, Enabled, port);
             saved = true;
-            Changed(nameof(PendingChangesText));
+            PendingChanged();
             Feedback = "MCP settings saved.";
             if (System.Windows.Application.Current is App app) app.RefreshControlApi(_config);
             await ProbeCoreAsync(ct);
         }
         catch (OperationCanceledException)
-        { Status = saved ? "Connection check cancelled. Saved settings remain applied." : "Apply cancelled before saving."; }
+        {
+            Status = saved ? "Connection check cancelled. Saved settings remain applied." : "Apply cancelled before saving.";
+            ConnectionState = _config.ControlApi.Enabled ? McpConnectionState.Unknown : McpConnectionState.Off;
+        }
         catch (Exception ex)
         {
             Serilog.Log.Warning("MCP settings {Stage} failed ({ErrorType})", saved ? "activation" : "save", ex.GetType().Name);
             Status = saved ? "Settings were saved, but the app connection could not be started. Check the app log and retry."
                 : "Could not save MCP settings. Check the app log and try again.";
+            ConnectionState = McpConnectionState.Error;
         }
         finally { IsBusy = false; }
     }
@@ -129,18 +171,27 @@ public sealed class McpSettingsViewModel : INotifyPropertyChanged
         if (IsBusy || !_readLocalState || ConfigManager.ReadOnly) return;
         IsBusy = true;
         try { await ProbeCoreAsync(ct); }
-        catch (OperationCanceledException) { Status = "Connection check cancelled."; }
-        catch (Exception) { Status = "Connection check failed. Check that GlDrive is running and try again."; }
+        catch (OperationCanceledException)
+        {
+            Status = "Connection check cancelled.";
+            ConnectionState = _config.ControlApi.Enabled ? McpConnectionState.Unknown : McpConnectionState.Off;
+        }
+        catch (Exception)
+        {
+            Status = "Connection check failed. Check that GlDrive is running and try again.";
+            ConnectionState = McpConnectionState.Error;
+        }
         finally { IsBusy = false; }
     }
 
     private async Task ProbeCoreAsync(CancellationToken ct)
     {
         Setup = McpSetupService.GetSetup();
-        Changed(nameof(Setup)); Changed(nameof(ClientSnippet)); Changed(nameof(PendingChangesText));
+        Changed(nameof(Setup)); Changed(nameof(ClientSnippet)); Changed(nameof(AdapterMissing)); PendingChanged();
         Status = "Checking the applied app connection…";
+        ConnectionState = McpConnectionState.Checking;
         var result = await McpSetupService.ProbeAsync(_config.ControlApi, ct);
-        Status = result.Message;
+        ApplyProbeResult(result);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
