@@ -35,6 +35,15 @@ class ReleaseCheckHandler(TLS_FTPHandler):
     proto_cmds = TLS_FTPHandler.proto_cmds.copy()
     proto_cmds["SITE SEARCH"] = {"perm": None, "auth": True, "arg": None,
                                 "help": "Syntax: SITE SEARCH <query>"}
+    proto_cmds["SITE NUKES"] = {"perm": None, "auth": True, "arg": False,
+                               "help": "Syntax: SITE NUKES"}
+
+    def ftp_SITE_NUKES(self, line):
+        response = root / "site-nukes-response"
+        code = response.read_text().strip() if response.exists() else "500"
+        with (root / "site-nukes-commands").open("a") as commands:
+            commands.write(code + "\n")
+        self.respond(code + " Fixture SITE NUKES response")
 
     def ftp_SITE_SEARCH(self, line):
         response = root / "site-search-response"

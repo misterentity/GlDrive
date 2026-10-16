@@ -12,10 +12,8 @@ namespace GlDrive.Tests;
 [CollectionDefinition("NukePoller logger", DisableParallelization = true)]
 public sealed class NukePollerLoggerCollection { }
 
-// 2026-10-13 20:37/20:48: the poll deadline fired while Borrow waited for a busy pool
-// (FtpConnectionPool.WaitForReturnedConnectionAsync) and was logged as
-// "[WRN] NukePoller failed" with a full OperationCanceledException stack. A busy pool
-// is a skipped poll, not a fault: it still counts toward the circuit breaker, quietly.
+// Command deadlines remain bounded failures without noisy exception stacks.
+// Borrow deadlines are separate deferrals: no SITE NUKES command was sent.
 [Collection("NukePoller logger")]
 public sealed class NukePollerDeadlineLoggingTests : IDisposable
 {
@@ -46,7 +44,7 @@ public sealed class NukePollerDeadlineLoggingTests : IDisposable
     [Fact]
     public async Task Poll_deadline_is_an_information_skip_not_a_stack_trace_warning()
     {
-        var recorder = new TelemetryRecorder(_root, 64);
+        using var recorder = new TelemetryRecorder(_root, 64);
         using var poller = new NukePoller(recorder, () => [new("busy", () => true, WaitForever)],
             new NukeCursorStore(_root), _root, 1, pollTimeout: TimeSpan.FromMilliseconds(50), startTimer: false);
 
@@ -59,10 +57,10 @@ public sealed class NukePollerDeadlineLoggingTests : IDisposable
     }
 
     [Fact]
-    public async Task Poll_deadlines_still_open_the_circuit_after_three_misses()
+    public async Task Command_deadlines_still_open_the_circuit_after_three_misses()
     {
         var calls = 0;
-        var recorder = new TelemetryRecorder(_root, 64);
+        using var recorder = new TelemetryRecorder(_root, 64);
         using var poller = new NukePoller(recorder, () => [new("busy", () => true, ct =>
             {
                 Interlocked.Increment(ref calls);
@@ -72,6 +70,33 @@ public sealed class NukePollerDeadlineLoggingTests : IDisposable
 
         for (var i = 0; i < 4; i++) await poller.PollAllAsync();
         Assert.Equal(3, calls);
+    }
+
+    [Fact]
+    public async Task Borrow_deadlines_are_deferred_without_warning_or_breaker()
+    {
+        using var recorder = new TelemetryRecorder(_root, 64);
+        using var poller = new NukePoller(recorder, () => [new("busy", () => true, async ct =>
+            {
+                await NukePoller.BorrowForPollAsync(async token =>
+                {
+                    await Task.Delay(Timeout.Infinite, token);
+                    throw new InvalidOperationException("Borrow should be canceled");
+                }, null, ct);
+                throw new InvalidOperationException("No command should be sent");
+            })], new NukeCursorStore(_root), _root, 1,
+            pollTimeout: TimeSpan.FromMilliseconds(20), startTimer: false);
+
+        for (var i = 0; i < 4; i++)
+            await poller.PollAllAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var mine = _sink.Events.Where(e => e.MessageTemplate.Text.StartsWith("NukePoller")).ToList();
+        Assert.Equal(4, mine.Count);
+        Assert.All(mine, e =>
+        {
+            Assert.Equal(LogEventLevel.Information, e.Level);
+            Assert.Null(e.Exception);
+            Assert.Contains("SITE NUKES was not sent", e.MessageTemplate.Text);
+        });
     }
 
     private sealed class CaptureSink : ILogEventSink

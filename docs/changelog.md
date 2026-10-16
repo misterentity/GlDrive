@@ -12,6 +12,20 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.11.17 — recovery probes under FTP pool contention (2026-10-16)
+
+- Source relocation uses an available main or spread connection instead of waiting
+  repeatedly on a busy main pool. An unavailable connection or failed probe cannot
+  establish that the remote release is missing; damaged sessions are quarantined.
+- SITE NUKES can borrow the spread connection after a bounded main-pool wait.
+  Borrow deadlines defer polling without opening the remote-command breaker;
+  actual command failures and deadlines still retain their existing cooldown.
+- Add loopback and native FTPS regressions for occupied pools and incomplete
+  relocation evidence. Give the existing UDP tracker test enough retry time
+  under full-suite scheduling pressure without changing its protocol assertions.
+- See the [release notes](releases/v3.11.17.md) and
+  [deployment report](releases/v3.11.17-deployment.md) for validation and risks.
+
 ## v3.11.11 — industrial terminal UI and source recovery lifecycle (2026-10-15)
 
 - Redesign Cyberpunk with graphite surfaces, monospace type, restrained mint/lime

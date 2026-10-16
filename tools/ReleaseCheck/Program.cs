@@ -87,6 +87,7 @@ if (args.Contains("--relocation-only", StringComparer.Ordinal))
     Console.WriteLine("PASS: local native FTPS source-relocation verification complete");
     return;
 }
+await NativeNukePollCheck.Run(factory, root, deadline.Token);
 await CheckManualEnumerationAndDownloads(factory, root, remoteRoot, deadline.Token);
 await CheckIncompleteDownloadRecovery(factory, root, remoteRoot, deadline.Token);
 await CheckIncompleteRaceRecovery(factory, root, remoteRoot, deadline.Token);
@@ -779,8 +780,25 @@ static async Task CheckSourceRelocation(FtpClientFactory factory, string fixture
     const string fileName = "payload.bin";
     var payload = new byte[8192];
     new Random(153).NextBytes(payload);
-    foreach (var trigger in new[] { "retr", "empty-list" })
+    foreach (var trigger in new[] { "retr", "empty-list", "busy-main", "exhausted-main" })
     {
+        await using var pressurePool = trigger is "busy-main" or "exhausted-main"
+            ? new FtpConnectionPool(factory, 1) : null;
+        if (pressurePool != null)
+        {
+            await pressurePool.Initialize(ct);
+            if (trigger == "exhausted-main")
+            {
+                await using (var discarded = await pressurePool.Borrow(ct))
+                    discarded.Poison("release fixture: exhaust main pool");
+                // Reproduce the observed state without refusing a real account login:
+                // no surviving main session, with creation parked by a local backoff.
+                typeof(FtpConnectionPool).GetField("_gateBackoffUntilTicks", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .SetValue(pressurePool, DateTime.UtcNow.AddMinutes(2).Ticks);
+                Check(pressurePool.IsExhausted && pressurePool.IsThrottled,
+                    "exhausted-main: isolated main pool has no session and is in login backoff");
+            }
+        }
         var releaseName = $"Relocated.{trigger}.S01E01.1080p-GRP";
         var source = new ServerConfig { Id = "relocation-source", Name = "Relocating source" };
         var basePath = remoteRoot + "/relocation-" + trigger;
@@ -823,10 +841,26 @@ static async Task CheckSourceRelocation(FtpClientFactory factory, string fixture
             }
         }
 
-        if (trigger == "retr")
-            await JobTask(job, "HandleSourceMigration", source.Id, ct);
-        else
-            await JobTask(job, "ScanSites", paths, ct); // Empty LIST must initiate the migration itself.
+        await using (var occupiedMain = trigger == "busy-main" ? await pressurePool!.Borrow(ct) : null)
+        {
+            if (pressurePool != null) job.LiveMainPoolResolver = _ => pressurePool;
+            var loginsBefore = File.ReadAllLines(Path.Combine(fixtureRoot, "authentication-attempts")).Length;
+            using var migrationDeadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            migrationDeadline.CancelAfter(TimeSpan.FromSeconds(5));
+            var migrationClock = System.Diagnostics.Stopwatch.StartNew();
+            if (trigger == "empty-list")
+                await JobTask(job, "ScanSites", paths, ct); // Empty LIST initiates migration itself.
+            else
+                await JobTask(job, "HandleSourceMigration", source.Id, pressurePool != null ? migrationDeadline.Token : ct);
+            if (pressurePool != null)
+            {
+                Check(!migrationDeadline.IsCancellationRequested && migrationClock.Elapsed < TimeSpan.FromSeconds(5),
+                    $"{trigger}: native migration bypasses the unavailable main pool within five seconds");
+                Check(File.ReadAllLines(Path.Combine(fixtureRoot, "authentication-attempts")).Length == loginsBefore,
+                    $"{trigger}: native migration uses an existing spread session without an extra login");
+            }
+            job.LiveMainPoolResolver = null;
+        }
 
         var overrides = JobField<System.Collections.Concurrent.ConcurrentDictionary<string, string>>(
             job, "_extraSourcePaths");
