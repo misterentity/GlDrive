@@ -63,15 +63,18 @@ public sealed class TorrentTrackerFallbackTests
     [Fact]
     public async Task Real_udp_wire_interval_controls_the_ordinary_announce_schedule()
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         using var listener = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
         var uri = new Uri($"udp://127.0.0.1:{((IPEndPoint)listener.Client.LocalEndPoint!).Port}/announce");
         int announces = 0;
         var serving = Serve();
         try
         {
+            // Allow the loopback responder to be scheduled during a cold, parallel
+            // solution run. A 100ms retry budget could expire before its first reply;
+            // this test validates the tracker interval, not subsecond UDP latency.
             var factories = Factories.Default.WithTrackerCreator("udp", address => new Tracker(
-                new UdpTrackerConnection(address, AddressFamily.InterNetwork) { RetryDelay = TimeSpan.FromMilliseconds(100) }));
+                new UdpTrackerConnection(address, AddressFamily.InterNetwork) { RetryDelay = TimeSpan.FromSeconds(1) }));
             var tracker = TorrentTrackerFactories.Create(factories).CreateTracker(uri)!;
             var tier = Tier(tracker);
             await Announce(tier, TorrentEvent.Started, deadline.Token);

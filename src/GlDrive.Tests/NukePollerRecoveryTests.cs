@@ -73,6 +73,85 @@ public sealed class NukePollerRecoveryTests : IDisposable
     }
 
     [Fact]
+    public async Task Busy_pools_do_not_open_the_command_breaker_and_next_poll_recovers()
+    {
+        var calls = 0;
+        var busy = true;
+        using var poller = Create(() => [new("site", () => true, async ct =>
+        {
+            calls++;
+            if (busy)
+                await NukePoller.BorrowForPollAsync(async token =>
+                {
+                    await Task.Delay(Timeout.Infinite, token);
+                    throw new InvalidOperationException("Borrow should be canceled");
+                }, null, ct);
+            return Success();
+        })], timeout: TimeSpan.FromMilliseconds(20));
+
+        for (var i = 0; i < 4; i++)
+            await poller.PollAllAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(4, calls);
+        Assert.Equal(DateTime.MinValue, _cursors.Get("site"));
+
+        busy = false;
+        await poller.PollAllAsync();
+        Assert.Equal(5, calls);
+        Assert.NotEqual(DateTime.MinValue, _cursors.Get("site"));
+    }
+
+    [Fact]
+    public async Task Busy_primary_lends_from_fallback_within_the_poll_deadline()
+    {
+        using var client = new AsyncFtpClient("example.invalid");
+        var lease = new PooledConnection(client, null!);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var fallbackCalls = 0;
+        var result = await NukePoller.BorrowForPollAsync(async token =>
+        {
+            await Task.Delay(Timeout.Infinite, token);
+            throw new InvalidOperationException("Primary should time out");
+        }, token =>
+        {
+            Assert.Equal(deadline.Token, token);
+            fallbackCalls++;
+            return Task.FromResult(lease);
+        }, deadline.Token, TimeSpan.FromMilliseconds(20)).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Same(lease, result);
+        Assert.Equal(1, fallbackCalls);
+        Assert.False(lease.Poisoned);
+    }
+
+    [Fact]
+    public async Task Borrow_deferrals_preserve_real_command_failures_in_the_breaker_budget()
+    {
+        var calls = 0;
+        var busy = false;
+        using var poller = Create(() => [new("site", () => true, async ct =>
+        {
+            calls++;
+            if (busy)
+                await NukePoller.BorrowForPollAsync(async token =>
+                {
+                    await Task.Delay(Timeout.Infinite, token);
+                    throw new InvalidOperationException("Borrow should be canceled");
+                }, null, ct);
+            return new FtpReply { Code = "550" };
+        })], timeout: TimeSpan.FromMilliseconds(20));
+
+        await poller.PollAllAsync();
+        await poller.PollAllAsync();
+        busy = true;
+        await poller.PollAllAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        busy = false;
+        await poller.PollAllAsync();
+        await poller.PollAllAsync();
+        Assert.Equal(4, calls); // Two denials + deferral + third denial, then cooldown.
+        Assert.Equal(DateTime.MinValue, _cursors.Get("site"));
+    }
+
+    [Fact]
     public async Task Three_failures_cool_down_then_probe_and_success_resets_the_budget()
     {
         var now = new DateTime(2026, 9, 28, 10, 0, 0, DateTimeKind.Utc);

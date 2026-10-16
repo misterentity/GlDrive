@@ -3212,21 +3212,29 @@ public class SpreadJob : IDisposable
     /// Probe failure is NOT treated as proof of migration (returns true = assume present).</summary>
     private async Task<bool> SourceStillHasRelease(string serverId, string path, CancellationToken ct, CancellationToken readStop)
     {
-        var pool = ResolveMainPool(serverId) ?? ResolveSpreadPool(serverId);
-        if (pool == null) return true;
+        PooledConnection? conn = null;
+        var commandStarted = false;
         try
         {
-            using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct, readStop);
-            borrowCts.CancelAfter(TimeSpan.FromSeconds(15));
-            await using var conn = await pool.Borrow(borrowCts.Token);
+            conn = await BorrowSourceProbeConnection(serverId, ct, readStop);
             readStop.ThrowIfCancellationRequested();
+            commandStarted = true;
             return await conn.Client.DirectoryExists(path, ct);
         }
-        catch (OperationCanceledException) when (readStop.IsCancellationRequested || ct.IsCancellationRequested) { throw; }
+        catch (OperationCanceledException) when (readStop.IsCancellationRequested || ct.IsCancellationRequested)
+        {
+            if (commandStarted) conn?.Poison("source re-probe cancelled during a command");
+            throw;
+        }
         catch (Exception ex)
         {
+            if (commandStarted) conn?.Poison($"source re-probe failed: {ex.GetType().Name}");
             Log.Debug(ex, "Spread: source re-probe failed for {Server} {Path} — assuming present", serverId, path);
             return true;
+        }
+        finally
+        {
+            if (conn != null) await conn.DisposeAsync();
         }
     }
 
@@ -3238,6 +3246,32 @@ public class SpreadJob : IDisposable
         return _sitePathsRef != null && _sitePathsRef.TryGetValue(serverId, out var p) ? p : null;
     }
 
+    /// <summary>
+    /// Prefer a reusable session over waiting on a saturated pool. Migration parks
+    /// new transfers from this source, so a short control probe may use its spread
+    /// session while filesystem/search traffic occupies the main pool.
+    /// </summary>
+    private async Task<PooledConnection> BorrowSourceProbeConnection(
+        string serverId, CancellationToken ct, CancellationToken readStop)
+    {
+        var pools = new[] { ResolveMainPool(serverId), ResolveSpreadPool(serverId) }
+            .OfType<FtpConnectionPool>()
+            .Distinct()
+            .OrderBy(pool => pool.TotalCreated > pool.ActiveCount ? 0 : pool.IsExhausted ? 2 : 1);
+        Exception? lastError = null;
+        foreach (var pool in pools)
+        {
+            using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct, readStop);
+            borrowCts.CancelAfter(TimeSpan.FromSeconds(15));
+            try { return await pool.Borrow(borrowCts.Token); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested || readStop.IsCancellationRequested) { throw; }
+            catch (Exception ex) { lastError = ex; }
+        }
+        ct.ThrowIfCancellationRequested();
+        readStop.ThrowIfCancellationRequested();
+        throw new InvalidOperationException("Source relocation probe has no available connection", lastError);
+    }
+
     /// <summary>Probe the same site's OTHER candidate release dirs (section paths + the
     /// notification watch path) for a release that 550'd at <paramref name="currentPath"/>.
     /// Returns the first dir that exists, or null. Probe failures are not evidence.</summary>
@@ -3245,31 +3279,34 @@ public class SpreadJob : IDisposable
         CancellationToken readStop = default)
     {
         if (!_serverConfigs.TryGetValue(serverId, out var config)) return null;
-        var pool = ResolveMainPool(serverId) ?? ResolveSpreadPool(serverId);
-        if (pool == null) return null;
-
         // One connection serves every candidate; a probe that throws poisons it and the
         // next candidate borrows a fresh one.
         PooledConnection? conn = null;
+        Exception? probeFailure = null;
         try
         {
             foreach (var candidate in RelocationCandidatePaths(config, Section, ReleaseName, currentPath))
             {
+                // A failed borrow says nothing about ANY candidate. Stop this pass
+                // instead of spending another 15s per directory on the same pool,
+                // then falsely reporting that the release was not relocated.
+                if (conn == null)
+                    conn = await BorrowSourceProbeConnection(serverId, ct, readStop);
+                var commandStarted = false;
                 try
                 {
                     readStop.ThrowIfCancellationRequested();
-                    if (conn == null)
-                    {
-                        using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct, readStop);
-                        borrowCts.CancelAfter(TimeSpan.FromSeconds(15));
-                        conn = await pool.Borrow(borrowCts.Token);
-                    }
-                    readStop.ThrowIfCancellationRequested();
+                    commandStarted = true;
                     if (await conn.Client.DirectoryExists(candidate, ct)) return candidate;
                 }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested || readStop.IsCancellationRequested) { throw; }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested || readStop.IsCancellationRequested)
+                {
+                    if (commandStarted) conn.Poison("relocation probe cancelled during a command");
+                    throw;
+                }
                 catch (Exception ex)
                 {
+                    probeFailure = ex;
                     Log.Debug(ex, "Spread: relocation probe failed on {Server} at {Path}", config.Name, candidate);
                     if (conn != null)
                     {
@@ -3279,6 +3316,8 @@ public class SpreadJob : IDisposable
                     }
                 }
             }
+            if (probeFailure != null)
+                throw new InvalidOperationException("Source relocation probe could not check every candidate", probeFailure);
             return null;
         }
         finally

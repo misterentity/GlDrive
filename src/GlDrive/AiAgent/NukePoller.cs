@@ -25,22 +25,29 @@ public sealed class NukePoller : IDisposable
     private bool _polling;
     private bool _disposed;
     private const int BreakerThreshold = 3;
+    private static readonly TimeSpan MainPoolBudget = TimeSpan.FromSeconds(10);
+
+    // No SITE NUKES command was sent. Local contention is not evidence that the
+    // server's command is failing and must not open its circuit breaker.
+    private sealed class PollBorrowCanceledException(OperationCanceledException inner)
+        : OperationCanceledException("No FTP connection available for SITE NUKES", inner, inner.CancellationToken);
 
     internal sealed record PollTarget(string ServerId, Func<bool> IsAvailable,
         Func<CancellationToken, Task<FtpReply>> ReadNukes);
 
     public NukePoller(TelemetryRecorder recorder, Services.ServerManager servers,
                       NukeCursorStore cursors, string aiDataRoot, int intervalHours)
-        : this(recorder, () => servers.GetAllMountServices().Select(CreateTarget),
+        : this(recorder, () => servers.GetAllMountServices().Select(ms =>
+                CreateTarget(ms, () => servers.Spread?.GetLivePool(ms.ServerId))),
             cursors, aiDataRoot, intervalHours)
     {
     }
 
-    internal static PollTarget CreateTarget(MountService ms) => new(ms.ServerId,
+    internal static PollTarget CreateTarget(MountService ms, Func<FtpConnectionPool?>? getFallbackPool = null) => new(ms.ServerId,
         // A pool being initialized is not "exhausted", but borrowing it would
         // start another login alongside the mount's own recovery attempt.
         () => ms.CurrentState == MountState.Connected && ms.Pool is { IsExhausted: false },
-        ct => ReadNukesAsync(ms.Pool!, ct));
+        ct => ReadNukesAsync(ms.Pool!, getFallbackPool?.Invoke(), ct));
 
     internal NukePoller(TelemetryRecorder recorder, Func<IEnumerable<PollTarget>> getTargets,
         NukeCursorStore cursors, string aiDataRoot, int intervalHours,
@@ -125,11 +132,15 @@ public sealed class NukePoller : IDisposable
                 {
                     break;
                 }
+                catch (PollBorrowCanceledException)
+                {
+                    Log.Information("NukePoller deferred {Server}: FTP pools busy; SITE NUKES was not sent", serverId);
+                }
                 catch (OperationCanceledException)
                 {
-                    // Poll deadline, almost always while Borrow waited on a busy pool. A skipped
-                    // poll, not a fault — counts toward the breaker without a stack trace.
-                    Log.Information("NukePoller skipped {Server}: no reply within {Timeout}s (pool busy or slow server)",
+                    // A command deadline is a server failure. Borrow deadlines are
+                    // classified separately above, before any command can be sent.
+                    Log.Information("NukePoller skipped {Server}: SITE NUKES did not reply within {Timeout}s",
                         serverId, (int)_pollTimeout.TotalSeconds);
                     BumpFail(serverId);
                 }
@@ -150,10 +161,27 @@ public sealed class NukePoller : IDisposable
         }
     }
 
-    private static async Task<FtpReply> ReadNukesAsync(FtpConnectionPool pool, CancellationToken ct)
+    private static async Task<FtpReply> ReadNukesAsync(FtpConnectionPool pool,
+        FtpConnectionPool? fallbackPool, CancellationToken ct)
     {
-        await using var lease = await pool.Borrow(ct);
+        await using var lease = await BorrowForPollAsync(pool.Borrow,
+            fallbackPool == null || ReferenceEquals(pool, fallbackPool) ? null : fallbackPool.Borrow, ct);
         return await ExecuteNukesAsync(lease, token => lease.Client.Execute("SITE NUKES", token), ct);
+    }
+
+    internal static async Task<PooledConnection> BorrowForPollAsync(
+        Func<CancellationToken, Task<PooledConnection>> primary,
+        Func<CancellationToken, Task<PooledConnection>>? fallback, CancellationToken ct,
+        TimeSpan? primaryBudget = null)
+    {
+        try
+        {
+            return await PoolFallback.BorrowAsync(primary, fallback, primaryBudget ?? MainPoolBudget, ct);
+        }
+        catch (OperationCanceledException ex) when (ct.IsCancellationRequested)
+        {
+            throw new PollBorrowCanceledException(ex);
+        }
     }
 
     internal static async Task<FtpReply> ExecuteNukesAsync(PooledConnection lease,
