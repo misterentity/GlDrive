@@ -212,8 +212,7 @@ public sealed class TorrentQueueUiIntegrationTests
 
         private DownloadManager CreateManager(string path)
         {
-            var store = new DownloadStore("isolated-queue-ui");
-            Set(store, "_filePath", path);
+            var store = DownloadStore.ForFile(path);
             return new DownloadManager(store, Source, Config.Downloads);
         }
 

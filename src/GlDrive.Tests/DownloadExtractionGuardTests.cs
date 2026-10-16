@@ -1,5 +1,4 @@
 using System.IO;
-using System.Reflection;
 using System.Text.Json;
 using GlDrive.Downloads;
 using Xunit;
@@ -117,8 +116,7 @@ public sealed class DownloadExtractionGuardTests : IDisposable
     }
     private static DownloadStore Store(string path)
     {
-        var store = new DownloadStore("isolated-extractor-guard");
-        typeof(DownloadStore).GetField("_filePath", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(store, path);
+        var store = DownloadStore.ForFile(path);
         return store;
     }
     public void Dispose()

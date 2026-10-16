@@ -89,8 +89,17 @@ public partial class App
             CredentialStore.AccessDisabled = true;
             ConfigManager.ReadOnly = true;
             var screenshotTheme = e.Args.FirstOrDefault(a => a.StartsWith("--screenshot-theme=", StringComparison.OrdinalIgnoreCase))?.Split('=', 2)[1];
-            ScreenshotCapture.CaptureAll(ConfigManager.Load(), screenshotTheme);
-            Shutdown();
+            var screenshotOutput = e.Args.FirstOrDefault(a => a.StartsWith("--screenshot-output=", StringComparison.OrdinalIgnoreCase))?.Split('=', 2)[1];
+            try
+            {
+                ScreenshotCapture.CaptureAll(ConfigManager.Load(), screenshotTheme, screenshotOutput);
+                Shutdown();
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Screenshot capture failed: {ex.GetType().Name}: {ex.Message}");
+                Shutdown(1);
+            }
             return;
         }
 

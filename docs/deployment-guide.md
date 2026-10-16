@@ -33,7 +33,8 @@ Useful argv during development:
 | *(none)* | Normal startup, spawns watchdog |
 | `--watchdog <pid>` | Runs the watchdog loop. Not invoked by hand |
 | `--apply-update <pid> <extractDir> <installDir>` | In-place update applier, elevated. Invoked by `UpdateChecker.DownloadAndInstallAsync` |
-| `--screenshots` | Renders wizard / dashboard / settings to `%AppData%\GlDrive\screenshots\*.png` and exits. Used to regenerate README screenshots |
+| `--screenshots` | Renders demo windows to a unique run directory under `%AppData%\GlDrive\screenshots` and exits. Each completed run includes a manifest of image hashes and the application binary version/hash |
+| `--screenshot-output=<directory>` | With `--screenshots`, uses an explicitly owned new or empty output directory. Existing evidence is never overwritten |
 
 ## Release pipeline
 

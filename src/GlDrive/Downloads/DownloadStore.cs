@@ -29,8 +29,16 @@ public class DownloadStore
     public IReadOnlyList<DownloadItem> Items { get { lock (_lock) return _items.ToList(); } }
 
     public DownloadStore(string serverId)
+        : this(new FileInfo(Path.Combine(ConfigManager.AppDataPath, $"downloads-{serverId}.json")))
     {
-        _filePath = Path.Combine(ConfigManager.AppDataPath, $"downloads-{serverId}.json");
+    }
+
+    /// <summary>Open an explicitly located queue without consulting the application-state directory.</summary>
+    public static DownloadStore ForFile(string filePath) => new(new FileInfo(filePath));
+
+    private DownloadStore(FileInfo storageFile)
+    {
+        _filePath = storageFile.FullName;
         // Debounced save: coalesces rapid updates into a single disk write
         _debounceTimer = new Timer(_ => FlushSave(), null, Timeout.Infinite, Timeout.Infinite);
         lock (RegistryLock) OpenStores.Add(new WeakReference<DownloadStore>(this));

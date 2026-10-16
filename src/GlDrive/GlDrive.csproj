@@ -11,12 +11,16 @@
     <StartupObject>GlDrive.Program</StartupObject>
     <AssemblyName>GlDrive</AssemblyName>
     <RootNamespace>GlDrive</RootNamespace>
-    <Version>3.11.17</Version>
+    <Version>3.11.18</Version>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Description>Mount a glftpd FTPS server as a Windows drive letter</Description>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\GlDrive.Core\GlDrive.Core.csproj" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- Expose internals to the test project (PRD Q1) — IsZipscriptArtifact etc. -->
@@ -42,8 +46,6 @@
     <PackageReference Include="Serilog" Version="4.3.1" />
     <PackageReference Include="Serilog.Sinks.File" Version="6.0.0" />
     <PackageReference Include="Meziantou.Framework.Win32.CredentialManager" Version="1.7.17" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.5" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.5" />
     <PackageReference Include="SharpCompress" Version="0.50.0" />
     <PackageReference Include="System.IO.Hashing" Version="9.0.14" />
     <!-- Pulled to 2.7.0 by SSH.NET 2026.0.0. Backs FishCipher (Blowfish ECB/CBC) and

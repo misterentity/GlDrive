@@ -1,3 +1,4 @@
+using GlDrive.Config;
 using Serilog;
 
 namespace GlDrive.Downloads.Segmented;
@@ -26,7 +27,7 @@ public static class SegmentedHttpDownloader
         {
             var probe = await HttpRangeProbe.ProbeAsync(clients[0].Http, url, ct);
             var perNetwork = multi.Enabled && probe.AcceptsRanges && probe.Size > 0
-                ? Math.Clamp(multi.HttpLanesPerNetwork, 1, 32)
+                ? ConfigurationLimits.ClampHttpLanesPerNetwork(multi.HttpLanesPerNetwork)
                 : 1;
             var lanes = new List<ISegmentLane>();
             foreach (var (network, http) in clients)

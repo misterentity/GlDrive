@@ -8,6 +8,9 @@ $InstallerDir = $PSScriptRoot
 $OutputDir = Join-Path $InstallerDir 'output'
 $CsprojPath = Join-Path $Root 'src\GlDrive\GlDrive.csproj'
 
+# SDK selection and repository-relative tools must use the same root as provenance.
+Push-Location $Root
+try {
 # --- Read version ---
 [xml]$Csproj = Get-Content $CsprojPath
 $Version = $Csproj.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
@@ -55,14 +58,22 @@ if (Test-Path $WinFspMsiPath) {
     Write-Host "winfsp.msi SHA-256 verified" -ForegroundColor Green
 }
 
-# --- Test and build ---
-Write-Host "`n=== Running tests ===" -ForegroundColor Cyan
-& dotnet test (Join-Path $Root 'src\GlDrive.Tests\GlDrive.Tests.csproj') -c Release '-warnaserror:NU1901,NU1902,NU1903,NU1904'
+# --- Restore and build once for all three test suites ---
+Write-Host "`n=== Restoring and building release tests ===" -ForegroundColor Cyan
+$Solution = Join-Path $Root 'GlDrive.sln'
+& dotnet restore $Solution -p:Configuration=Release --locked-mode '-warnaserror:NU1901,NU1902,NU1903,NU1904'
+if ($LASTEXITCODE -ne 0) { exit 1 }
+& dotnet build $Solution -c Release --no-restore '-warnaserror:NU1901,NU1902,NU1903,NU1904'
 if ($LASTEXITCODE -ne 0) { exit 1 }
 
+foreach ($testProject in @('GlDrive.Core.Tests','GlDrive.Tests','GlDrive.Mcp.Tests')) {
+    Write-Host "`n=== Running $testProject ===" -ForegroundColor Cyan
+    & dotnet test (Join-Path $Root "src\$testProject\$testProject.csproj") -c Release --no-build --no-restore '-warnaserror:NU1901,NU1902,NU1903,NU1904'
+    if ($LASTEXITCODE -ne 0) { exit 1 }
+}
+& (Join-Path $InstallerDir 'tests\Test-PublishManifest.ps1')
+
 Write-Host "`n=== Running build.ps1 ===" -ForegroundColor Cyan
-& dotnet test (Join-Path $Root 'src\GlDrive.Mcp.Tests\GlDrive.Mcp.Tests.csproj') -c Release '-warnaserror:NU1901,NU1902,NU1903,NU1904'
-if ($LASTEXITCODE -ne 0) { exit 1 }
 & "$InstallerDir\build.ps1"
 if ($LASTEXITCODE -ne 0) { exit 1 }
 
@@ -172,3 +183,6 @@ try {
 }
 
 Write-Host "`n=== Release $Tag published ===" -ForegroundColor Green
+} finally {
+    Pop-Location
+}

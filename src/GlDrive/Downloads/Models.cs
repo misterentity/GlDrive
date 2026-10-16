@@ -2,7 +2,6 @@ namespace GlDrive.Downloads;
 
 public enum MediaType { Movie, TvShow }
 public enum WishlistStatus { Watching, Completed, Paused }
-public enum QualityProfile { Any, SD, Q720p, Q1080p, Q2160p }
 public enum DownloadStatus { Queued, Downloading, Extracting, Completed, Failed, Cancelled, Paused }
 public enum DownloadSourceKind { Ftp, Torrent }
 
@@ -65,16 +64,6 @@ public class SearchResult
     public string ServerId { get; set; } = "";
     public string ServerName { get; set; } = "";
 }
-
-public record ParsedRelease(
-    string Title,
-    int? Year,
-    int? Season,
-    int? Episode,
-    QualityProfile Quality,
-    string? Group,
-    bool IsSeasonPack,
-    string? Source = null);
 
 public record DownloadProgress(long DownloadedBytes, long TotalBytes, double BytesPerSecond, string? CurrentFileName = null,
     IReadOnlyList<GlDrive.Downloads.Segmented.LaneStats>? Lanes = null,

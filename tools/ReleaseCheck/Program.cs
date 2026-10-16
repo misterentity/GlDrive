@@ -621,9 +621,7 @@ static async Task CheckIncompleteDownloadRecovery(FtpClientFactory factory, stri
     var downloader = new StreamingDownloader(waitingPool, "waiting-fixture", downloadConfig, 0, null);
     DownloadStore NewStore()
     {
-        var store = new DownloadStore("isolated-waiting-fixture");
-        typeof(DownloadStore).GetField("_filePath", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(store, storePath);
+        var store = DownloadStore.ForFile(storePath);
         return store;
     }
     var item = new DownloadItem

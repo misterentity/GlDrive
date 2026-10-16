@@ -163,13 +163,15 @@ dotnet run   --project src/GlDrive/GlDrive.csproj
 dotnet test  src/GlDrive.Tests/GlDrive.Tests.csproj
 ```
 
-`GlDrive.sln` includes the app and test projects, so `dotnet build GlDrive.sln` and
-`dotnet test GlDrive.sln` also build and verify the application.
+`GlDrive.sln` includes the desktop, Core and MCP projects and their test suites.
+For dependency-light parser/policy changes, use the standalone Core commands in
+[the development guide](docs/development-guide.md); full solution and native
+release checks remain required.
 
-`src/GlDrive.Tests` covers the pure logic: crypto round-trips against known-answer vectors,
-login-gate accounting, spread scoring, zipscript artifact filtering, failure classification,
-log redaction, and control-API routing and bounds. The WinFsp, WPF and live-FTP layers still
-need manual runtime verification — build and exercise the app.
+`src/GlDrive.Tests` retains crypto/login-gate checks, consumer-specific artifact
+rules, API/persistence/queue integration and isolated WPF regressions. Native
+FTPS/WinFsp checks use [tools/ReleaseCheck](tools/ReleaseCheck/README.md); packaged
+UI smoke and real-server observation remain separate release gates.
 
 ### Build the installer yourself
 
@@ -327,6 +329,7 @@ Use **Add or Remove Programs**. The uninstaller intentionally leaves `%AppData%\
 - [docs/codebase-summary.md](docs/codebase-summary.md) — subsystem inventory, folder layout, dependencies
 - [docs/system-architecture.md](docs/system-architecture.md) — Mermaid diagrams, CPSV, FXP, IRC, update flow
 - [docs/configuration-guide.md](docs/configuration-guide.md) — `appsettings.json` schema, data files, credential keys
+- [docs/development-guide.md](docs/development-guide.md) — fast Core checks, full Windows tests, portable/publish lockfiles
 - [docs/deployment-guide.md](docs/deployment-guide.md) — build, installer, release, in-app update
 - [docs/design-guidelines.md](docs/design-guidelines.md) — WPF themes, controls, commands
 - [docs/code-standards.md](docs/code-standards.md) — conventions actually in use

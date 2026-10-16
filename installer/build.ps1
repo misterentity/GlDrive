@@ -13,7 +13,12 @@ $PublishDir = Join-Path $InstallerDir 'publish'
 $CsprojPath = Join-Path $Root 'src\GlDrive\GlDrive.csproj'
 $IssPath = Join-Path $InstallerDir 'GlDrive.iss'
 $OutputDir = Join-Path $InstallerDir 'output'
+. (Join-Path $InstallerDir 'PublishManifest.ps1')
+$PublishManifest = Join-Path $OutputDir 'publish-manifest.json'
 
+# SDK selection and repository-relative tools must use the same root as provenance.
+Push-Location $Root
+try {
 # --- Read version from csproj ---
 [xml]$Csproj = Get-Content $CsprojPath
 $Version = $Csproj.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
@@ -45,8 +50,18 @@ if (-not $SkipPublish) {
         Remove-Item -LiteralPath $ResolvedPublish -Recurse -Force
     }
 
+    # Self-contained publishing has a different assets graph from desktop tests.
+    # Restore it explicitly; publish must not repeat restore or reuse test binaries.
+    $McpProject = Join-Path $Root 'src\GlDrive.Mcp\GlDrive.Mcp.csproj'
+    foreach ($project in @($CsprojPath, $McpProject)) {
+        & dotnet restore $project -r win-x64 -p:SelfContained=true -p:Configuration=Release --locked-mode '-warnaserror:NU1901,NU1902,NU1903,NU1904'
+        if ($LASTEXITCODE -ne 0) { throw 'Self-contained publish restore failed' }
+    }
+    $PublishContext = Get-PublishContext $Root $Version
+    if (Test-Path -LiteralPath $PublishManifest) { Remove-Item -LiteralPath $PublishManifest -Force }
     dotnet publish $CsprojPath `
         -c Release `
+        -r win-x64 --no-restore `
         --self-contained `
         -o $PublishDir
 
@@ -56,10 +71,12 @@ if (-not $SkipPublish) {
     }
 
     Write-Host "Publishing MCP adapter..." -ForegroundColor Cyan
-    dotnet publish (Join-Path $Root 'src\GlDrive.Mcp\GlDrive.Mcp.csproj') `
-        -c Release -r win-x64 --self-contained -o (Join-Path $PublishDir 'mcp')
+    dotnet publish $McpProject `
+        -c Release -r win-x64 --self-contained --no-restore -o (Join-Path $PublishDir 'mcp')
     if ($LASTEXITCODE -ne 0) { throw 'MCP adapter publish failed' }
     Copy-Item -LiteralPath (Join-Path $Root 'docs\mcp.md') -Destination (Join-Path $PublishDir 'mcp\README.md')
+    Assert-PublishContext $PublishContext (Get-PublishContext $Root $Version)
+    Write-PublishManifest $PublishManifest $PublishDir $PublishContext
 
     $fileCount = (Get-ChildItem $PublishDir -Recurse -File).Count
     $sizeMB = [math]::Round((Get-ChildItem $PublishDir -Recurse -File | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
@@ -71,6 +88,7 @@ else {
         Write-Error "Publish directory not found: $PublishDir. Run without -SkipPublish first."
         exit 1
     }
+    Assert-PublishManifest $PublishManifest $PublishDir (Get-PublishContext $Root $Version)
 }
 
 # --- Step 2: Check WinFsp MSI ---
@@ -126,8 +144,12 @@ if (Test-Path $ZipPath) {
 }
 
 Compress-Archive -Path "$PublishDir\*" -DestinationPath $ZipPath -CompressionLevel Optimal
+Assert-PublishManifest $PublishManifest $PublishDir (Get-PublishContext $Root $Version)
 
 $zipSizeMB = [math]::Round((Get-Item $ZipPath).Length / 1MB, 1)
 Write-Host "Zip created: $ZipPath ($zipSizeMB MB)" -ForegroundColor Green
 
 Write-Host "`n=== Done ===" -ForegroundColor Cyan
+} finally {
+    Pop-Location
+}
