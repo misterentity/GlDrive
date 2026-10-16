@@ -145,7 +145,8 @@ public sealed class VolumeSetWaitBudgetWiringTests
         // The retry must sit inside that branch, not beside it.
         var branch = Regex.Match(body, @"if\s*\(\s*ArchiveWait\.DeservesRetry\s*\([^)]*\)\s*\)\s*\{(?<block>[\s\S]*?)\n            \}");
         Assert.True(branch.Success, "Could not locate the DeservesRetry branch.");
-        Assert.Contains("ScheduleWatchRetry", branch.Groups["block"].Value);
+        // HandleStalledArchive owns ScheduleWatchRetry (IncompleteAtSourceExtractionTests).
+        Assert.Contains("HandleStalledArchive", branch.Groups["block"].Value);
     }
 
     /// <summary>

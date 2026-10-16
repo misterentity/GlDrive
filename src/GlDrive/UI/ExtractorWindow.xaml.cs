@@ -1399,8 +1399,7 @@ public partial class ExtractorWindow : Window
                 // nothing in production branched on it, so the ceiling burned retries anyway.
                 if (ArchiveWait.DeservesRetry(readiness))
                 {
-                    Log.Warning("Extractor: archive stalled before it was ready — {Path}", path);
-                    ScheduleWatchRetry(path);
+                    HandleStalledArchive(path);
                 }
                 else
                 {
@@ -1577,12 +1576,10 @@ public partial class ExtractorWindow : Window
         {
             // Same two endings the watcher route draws, for the same reasons: a stall may
             // clear on a retry, the arrival ceiling cannot. Neither is a durable verdict —
-            // an incomplete set is not a corrupt one, which is the entire defect.
+            // an incomplete set is not a corrupt one, which is the entire defect — unless the
+            // source itself marked the parts missing (HandleStalledArchive).
             if (ArchiveWait.DeservesRetry(readiness))
-            {
-                Log.Warning("Extractor: archive stalled before it was ready — {Path}", item.FilePath);
-                ScheduleWatchRetry(item.FilePath);
-            }
+                HandleStalledArchive(item.FilePath);
             else
             {
                 Log.Warning(
@@ -1961,6 +1958,45 @@ public partial class ExtractorWindow : Window
                 "Extractor: waiting for disk space — {Path} needs {Need} on {Root} but only {Free} is free ({Headroom} kept in reserve). It will extract automatically once space frees.",
                 path, FormatSize(requiredBytes), ExtractSpaceParking.RootOf(outputDir),
                 freeBytes is { } f ? FormatSize(f) : "an unknown amount", FormatSize(_spaceParked.Headroom));
+    }
+
+    /// <summary>
+    /// The one place a stalled readiness wait is handled, for every route into extraction.
+    ///
+    /// A stall usually means a copy paused, and a retry may clear it. But when the set is
+    /// missing parts AND the folder holds the site's zipscript marker saying so, the source
+    /// never had them: 2026-10-13..15, a 3-of-15-part Small.Prophets folder replayed six
+    /// 300s waits and 13 WRN lines on every restart. The durable verdict is keyed to the
+    /// volume-set fingerprint, so it lapses the moment a missing part arrives.
+    /// </summary>
+    private void HandleStalledArchive(string path)
+    {
+        Log.Warning("Extractor: archive stalled before it was ready — {Path}", path);
+
+        var marker = IncompleteAtSourceMarker(path);
+        if (marker != null)
+        {
+            AbandonWatchedPath(path,
+                $"incomplete at its source (site marker \"{marker}\") and its missing parts are not arriving",
+                durable: true);
+            return;
+        }
+
+        ScheduleWatchRetry(path);
+    }
+
+    private static string? IncompleteAtSourceMarker(string path)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(path);
+            if (dir == null || SampleVolumeSet(path).MissingCount == 0) return null;
+            return ReleaseSourceState.FindIncompleteMarker(Directory.EnumerateFileSystemEntries(dir));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     private void ScheduleWatchRetry(string path, Exception? failure = null)

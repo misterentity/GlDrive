@@ -373,6 +373,12 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
             serverId, MountRetryPolicy.DelayFor(1));
     }
 
+    /// <summary>The server's live spread pool, or null when none is up.</summary>
+    internal FtpConnectionPool? GetLivePool(string serverId)
+    {
+        lock (_lock) return _spreadPools.TryGetValue(serverId, out var pool) && !pool.IsDisposed ? pool : null;
+    }
+
     public async Task DisposePool(string serverId)
     {
         FtpConnectionPool? pool;
