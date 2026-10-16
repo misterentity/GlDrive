@@ -16,6 +16,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 using GlDrive.Config;
 using GlDrive.Downloads;
 using GlDrive.UI;
@@ -528,14 +529,42 @@ public partial class StreamMatrixRenderTests
         const uint WM_KEYDOWN = 0x0100, WM_KEYUP = 0x0101;
         var vk = (uint)KeyInterop.VirtualKeyFromKey(key);
         var scan = (int)MapVirtualKey(vk, 0);   // MAPVK_VK_TO_VSC
-        void Post(uint message, nint lparam)
+        Assert.True(target.IsKeyboardFocused, $"{key}: fixture target did not have keyboard focus before native input");
+        void Post(uint message, nint lparam, RoutedEvent routedEvent)
         {
-            if (!PostMessage(hwnd, message, vk, lparam))
-                throw new InvalidOperationException($"PostMessage 0x{message:X4} failed: {Marshal.GetLastWin32Error()}");
+            var received = false;
+            var frame = new DispatcherFrame();
+            var timeout = new DispatcherTimer(DispatcherPriority.Send) { Interval = TimeSpan.FromSeconds(3) };
+            KeyEventHandler acknowledge = (_, e) =>
+            {
+                if (e.Key != key) return;
+                received = true;
+                frame.Continue = false;
+            };
+            timeout.Tick += (_, _) => frame.Continue = false;
+            // ButtonBase handles Space, and Tab moves focus before key-up. Observe the
+            // owned window's complete route without handling or synthesizing WPF events.
+            window.AddHandler(routedEvent, acknowledge, handledEventsToo: true);
+            try
+            {
+                if (!PostMessage(hwnd, message, vk, lparam))
+                    throw new InvalidOperationException($"PostMessage 0x{message:X4} failed: {Marshal.GetLastWin32Error()}");
+                timeout.Start();
+                Dispatcher.PushFrame(frame);
+                Assert.True(received,
+                    $"{key}/0x{message:X4}: native input did not reach the fixture's {routedEvent.Name} route; " +
+                    $"targetFocused={target.IsKeyboardFocused}, modifiers={Keyboard.Modifiers}, " +
+                    $"leftMouse={Mouse.LeftButton}, captured={Mouse.Captured?.GetType().Name ?? "none"}");
+            }
+            finally
+            {
+                timeout.Stop();
+                window.RemoveHandler(routedEvent, acknowledge);
+            }
             Pump();
         }
-        Post(WM_KEYDOWN, (scan << 16) | 1);
-        Post(WM_KEYUP, unchecked((int)0xC0000000) | (scan << 16) | 1);   // previous-state and transition bits
+        Post(WM_KEYDOWN, (scan << 16) | 1, Keyboard.KeyDownEvent);
+        Post(WM_KEYUP, unchecked((int)0xC0000000) | (scan << 16) | 1, Keyboard.KeyUpEvent);   // previous-state and transition bits
     }
 
     /// <summary>The focus visual WPF actually attached to a keyboard-focused element, if any.</summary>
