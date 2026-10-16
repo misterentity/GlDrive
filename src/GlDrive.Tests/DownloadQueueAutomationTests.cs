@@ -193,8 +193,7 @@ public sealed class DownloadQueueAutomationTests
         }
         private static DownloadManager Manager(string path, DownloadConfig config)
         {
-            var store = new DownloadStore("isolated-queue-api");
-            Set(store, "_filePath", path);
+            var store = DownloadStore.ForFile(path);
             return new DownloadManager(store, new UnusedSource(), config);
         }
         public async Task<JsonElement> Call(string operation, object args) => Assert.IsType<JsonElement>(

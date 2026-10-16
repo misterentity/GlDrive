@@ -12,35 +12,40 @@ namespace GlDrive.UI;
 
 internal static class ScreenshotCapture
 {
-    private static string OutputDir = Path.Combine(ConfigManager.AppDataPath, "screenshots");
+    private static RenderArtifactSession? _artifacts;
 
-    internal static void CaptureAll(AppConfig config, string? themeOverride = null)
+    internal static void CaptureAll(AppConfig config, string? themeOverride = null, string? outputDirectory = null)
     {
-        OutputDir = Path.Combine(ConfigManager.AppDataPath, "screenshots");
+        var outputRoot = Path.Combine(ConfigManager.AppDataPath, "screenshots");
         if (themeOverride is "Dark" or "Light" or "Cyberpunk")
-            OutputDir = Path.Combine(OutputDir, themeOverride);
-        Directory.CreateDirectory(OutputDir);
+            outputRoot = Path.Combine(outputRoot, themeOverride);
+        using var artifacts = new RenderArtifactSession(outputRoot, outputDirectory);
+        _artifacts = artifacts;
+        try
+        {
+            // Apply the user's saved theme before capturing. Without this, screenshots
+            // render with only DarkTheme.xaml (App.xaml's default merged dictionary)
+            // because our --screenshots startup path returns BEFORE App.xaml.cs's
+            // normal flow calls ThemeManager.ApplyTheme. End result: screenshots
+            // showed basic dark styling but missed the 69KB CyberpunkTheme.xaml
+            // brushes / effects / control templates that the actual running app
+            // uses. The 'screenshots show the old UI' complaint was this mismatch.
+            var themeName = themeOverride ?? config.Downloads.Theme;
+            if (string.IsNullOrEmpty(themeName)) themeName = "Cyberpunk";
+            try { ThemeManager.ApplyTheme(themeName); }
+            catch (Exception ex) { Serilog.Log.Debug(ex, "Screenshot: theme apply failed (non-fatal)"); }
 
-        // Apply the user's saved theme before capturing. Without this, screenshots
-        // render with only DarkTheme.xaml (App.xaml's default merged dictionary)
-        // because our --screenshots startup path returns BEFORE App.xaml.cs's
-        // normal flow calls ThemeManager.ApplyTheme. End result: screenshots
-        // showed basic dark styling but missed the 69KB CyberpunkTheme.xaml
-        // brushes / effects / control templates that the actual running app
-        // uses. The 'screenshots show the old UI' complaint was this mismatch.
-        var themeName = themeOverride ?? config.Downloads.Theme;
-        if (string.IsNullOrEmpty(themeName)) themeName = "Cyberpunk";
-        try { ThemeManager.ApplyTheme(themeName); }
-        catch (Exception ex) { Serilog.Log.Debug(ex, "Screenshot: theme apply failed (non-fatal)"); }
-
-        var demoConfig = BuildDemoConfig();
-        // Ensure the demo dashboard also reads the chosen theme, in case any
-        // code path reads from config.Downloads.Theme during render.
-        demoConfig.Downloads.Theme = themeName;
-        CaptureWizard();
-        CaptureDashboard(demoConfig);
-        CaptureSettings(demoConfig);
-        CaptureUtilityWindows(demoConfig);
+            var demoConfig = BuildDemoConfig();
+            // Ensure the demo dashboard also reads the chosen theme, in case any
+            // code path reads from config.Downloads.Theme during render.
+            demoConfig.Downloads.Theme = themeName;
+            CaptureWizard();
+            CaptureDashboard(demoConfig);
+            CaptureSettings(demoConfig);
+            CaptureUtilityWindows(demoConfig);
+            artifacts.Complete();
+        }
+        finally { _artifacts = null; }
     }
 
     private static AppConfig BuildDemoConfig()
@@ -722,9 +727,7 @@ internal static class ScreenshotCapture
         var encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(rtb));
 
-        var path = Path.Combine(OutputDir, filename);
-        using var fs = new FileStream(path, FileMode.Create);
-        encoder.Save(fs);
+        (_artifacts ?? throw new InvalidOperationException("No render session is active.")).Write(filename, encoder.Save);
     }
 
     private static TabControl? FindTabControl(Window window)

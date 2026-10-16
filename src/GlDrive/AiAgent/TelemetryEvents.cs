@@ -79,7 +79,10 @@ public record SiteHealthEvent : TelemetryEnvelope
     [JsonPropertyName("tlsHandshakeMs")]   public double TlsHandshakeMs { get; init; }
     [JsonPropertyName("poolExhaustCount")] public int PoolExhaustCount { get; init; }
     [JsonPropertyName("ghostKills")]       public int GhostKills { get; init; }
-    [JsonPropertyName("errors5xx")]        public int Errors5xx { get; init; }
+    // Retain historical log compatibility without reporting an unmeasured value as zero.
+    [JsonPropertyName("errors5xx")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Errors5xx { get; init; }
     [JsonPropertyName("reinitCount")]      public int ReinitCount { get; init; }
     [JsonPropertyName("abandonedBorrows")] public int AbandonedBorrows { get; init; }
 }

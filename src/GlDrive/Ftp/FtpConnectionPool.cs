@@ -67,7 +67,6 @@ public class FtpConnectionPool : IAsyncDisposable
     public double AvgTlsHandshakeMs { get; private set; }  // always 0 — TLS buried inside FluentFTP Connect
     public int ExhaustCountSinceFlush { get; private set; }
     public int GhostKillsSinceFlush { get; private set; }
-    public int Errors5xxSinceFlush { get; private set; }   // TODO: wire IncrementError5xx when 5xx signal is plumbed
     public int ReinitCountSinceFlush { get; private set; }
     // Borrows where the caller's own deadline expired before a new connection came
     // up — ConnectFailureClassifier.CallerAbandoned. Not exhaustion, not a server
@@ -79,7 +78,7 @@ public class FtpConnectionPool : IAsyncDisposable
     private readonly List<double> _connectMsSamples = new();
     private readonly List<double> _tlsMsSamples = new();   // reserved for future TLS timing
 
-    private int _disconnects, _exhaustCount, _ghostKills, _errors5xx, _reinitCount, _abandonedBorrows;
+    private int _disconnects, _exhaustCount, _ghostKills, _reinitCount, _abandonedBorrows;
 
     // Poisoned-connection quarantine. After mid-transfer SSL errors ("forcibly
     // closed by the remote host"), or any teardown of a connection whose native
@@ -166,7 +165,6 @@ public class FtpConnectionPool : IAsyncDisposable
     internal void IncrementDisconnect() => Interlocked.Increment(ref _disconnects);
     internal void IncrementExhaust() => Interlocked.Increment(ref _exhaustCount);
     internal void IncrementGhostKill() => Interlocked.Increment(ref _ghostKills);
-    internal void IncrementError5xx() => Interlocked.Increment(ref _errors5xx);
     internal void IncrementReinit() => Interlocked.Increment(ref _reinitCount);
     internal void IncrementAbandonedBorrow() => Interlocked.Increment(ref _abandonedBorrows);
 
@@ -190,7 +188,6 @@ public class FtpConnectionPool : IAsyncDisposable
         DisconnectsSinceFlush = Interlocked.Exchange(ref _disconnects, 0);
         ExhaustCountSinceFlush = Interlocked.Exchange(ref _exhaustCount, 0);
         GhostKillsSinceFlush = Interlocked.Exchange(ref _ghostKills, 0);
-        Errors5xxSinceFlush = Interlocked.Exchange(ref _errors5xx, 0);
         ReinitCountSinceFlush = Interlocked.Exchange(ref _reinitCount, 0);
         AbandonedBorrowsSinceFlush = Interlocked.Exchange(ref _abandonedBorrows, 0);
     }

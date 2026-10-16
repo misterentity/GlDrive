@@ -1935,17 +1935,13 @@ public class SpreadJob : IDisposable
     {
         if (string.IsNullOrEmpty(name)) return false;
 
-        if (name.StartsWith("-missing-", StringComparison.OrdinalIgnoreCase)) return true;
-        if (name.EndsWith(".missing", StringComparison.OrdinalIgnoreCase)) return true;
-        if (name.EndsWith("-missing", StringComparison.OrdinalIgnoreCase)) return true;
+        if (ReleaseArtifactNames.IsMissingPlaceholderName(name)) return true;
 
         // Per-release metadata sidecars generated SERVER-SIDE by the destination's own
         // glftpd zipscript (PSXC-IMDB etc.). They live inside the release dir but are
         // regenerated locally on every site, so racing them ships pseudo-files — often
         // BACKWARD to a no-upload-rights source (553) — and inflates the file total
         // (observed 2026-06-26: Ryan.Hamilton .imdb.html FXP'd SYN->superbnc, 553).
-        if (name.EndsWith(".imdb.html", StringComparison.OrdinalIgnoreCase)) return true;
-        if (name.EndsWith(".imdb.nfo", StringComparison.OrdinalIgnoreCase)) return true;
 
         // ...and the Unix-hidden form of the same thing. The two suffix rules above
         // enumerated the sidecar names we happened to have SEEN, which missed the
@@ -1957,7 +1953,7 @@ public class SpreadJob : IDisposable
         // A LEADING dot is the discriminator, not a dot anywhere: scene naming is
         // dot-separated ("Show.S01E01.1080p...mkv") but a basename always precedes
         // the first dot, so a leading dot only ever means a hidden site file.
-        if (name.StartsWith('.')) return true;
+        if (ReleaseArtifactNames.IsSiteMetadataName(name)) return true;
 
         // Race progress / completion-state indicators. glftpd's zipscript writes
         // 0-byte marker files (or dirs) named with bracketed status text and a
@@ -1967,7 +1963,7 @@ public class SpreadJob : IDisposable
 
         // Tiny stubs whose name starts with a marker char are almost always
         // zipscript artifacts; real release files are multi-KB.
-        if (size == 0 && (name.StartsWith('-') || name.StartsWith('['))) return true;
+        if (ReleaseArtifactNames.IsZeroByteMarker(name, size)) return true;
 
         return false;
     }

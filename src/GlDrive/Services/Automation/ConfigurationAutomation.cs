@@ -383,6 +383,16 @@ public sealed class ConfigurationAutomation : IAutomationModule
             var schema = BuildSchema(property.PropertyType);
             if (new NullabilityInfoContext().Create(property).WriteState == NullabilityState.Nullable)
                 schema = new JsonObject { ["anyOf"] = new JsonArray(schema, new JsonObject { ["type"] = "null" }) };
+            if (type == typeof(DownloadConfig) && property.Name == nameof(DownloadConfig.MaxConcurrentDownloads))
+            {
+                schema["minimum"] = ConfigurationLimits.MinConcurrentDownloads;
+                schema["maximum"] = ConfigurationLimits.MaxConcurrentDownloads;
+            }
+            else if (type == typeof(MultiStreamConfig) && property.Name == nameof(MultiStreamConfig.HttpLanesPerNetwork))
+            {
+                schema["minimum"] = ConfigurationLimits.MinHttpLanesPerNetwork;
+                schema["maximum"] = ConfigurationLimits.MaxHttpLanesPerNetwork;
+            }
             if (ConfigSecretPointers.IsSecret(name)) schema["writeOnly"] = true;
             properties[name] = schema;
         }
@@ -396,10 +406,10 @@ public sealed class ConfigurationAutomation : IAutomationModule
             throw new ArgumentException("Every server needs a nonempty, unique id");
         Range(config.ControlApi.Port, 1, 65535, "/controlApi/port");
         if (config.ControlApi.Enabled && config.ControlApi.Token.Length < 32) throw new ArgumentException("An enabled control API requires a token of at least 32 characters");
-        Range(config.Downloads.MaxConcurrentDownloads, 1, 100, "/downloads/maxConcurrentDownloads");
+        Range(config.Downloads.MaxConcurrentDownloads, ConfigurationLimits.MinConcurrentDownloads, ConfigurationLimits.MaxConcurrentDownloads, "/downloads/maxConcurrentDownloads");
         Range(config.Downloads.ScheduleStartHour, 0, 23, "/downloads/scheduleStartHour");
         Range(config.Downloads.ScheduleEndHour, 0, 23, "/downloads/scheduleEndHour");
-        Range(config.Downloads.MultiStream.HttpLanesPerNetwork, 1, 64, "/downloads/multiStream/httpLanesPerNetwork");
+        Range(config.Downloads.MultiStream.HttpLanesPerNetwork, ConfigurationLimits.MinHttpLanesPerNetwork, ConfigurationLimits.MaxHttpLanesPerNetwork, "/downloads/multiStream/httpLanesPerNetwork");
         Range(config.Agent.RunHourLocal, 0, 23, "/agent/runHourLocal");
         Range(config.Agent.ConfidenceThreshold_x100, 0, 100, "/agent/confidenceThreshold_x100");
         Range(config.Spread.MaxConcurrentRaces, 1, 100, "/spread/maxConcurrentRaces");

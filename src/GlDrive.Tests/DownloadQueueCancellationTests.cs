@@ -18,9 +18,7 @@ public sealed class DownloadQueueCancellationTests
         var root = Path.Combine(Path.GetTempPath(), "gldrive-completion-test-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         var path = Path.Combine(root, "downloads.json");
-        var store = new DownloadStore("isolated-completion-test");
-        typeof(DownloadStore).GetField("_filePath", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(store, path);
+        var store = DownloadStore.ForFile(path);
         using var manager = new DownloadManager(store, null!, null!, new DownloadConfig());
         var item = new DownloadItem { Status = DownloadStatus.Downloading, LocalPath = root, RemotePath = "/empty" };
         var notifications = new List<DownloadStatus>();
@@ -59,9 +57,9 @@ public sealed class DownloadQueueCancellationTests
     [Fact]
     public void Cancelled_token_prevents_completion_without_a_status_notification()
     {
-        var store = new DownloadStore("unused-cancelled-completion-test");
+        var store = DownloadStore.ForFile(Path.Combine(Path.GetTempPath(), "gldrive-unused-" + Guid.NewGuid().ToString("N") + ".json"));
         // No writes are necessary: cancellation must be observed before Update.
-        // Close the store so manager teardown cannot persist a test file in AppData.
+        // Close the isolated store so teardown cannot persist any test file.
         store.Flush();
         using var manager = new DownloadManager(store, null!, null!, new DownloadConfig());
         using var cts = new CancellationTokenSource();
@@ -82,9 +80,7 @@ public sealed class DownloadQueueCancellationTests
     {
         var root = Path.Combine(Path.GetTempPath(), "gldrive-queue-test-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
-        var store = new DownloadStore("isolated-queue-test");
-        typeof(DownloadStore).GetField("_filePath", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(store, Path.Combine(root, "downloads.json"));
+        var store = DownloadStore.ForFile(Path.Combine(root, "downloads.json"));
         await using var pool = new FtpConnectionPool(null!);
         // Only IsPoolInCooldown is needed. Avoid initializing global network-usage services.
         var downloader = (StreamingDownloader)RuntimeHelpers.GetUninitializedObject(typeof(StreamingDownloader));

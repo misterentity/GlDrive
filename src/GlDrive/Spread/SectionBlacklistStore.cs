@@ -147,7 +147,7 @@ public sealed class SectionBlacklistStore
             Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
             var opts = new JsonSerializerOptions { WriteIndented = true };
             var json = JsonSerializer.Serialize(_entries.Values.OrderBy(e => e.ServerName).ThenBy(e => e.Section), opts);
-            File.WriteAllText(_path, json);
+            GlDrive.Util.SecureFile.WriteAllTextRestricted(_path, json);
         }
         catch (Exception ex)
         {

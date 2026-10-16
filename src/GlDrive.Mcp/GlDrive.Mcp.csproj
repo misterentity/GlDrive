@@ -6,6 +6,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <!-- Portable tests and explicit RID publication have different restore graphs. -->
+    <NuGetLockFilePath Condition="'$(RuntimeIdentifier)' == 'win-x64' Or '$(RuntimeIdentifiers)' == 'win-x64'">packages.win-x64.lock.json</NuGetLockFilePath>
     <Description>Local MCP bridge for the running GlDrive application</Description>
   </PropertyGroup>
   <ItemGroup>

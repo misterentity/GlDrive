@@ -8,8 +8,30 @@ namespace GlDrive.Downloads;
 
 public class WishlistStore
 {
-    private static readonly string FilePath =
-        Path.Combine(ConfigManager.AppDataPath, "wishlist.json");
+    // Production instances share one list and ordered persistence gate. Isolated stores
+    // use the same implementation without initializing AppData or touching user state.
+    private static readonly Lazy<State> Shared = new(() =>
+    {
+        var path = Path.Combine(ConfigManager.AppDataPath, "wishlist.json");
+        return new State(() => File.Exists(path) ? File.ReadAllText(path) : null, json =>
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            SecureFile.WriteAllTextRestricted(path, json);
+        });
+    });
+    private readonly State _state;
+
+    public WishlistStore() => _state = Shared.Value;
+    internal WishlistStore(Func<string?> read, Action<string> write) => _state = new State(read, write);
+
+    private sealed class State(Func<string?> read, Action<string> write)
+    {
+        internal readonly Lock Sync = new();
+        internal readonly Func<string?> Read = read;
+        internal readonly Action<string> Write = write;
+        internal List<WishlistItem> Items = [];
+        internal bool Loaded;
+    }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -17,46 +39,39 @@ public class WishlistStore
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
-    private static readonly Lock Sync = new();
-    private static List<WishlistItem> _items = [];
-    private static volatile bool _loaded;
-
     public IReadOnlyList<WishlistItem> Items
     {
-        get { EnsureLoaded(); lock (Sync) return _items.ToList(); }
+        get { lock (_state.Sync) { EnsureLoaded(); return _state.Items.ToList(); } }
     }
 
     public void Load()
     {
-        lock (Sync)
+        lock (_state.Sync)
         {
-            if (_loaded) return;
+            if (_state.Loaded) return;
 
             try
             {
-                _items = File.Exists(FilePath)
-                    ? JsonSerializer.Deserialize<List<WishlistItem>>(File.ReadAllText(FilePath), JsonOptions) ?? []
-                    : [];
+                var json = _state.Read();
+                _state.Items = json == null ? [] : JsonSerializer.Deserialize<List<WishlistItem>>(json, JsonOptions) ?? [];
             }
             catch (Exception ex)
             {
                 Log.Warning(ex, "Failed to load wishlist, starting empty");
-                _items = [];
+                _state.Items = [];
             }
-            _loaded = true;
+            _state.Loaded = true;
         }
     }
 
     public void Save()
     {
-        EnsureLoaded();
         try
         {
-            lock (Sync)
+            lock (_state.Sync)
             {
-                var json = JsonSerializer.Serialize(_items, JsonOptions);
-                Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-                SecureFile.WriteAllTextRestricted(FilePath, json);
+                EnsureLoaded();
+                _state.Write(JsonSerializer.Serialize(_state.Items, JsonOptions));
             }
         }
         catch (Exception ex)
@@ -67,41 +82,88 @@ public class WishlistStore
 
     public void Add(WishlistItem item)
     {
-        EnsureLoaded();
-        lock (Sync) _items.Add(item);
-        Save();
+        lock (_state.Sync)
+        {
+            EnsureLoaded();
+            _state.Items.Add(item);
+            Save();
+        }
     }
 
     public void Remove(string id)
     {
-        EnsureLoaded();
-        lock (Sync) _items.RemoveAll(i => i.Id == id);
-        Save();
+        lock (_state.Sync)
+        {
+            EnsureLoaded();
+            _state.Items.RemoveAll(i => i.Id == id);
+            Save();
+        }
     }
 
     public void Update(WishlistItem item)
     {
-        EnsureLoaded();
-        lock (Sync)
+        lock (_state.Sync)
         {
-            var idx = _items.FindIndex(i => i.Id == item.Id);
+            EnsureLoaded();
+            var idx = _state.Items.FindIndex(i => i.Id == item.Id);
             if (idx >= 0)
-                _items[idx] = item;
+                _state.Items[idx] = item;
             else
                 return;
+            Save();
         }
-        Save();
     }
 
     public WishlistItem? GetById(string id)
     {
-        EnsureLoaded();
-        lock (Sync) return _items.FirstOrDefault(i => i.Id == id);
+        lock (_state.Sync) { EnsureLoaded(); return _state.Items.FirstOrDefault(i => i.Id == id); }
     }
 
-    private static void EnsureLoaded()
+    /// <summary>
+    /// Imports unique entries with fresh IDs and one ordered secure save. The batch is
+    /// published only after persistence succeeds; failures propagate to the import UI.
+    /// </summary>
+    public int AddImported(IEnumerable<WishlistItem> items)
     {
-        if (!_loaded)
-            new WishlistStore().Load();
+        ArgumentNullException.ThrowIfNull(items);
+        lock (_state.Sync)
+        {
+            EnsureLoaded();
+            var next = new List<WishlistItem>(_state.Items);
+            var imdb = next.Where(i => !string.IsNullOrEmpty(i.ImdbId)).Select(i => i.ImdbId!).ToHashSet(StringComparer.Ordinal);
+            var tvMaze = next.Where(i => i.TvMazeId.HasValue).Select(i => i.TvMazeId!.Value).ToHashSet();
+            var titles = next.Select(i => (i.Title, i.Type)).ToHashSet();
+            foreach (var item in items)
+            {
+                if (item == null) throw new InvalidDataException("Wishlist import contains an empty entry.");
+                if ((!string.IsNullOrEmpty(item.ImdbId) && imdb.Contains(item.ImdbId)) ||
+                    (item.TvMazeId.HasValue && tvMaze.Contains(item.TvMazeId.Value)) ||
+                    titles.Contains((item.Title, item.Type))) continue;
+
+                // Do not mutate imported objects (or their IDs) before a successful save.
+                next.Add(new WishlistItem
+                {
+                    Id = Guid.NewGuid().ToString("N"), Type = item.Type, Title = item.Title,
+                    Year = item.Year, ImdbId = item.ImdbId, TvMazeId = item.TvMazeId,
+                    Quality = item.Quality, Status = item.Status, AddedAt = item.AddedAt,
+                    GrabbedReleases = item.GrabbedReleases == null ? null! : new List<string>(item.GrabbedReleases),
+                    PosterUrl = item.PosterUrl, Plot = item.Plot, Rating = item.Rating,
+                    Genres = item.Genres, Dead = item.Dead
+                });
+                if (!string.IsNullOrEmpty(item.ImdbId)) imdb.Add(item.ImdbId);
+                if (item.TvMazeId.HasValue) tvMaze.Add(item.TvMazeId.Value);
+                titles.Add((item.Title, item.Type));
+            }
+            var added = next.Count - _state.Items.Count;
+            if (added == 0) return 0;
+            _state.Write(JsonSerializer.Serialize(next, JsonOptions));
+            _state.Items = next;
+            return added;
+        }
+    }
+
+    private void EnsureLoaded()
+    {
+        if (!_state.Loaded) Load();
     }
 }

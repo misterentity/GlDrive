@@ -331,9 +331,7 @@ public sealed class DownloadSourceCompletionTests
 
         private DownloadStore CreateStore()
         {
-            var store = new DownloadStore("isolated-source-completion");
-            typeof(DownloadStore).GetField("_filePath", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .SetValue(store, Path.Combine(_root, "downloads.json"));
+            var store = DownloadStore.ForFile(Path.Combine(_root, "downloads.json"));
             return store;
         }
 

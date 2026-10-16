@@ -28,7 +28,7 @@ public sealed class WpfRenderCollection { }
 [Collection("WpfRender")]
 public partial class StreamMatrixRenderTests
 {
-    public static readonly string OutputDir = Path.Combine(Path.GetTempPath(), "gldrive-ui-render");
+    private static RenderArtifactSession? _artifacts;
 
     private static readonly string[] NewKeys =
     [
@@ -45,6 +45,8 @@ public partial class StreamMatrixRenderTests
     [Fact]
     public void RendersEveryThemeWithAllKeys()
     {
+        using var artifacts = new RenderArtifactSession(Path.Combine(Path.GetTempPath(), "gldrive-ui-render"));
+        _artifacts = artifacts;
         Exception? failure = null;
         var thread = new Thread(() =>
         {
@@ -84,6 +86,7 @@ public partial class StreamMatrixRenderTests
         Assert.True(thread.Join(TimeSpan.FromSeconds(90)), "UI render hung (a modal dialog or a stuck dispatcher)");
         if (failure != null) throw new Xunit.Sdk.XunitException(failure.ToString());
         Assert.Null(Application.Current);
+        artifacts.Complete();
     }
 
     private static void RenderAll()
@@ -97,7 +100,6 @@ public partial class StreamMatrixRenderTests
                 .SetValue(null, typeof(App).Assembly);
             new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown, Resources = LoadAppResources() };
         }
-        Directory.CreateDirectory(OutputDir);
 
         var application = Application.Current!;
         var originalButtonStyle = application.Resources[typeof(Button)];
@@ -106,6 +108,7 @@ public partial class StreamMatrixRenderTests
         var originalCheckRadius = (CornerRadius)application.Resources["CheckBoxCornerRadius"];
         // Switch away from Cyberpunk as well: its theme-only resources must not leak
         // into the light or dark UI after a live theme change.
+        var renderedThemes = new HashSet<string>();
         foreach (var theme in new[] { "Cyberpunk", "Dark", "Light", "Cyberpunk" })
         {
             var dict = new ResourceDictionary { Source = new Uri($"pack://application:,,,/GlDrive;component/UI/Themes/{theme}Theme.xaml") };
@@ -116,7 +119,7 @@ public partial class StreamMatrixRenderTests
             AssertDisclosureAndInputTheme(theme == "Cyberpunk" ? new CornerRadius(0) : originalInputRadius);
             AssertTerminalUi(theme, dict);
             var matrix = BuildMatrix();
-            var name = theme.ToLowerInvariant();
+            var name = theme.ToLowerInvariant() + (renderedThemes.Add(theme) ? "" : "-restored");
 
             Render(new StreamMatrixView { DataContext = matrix, Width = 1100 }, $"multistream-matrix-{name}.png");
             Render(BuildRows(matrix), $"multistream-row-{name}.png");
@@ -348,7 +351,7 @@ public partial class StreamMatrixRenderTests
         rtb.Render(host);
         var encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(rtb));
-        using (var fs = File.Create(Path.Combine(OutputDir, file))) encoder.Save(fs);
+        (_artifacts ?? throw new InvalidOperationException("No render session is active.")).Write(file, encoder.Save);
         root.Close();
     }
 

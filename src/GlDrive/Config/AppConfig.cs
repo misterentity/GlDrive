@@ -208,7 +208,7 @@ public class DownloadConfig
             return customPath;
         return LocalPath;
     }
-    public int MaxConcurrentDownloads { get; set; } = 1;
+    public int MaxConcurrentDownloads { get; set; } = ConfigurationLimits.DefaultConcurrentDownloads;
     public int StreamingBufferSizeKb { get; set; } = 256;
     public int WriteBufferLimitMb { get; set; } = 0;
     public string QualityDefault { get; set; } = "1080p";
@@ -277,7 +277,7 @@ public class MultiStreamConfig
     public bool BorrowIdleRaceLogin { get; set; } = true;
 
     /// <summary>HTTP connections per enabled network (plexo starts at 8; updates are one zip, 4 is plenty).</summary>
-    public int HttpLanesPerNetwork { get; set; } = 4;
+    public int HttpLanesPerNetwork { get; set; } = ConfigurationLimits.DefaultHttpLanesPerNetwork;
 
     /// <summary>An in-flight FTP range is only split when both halves are at least this big.</summary>
     public int FtpMinSplitMb { get; set; } = 32;

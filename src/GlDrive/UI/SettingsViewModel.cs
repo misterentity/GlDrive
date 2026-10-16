@@ -353,7 +353,7 @@ public class SettingsViewModel : INotifyPropertyChanged
         Mcp.ApplyTo(config);
         config.Logging.Level = LogLevel;
         config.Downloads.LocalPath = DownloadLocalPath;
-        config.Downloads.MaxConcurrentDownloads = int.TryParse(MaxConcurrentDownloads, out var mcd) ? Math.Clamp(mcd, 1, 5) : 1;
+        ApplyDownloadCapacitySettings(config);
         config.Downloads.StreamingBufferSizeKb = int.TryParse(StreamingBufferSize, out var sbs) ? Math.Clamp(sbs, 64, 4096) : 256;
         config.Downloads.WriteBufferLimitMb = int.TryParse(WriteBufferLimit, out var wbl) ? Math.Clamp(wbl, 0, 512) : 0;
         config.Downloads.QualityDefault = QualityDefault;
@@ -391,7 +391,6 @@ public class SettingsViewModel : INotifyPropertyChanged
         var ms = config.Downloads.MultiStream;
         ms.Enabled = MultiStreamEnabled;
         ms.BorrowIdleRaceLogin = BorrowIdleRaceLogin;
-        ms.HttpLanesPerNetwork = int.TryParse(HttpLanesPerNetwork, out var hlpn) ? Math.Clamp(hlpn, 1, 32) : 4;
         ms.FtpMinSplitMb = int.TryParse(FtpMinSplitMb, out var fms) ? Math.Clamp(fms, 4, 1024) : 32;
         ms.SlowMode = SlowMode;
         ms.SlowModeKbps = int.TryParse(SlowModeKbps, out var smk) ? Math.Clamp(smk, 64, 1_000_000) : 2048;
@@ -424,6 +423,13 @@ public class SettingsViewModel : INotifyPropertyChanged
         TrustedCertsInfo = certs.Count == 0
             ? "No trusted certificates."
             : $"{certs.Count} trusted certificate(s).";
+    }
+
+    // Kept separate from credential persistence so capacity edits can be verified in isolation.
+    internal void ApplyDownloadCapacitySettings(AppConfig config)
+    {
+        config.Downloads.MaxConcurrentDownloads = ConfigurationLimits.ParseConcurrentDownloads(MaxConcurrentDownloads);
+        config.Downloads.MultiStream.HttpLanesPerNetwork = ConfigurationLimits.ParseHttpLanesPerNetwork(HttpLanesPerNetwork);
     }
 
     internal void ApplyAgentTunableSpreadSettings(AppConfig config)

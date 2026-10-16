@@ -26,6 +26,9 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private readonly NotificationStore _notificationStore;
     private readonly IrcViewModel _ircViewModel;
     private readonly PlexViewModel _plexViewModel;
+    private volatile bool _disposed;
+    private readonly DashboardDiskPoll _diskPoll = new();
+    internal Task DiskPollShutdown { get; private set; } = Task.CompletedTask;
     private string _searchQuery = "";
     private string _searchStatus = "";
     private bool _isSearching;
@@ -71,7 +74,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private int _preDbHighestId;
 
     // Notification filter state
-    private List<NotificationItemVm> _allNotifications = new();
+    private readonly NotificationProjection _notifications = new();
     private string _notificationFilterText = "";
     private string _notificationFilterCategory = "All";
     private string _notificationFilterServer = "All";
@@ -84,11 +87,6 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private string _statusBarSites = "";
     private DispatcherTimer? _statusTimer;
     private DateTime _lastDiskPoll = DateTime.MinValue;
-
-    // Per-server SITE STATS disk capacity cache. Populated by PollServerDiskUsage
-    // (status-bar 30s poll); read by RefreshOverview() so the Overview/Mounts
-    // disc widgets show real disk-space % instead of pool-utilization fallback.
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (long totalBytes, long freeBytes)> _serverDiskCache = new();
 
     // Bandwidth graph
     private readonly List<double> _speedHistory = new();
@@ -122,7 +120,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
-    public ObservableCollection<NotificationItemVm> NotificationItems { get; } = new();
+    public ObservableCollection<NotificationItemVm> NotificationItems => _notifications.Items;
     public ObservableCollection<WishlistItemVm> WishlistItems { get; } = new();
     public ObservableCollection<DownloadItemVm> DownloadItems { get; } = new();
     private readonly Dictionary<string, DownloadItemVm> _downloadItemById = new();
@@ -196,6 +194,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     public void RefreshOverview()
     {
+        if (_disposed) return;
         MountedServerStatus.Clear();
         foreach (var server in _config.Servers)
         {
@@ -210,9 +209,8 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             var isMounted = isConnected && wantsDrive;
             var driveLetter = server.Mount?.DriveLetter ?? "";
 
-            // Disc widget %: prefer real SITE STATS disk-space % (cached by
-            // PollServerDiskUsage every 30s); fall back to connection-pool
-            // utilization when we haven't successfully polled this server yet.
+            // Disc widgets show live connection-pool utilization; server disk
+            // capacity is displayed separately in the status bar.
             double poolPct = 0;
             int poolActive = 0, poolMax = 0;
             if (service?.Pool is { } pool && pool.MaxSize > 0)
@@ -225,8 +223,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             // Disc widget % always shows pool utilization. SITE STATS-based
             // disk% was tried in v1.92c but only one server (superbnc) returned
             // data; the others showed 0% which was worse UX than the consistent
-            // pool reading. _serverDiskCache is still populated (used by the
-            // status-bar disk-space string) but no longer drives the disc widget.
+            // pool reading.
             double capacityPct = poolPct;
             string usedDisplay = poolMax > 0 ? poolActive.ToString() : "—";
             string totalDisplay = poolMax > 0 ? poolMax.ToString() : "—";
@@ -386,7 +383,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     public void StartOverviewLive()
     {
-        if (_overviewTimer != null) return;
+        if (_disposed || _overviewTimer != null) return;
         _overviewTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
             Interval = TimeSpan.FromSeconds(2)
@@ -414,12 +411,14 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, double> _liveItemSpeeds = new();
     private void EnsureLiveSpeedSubscriptions()
     {
+        if (_disposed) return;
         foreach (var queue in _serverManager.GetDownloadQueues())
             SubscribeToDownloads(queue.Id, queue.Manager);
     }
 
     private void TickOverview()
     {
+        if (_disposed) return;
         // Make sure we're subscribed to every active server's progress feed.
         EnsureLiveSpeedSubscriptions();
 
@@ -567,8 +566,8 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     public ObservableCollection<UpcomingTvEpisodeVm> UpcomingTvEpisodes { get; } = new();
     public ObservableCollection<UpcomingMovieVm> UpcomingMovies { get; } = new();
     public ObservableCollection<PreDbItemVm> PreDbItems { get; } = new();
-    public ObservableCollection<string> NotificationCategories { get; } = new() { "All" };
-    public ObservableCollection<string> NotificationServers { get; } = new() { "All" };
+    public ObservableCollection<string> NotificationCategories => _notifications.Categories;
+    public ObservableCollection<string> NotificationServers => _notifications.Servers;
 
     public WishlistItemVm? SelectedWishlistItem
     {
@@ -598,6 +597,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         get => _selectedNotificationItem;
         set
         {
+            if (_disposed || ReferenceEquals(_selectedNotificationItem, value)) return;
             _selectedNotificationItem = value;
             OnPropertyChanged();
             NotifyNotificationDetailChanged();
@@ -1119,6 +1119,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                 {
                     Application.Current?.Dispatcher.BeginInvoke(() =>
                     {
+                        if (_disposed) return;
                         if (server.Downloads != null) SubscribeToDownloads(serverId, server.Downloads);
                         RefreshDownloads();
                     });
@@ -1132,6 +1133,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         {
             Application.Current?.Dispatcher.BeginInvoke(() =>
             {
+                if (_disposed) return;
                 var vm = new NotificationItemVm
                 {
                     ServerId = serverId,
@@ -1141,11 +1143,9 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                     RemotePath = remotePath,
                     TimeDisplay = DateTime.Now.ToString("g")
                 };
-                _allNotifications.Insert(0, vm);
-                if (_allNotifications.Count > 5000)
-                    _allNotifications.RemoveRange(5000, _allNotifications.Count - 5000);
-                UpdateNotificationFilterOptions();
-                ApplyNotificationFilter();
+                var removed = _notifications.Add(vm);
+                if (removed != null && ReferenceEquals(SelectedNotificationItem, removed))
+                    SelectedNotificationItem = null;
             });
         };
         _serverManager.NewReleaseDetected += _newReleaseHandler;
@@ -1153,6 +1153,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     private void SubscribeToDownloads(string queueId, DownloadManager manager)
     {
+        if (_disposed) return;
         if (_subscribedDownloads.TryGetValue(queueId, out var previous))
         {
             if (ReferenceEquals(previous, manager)) return;
@@ -1546,6 +1547,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
         Application.Current?.Dispatcher.InvokeAsync(() =>
         {
+            if (_disposed) return;
             // A queued progress callback may arrive after the item was parked,
             // cancelled, or completed. Keep its waiting reason and inactive state.
             if (item.Status != DownloadStatus.Downloading) return;
@@ -1580,6 +1582,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     {
         Application.Current?.Dispatcher.InvokeAsync(() =>
         {
+            if (_disposed) return;
             if (item.Status != DownloadStatus.Downloading && item.Status != DownloadStatus.Extracting)
             {
                 _activeDownloads.Remove(item.Id);
@@ -1942,10 +1945,8 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     private void RefreshNotifications()
     {
-        _allNotifications.Clear();
-        foreach (var item in _notificationStore.Items)
-        {
-            _allNotifications.Add(new NotificationItemVm
+        if (_disposed) return;
+        _notifications.Reset(_notificationStore.Items.Select(item => new NotificationItemVm
             {
                 ServerId = item.ServerId,
                 ServerName = item.ServerName,
@@ -1953,49 +1954,20 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                 ReleaseName = item.ReleaseName,
                 RemotePath = item.RemotePath,
                 TimeDisplay = item.Timestamp.ToLocalTime().ToString("g")
-            });
-        }
-        UpdateNotificationFilterOptions();
-        ApplyNotificationFilter();
-    }
-
-    private void UpdateNotificationFilterOptions()
-    {
-        var categories = _allNotifications.Select(n => n.Category).Where(c => !string.IsNullOrEmpty(c)).Distinct().OrderBy(c => c).ToList();
-        var servers = _allNotifications.Select(n => n.ServerName).Where(s => !string.IsNullOrEmpty(s)).Distinct().OrderBy(s => s).ToList();
-
-        NotificationCategories.Clear();
-        NotificationCategories.Add("All");
-        foreach (var c in categories) NotificationCategories.Add(c);
-
-        NotificationServers.Clear();
-        NotificationServers.Add("All");
-        foreach (var s in servers) NotificationServers.Add(s);
+            }));
     }
 
     private void ApplyNotificationFilter()
     {
-        NotificationItems.Clear();
-        foreach (var item in _allNotifications)
-        {
-            if (!string.IsNullOrEmpty(_notificationFilterText) &&
-                !item.ReleaseName.Contains(_notificationFilterText, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            if (!string.IsNullOrEmpty(_notificationFilterCategory) && _notificationFilterCategory != "All"
-                && item.Category != _notificationFilterCategory)
-                continue;
-
-            if (!string.IsNullOrEmpty(_notificationFilterServer) && _notificationFilterServer != "All"
-                && item.ServerName != _notificationFilterServer)
-                continue;
-
-            NotificationItems.Add(item);
-        }
+        if (_disposed) return;
+        var selected = SelectedNotificationItem;
+        _notifications.SetFilter(_notificationFilterText, _notificationFilterCategory, _notificationFilterServer);
+        SelectedNotificationItem = selected != null && NotificationItems.Contains(selected) ? selected : null;
     }
 
     private void NotifyNotificationDetailChanged()
     {
+        if (_disposed) return;
         OnPropertyChanged(nameof(HasNotificationSelection));
         OnPropertyChanged(nameof(HasNotificationPoster));
         OnPropertyChanged(nameof(NotificationPosterUrl));
@@ -2185,12 +2157,8 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private void ClearNotifications()
     {
         _notificationStore.Clear();
-        _allNotifications.Clear();
-        NotificationItems.Clear();
-        NotificationCategories.Clear();
-        NotificationCategories.Add("All");
-        NotificationServers.Clear();
-        NotificationServers.Add("All");
+        _notifications.Reset([]);
+        SelectedNotificationItem = null;
     }
 
     private void RefreshWishlist()
@@ -2318,20 +2286,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             });
             if (items == null) return;
 
-            var added = 0;
-            foreach (var item in items)
-            {
-                // Deduplicate by ImdbId, TvMazeId, or Title
-                var isDupe = _wishlistStore.Items.Any(w =>
-                    (!string.IsNullOrEmpty(w.ImdbId) && w.ImdbId == item.ImdbId) ||
-                    (w.TvMazeId.HasValue && w.TvMazeId == item.TvMazeId) ||
-                    (w.Title == item.Title && w.Type == item.Type));
-                if (isDupe) continue;
-
-                item.Id = Guid.NewGuid().ToString("N");
-                _wishlistStore.Add(item);
-                added++;
-            }
+            var added = _wishlistStore.AddImported(items);
 
             RefreshWishlist();
             Log.Information("Imported {Count} wishlist item(s)", added);
@@ -2344,6 +2299,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     private void UpdateStatusBar()
     {
+        if (_disposed) return;
         // Aggregate speed across all servers
         var totalSpeed = _serverSpeeds.Values.Sum();
         _speedHistory.Add(totalSpeed);
@@ -2365,7 +2321,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         if ((now - _lastDiskPoll).TotalSeconds >= 30)
         {
             _lastDiskPoll = now;
-            _ = PollServerDiskUsage();
+            _diskPoll.TryStart(PollServerDiskUsage);
         }
 
         // FTP connection status per server
@@ -2417,49 +2373,49 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         UpdateSpeedGraph();
     }
 
-    private async Task PollServerDiskUsage()
+    private async Task PollServerDiskUsage(CancellationToken ct)
     {
         try
         {
             long totalUsed = 0;
             long totalSize = 0;
-            var parts = new List<string>();
-            bool anyCacheUpdate = false;
+            bool anyDiskResult = false;
 
             foreach (var server in _serverManager.GetMountedServers())
             {
+                ct.ThrowIfCancellationRequested();
                 if (server.Ftp == null || server.CurrentState != MountState.Connected) continue;
                 try
                 {
-                    var disk = await server.Ftp.GetDiskFree(CancellationToken.None);
+                    // Await the real operation and its lease cleanup, including on cancellation.
+                    var disk = await server.Ftp.GetDiskFree(ct);
+                    ct.ThrowIfCancellationRequested();
                     if (disk == null) continue;
-                    // Cache per-server tuple so RefreshOverview() can compute real
-                    // disk-space % for the Overview/Mounts disc widgets.
-                    _serverDiskCache[server.ServerId] = (disk.Value.totalBytes, disk.Value.freeBytes);
-                    anyCacheUpdate = true;
+                    anyDiskResult = true;
                     var used = disk.Value.totalBytes - disk.Value.freeBytes;
                     totalUsed += used;
                     totalSize += disk.Value.totalBytes;
-                    parts.Add($"{server.ServerName}: {FormatSize(used)}/{FormatSize(disk.Value.totalBytes)}");
                 }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch { }
             }
 
+            if (_disposed || ct.IsCancellationRequested) return;
             if (totalSize > 0)
                 StatusBarDiskSpace = $"{FormatSize(totalUsed)} / {FormatSize(totalSize)} used";
             else
                 StatusBarDiskSpace = "";
 
-            // Refresh the Overview tab so the disc widgets pick up the new
-            // disk-space values. RefreshOverview() rebuilds MountedServerStatus
-            // from scratch and reads _serverDiskCache, so a single delegate
-            // call after the poll is enough. Marshalled to the UI dispatcher
-            // because RefreshOverview mutates an ObservableCollection.
-            if (anyCacheUpdate)
+            // Retain the periodic overview/log refresh without letting a completed
+            // poll reactivate a closed dashboard. Collection changes run on the UI.
+            if (anyDiskResult)
             {
                 try
                 {
-                    Application.Current?.Dispatcher.Invoke(RefreshOverview);
+                    Application.Current?.Dispatcher.Invoke(() =>
+                    {
+                        if (!_disposed && !ct.IsCancellationRequested) RefreshOverview();
+                    });
                 }
                 catch { /* dispatcher shut down or VM disposed — ignore */ }
             }
@@ -2636,6 +2592,11 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     public void Dispose()
     {
+        if (_disposed) return;
+        _disposed = true;
+        // Cancellation starts immediately; native lease cleanup is awaited asynchronously
+        // so closing a window never blocks its dispatcher or tears down a shared FTP pool.
+        DiskPollShutdown = _diskPoll.StopAsync();
         // DispatcherTimer is not IDisposable — Stop() removes it from the dispatcher's
         // active-timer list, which is the GC root that keeps this VM alive via the Tick
         // lambdas (they capture `this`). All four timers use anonymous Tick handlers with
@@ -2661,8 +2622,10 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
-    protected void OnPropertyChanged([CallerMemberName] string? name = null) =>
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+    protected void OnPropertyChanged([CallerMemberName] string? name = null)
+    {
+        if (!_disposed) PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+    }
 }
 
 public class PreDbItemVm

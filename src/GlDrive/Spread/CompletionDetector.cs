@@ -76,9 +76,7 @@ public static class CompletionDetector
     public static bool IsMissingStub(string name, long size)
     {
         if (string.IsNullOrEmpty(name)) return false;
-        if (name.StartsWith("-missing-", StringComparison.OrdinalIgnoreCase)) return true;
-        if (name.EndsWith(".missing", StringComparison.OrdinalIgnoreCase)) return true;
-        if (name.EndsWith("-missing", StringComparison.OrdinalIgnoreCase)) return true;
+        if (GlDrive.Downloads.ReleaseArtifactNames.IsMissingPlaceholderName(name)) return true;
         if (size == 0 && name.StartsWith('-')) return true;
         return false;
     }

@@ -136,9 +136,7 @@ public sealed class NetworkUsageStore
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(_filePath))!);
-                var tmp = _filePath + ".tmp";
-                File.WriteAllText(tmp, json);
-                File.Move(tmp, _filePath, overwrite: true);
+                GlDrive.Util.SecureFile.WriteAllTextRestricted(_filePath, json);
             }
             catch (Exception ex)
             {

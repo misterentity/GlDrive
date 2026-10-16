@@ -40,7 +40,6 @@ public sealed class HealthRollup : IDisposable
                     TlsHandshakeMs = pool.AvgTlsHandshakeMs,
                     PoolExhaustCount = pool.ExhaustCountSinceFlush,
                     GhostKills = pool.GhostKillsSinceFlush,
-                    Errors5xx = pool.Errors5xxSinceFlush,
                     ReinitCount = pool.ReinitCountSinceFlush,
                     AbandonedBorrows = pool.AbandonedBorrowsSinceFlush
                 });

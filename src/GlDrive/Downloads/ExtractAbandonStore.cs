@@ -161,7 +161,7 @@ public sealed class ExtractAbandonStore
 
             var json = JsonSerializer.Serialize(_entries.Values.ToList(),
                 new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(_path, json);
+            GlDrive.Util.SecureFile.WriteAllTextRestricted(_path, json);
         }
         catch (Exception ex)
         {

@@ -374,8 +374,7 @@ public sealed class WholeDownloadLifecycleTests
 
         public DownloadStore CreateStore()
         {
-            var store = new DownloadStore("isolated-whole-lifecycle");
-            typeof(DownloadStore).GetField("_filePath", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(store, StorePath);
+            var store = DownloadStore.ForFile(StorePath);
             return store;
         }
 

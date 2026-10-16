@@ -19,9 +19,7 @@ internal static class ReleaseSourceState
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     internal static bool IsMissingPlaceholder(string name) =>
-        name.StartsWith("-missing-", StringComparison.OrdinalIgnoreCase) ||
-        name.EndsWith(".missing", StringComparison.OrdinalIgnoreCase) ||
-        name.EndsWith("-missing", StringComparison.OrdinalIgnoreCase);
+        ReleaseArtifactNames.IsMissingPlaceholderName(name);
 
     internal static bool IsIncompleteMarker(string name)
     {
@@ -50,12 +48,10 @@ internal static class ReleaseSourceState
     }
 
     internal static bool IsSiteMetadata(string name, long size) =>
-        IsMissingPlaceholder(name) || name.StartsWith('.') ||
-        name.EndsWith(".imdb.html", StringComparison.OrdinalIgnoreCase) ||
-        name.EndsWith(".imdb.nfo", StringComparison.OrdinalIgnoreCase) ||
+        IsMissingPlaceholder(name) || ReleaseArtifactNames.IsSiteMetadataName(name) ||
         Progress.IsMatch(name) ||
         StatusMarker.IsMatch(name) ||
-        (size == 0 && (name.StartsWith('-') || name.StartsWith('[')));
+        ReleaseArtifactNames.IsZeroByteMarker(name, size);
 
     internal static bool IsArchive(string path) => ArchiveVolume.IsMatch(Path.GetFileName(path));
 
