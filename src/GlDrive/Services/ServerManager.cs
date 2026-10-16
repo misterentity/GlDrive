@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using GlDrive.Config;
 using GlDrive.Downloads;
+using GlDrive.Ftp;
 using GlDrive.Irc;
 using GlDrive.Spread;
 using GlDrive.Tls;
@@ -504,6 +505,8 @@ public partial class ServerManager : IDisposable
         return [];
     }
 
+    private static readonly TimeSpan SiteInviteMainPoolBudget = TimeSpan.FromSeconds(10);
+
     private async Task StartIrcService(ServerConfig serverConfig)
     {
         if (_ircServices.ContainsKey(serverConfig.Id)) return;
@@ -518,7 +521,19 @@ public partial class ServerManager : IDisposable
             if (!_servers.TryGetValue(serverConfig.Id, out var mountService) || mountService.Pool == null)
                 return "SITE INVITE skipped: server not mounted";
 
-            await using var conn = await mountService.Pool.Borrow(ct);
+            // The main pool can be a single connection kept busy by spread scans; an invite
+            // queued behind them for its whole budget left the announce channels unjoined.
+            var mainPool = mountService.Pool;
+            var spreadPool = _spreadManager?.GetLivePool(serverConfig.Id);
+            await using var conn = await PoolFallback.BorrowAsync(
+                mainPool.Borrow,
+                spreadPool == null ? null : t =>
+                {
+                    Log.Information("IRC {Server}: main FTP pool busy — sending SITE INVITE on the spread pool",
+                        serverConfig.Name);
+                    return spreadPool.Borrow(t);
+                },
+                SiteInviteMainPoolBudget, ct);
             var sanitized = nick.Replace("\r", "").Replace("\n", "").Replace("\0", "");
                 if (sanitized.Contains(' ') || sanitized.Length == 0 || sanitized.Length > 30)
                     return "SITE INVITE skipped: invalid nick";

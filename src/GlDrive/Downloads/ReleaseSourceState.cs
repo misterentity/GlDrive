@@ -33,6 +33,14 @@ internal static class ReleaseSourceState
             NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var percent) && percent < 100;
     }
 
+    /// <summary>
+    /// The first entry in a local release folder that is the site's own statement the release
+    /// was incomplete when it was copied (a missing-part stub or a sub-100% progress marker),
+    /// or null. Such a folder's missing parts are not on their way.
+    /// </summary>
+    internal static string? FindIncompleteMarker(IEnumerable<string> paths) =>
+        paths.Select(Path.GetFileName).FirstOrDefault(n => !string.IsNullOrEmpty(n) && IsIncompleteMarker(n));
+
     internal static bool IsCompletionMarker(string name)
     {
         if (CompleteStatus.IsMatch(name)) return true;
