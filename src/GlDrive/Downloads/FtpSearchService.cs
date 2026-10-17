@@ -47,22 +47,24 @@ public class FtpSearchService : IDisposable
         @"^\[\s*NUKED\s*\](?:\s*-|\s*$)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
 
-    // A scene release directory: one whitespace-free token with a digit, dot/underscore word
-    // separators and a trailing -GROUP tag that contains a letter. Its children are the release's
+    // A scene release directory: no whitespace, a trailing -GROUP tag of word characters that
+    // contains a letter, and at least three ./_/- separated tokens. Its children are the release's
     // own Sample/Subs/CD1 folders, never further releases, so crawls index it without listing it.
-    // Containers stay crawlable: categories (tv-hd, x264-hd), boxsets (007.Boxset), date dirs.
+    // Containers stay crawlable: categories (tv-hd, xxx-paysite) have two tokens, boxsets
+    // (007.Boxset) no group tag, date dirs (2026-10-16) no letter. Two-token releases
+    // (Cairn-RUNE) and digit-only groups (-403) are still listed, as before 3.11.19.
     internal static bool IsReleaseDirectory(string name)
     {
         var dash = name.LastIndexOf('-');
-        if (dash <= 0 || name.Length - dash - 1 < 2) return false;
-        if (name.Any(char.IsWhiteSpace) || !name.Any(char.IsAsciiDigit)) return false;
-        if (name.IndexOfAny(['.', '_']) < 0) return false;
+        if (dash <= 0 || name.Length - dash - 1 < 2 || name.Any(char.IsWhiteSpace)) return false;
         var group = name.AsSpan(dash + 1);
+        var groupHasLetter = false;
         foreach (var c in group)
+        {
             if (!char.IsAsciiLetterOrDigit(c) && c != '_') return false;
-        foreach (var c in group)
-            if (char.IsAsciiLetter(c)) return true;
-        return false;
+            groupHasLetter |= char.IsAsciiLetter(c);
+        }
+        return groupHasLetter && name.Split(['.', '_', '-'], StringSplitOptions.RemoveEmptyEntries).Length >= 3;
     }
 
     internal static bool SkipDirectory(string name) => SkipDirs.Contains(name) ||
