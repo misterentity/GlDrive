@@ -19,7 +19,7 @@ not follow conventional-commit syntax — versions are split into **Features**, 
   11 minutes. The rule is now: a `-GROUP` tag with a letter, and three or more
   `.`/`_`/`-` tokens. Replaying 20,714 production release names, it recognises 99.7%
   and keeps all 20 category folders as containers.
-- See the [release notes](releases/v3.11.20.md).
+- See the [release notes](releases/v3.11.20.md) and the [deployment report](releases/v3.11.20-deployment.md).
 
 ## v3.11.19 — search crawls stop listing inside releases (2026-10-16)
 
