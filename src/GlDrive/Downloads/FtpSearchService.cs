@@ -47,6 +47,24 @@ public class FtpSearchService : IDisposable
         @"^\[\s*NUKED\s*\](?:\s*-|\s*$)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
 
+    // A scene release directory: one whitespace-free token with a digit, dot/underscore word
+    // separators and a trailing -GROUP tag that contains a letter. Its children are the release's
+    // own Sample/Subs/CD1 folders, never further releases, so crawls index it without listing it.
+    // Containers stay crawlable: categories (tv-hd, x264-hd), boxsets (007.Boxset), date dirs.
+    internal static bool IsReleaseDirectory(string name)
+    {
+        var dash = name.LastIndexOf('-');
+        if (dash <= 0 || name.Length - dash - 1 < 2) return false;
+        if (name.Any(char.IsWhiteSpace) || !name.Any(char.IsAsciiDigit)) return false;
+        if (name.IndexOfAny(['.', '_']) < 0) return false;
+        var group = name.AsSpan(dash + 1);
+        foreach (var c in group)
+            if (!char.IsAsciiLetterOrDigit(c) && c != '_') return false;
+        foreach (var c in group)
+            if (char.IsAsciiLetter(c)) return true;
+        return false;
+    }
+
     internal static bool SkipDirectory(string name) => SkipDirs.Contains(name) ||
         NukedDirectory.IsMatch(name) ||
         (name.StartsWith('[') && name.EndsWith(']') && StatusDirectory.IsMatch(name));
@@ -594,7 +612,7 @@ public class FtpSearchService : IDisposable
                 Modified = item.Modified
             });
 
-            if (depth < maxDepth)
+            if (depth < maxDepth && !IsReleaseDirectory(item.Name))
                 await CrawlForIndex(list, item.FullName, searchRoot, depth + 1, maxDepth, entries, report, ct);
         }
     }
@@ -815,7 +833,7 @@ public class FtpSearchService : IDisposable
                 });
             }
 
-            if (depth < maxDepth)
+            if (depth < maxDepth && !IsReleaseDirectory(item.Name))
                 await SearchRecursive(list, item.FullName, keyword, depth + 1, maxDepth, results, progress, ct, report, searchRoot, queryTerms);
         }
     }
