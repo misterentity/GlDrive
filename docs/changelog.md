@@ -12,6 +12,15 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.11.20 — release-directory rule covers music and game names (2026-10-16)
+
+- 3.11.19 recognised a release only by a digit plus `.`/`_` separators. After it was
+  deployed, superbnc still listed 632 hyphen-only music and digit-less game releases in
+  11 minutes. The rule is now: a `-GROUP` tag with a letter, and three or more
+  `.`/`_`/`-` tokens. Replaying 20,714 production release names, it recognises 99.7%
+  and keeps all 20 category folders as containers.
+- See the [release notes](releases/v3.11.20.md).
+
 ## v3.11.19 — search crawls stop listing inside releases (2026-10-16)
 
 - The search index and live search no longer list inside scene release directories. They

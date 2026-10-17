@@ -139,6 +139,12 @@ public sealed class SearchIndexCrawlTests
     [InlineData("Y.N.X._716-Quiet_as_Kept-WEB-2026-FTD")]
     [InlineData("Lucky_Tower_Ultimate_Update_v1.2.3_NSW-SUXXORS")]
     [InlineData("Show.S01.COMPLETE.1080p-GRP")]
+    // 3.11.19 required a digit and a ./_ separator; production showed 492 hyphen-only music
+    // names and 140 digit-less game names still listed inside superbnc /recent within 11 minutes.
+    [InlineData("KUKO-CATHARSIS-16BIT-WEB-FLAC-2026-WAVED")]
+    [InlineData("KRTOHLD-Skuggaritme-(RKT007)-16BIT-WEB-FLAC-2025-BABAS")]
+    [InlineData("A_World_to_Come-bADkARMA")]
+    [InlineData("Tenebris_Somnia_NSW-VENOM")]
     public void Scene_release_names_are_release_directories(string name) =>
         Assert.True(FtpSearchService.IsReleaseDirectory(name));
 
@@ -147,6 +153,9 @@ public sealed class SearchIndexCrawlTests
     [InlineData("tv-hd")]
     [InlineData("x264-hd")]
     [InlineData("bluray-uhd")]
+    [InlineData("tv-sports")]
+    [InlineData("xxx-paysite")]
+    [InlineData("TV-SORTED")]
     [InlineData("MOVIES-BOXSETS")]
     [InlineData("007.Boxset")]
     [InlineData("Kick-Ass.Boxset")]
@@ -171,7 +180,9 @@ public sealed class SearchIndexCrawlTests
     [InlineData(true)]
     public async Task Release_directories_are_indexed_but_never_listed(bool live)
     {
-        var releases = Enumerable.Range(0, 40).Select(i => $"Artist_{i:D2}-Album-WEB-FLAC-2026-GRP").ToArray();
+        var releases = Enumerable.Range(0, 40).Select(i => i % 2 == 0
+            ? $"Artist_{i:D2}-Album-WEB-FLAC-2026-GRP"
+            : $"ARTIST{i:D2}-ALBUM-16BIT-WEB-FLAC-2026-GRP").ToArray();
         var tree = new Dictionary<string, FtpListItem[]>
         {
             ["/recent"] = [Dir("/recent/flac"), Dir("/recent/tv-hd")],
