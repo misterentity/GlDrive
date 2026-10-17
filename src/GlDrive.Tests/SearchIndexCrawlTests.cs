@@ -127,7 +127,106 @@ public sealed class SearchIndexCrawlTests
             found = entries.Select(e => e.Name).ToArray();
         }
         Assert.Equal(real, found);
-        Assert.Equal(new[] { "/TV" }.Concat(real.Select(n => "/TV/" + n)), visited);
+        // Release directories are results but never crawl targets (their children are
+        // Sample/Subs/CD1); only the non-release containers are descended into.
+        Assert.Equal(new[] { "/TV" }.Concat(real.Where(n => !FtpSearchService.IsReleaseDirectory(n)).Select(n => "/TV/" + n)), visited);
+    }
+
+    [Theory]
+    [InlineData("Car.SOS.S13E01.1080p.WEB.h264-UNLOCKED")]
+    [InlineData("Casino.Royale.2006.1080p.BluRay.x264-hV")]
+    [InlineData("Jack_White-2024_10_23_First_Avenue_Minneapolis_Minnesota-16BIT-WEB-FLAC-2024-OBZEN")]
+    [InlineData("Y.N.X._716-Quiet_as_Kept-WEB-2026-FTD")]
+    [InlineData("Lucky_Tower_Ultimate_Update_v1.2.3_NSW-SUXXORS")]
+    [InlineData("Show.S01.COMPLETE.1080p-GRP")]
+    public void Scene_release_names_are_release_directories(string name) =>
+        Assert.True(FtpSearchService.IsReleaseDirectory(name));
+
+    [Theory]
+    [InlineData("flac")]
+    [InlineData("tv-hd")]
+    [InlineData("x264-hd")]
+    [InlineData("bluray-uhd")]
+    [InlineData("MOVIES-BOXSETS")]
+    [InlineData("007.Boxset")]
+    [InlineData("Kick-Ass.Boxset")]
+    [InlineData("Star.Wars.1977-2019")]
+    [InlineData("2026-10-16")]
+    [InlineData("1016")]
+    [InlineData("Law and Order SVU")]
+    [InlineData("[Group] Show.S01")]
+    [InlineData("Sample")]
+    public void Containers_are_not_release_directories(string name) =>
+        Assert.False(FtpSearchService.IsReleaseDirectory(name));
+
+    /// <summary>
+    /// 2026-10-16: superbnc's index (roots /incoming, /recent, /archive, depth 2) listed every
+    /// release directory under every category — 12,096 /recent/flac releases alone, one LIST
+    /// per second over the account's single main-pool login — to index only their Sample/CD1
+    /// subfolders. The crawl never finished inside a process lifetime, so superbnc's index was
+    /// permanently empty while the crawl held its only login at ~100% duty cycle.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Release_directories_are_indexed_but_never_listed(bool live)
+    {
+        var releases = Enumerable.Range(0, 40).Select(i => $"Artist_{i:D2}-Album-WEB-FLAC-2026-GRP").ToArray();
+        var tree = new Dictionary<string, FtpListItem[]>
+        {
+            ["/recent"] = [Dir("/recent/flac"), Dir("/recent/tv-hd")],
+            ["/recent/flac"] = releases.Select(n => Dir("/recent/flac/" + n)).ToArray(),
+            ["/recent/tv-hd"] = [Dir("/recent/tv-hd/Car.SOS.S13E01.1080p.WEB.h264-UNLOCKED")],
+        };
+        foreach (var r in releases) tree["/recent/flac/" + r] = [Dir($"/recent/flac/{r}/CD1")];
+        tree["/recent/tv-hd/Car.SOS.S13E01.1080p.WEB.h264-UNLOCKED"] = [Dir("/recent/tv-hd/Car.SOS.S13E01.1080p.WEB.h264-UNLOCKED/Sample")];
+        var visited = new List<string>();
+        FtpSearchService.DirectoryLister list = (path, _) =>
+        {
+            visited.Add(path);
+            return Task.FromResult(tree.TryGetValue(path, out var items) ? items : []);
+        };
+
+        string[] found;
+        if (live)
+        {
+            var results = new List<SearchResult>();
+            await FtpSearchService.SearchRecursive(list, "/recent", "", 0, 2, results, null, CancellationToken.None);
+            found = results.Select(r => r.RemotePath).ToArray();
+        }
+        else
+        {
+            var entries = new List<FtpSearchService.IndexEntry>();
+            await FtpSearchService.CrawlForIndex(list, "/recent", "/recent", 0, 2, entries, new(), CancellationToken.None);
+            found = entries.Select(e => e.Path).ToArray();
+        }
+
+        Assert.Equal(["/recent", "/recent/flac", "/recent/tv-hd"], visited);
+        Assert.Contains("/recent/flac/" + releases[^1], found);
+        Assert.Contains("/recent/tv-hd/Car.SOS.S13E01.1080p.WEB.h264-UNLOCKED", found);
+        Assert.DoesNotContain(found, p => p.EndsWith("/CD1") || p.EndsWith("/Sample"));
+    }
+
+    [Fact]
+    public async Task Boxset_containers_are_still_descended_to_their_releases()
+    {
+        var tree = new Dictionary<string, FtpListItem[]>
+        {
+            ["/MOVIES-BOXSETS"] = [Dir("/MOVIES-BOXSETS/007.Boxset")],
+            ["/MOVIES-BOXSETS/007.Boxset"] = [Dir("/MOVIES-BOXSETS/007.Boxset/Casino.Royale.2006.1080p.BluRay.x264-hV")],
+        };
+        var visited = new List<string>();
+        FtpSearchService.DirectoryLister list = (path, _) =>
+        {
+            visited.Add(path);
+            return Task.FromResult(tree.TryGetValue(path, out var items) ? items : []);
+        };
+        var entries = new List<FtpSearchService.IndexEntry>();
+
+        await FtpSearchService.CrawlForIndex(list, "/MOVIES-BOXSETS", "/MOVIES-BOXSETS", 0, 2, entries, new(), CancellationToken.None);
+
+        Assert.Equal(["/MOVIES-BOXSETS", "/MOVIES-BOXSETS/007.Boxset"], visited);
+        Assert.Contains(entries, e => e.Name == "Casino.Royale.2006.1080p.BluRay.x264-hV");
     }
 
     private static FtpSearchService.IndexEntry Entry(string path) => new() { Name = path[(path.LastIndexOf('/') + 1)..], Path = path };

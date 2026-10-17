@@ -12,6 +12,16 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.11.19 — search crawls stop listing inside releases (2026-10-16)
+
+- The search index and live search no longer list inside scene release directories. They
+  still index the release, but skip its Sample, Subs and CD1 folders. superbnc's index,
+  which listed every release one at a time over its only main-pool login and never finished
+  (12,096 `/recent/flac` listings in four hours), now needs one listing per category.
+- Categories, boxsets, date directories and names with spaces are still descended into.
+  Race scans, FXP copies and deletes are unchanged.
+- See the [release notes](releases/v3.11.19.md).
+
 ## v3.11.17 — recovery probes under FTP pool contention (2026-10-16)
 
 - Source relocation uses an available main or spread connection instead of waiting
