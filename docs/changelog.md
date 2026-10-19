@@ -12,6 +12,16 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.11.21 — reliable search deadlines and tray recovery (2026-10-19)
+
+- Preserve the timeout/partial-result status when a listing completes before
+  deadline cancellation reaches the linked traversal token. The regression
+  explicitly reproduces the callback ordering behind the intermittent failure.
+- Contain the known Windows tray-tooltip update rejection and preserve the latest
+  text for shell recreation, without suppressing unrelated exceptions.
+- Document release worktrees outside OneDrive and retain the standard signed
+  release pipeline. See the [release notes](releases/v3.11.21.md).
+
 ## v3.11.20 — release-directory rule covers music and game names (2026-10-16)
 
 - 3.11.19 recognised a release only by a digit plus `.`/`_` separators. After it was

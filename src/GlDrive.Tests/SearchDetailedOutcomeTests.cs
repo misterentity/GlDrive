@@ -195,14 +195,37 @@ public sealed class SearchDetailedOutcomeTests
     [Fact]
     public async Task A_listing_that_finishes_after_the_deadline_still_reports_timeout()
     {
+        // Cancellation callbacks run in reverse registration order. Complete the
+        // listing in the operation token's newest callback, while its older
+        // callback has not yet cancelled the traversal token. Holding that
+        // callback until the search finishes makes the production race explicit.
+        var listing = new TaskCompletionSource<FtpListItem[]>();
+        using var searchFinished = new ManualResetEventSlim();
+        var finishedBeforeCancellationPropagated = false;
+        CancellationTokenRegistration completionRegistration = default;
         await using var f = new Fixture(new() { Method = SearchMethod.LiveCrawl, SearchPaths = ["/TV"], MaxDepth = 0 },
-            async (_, ct) =>
+            (_, ct) =>
             {
-                try { await Task.Delay(Timeout.Infinite, ct); }
-                catch (OperationCanceledException) { }
-                return [];
-            }, Unsupported, TimeSpan.FromMilliseconds(20));
-        var result = await f.Search.SearchDetailed("wanted");
+                completionRegistration = ct.Register(() =>
+                {
+                    listing.TrySetResult([]);
+                    finishedBeforeCancellationPropagated = searchFinished.Wait(TimeSpan.FromSeconds(5));
+                });
+                return listing.Task;
+            }, Unsupported, TimeSpan.FromMilliseconds(100));
+        SearchOutcome result;
+        try
+        {
+            // The test runner's synchronization context must not defer the
+            // listing continuation until after cancellation has propagated.
+            result = await Task.Run(async () =>
+            {
+                try { return await f.Search.SearchDetailed("wanted"); }
+                finally { searchFinished.Set(); }
+            }).WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally { completionRegistration.Dispose(); }
+        Assert.True(finishedBeforeCancellationPropagated);
         Assert.Empty(result.Results);
         Assert.True(result.TimedOut);
         Assert.True(result.IsPartial);

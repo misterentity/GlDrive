@@ -18,7 +18,7 @@ public static class TrayIconSetup
     {
         var version = UpdateChecker.CurrentVersion;
         var versionStr = $"{version.Major}.{version.Minor}.{version.Build}";
-        taskbarIcon.ToolTipText = $"GlDrive v{versionStr}";
+        UpdateToolTip(taskbarIcon, $"GlDrive v{versionStr}");
         taskbarIcon.Icon = CyberpunkIconGenerator.Generate(MountState.Unmounted);
 
         var menu = new ContextMenu();
@@ -59,7 +59,7 @@ public static class TrayIconSetup
                         bestState = MountState.Error;
                 }
 
-                taskbarIcon.ToolTipText = $"GlDrive v{versionStr} — {vm.StatusText}";
+                UpdateToolTip(taskbarIcon, $"GlDrive v{versionStr} — {vm.StatusText}");
                 taskbarIcon.Icon = CyberpunkIconGenerator.Generate(bestState);
             });
         };
@@ -102,6 +102,33 @@ public static class TrayIconSetup
         catch (Exception ex)
         {
             Log.Debug(ex, "Tray notification could not be shown");
+            return false;
+        }
+    }
+
+    internal static void UpdateToolTip(TaskbarIcon taskbarIcon, string text) =>
+        TryUpdateToolTip(() => taskbarIcon.ToolTipText = text,
+            () => taskbarIcon.TrayIcon.ToolTip = text);
+
+    /// <summary>
+    /// Explorer can reject a tooltip update while its notification area is being rebuilt.
+    /// H.NotifyIcon throws before caching the new text; preserve it for the library's
+    /// existing TaskbarCreated recovery, and allow the remaining state update to continue.
+    /// Only the library's known shell rejection is recoverable here.
+    /// </summary>
+    internal static bool TryUpdateToolTip(Action update, Action retainForTaskbarRecovery)
+    {
+        ArgumentNullException.ThrowIfNull(update);
+        ArgumentNullException.ThrowIfNull(retainForTaskbarRecovery);
+        try
+        {
+            update();
+            return true;
+        }
+        catch (InvalidOperationException ex) when (ex.Message == "UpdateToolTip failed.")
+        {
+            retainForTaskbarRecovery();
+            Log.Debug(ex, "Tray tooltip update deferred until the Windows notification area recovers");
             return false;
         }
     }
