@@ -20,7 +20,8 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 - Contain the known Windows tray-tooltip update rejection and preserve the latest
   text for shell recreation, without suppressing unrelated exceptions.
 - Document release worktrees outside OneDrive and retain the standard signed
-  release pipeline. See the [release notes](releases/v3.11.21.md).
+  release pipeline. See the [release notes](releases/v3.11.21.md) and
+  [deployment report](releases/v3.11.21-deployment.md).
 
 ## v3.11.20 — release-directory rule covers music and game names (2026-10-16)
 
