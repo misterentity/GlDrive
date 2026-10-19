@@ -165,6 +165,10 @@ public class FtpSearchService : IDisposable
         try
         {
             await SearchOnce(keyword, progress, run, traversal.Token);
+            // A listing's cancellation callback can finish the search before
+            // cancellation reaches the linked traversal token. Check the source
+            // token as well so an expired deadline cannot look like no matches.
+            deadline.Token.ThrowIfCancellationRequested();
             traversal.Token.ThrowIfCancellationRequested();
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested && !stopToken.IsCancellationRequested)
