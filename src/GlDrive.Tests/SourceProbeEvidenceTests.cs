@@ -17,7 +17,8 @@ namespace GlDrive.Tests;
 /// transient connection failure silently suppressed a perfectly good release
 /// for an hour, and the skip logged at Debug where nobody would see it.
 ///
-/// Evidence of absence requires at least one probe that actually came back.
+/// Evidence of absence requires a complete sweep of negative answers. A failed
+/// probe may be the only site holding the release.
 /// </summary>
 public class SourceProbeEvidenceTests
 {
@@ -33,16 +34,24 @@ public class SourceProbeEvidenceTests
     }
 
     /// <summary>
-    /// The ONLY thing that licenses "absent" is a probe that returned a negative
-    /// answer. One clean negative is enough — that is a site actually saying no.
+    /// A complete sweep of negative answers licenses "absent".
     /// </summary>
     [Theory]
     [InlineData(1, 0)]
     [InlineData(16, 0)]
-    [InlineData(4, 12)]     // some paths errored, but four sites still answered "no"
-    public void A_clean_negative_answer_licenses_Absent(int clean, int errored)
+    public void Only_clean_negative_answers_license_Absent(int clean, int errored)
     {
         Assert.Equal(SourceProbeVerdict.Absent,
+            CandidatePredicates.ClassifySourceProbe(0, clean, errored));
+    }
+
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(4, 12)]
+    [InlineData(7, 16)] // A responsive destination cannot speak for the unavailable source.
+    public void Mixed_negative_and_failed_probes_are_Inconclusive(int clean, int errored)
+    {
+        Assert.Equal(SourceProbeVerdict.Inconclusive,
             CandidatePredicates.ClassifySourceProbe(0, clean, errored));
     }
 

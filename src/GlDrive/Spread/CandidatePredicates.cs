@@ -231,7 +231,8 @@ internal static class CandidatePredicates
     /// are evidence; the third is not. Collapsing "no answer" into "not there" is
     /// what let one transient connection failure park a live release for an hour.
     ///
-    /// Absence is only provable by a probe that came back. See
+    /// Absence requires a complete sweep of negative answers. A responsive peer
+    /// cannot establish absence on a source whose probes failed. See
     /// <see cref="SourceProbeVerdict"/>.
     /// </summary>
     /// <param name="serversWithRelease">Servers confirmed to hold the release.</param>
@@ -241,11 +242,9 @@ internal static class CandidatePredicates
         int serversWithRelease, int pathsAnsweredCleanly, int pathsErrored)
     {
         if (serversWithRelease > 0) return SourceProbeVerdict.Found;
-        if (pathsAnsweredCleanly > 0) return SourceProbeVerdict.Absent;
-        // Nothing came back — including the "nothing was probed at all" case
-        // (no sections configured, or no pool for any server). Either way we
-        // never asked, so we cannot say the release is missing.
-        _ = pathsErrored;
+        if (pathsAnsweredCleanly > 0 && pathsErrored == 0) return SourceProbeVerdict.Absent;
+        // Any unanswered candidate may hold the release. An empty sweep also
+        // supplies no evidence that it is missing.
         return SourceProbeVerdict.Inconclusive;
     }
 }
@@ -256,9 +255,9 @@ internal enum SourceProbeVerdict
     /// <summary>At least one server holds the release.</summary>
     Found,
 
-    /// <summary>At least one probe answered, and every answer was "not here".</summary>
+    /// <summary>At least one probe answered "not here", with no unanswered candidates.</summary>
     Absent,
 
-    /// <summary>No probe returned an answer. Says nothing about the release.</summary>
+    /// <summary>No source was found and some or all candidate paths remain unknown.</summary>
     Inconclusive,
 }
