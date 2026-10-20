@@ -148,6 +148,13 @@ public class SpreadJob : IDisposable
     private long _ownershipEpoch;
     private readonly Dictionary<(string fileName, string dstId), long> _transferConfirmedEpoch =
         new(new FileDstTupleComparer());
+    // Latest confirmed delivery per destination, and the epoch the latest applied listing
+    // of each site started at. A listing that started before a delivery cannot have seen
+    // it, nor the zipscript stub/progress marker that delivery cleared.
+    private readonly Dictionary<string, long> _deliveryEpoch = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, long> _appliedListingEpoch = new(StringComparer.Ordinal);
+    private DateTime _lastDeliveryAt = DateTime.MinValue;
+    internal static readonly TimeSpan ParkEvidenceWait = TimeSpan.FromSeconds(30);
 
     // Directory cleanup: track created dirs and successful transfers per destination
     private readonly HashSet<string> _dirsCreated = new(); // serverId values that got MKD
@@ -1099,7 +1106,9 @@ public class SpreadJob : IDisposable
                         // slot. A queued retry must not overlap an old scan or SFV read.
                         bool sfvsPending;
                         lock (_ownershipLock) sfvsPending = _pendingSfvs.Count > 0;
-                        if (_backgroundScan is { IsCompleted: false } || _sfvParseTask is { IsCompleted: false } || sfvsPending)
+                        // Nor park on listings that predate the last delivery: the stub or
+                        // progress marker they show may be the one that delivery cleared.
+                        if (_backgroundScan is { IsCompleted: false } || _sfvParseTask is { IsCompleted: false } || sfvsPending || (waitingForRelease && DeliveryAwaitingListing(DateTime.UtcNow)))
                         {
                             await Task.Delay(TimeSpan.FromSeconds(1), token);
                             continue;
@@ -2113,6 +2122,7 @@ public class SpreadJob : IDisposable
 
     private void ProcessFiles(string serverId, List<SpreadFileInfo> files, long listingEpoch)
     {
+        _appliedListingEpoch[serverId] = Math.Max(listingEpoch, _appliedListingEpoch.GetValueOrDefault(serverId, -1));
         // Called inside _ownershipLock
         bool ConfirmedAfterListing(string name) =>
             _transferConfirmedEpoch.TryGetValue((name, serverId), out var epoch) && epoch > listingEpoch;
@@ -2145,12 +2155,15 @@ public class SpreadJob : IDisposable
                 && _fileOwnership.TryGetValue(file.Name, out var observedOwners)
                 && observedOwners.Contains(serverId))
             {
-                if ((_sfvSizes.TryGetValue(file.Name, out var previousSize) && previousSize != file.Size)
-                    || (_sfvParsedAt.TryGetValue(file.Name, out var parsedAt)
-                        && DateTime.UtcNow - parsedAt >= TimeSpan.FromSeconds(30)))
+                // A resized manifest is unknown until re-read. An aged one is only due a
+                // refresh: its inventory stays valid, because revoking it made any failed
+                // re-read (a 15s borrow wait behind a busy transfer) park a finished race.
+                if (_sfvSizes.TryGetValue(file.Name, out var previousSize) && previousSize != file.Size)
                     _parsedSfvs.Remove(file.Name);
+                var refreshDue = _sfvParsedAt.TryGetValue(file.Name, out var parsedAt)
+                    && DateTime.UtcNow - parsedAt >= TimeSpan.FromSeconds(30);
                 _sfvSizes[file.Name] = file.Size;
-                if (!_parsedSfvs.Contains(file.Name) && !_parsingSfvs.Contains(file.Name))
+                if ((!_parsedSfvs.Contains(file.Name) || refreshDue) && !_parsingSfvs.Contains(file.Name))
                     _pendingSfvs[file.Name] = (serverId, file.FullPath);
             }
         }
@@ -2269,6 +2282,25 @@ public class SpreadJob : IDisposable
 
     private int ExpectedTotalNoLock() => Math.Max(_expectedFileCount,
         _fileInfos.Count + _expectedFiles.Count(name => !_fileInfos.ContainsKey(name)));
+
+    private void RecordConfirmedDeliveryNoLock(string fileName, string dstId)
+    {
+        _transferConfirmedEpoch[(fileName, dstId)] = ++_ownershipEpoch;
+        _deliveryEpoch[dstId] = _ownershipEpoch;
+        _lastDeliveryAt = DateTime.UtcNow;
+    }
+
+    /// <summary>True while some destination's latest delivery is newer than every listing
+    /// applied for it, bounded by <see cref="ParkEvidenceWait"/> so a site whose scans keep
+    /// failing cannot hold the race slot.</summary>
+    internal bool DeliveryAwaitingListing(DateTime now)
+    {
+        lock (_ownershipLock)
+        {
+            if (now - _lastDeliveryAt >= ParkEvidenceWait) return false;
+            return _deliveryEpoch.Any(kv => _appliedListingEpoch.GetValueOrDefault(kv.Key, -1) < kv.Value);
+        }
+    }
 
     internal bool HasPendingReleaseInventory()
     {
@@ -2727,7 +2759,7 @@ public class SpreadJob : IDisposable
                 lock (_ownershipLock)
                 {
                     _observedFileSizes[(file.Name, dstId)] = file.Size;
-                    _transferConfirmedEpoch[(file.Name, dstId)] = ++_ownershipEpoch;
+                    RecordConfirmedDeliveryNoLock(file.Name, dstId);
                     if (_fileOwnership.TryGetValue(file.Name, out var owners) && owners.Add(dstId))
                     {
                         _serverFileCount.TryGetValue(dstId, out var cnt);

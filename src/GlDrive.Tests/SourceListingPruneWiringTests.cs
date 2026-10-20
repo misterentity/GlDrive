@@ -47,7 +47,9 @@ public sealed class SourceListingPruneWiringTests
     {
         // v3.10.127: a LIST snapshot applied after a completion must not revoke it.
         // Stamp on the success path, capture before the LIST, compare in ProcessFiles.
-        Assert.Equal(1, Count("_transferConfirmedEpoch[(file.Name, dstId)] = ++_ownershipEpoch;"));
+        // v3.11.22: the stamp lives in RecordConfirmedDeliveryNoLock, called once from the success path.
+        Assert.Equal(1, Count("_transferConfirmedEpoch[(fileName, dstId)] = ++_ownershipEpoch;"));
+        Assert.Equal(1, Count("RecordConfirmedDeliveryNoLock(file.Name, dstId);"));
         Assert.Equal(1, Count("lock (_ownershipLock) listingEpoch = _ownershipEpoch;"));
         Assert.Equal(1, Count("ProcessFiles(serverId, files, listingEpoch);"));
         Assert.Equal(1, Count("epoch > listingEpoch"));
