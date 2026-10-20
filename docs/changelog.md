@@ -12,6 +12,18 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.11.23 — cancellation and source-discovery evidence (2026-10-20)
+
+- Preserve caller cancellation across account-login permit waits. A finished
+  race's background borrow no longer creates a false login-cap cooldown or
+  spends the ghost-connection recovery budget. Interrupted native probes still
+  enter deferred quarantine.
+- Require a complete negative source sweep before reporting a release absent.
+  Failed probes and missing/disposed pools keep discovery inconclusive, with
+  accurate counts and the existing five-minute retry suppression.
+- Add pool cancellation and loopback discovery regressions. See the
+  [release notes](releases/v3.11.23.md) for causes and validation scope.
+
 ## v3.11.21 — reliable search deadlines and tray recovery (2026-10-19)
 
 - Preserve the timeout/partial-result status when a listing completes before

@@ -537,12 +537,19 @@ public class SpreadJob : IDisposable
             foreach (var (serverId, config) in _serverConfigs)
             {
                 if (sitePaths.ContainsKey(serverId)) continue; // Already known
-                if (!_pools.TryGetValue(serverId, out var pool)) continue;
-
                 // Probe all section paths AND the notification watch path. The same
                 // list drives the mid-race relocation probe (FindRelocatedSourcePath),
                 // so the two never disagree about where a site may hold a release.
                 var pathsToProbe = CandidateBasePaths(config, Section);
+                if (!_pools.TryGetValue(serverId, out var pool) || pool.IsDisposed)
+                {
+                    // A pool disappearing between admission and discovery leaves
+                    // these candidates unanswered, not absent.
+                    pathsErrored += pathsToProbe.Count;
+                    Log.Debug("Spread: source discovery pool unavailable on {Server} for {Count} candidate paths",
+                        config.Name, pathsToProbe.Count);
+                    continue;
+                }
 
                 foreach (var basePath in pathsToProbe)
                 {
@@ -592,15 +599,14 @@ public class SpreadJob : IDisposable
 
                 if (verdict == SourceProbeVerdict.Inconclusive)
                 {
-                    // We never got an answer from anywhere. Say so, and let
-                    // SpreadManager park this on the short TTL rather than the
-                    // hour-long release-not-found one.
+                    // A clean negative on a peer cannot rule out a release on
+                    // an unavailable source. Preserve the short retry class.
                     var probed = pathsAnsweredCleanly + pathsErrored;
                     Log.Warning("Spread: source probe inconclusive for {Release} — " +
-                        "{Errored} of {Probed} path probes failed, none answered",
-                        ReleaseName, pathsErrored, probed);
-                    SetFailed($"Source probe inconclusive — 0 of {probed} path probes " +
-                        "returned an answer (connection failures)");
+                        "{Answered} of {Probed} path probes answered, {Errored} failed",
+                        ReleaseName, pathsAnsweredCleanly, probed, pathsErrored);
+                    SetFailed($"Source probe inconclusive — {pathsAnsweredCleanly} of {probed} path probes " +
+                        $"returned an answer ({pathsErrored} failed)");
                     return;
                 }
 

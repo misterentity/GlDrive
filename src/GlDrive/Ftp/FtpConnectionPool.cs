@@ -260,11 +260,20 @@ public class FtpConnectionPool : IAsyncDisposable
         {
             var got = await _loginGate.TryAcquireAsync(ct, PermitAcquireTimeout, _priorityLogins);
             if (!got)
+            {
+                // The gate returns false for cancellation as well as a timed-out
+                // permit wait. Preserve the caller's outcome before Borrow classifies
+                // it as account pressure and parks unrelated work.
+                ct.ThrowIfCancellationRequested();
                 throw new InvalidOperationException(
                     "Account login cap reached — no login permit available");
+            }
         }
         try
         {
+            // Cancellation can race a successful permit grant. Release that permit
+            // through the catch below without opening a new native connection.
+            ct.ThrowIfCancellationRequested();
             var client = await _factory.CreateAndConnect(ct);
             Interlocked.Increment(ref _permitsHeld);
             return client;
@@ -402,6 +411,14 @@ public class FtpConnectionPool : IAsyncDisposable
             if (probe == LiveProbe.TimedOut)
             {
                 QuarantineDeferred(client, "borrow-probe-timeout"); // native read may be live — defer teardown
+                // A race finishing can cancel its SFV borrow during this NOOP.
+                // The interrupted native session must still be quarantined, but the
+                // abandoned borrower must not continue into a replacement login.
+                if (ct.IsCancellationRequested)
+                {
+                    IncrementAbandonedBorrow();
+                    ct.ThrowIfCancellationRequested();
+                }
                 return BorrowCheck.Dead;
             }
             // DeadCompleted — fall through to immediate neutralize.
@@ -617,6 +634,8 @@ public class FtpConnectionPool : IAsyncDisposable
     public async Task<PooledConnection> Borrow(CancellationToken ct = default)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(FtpConnectionPool));
+        // Do not remove and probe an idle connection for work that already ended.
+        ct.ThrowIfCancellationRequested();
         // Quarantines seen so far: the at-capacity wait re-runs Borrow only for a slot freed
         // AFTER this point — never merely because capacity looks free (that is the state right
         // after a failed connect, and re-running then would be a reconnect storm).
@@ -637,6 +656,7 @@ public class FtpConnectionPool : IAsyncDisposable
             IncrementDisconnect();
         }
 
+        ct.ThrowIfCancellationRequested();
         // PRD H2: if the server is in a BNC cooldown, don't attempt a new
         // connection — it'll just be refused and deepen the cooldown. Fall
         // through to wait on the channel (an in-flight transfer may return a
