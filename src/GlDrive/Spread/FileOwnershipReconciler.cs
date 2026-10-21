@@ -20,7 +20,8 @@ internal static class FileOwnershipReconciler
         Dictionary<string, SpreadFileInfo> fileInfos,
         Dictionary<(string fileName, string serverId), long> observedSizes,
         Dictionary<string, int> serverFileCount,
-        bool inFlight)
+        bool inFlight,
+        Func<string, bool>? preserveOwner = null)
     {
         if (inFlight) return;
 
@@ -52,6 +53,9 @@ internal static class FileOwnershipReconciler
         {
             foreach (var owner in owners.ToList())
             {
+                // A remote dupe refusal suppresses another upload even if its copy is
+                // short. The caller separately excludes that unverified copy as a source.
+                if (preserveOwner?.Invoke(owner) == true) continue;
                 if (!observedSizes.TryGetValue((file.Name, owner), out var observed)
                     || observed != canonical.Size)
                     RemoveOwner(owner, owners, serverFileCount);
@@ -63,7 +67,7 @@ internal static class FileOwnershipReconciler
             if (owners.Add(serverId))
                 serverFileCount[serverId] = serverFileCount.GetValueOrDefault(serverId) + 1;
         }
-        else
+        else if (preserveOwner?.Invoke(serverId) != true)
         {
             RemoveOwner(serverId, owners, serverFileCount);
         }

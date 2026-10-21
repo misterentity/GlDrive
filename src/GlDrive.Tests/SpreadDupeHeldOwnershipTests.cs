@@ -22,6 +22,70 @@ public sealed class SpreadDupeHeldOwnershipTests
     private const string Sample = "Sample/release-sample.mkv";
 
     [Fact]
+    public async Task Source_growth_does_not_revoke_an_unresolved_dupe_verdict()
+    {
+        await using var fixture = new Fixture();
+        fixture.Observe("source", 0, (Sample, 100));
+        fixture.Observe("destination", 0, (Sample, 40));
+        fixture.CreditDupe(Sample, 100, "destination");
+        fixture.Observe("source", 100, (Sample, 200));
+
+        Assert.True(fixture.Owns("destination", Sample));
+        Assert.Equal(1, Field<Dictionary<string, int>>(fixture.Job, "_serverFileCount")["destination"]);
+        fixture.Observe("destination", 101, (Sample, 40));
+        Assert.True(fixture.Owns("destination", Sample));
+    }
+
+    [Fact]
+    public async Task A_short_dupe_copy_is_not_a_source_for_a_third_site()
+    {
+        await using var fixture = new Fixture(includeThirdSite: true);
+        fixture.Observe("source", 0, (Sample, 100));
+        fixture.Observe("destination", 0, (Sample, 40));
+        fixture.CreditDupe(Sample, 100, "destination");
+        fixture.ParkOriginalSource();
+
+        Assert.Null(fixture.NextTransfer());
+        fixture.Observe("destination", 100, (Sample, 40));
+        Assert.Null(fixture.NextTransfer());
+    }
+
+    [Fact]
+    public async Task Only_a_fresh_full_listing_makes_a_dupe_copy_eligible_as_source()
+    {
+        await using var fixture = new Fixture(includeThirdSite: true);
+        fixture.Observe("source", 0, (Sample, 100));
+        fixture.CreditDupe(Sample, 100, "destination");
+        fixture.ParkOriginalSource();
+
+        fixture.Observe("destination", 0, (Sample, 100));
+        Assert.Null(fixture.NextTransfer());
+        fixture.Observe("destination", 100, (Sample, 100));
+        var transfer = fixture.NextTransfer();
+        Assert.NotNull(transfer);
+        Assert.Equal(("destination", "third", 100L),
+            (transfer.Value.srcId, transfer.Value.dstId, transfer.Value.file.Size));
+
+        fixture.Observe("source", 101, (Sample, 200));
+        Assert.False(fixture.Owns("destination", Sample));
+        Assert.Null(fixture.NextTransfer());
+    }
+
+    [Fact]
+    public async Task An_unverified_dupe_sfv_does_not_replace_the_source_manifest()
+    {
+        const string sfv = "release.sfv";
+        await using var fixture = new Fixture();
+        fixture.Observe("source", 0, (sfv, 100));
+        var pending = Field<Dictionary<string, (string serverId, string path)>>(fixture.Job, "_pendingSfvs");
+        Assert.Equal("source", pending[sfv].serverId);
+        fixture.CreditDupe(sfv, 100, "destination");
+        fixture.Observe("destination", 100, (sfv, 40));
+
+        Assert.Equal("source", pending[sfv].serverId);
+    }
+
+    [Fact]
     public async Task A_dupe_verdict_survives_a_later_listing_of_the_short_copy()
     {
         await using var fixture = new Fixture();
@@ -133,10 +197,15 @@ public sealed class SpreadDupeHeldOwnershipTests
         };
         public SpreadJob Job { get; }
 
-        public Fixture()
+        public Fixture(bool includeThirdSite = false)
         {
+            if (includeThirdSite)
+            {
+                Pools["third"] = new(null!, 1);
+                Paths["third"] = "/third/Release";
+            }
             Job = new("TV", "Release", SpreadMode.Race, new SpreadConfig(), Pools, Pools,
-                new() { ["source"] = new() { Id = "source" }, ["destination"] = new() { Id = "destination" } },
+                Pools.Keys.ToDictionary(id => id, id => new ServerConfig { Id = id }),
                 new SpeedTracker(), new SkiplistEvaluator());
             Field<HashSet<string>>(Job, "_sourceServersField").Add("source");
             typeof(SpreadJob).GetField("_sitePathsRef", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(Job, Paths);
@@ -160,6 +229,10 @@ public sealed class SpreadDupeHeldOwnershipTests
 
         public bool Owns(string id, string name) =>
             Field<Dictionary<string, HashSet<string>>>(Job, "_fileOwnership").TryGetValue(name, out var owners) && owners.Contains(id);
+
+        public void ParkOriginalSource() => Field<HashSet<string>>(Job, "_sourceCreditDenied").Add("source");
+        public (SpreadFileInfo file, string srcId, string dstId)? NextTransfer() =>
+            ((SpreadFileInfo file, string srcId, string dstId)?)Invoke(Job, "FindBestTransfer", Paths, new SpreadScorer(new SpeedTracker()));
 
         public async ValueTask DisposeAsync()
         {

@@ -55,7 +55,17 @@ public class MountService : IDisposable
     public string ServerName => _serverConfig.Name;
     public string DriveLetter => _serverConfig.Mount.DriveLetter;
     public MountState CurrentState { get; private set; } = MountState.Unmounted;
-    public FtpConnectionPool? Pool => _pool;
+    public FtpConnectionPool? Pool
+    {
+        get
+        {
+            // Keep ownership in _pool for mount-failure cleanup, but do not let a
+            // scan/invite borrow before Initialize has established pool readiness.
+            // Initialized exhausted pools stay visible so callers can recover them.
+            var pool = _pool;
+            return pool is { IsConnected: true, IsDisposed: false } ? pool : null;
+        }
+    }
     public FtpClientFactory? Factory => _factory;
     public FtpOperations? Ftp => _ftp;
     public DirectoryCache? Cache => _cache;

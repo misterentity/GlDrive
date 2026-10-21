@@ -49,6 +49,10 @@ public sealed class NukePollerRecoveryTests : IDisposable
         Assert.False(pool.IsExhausted); // Reproduces the production mount-initialization state.
         Assert.False(NukePoller.CreateTarget(mount).IsAvailable());
         typeof(MountService).GetProperty(nameof(MountService.CurrentState))!.SetValue(mount, MountState.Connected);
+        Assert.False(NukePoller.CreateTarget(mount).IsAvailable());
+        typeof(FtpConnectionPool).GetProperty(nameof(FtpConnectionPool.IsConnected))!.SetValue(pool, true);
+        typeof(FtpConnectionPool).GetField("_created", System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.NonPublic)!.SetValue(pool, 1);
         Assert.True(NukePoller.CreateTarget(mount).IsAvailable());
     }
 

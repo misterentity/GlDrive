@@ -61,8 +61,10 @@ public sealed class SourceListingPruneWiringTests
         Assert.True(capture > 0 && capture < list, "The epoch must be captured BEFORE the LIST runs.");
 
         var observe = Source.IndexOf("FileOwnershipReconciler.Observe(", StringComparison.Ordinal);
-        var guard = Source.IndexOf("|| ConfirmedAfterListing(file.Name)", observe, StringComparison.Ordinal);
-        Assert.True(observe > 0 && guard > observe && guard - observe < 300,
+        var protection = Source.IndexOf("var protectedObservation = _inFlightFiles.Contains", StringComparison.Ordinal);
+        var guard = Source.IndexOf("|| ConfirmedAfterListing(file.Name)", protection, StringComparison.Ordinal);
+        Assert.True(protection > 0 && guard > protection && guard < observe
+            && Source[observe..(observe + 250)].Contains("_serverFileCount, protectedObservation,"),
             "Observe must treat a post-listing completion like in-flight (a mid-upload snapshot shows a partial size).");
     }
 

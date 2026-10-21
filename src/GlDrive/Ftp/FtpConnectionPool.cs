@@ -567,63 +567,76 @@ public class FtpConnectionPool : IAsyncDisposable
     public bool UseCpsv { get; private set; }
     public string ControlHost { get; private set; } = "";
 
-    public async Task Initialize(CancellationToken ct = default)
-    {
-        await _initLock.WaitAsync(ct);
-        try
-        {
-            if (_created > 0) return;
-
-            // Create initial connection to verify connectivity
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            var client = await AcquireAndConnect(ct);
-            RecordConnect(sw.ElapsedMilliseconds);
-
-            // Detect CPSV support (glftpd BNC)
-            ControlHost = _factory.Host;
-            if (client.Capabilities.Contains(FtpCapability.CPSV))
-            {
-                UseCpsv = true;
-                Log.Information("Server supports CPSV — using BNC-compatible data connections");
-            }
-
-            await _pool.Writer.WriteAsync(client, ct);
-            _created = 1;
-            IsConnected = true;
-            Log.Information("Connection pool initialized with 1 connection (max {Max})", _maxSize);
-        }
-        finally
-        {
-            _initLock.Release();
-        }
-    }
+    public Task Initialize(CancellationToken ct = default)
+        => InitializeEmptyPool(recovery: false, ct);
 
     /// <summary>
     /// Re-initialize a pool that has been fully exhausted (all connections poisoned/discarded).
     /// Creates a fresh connection and puts it back in the pool.
     /// </summary>
-    public async Task Reinitialize(CancellationToken ct = default)
+    public Task Reinitialize(CancellationToken ct = default)
+        => InitializeEmptyPool(recovery: true, ct);
+
+    private async Task InitializeEmptyPool(bool recovery, CancellationToken ct)
     {
-        if (_disposed) return;
-        if (_created > 0 || _active > 0) return; // Pool still has connections
+        if (_disposed)
+        {
+            if (recovery) return;
+            throw new ObjectDisposedException(nameof(FtpConnectionPool));
+        }
 
         await _initLock.WaitAsync(ct);
         try
         {
-            if (_created > 0 || _active > 0) return; // Double-check under lock
+            if (_disposed) throw new ObjectDisposedException(nameof(FtpConnectionPool));
+            if (_active > 0) return;
+            // The mount publishes its pool before this initial login completes.
+            // Reserve capacity just like Borrow: otherwise a concurrent scan starts
+            // a second gate wait, and its cancellation decrements the successful
+            // initialization's overwritten _created=1 back to zero.
+            if (Interlocked.CompareExchange(ref _created, 1, 0) != 0) return;
 
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            var client = await AcquireAndConnect(ct);
-            RecordConnect(sw.ElapsedMilliseconds);
-            ControlHost = _factory.Host;
-            if (client.Capabilities.Contains(FtpCapability.CPSV))
-                UseCpsv = true;
+            AsyncFtpClient? client = null;
+            var published = false;
+            try
+            {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                client = await AcquireAndConnect(ct);
+                ct.ThrowIfCancellationRequested();
+                if (_disposed) throw new ObjectDisposedException(nameof(FtpConnectionPool));
+                ControlHost = _factory.Host;
+                if (client.Capabilities.Contains(FtpCapability.CPSV))
+                {
+                    UseCpsv = true;
+                    if (!recovery)
+                        Log.Information("Server supports CPSV — using BNC-compatible data connections");
+                }
 
-            await _pool.Writer.WriteAsync(client, ct);
-            _created = 1;
-            IsConnected = true;
-            IncrementReinit();
-            Log.Information("Connection pool reinitialized with 1 connection (max {Max})", _maxSize);
+                // The reserved slot guarantees capacity. A failed publication means
+                // shutdown won the race; reclaim the connected client's permit too.
+                if (!_pool.Writer.TryWrite(client))
+                    throw new ObjectDisposedException(nameof(FtpConnectionPool));
+                published = true;
+                client = null; // ownership is now with the channel or its borrower
+                RecordConnect(sw.ElapsedMilliseconds);
+                IsConnected = true;
+                if (_disposed) IsConnected = false;
+                if (recovery)
+                {
+                    IncrementReinit();
+                    Log.Information("Connection pool reinitialized with 1 connection (max {Max})", _maxSize);
+                }
+                else
+                    Log.Information("Connection pool initialized with 1 connection (max {Max})", _maxSize);
+            }
+            catch
+            {
+                if (client != null)
+                    Quarantine(client, "initialization-abandoned", recvQuiescent: true);
+                else if (!published)
+                    Interlocked.Decrement(ref _created);
+                throw;
+            }
         }
         finally
         {
@@ -1332,7 +1345,9 @@ public class FtpConnectionPool : IAsyncDisposable
             ReleasePermit();
         }
 
-        _initLock.Dispose();
+        // An initialization may still own or await this semaphore while a mount
+        // is shutting down. Disposing it races that owner's Release in finally.
+        // No WaitHandle is allocated; let the managed semaphore die with the pool.
         GC.SuppressFinalize(this);
     }
 }
