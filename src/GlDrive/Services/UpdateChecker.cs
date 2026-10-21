@@ -4,6 +4,7 @@ using System.IO.Compression;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Serialization;
@@ -848,7 +849,7 @@ public class UpdateChecker : IDisposable
     /// install directory is this process's OWN directory — it is never taken from the hand-off,
     /// so a forged record cannot redirect where files land.
     /// </summary>
-    public static void ApplyUpdateFromTask()
+    public static int ApplyUpdateFromTask()
     {
         var path = UpdateTaskHandoff.DefaultPath;
         var taskLogPath = Path.Combine(
@@ -871,7 +872,7 @@ public class UpdateChecker : IDisposable
         if (handoff is null)
         {
             Log.Warning("Update task ran with no valid pending hand-off at {Path} — nothing to do", path);
-            return;
+            return 1;
         }
 
         TaskLog($"Accepted handoff for {handoff.Tag}");
@@ -887,10 +888,11 @@ public class UpdateChecker : IDisposable
         if (File.Exists(path))
         {
             TaskLog($"Could not consume handoff for {handoff.Tag}; refusing dispatch");
-            return;
+            return 1;
         }
         TaskLog($"Consumed handoff for {handoff.Tag}; dispatching updater");
         ApplyUpdate(handoff.Pid, handoff.PackageDir, installDir, viaScheduledTask: true);
+        return 1; // ApplyUpdate normally terminates this process; never report a fallback as success.
     }
 
     /// <summary>
@@ -1233,6 +1235,7 @@ public class UpdateChecker : IDisposable
         var backups = new List<(string Original, string Backup)>();
         var copiedDestinations = new List<string>();
         string? validatedInstallDir = null;
+        var exitCode = 1;
 
         try
         {
@@ -1453,6 +1456,7 @@ public class UpdateChecker : IDisposable
             {
                 LogUpdate("Desktop shell accepted the application relaunch request");
             }
+            exitCode = 0;
         }
         catch (Exception ex)
         {
@@ -1482,10 +1486,32 @@ public class UpdateChecker : IDisposable
         SignalUpdateCompletion(pid);
 
         // Force-kill instead of normal teardown because loaded files may have been
-        // renamed or replaced while this updater process was running.
+        // renamed or replaced while this updater process was running. Process.Kill()
+        // always reports -1, which made successful scheduled installs look failed.
+        // Preserve that native termination behavior while reporting the install result.
+        LogUpdate($"Updater exiting with code {exitCode}");
         Thread.Sleep(2000);
-        Process.GetCurrentProcess().Kill();
+        TerminateUpdaterProcess(exitCode);
     }
+
+    [System.Diagnostics.CodeAnalysis.DoesNotReturn]
+    internal static void TerminateUpdaterProcess(int exitCode)
+    {
+        // -1 is Windows' current-process pseudo-handle. Terminating ourselves does not
+        // return or run managed/native teardown; unlike Environment.Exit it cannot hang
+        // on finalizers after the runtime files were renamed by the update.
+        try { TerminateProcess(new IntPtr(-1), unchecked((uint)exitCode)); }
+        catch { /* Continue to the original hard-stop fallback. */ }
+        // Defensive only: self-termination should never return. Retain the old hard-stop
+        // safeguard if Windows refuses it; do not run ordinary shutdown on replaced files.
+        try { Process.GetCurrentProcess().Kill(); }
+        catch { /* Never unwind through ordinary teardown of replaced files. */ }
+        Environment.FailFast("Could not terminate the updater process");
+    }
+
+    [DllImport("kernel32.dll", ExactSpelling = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool TerminateProcess(IntPtr process, uint exitCode);
 
     internal static string UpdateCompletionPath(int pid) => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),

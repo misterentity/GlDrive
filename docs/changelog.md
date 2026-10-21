@@ -12,6 +12,15 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.11.25 — pool initialization, duplicate-source safety and updater status (2026-10-21)
+
+- Preserve pool capacity and login accounting when initialization overlaps a
+  borrow, cancellation or disposal during a remount.
+- Exclude unverified duplicate copies from onward transfers and SFV reads;
+  preserve duplicate suppression when the source grows.
+- Keep native updater termination while reporting the actual install outcome.
+  See the [release notes](releases/v3.11.25.md) for behavior and validation scope.
+
 ## v3.11.23 — cancellation and source-discovery evidence (2026-10-20)
 
 - Preserve caller cancellation across account-login permit waits. A finished

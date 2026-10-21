@@ -5,6 +5,7 @@ import pathlib
 import socket
 import sys
 import tempfile
+import time
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -75,6 +76,18 @@ class ReleaseCheckHandler(TLS_FTPHandler):
         # A rejected certificate must fail before the client sends USER/PASS.
         with (root / "authentication-attempts").open("a") as attempts:
             attempts.write("USER\n")
+        pause = root / "pause-authentication"
+        if pause.exists():
+            # Only the isolated initialization check enables this pause, before
+            # any other fixture pool exists. Keep the native handshake in flight
+            # until its competing borrowers have reached the desired state.
+            (root / "authentication-paused").write_text("ready")
+            deadline = time.monotonic() + 15
+            while pause.exists():
+                if time.monotonic() >= deadline:
+                    self.respond("421 Fixture authentication pause expired")
+                    return
+                time.sleep(0.01)
         super().ftp_USER(line)
 
     def ftp_EPSV(self, line):

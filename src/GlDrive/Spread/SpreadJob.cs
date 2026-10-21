@@ -150,8 +150,9 @@ public class SpreadJob : IDisposable
         new(new FileDstTupleComparer());
     // Files a destination's dupe checker refused, credited as owned. The copy it holds may be
     // another racer's short/partial upload, so a listing's size mismatch must not revoke the
-    // credit (that re-sent the file into the same dupe every pass). Ends when the site stops
-    // listing the file — then the dupe no longer stands.
+    // credit (that re-sent the file into the same dupe every pass). Excluded as a source
+    // until a fresh full-size listing verifies it. Ends on that verification or when the
+    // site stops listing the file — then the dupe no longer stands.
     private readonly HashSet<(string fileName, string dstId)> _dupeHeld =
         new(new FileDstTupleComparer());
     // Latest confirmed delivery per destination, and the epoch the latest applied listing
@@ -2150,11 +2151,17 @@ public class SpreadJob : IDisposable
             if (action == SkiplistAction.Deny) continue;
 
             var isNewFile = !_fileInfos.ContainsKey(file.Name);
+            // A dupe refusal is permission to stop uploading, not proof of complete
+            // source bytes. Only a current, full-size listing can verify that copy.
+            var protectedObservation = _inFlightFiles.Contains((file.Name, serverId))
+                || ConfirmedAfterListing(file.Name);
+            if (!protectedObservation && _fileInfos.TryGetValue(file.Name, out var canonical)
+                && file.Size >= canonical.Size)
+                _dupeHeld.Remove((file.Name, serverId));
             FileOwnershipReconciler.Observe(
                 serverId, file, _fileOwnership, _fileInfos, _observedFileSizes,
-                _serverFileCount,
-                _inFlightFiles.Contains((file.Name, serverId)) || ConfirmedAfterListing(file.Name)
-                    || _dupeHeld.Contains((file.Name, serverId)));
+                _serverFileCount, protectedObservation,
+                owner => _dupeHeld.Contains((file.Name, owner)));
 
             if (isNewFile && _fileInfos.ContainsKey(file.Name))
             {
@@ -2165,6 +2172,7 @@ public class SpreadJob : IDisposable
             // Only arm for SFVs not already counted — re-arming for a parsed SFV
             // wasted a download every scan cycle. (Called under _ownershipLock.)
             if (fileName.EndsWith(".sfv", StringComparison.OrdinalIgnoreCase)
+                && !_dupeHeld.Contains((file.Name, serverId))
                 && _fileOwnership.TryGetValue(file.Name, out var observedOwners)
                 && observedOwners.Contains(serverId))
             {
@@ -2316,7 +2324,7 @@ public class SpreadJob : IDisposable
 
     private void CreditDeliveryNoLock(string fileName, long size, string dstId, bool wasDupe)
     {
-        _observedFileSizes[(fileName, dstId)] = size;
+        if (!wasDupe) _observedFileSizes[(fileName, dstId)] = size;
         RecordConfirmedDeliveryNoLock(fileName, dstId);
         if (_fileOwnership.TryGetValue(fileName, out var owners) && owners.Add(dstId))
         {
@@ -2495,6 +2503,10 @@ public class SpreadJob : IDisposable
 
                 foreach (var srcId in owners)
                 {
+                    // Dupe credit suppresses destination retries; it does not authorize
+                    // relaying a possibly truncated file or reading its SFV as inventory.
+                    if (_dupeHeld.Contains((fileName, srcId))) { skippedFailures++; continue; }
+
                     // Source parked for this race — out of credits, can't pull
                     // from it. Skip every (file, this-src, *) candidate.
                     if (_sourceCreditDenied.Contains(srcId)) { skippedFailures++; continue; }

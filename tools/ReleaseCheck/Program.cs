@@ -69,8 +69,14 @@ finally
     try { probe.Dispose(); }
     finally { detached?.Dispose(); }
 }
-await using var pool = new FtpConnectionPool(factory, 2);
 using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(240));
+await NativeInitializationCheck.Run(factory, root, deadline.Token);
+if (args.Contains("--initialization-only", StringComparer.Ordinal))
+{
+    Console.WriteLine("PASS: native pool initialization verification complete");
+    return;
+}
+await using var pool = new FtpConnectionPool(factory, 2);
 await pool.Initialize(deadline.Token);
 var ftp = new FtpOperations(pool);
 var remoteRoot = "/check-" + Guid.NewGuid().ToString("N");

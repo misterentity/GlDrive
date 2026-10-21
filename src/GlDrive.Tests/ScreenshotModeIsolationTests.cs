@@ -104,7 +104,7 @@ public sealed class ScreenshotModeIsolationTests
     public void System_task_consumes_handoff_before_nonreturning_update_dispatch()
     {
         var source = ReadSource("src/GlDrive/Services/UpdateChecker.cs");
-        var entry = source.IndexOf("public static void ApplyUpdateFromTask()", StringComparison.Ordinal);
+        var entry = source.IndexOf("public static int ApplyUpdateFromTask()", StringComparison.Ordinal);
         var clear = source.IndexOf("UpdateTaskHandoff.Clear(path)", entry, StringComparison.Ordinal);
         var dispatch = source.IndexOf("ApplyUpdate(handoff.Pid", entry, StringComparison.Ordinal);
 
@@ -122,7 +122,7 @@ public sealed class ScreenshotModeIsolationTests
 
         var checker = ReadSource("src/GlDrive/Services/UpdateChecker.cs");
         var signal = checker.IndexOf("SignalUpdateCompletion(pid)", StringComparison.Ordinal);
-        var kill = checker.IndexOf("Process.GetCurrentProcess().Kill()", signal, StringComparison.Ordinal);
+        var kill = checker.IndexOf("TerminateUpdaterProcess(exitCode)", signal, StringComparison.Ordinal);
         Assert.True(signal >= 0 && signal < kill);
 
         var tray = ReadSource("src/GlDrive/UI/TrayViewModel.cs");

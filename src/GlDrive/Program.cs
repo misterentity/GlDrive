@@ -35,9 +35,9 @@ public static class Program
             arg => arg.Equals("--apply-update-task", StringComparison.OrdinalIgnoreCase));
         if (taskIdx >= 0)
         {
-            UpdateChecker.ApplyUpdateFromTask();
-            Process.GetCurrentProcess().Kill();
-            return -1;
+            // Rejected handoffs have not replaced any files and can return normally.
+            // A dispatched install terminates itself with its actual result.
+            return UpdateChecker.ApplyUpdateFromTask();
         }
 
         var applyIdx = Array.FindIndex(args,
@@ -46,8 +46,7 @@ public static class Program
             int.TryParse(args[applyIdx + 1], out var updatePid))
         {
             UpdateChecker.ApplyUpdate(updatePid, args[applyIdx + 2], args[applyIdx + 3]);
-            Process.GetCurrentProcess().Kill();
-            return -1;
+            return 1; // ApplyUpdate does not return after success or rollback.
         }
 
         // Watchdog mode — lightweight process monitor, no WPF.
