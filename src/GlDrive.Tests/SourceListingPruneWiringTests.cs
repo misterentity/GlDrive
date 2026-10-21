@@ -49,7 +49,9 @@ public sealed class SourceListingPruneWiringTests
         // Stamp on the success path, capture before the LIST, compare in ProcessFiles.
         // v3.11.22: the stamp lives in RecordConfirmedDeliveryNoLock, called once from the success path.
         Assert.Equal(1, Count("_transferConfirmedEpoch[(fileName, dstId)] = ++_ownershipEpoch;"));
-        Assert.Equal(1, Count("RecordConfirmedDeliveryNoLock(file.Name, dstId);"));
+        // v3.11.24: …via CreditDeliveryNoLock, the one ownership-credit helper.
+        Assert.Equal(1, Count("RecordConfirmedDeliveryNoLock(fileName, dstId);"));
+        Assert.Equal(1, Count("CreditDeliveryNoLock(file.Name, file.Size, dstId, transfer.WasDupe);"));
         Assert.Equal(1, Count("lock (_ownershipLock) listingEpoch = _ownershipEpoch;"));
         Assert.Equal(1, Count("ProcessFiles(serverId, files, listingEpoch);"));
         Assert.Equal(1, Count("epoch > listingEpoch"));
