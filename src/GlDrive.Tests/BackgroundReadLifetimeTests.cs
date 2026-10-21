@@ -171,8 +171,9 @@ public class BackgroundReadLifetimeTests
     {
         var sfv = Slice(Job(), "private async Task ParseSfvForCount", "internal bool ApplySfvInventory");
         Assert.Contains("CreateLinkedTokenSource(token, readStop)", sfv);
-        Assert.Contains("pool.Borrow(borrowCts.Token)", sfv);
-        Assert.DoesNotContain("pool.Borrow(token)", sfv);
+        Assert.Contains("SfvMainPoolBudget, borrowCts.Token)", sfv);
+        Assert.DoesNotContain("Borrow(token)", sfv);
+        Assert.DoesNotContain(", token)", sfv[sfv.IndexOf("PoolFallback.BorrowAsync(", StringComparison.Ordinal)..sfv.IndexOf("byte[] data", StringComparison.Ordinal)]);
     }
 
     private static string RepoRoot()

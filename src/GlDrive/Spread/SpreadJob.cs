@@ -148,6 +148,12 @@ public class SpreadJob : IDisposable
     private long _ownershipEpoch;
     private readonly Dictionary<(string fileName, string dstId), long> _transferConfirmedEpoch =
         new(new FileDstTupleComparer());
+    // Files a destination's dupe checker refused, credited as owned. The copy it holds may be
+    // another racer's short/partial upload, so a listing's size mismatch must not revoke the
+    // credit (that re-sent the file into the same dupe every pass). Ends when the site stops
+    // listing the file — then the dupe no longer stands.
+    private readonly HashSet<(string fileName, string dstId)> _dupeHeld =
+        new(new FileDstTupleComparer());
     // Latest confirmed delivery per destination, and the epoch the latest applied listing
     // of each site started at. A listing that started before a delivery cannot have seen
     // it, nor the zipscript stub/progress marker that delivery cleared.
@@ -2147,7 +2153,8 @@ public class SpreadJob : IDisposable
             FileOwnershipReconciler.Observe(
                 serverId, file, _fileOwnership, _fileInfos, _observedFileSizes,
                 _serverFileCount,
-                _inFlightFiles.Contains((file.Name, serverId)) || ConfirmedAfterListing(file.Name));
+                _inFlightFiles.Contains((file.Name, serverId)) || ConfirmedAfterListing(file.Name)
+                    || _dupeHeld.Contains((file.Name, serverId)));
 
             if (isNewFile && _fileInfos.ContainsKey(file.Name))
             {
@@ -2187,6 +2194,13 @@ public class SpreadJob : IDisposable
                     "dropped from the race set ({Release}): {Files}",
                     serverConfig.Name, dropped.Count, ReleaseName, string.Join(", ", dropped));
             }
+            // Same evidence rule as Prune: an empty listing proves nothing about one file.
+            if (files.Count > 0)
+            {
+                var listed = files.Select(f => f.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                _dupeHeld.RemoveWhere(k => k.dstId == serverId && !listed.Contains(k.fileName)
+                    && !ConfirmedAfterListing(k.fileName));
+            }
         }
 
         // Snapshot counts under ownership lock, then update progress outside it
@@ -2212,6 +2226,8 @@ public class SpreadJob : IDisposable
         ProgressChanged?.Invoke(this);
     }
 
+    internal static readonly TimeSpan SfvMainPoolBudget = TimeSpan.FromSeconds(5);
+
     private async Task ParseSfvForCount(string serverId, string sfvPath, string relName)
     {
         try
@@ -2219,12 +2235,21 @@ public class SpreadJob : IDisposable
             using var readTimeout = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
             readTimeout.CancelAfter(TimeSpan.FromSeconds(15));
             var token = readTimeout.Token;
-            var pool = ResolveSpreadPool(serverId);
-            if (pool == null) return;
+            // Main pool first, like the scan: the spread pool's logins carry FXP/relay transfers
+            // that outlast this 15s budget (204 of ~640 SFV reads failed on 2026-10-20 waiting
+            // for one while the scan, on the main pool, listed the same site fine).
+            var mainPool = ResolveMainPool(serverId);
+            var spreadPool = ResolveSpreadPool(serverId);
+            if (mainPool == null && spreadPool == null) return;
             // Same rule as the scan: no new login once the race has ended; the read keeps token.
             var readStop = _backgroundReads?.StopToken ?? CancellationToken.None;
             using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(token, readStop);
-            await using var conn = await pool.Borrow(borrowCts.Token);
+            var pool = mainPool ?? spreadPool!;
+            Func<CancellationToken, Task<PooledConnection>>? fallback = mainPool != null && spreadPool != null
+                ? t => { pool = spreadPool; return spreadPool.Borrow(t); }
+                : null;
+            await using var conn = await PoolFallback.BorrowAsync(pool.Borrow, fallback,
+                SfvMainPoolBudget, borrowCts.Token);
 
             byte[] data;
             if (pool.UseCpsv)
@@ -2288,6 +2313,31 @@ public class SpreadJob : IDisposable
 
     private int ExpectedTotalNoLock() => Math.Max(_expectedFileCount,
         _fileInfos.Count + _expectedFiles.Count(name => !_fileInfos.ContainsKey(name)));
+
+    private void CreditDeliveryNoLock(string fileName, long size, string dstId, bool wasDupe)
+    {
+        _observedFileSizes[(fileName, dstId)] = size;
+        RecordConfirmedDeliveryNoLock(fileName, dstId);
+        if (_fileOwnership.TryGetValue(fileName, out var owners) && owners.Add(dstId))
+        {
+            _serverFileCount.TryGetValue(dstId, out var cnt);
+            _serverFileCount[dstId] = cnt + 1;
+        }
+        if (wasDupe)
+            _dupeHeld.Add((fileName, dstId));
+        else
+        {
+            _dupeHeld.Remove((fileName, dstId));
+            _destDelivered.TryGetValue(dstId, out var dd);
+            _destDelivered[dstId] = dd + 1;
+        }
+        _serversWithSuccessfulTransfer.Add(dstId);
+        // A single success proves the dest is working — clear any
+        // accumulated failure count + backoff window so future
+        // transient 550s don't immediately re-trigger the ladder.
+        _destFailureCount.Remove(dstId);
+        _destRetryAt.Remove(dstId);
+    }
 
     private void RecordConfirmedDeliveryNoLock(string fileName, string dstId)
     {
@@ -2763,26 +2813,7 @@ public class SpreadJob : IDisposable
                     _speedTracker.RecordTransfer(srcId, dstId, file.Size, duration);
 
                 lock (_ownershipLock)
-                {
-                    _observedFileSizes[(file.Name, dstId)] = file.Size;
-                    RecordConfirmedDeliveryNoLock(file.Name, dstId);
-                    if (_fileOwnership.TryGetValue(file.Name, out var owners) && owners.Add(dstId))
-                    {
-                        _serverFileCount.TryGetValue(dstId, out var cnt);
-                        _serverFileCount[dstId] = cnt + 1;
-                    }
-                    if (!transfer.WasDupe)
-                    {
-                        _destDelivered.TryGetValue(dstId, out var dd);
-                        _destDelivered[dstId] = dd + 1;
-                    }
-                    _serversWithSuccessfulTransfer.Add(dstId);
-                    // A single success proves the dest is working — clear any
-                    // accumulated failure count + backoff window so future
-                    // transient 550s don't immediately re-trigger the ladder.
-                    _destFailureCount.Remove(dstId);
-                    _destRetryAt.Remove(dstId);
-                }
+                    CreditDeliveryNoLock(file.Name, file.Size, dstId, transfer.WasDupe);
                 _forceScan = true; // Rescan — new files likely appeared on source from other racers
                 if (transfer.WasDupe)
                     Log.Information("FXP dupe-skip: {File} ({Src} -> {Dst}) — already on dest",
