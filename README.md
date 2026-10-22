@@ -2,7 +2,7 @@
 
 **Mount glftpd FTPS servers as native Windows drive letters.** One tray app covers the whole site-user workflow: browse in Explorer, auto-download from a wishlist, race releases between sites over FXP, chat on FiSH-encrypted IRC, stream media, search PreDB, and script the running app through MCP.
 
-Built on .NET 10, WPF, WinFsp, FluentFTP and GnuTLS. Windows 11, x64. Current version: **3.11.25**.
+Built on .NET 10, WPF, WinFsp, FluentFTP and GnuTLS. Windows 11, x64. Current version: **3.11.27**.
 
 ![GlDrive dashboard in light mode](docs/screenshots/light/dashboard-overview.png)
 
