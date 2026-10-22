@@ -12,6 +12,16 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.11.27 — direct FXP completion validation (2026-10-22)
+
+- Require successful completion replies from both servers before crediting a
+  direct FXP transfer. Server failures remain failures, with conservative
+  connection quarantine, and timeouts cannot mark a direct route successful.
+- Preserve cancellation and the shared completion deadline. Relay's separate
+  byte-count checks and known glftpd completion behavior remain in place.
+- Add regressions for completion rejection, reply draining, timeout and
+  cancellation. See the [release notes](releases/v3.11.27.md).
+
 ## v3.11.25 — pool initialization, duplicate-source safety and updater status (2026-10-21)
 
 - Preserve pool capacity and login accounting when initialization overlaps a

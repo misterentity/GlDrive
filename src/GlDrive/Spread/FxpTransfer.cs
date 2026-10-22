@@ -32,6 +32,8 @@ public enum FxpFaultSide { None, Source, Dest, Both, Neither }
 /// <summary>Outcome of <see cref="FxpTransfer.RecordDirectFailure"/>.</summary>
 internal enum DirectProbeFailure { NotCached, First, Reprobe }
 
+internal sealed class DirectFxpCompletionException(string message) : IOException(message);
+
 public class FxpTransfer
 {
     private static readonly Regex PasvRegex = new(@"\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)\)", RegexOptions.Compiled);
@@ -185,7 +187,25 @@ public class FxpTransfer
                     try
                     {
                         ok = await ExecuteCpsvPasv(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct, pasvSw);
-                        RecordDirectSuccess(srcServerId, dstServerId);
+                        if (ok)
+                            RecordDirectSuccess(srcServerId, dstServerId);
+                        else
+                        {
+                            // A timed-out native reply may still be draining. Remember the
+                            // failed route, but let the next attempt obtain fresh sessions.
+                            RecordDirectFailure(srcServerId, dstServerId, DateTime.UtcNow);
+                            source.Poison("direct FXP completion timed out");
+                            dest.Poison("direct FXP completion timed out");
+                        }
+                    }
+                    catch (DirectFxpCompletionException)
+                    {
+                        // A preliminary or session-closing reply may leave transfer state
+                        // unresolved. Never send relay commands on these same sessions.
+                        RecordDirectFailure(srcServerId, dstServerId, DateTime.UtcNow);
+                        source.Poison("direct FXP completion rejected");
+                        dest.Poison("direct FXP completion rejected");
+                        throw;
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
@@ -765,26 +785,43 @@ public class FxpTransfer
         }
     }
 
-    private async Task<bool> WaitForTransferComplete(
+    private Task<bool> WaitForTransferComplete(
         AsyncFtpClient src, AsyncFtpClient dst,
         int timeoutSec, CancellationToken ct)
+        => CompleteDirectAsync(timeoutSec,
+            (timeout, token) => ReadReplyManagedTimeout(src, timeout, token),
+            (timeout, token) => ReadReplyManagedTimeout(dst, timeout, token), ct);
+
+    internal async Task<bool> CompleteDirectAsync(int timeoutSec,
+        Func<TimeSpan, CancellationToken, Task<FtpReply?>> readSource,
+        Func<TimeSpan, CancellationToken, Task<FtpReply?>> readDestination,
+        CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         var deadline = TimeSpan.FromSeconds(timeoutSec > 0 ? timeoutSec : 60);
         var sw = Stopwatch.StartNew();
 
         // Source sends 226 when RETR is done
-        var srcReply = await ReadReplyManagedTimeout(src, deadline, ct);
+        var srcReply = await readSource(deadline, ct);
+        ct.ThrowIfCancellationRequested();
         if (srcReply is null) return TimedOut();
-        if (srcReply.Value.Code != "226" && srcReply.Value.Code != "250")
-            Log.Warning("FXP source unexpected reply: {Code} {Msg}", srcReply.Value.Code, srcReply.Value.Message);
 
         // Dest sends 226 when STOR is done
         var remaining = deadline - sw.Elapsed;
         if (remaining <= TimeSpan.Zero) return TimedOut();
-        var dstReply = await ReadReplyManagedTimeout(dst, remaining, ct);
+        var dstReply = await readDestination(remaining, ct);
+        ct.ThrowIfCancellationRequested();
         if (dstReply is null) return TimedOut();
+
+        // Drain both replies before judging their result. Direct FXP has no local
+        // byte-count proof: a refusal or aborted transfer must not credit ownership
+        // or mark a direct route healthy. The relay-only glftpd STOR 426 exception
+        // belongs to CompleteRelayAsync and does not apply to server-to-server FXP.
+        // Keep FaultSide.None so callers quarantine both data-phase sessions.
+        if (srcReply.Value.Code != "226" && srcReply.Value.Code != "250")
+            throw new DirectFxpCompletionException($"FXP source completion failed: {srcReply.Value.Code} {srcReply.Value.Message}");
         if (dstReply.Value.Code != "226" && dstReply.Value.Code != "250")
-            Log.Warning("FXP dest unexpected reply: {Code} {Msg}", dstReply.Value.Code, dstReply.Value.Message);
+            throw new DirectFxpCompletionException($"FXP destination completion failed: {dstReply.Value.Code} {dstReply.Value.Message}");
 
         SetState(TransferState.Complete);
         return true;
