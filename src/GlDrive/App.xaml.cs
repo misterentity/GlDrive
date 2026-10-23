@@ -176,7 +176,6 @@ public partial class App
             // 2. FluentFTP.GnuTLS surfaces GnuTlsException (e.g. -50 INVALID_REQUEST,
             //    -9 TLS_PACKET_DECODING_ERROR) from background reads after a BNC drops us.
             // Both are harmless (we SetObserved) but spam [ERR] logs. Suppress to Debug.
-            // Type-check by name to avoid taking a using-reference on FluentFTP.GnuTLS.
             var inner = args.Exception?.Flatten().InnerExceptions
                 ?? (IEnumerable<Exception>)Array.Empty<Exception>();
             bool suppress = false;
@@ -205,7 +204,7 @@ public partial class App
                     suppress = true;
                     break;
                 }
-                if (ex.GetType().Name == "GnuTlsException")
+                if (GlDrive.Ftp.SerializedGnuTlsStream.IsGnuTlsIoFailure(ex))
                 {
                     suppress = true;
                     break;

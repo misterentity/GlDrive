@@ -135,6 +135,11 @@ public sealed class SerializedGnuTlsStream : IFtpStream
         return Enum.GetName(GnuTlsErrorEnum, Enum.ToObject(GnuTlsErrorEnum, code)) ?? "GnuTLS error";
     }
 
+    // Timed-out native reads may finish after their caller has gone away. Keep their
+    // existing background-fault classification when the stream adds an IOException wrapper.
+    internal static bool IsGnuTlsIoFailure(Exception exception) =>
+        exception is GnuTlsException or IOException { InnerException: GnuTlsException };
+
     /// <summary>
     /// A <see cref="Stream"/> that wraps the real <c>GnuTlsInternalStream</c> and holds
     /// <see cref="_ioLock"/> for the entire duration of every native read/write, so a concurrent
@@ -165,6 +170,7 @@ public sealed class SerializedGnuTlsStream : IFtpStream
         {
             _lock.Wait();
             try { ThrowIfFreed(); return _inner.Read(buffer, offset, count); }
+            catch (GnuTlsException ex) { throw ReadFailed(ex); }
             finally { _lock.Release(); }
         }
 
@@ -176,7 +182,18 @@ public sealed class SerializedGnuTlsStream : IFtpStream
             // runs to CommTimeout, and we keep the lock until it returns so Dispose waits it out.
             await _lock.WaitAsync(cancellationToken).ConfigureAwait(false);
             try { ThrowIfFreed(); return await Task.Run(() => _inner.Read(buffer, offset, count), CancellationToken.None).ConfigureAwait(false); }
+            catch (GnuTlsException ex) { throw ReadFailed(ex); }
             finally { _lock.Release(); }
+        }
+
+        // The package reports failed native recv calls as GnuTlsException (not IOException).
+        // Normalize only at the I/O boundary so search's transport retry and spread's scan
+        // poisoning recognize them, while handshake/authentication failures remain distinct.
+        // Invalidate under the native I/O lock before any queued teardown can send gnutls_bye.
+        private IOException ReadFailed(GnuTlsException ex)
+        {
+            FtpConnectionPool.MarkGnuTlsSessionUnusable(_inner);
+            return new IOException($"GnuTLS read failed: {GnuTlsErrorName(ex.ExResult)} ({ex.ExResult}) — connection lost", ex);
         }
 
         public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
