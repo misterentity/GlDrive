@@ -12,6 +12,16 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.11.29 — TLS read failure recovery (2026-10-23)
+
+- Report native GnuTLS read failures as transport `IOException`s, preserving the
+  original exception and marking the failed session unusable. Search retries and
+  spread scan quarantine can now recognize the read-side failure already
+  documented in v3.11.28's remaining risks.
+- Cover synchronous/asynchronous reads and the search retry boundary with
+  regression tests while preserving caller cancellation and unrelated errors.
+  See the [release notes](releases/v3.11.29.md).
+
 ## v3.11.28 — honest transport failures and download-lane stalls (2026-10-23)
 
 - Report a GnuTLS send on a dead connection as an `IOException` naming the
