@@ -23,6 +23,11 @@ namespace GlDrive.Downloads.Segmented;
 internal sealed class FtpLane : ISegmentLane
 {
     private static readonly TimeSpan ReplyTimeout = TimeSpan.FromSeconds(10);
+    // Re-borrowing after a fault queues behind every other borrower of the main pool (the next
+    // download, a scan). Bound the wait inside the engine's stall window and back off instead:
+    // waiting for a busy pool is not a lane fault. 45s still covers the account login gate (30s).
+    internal static readonly TimeSpan ReborrowWait = TimeSpan.FromSeconds(45);
+    private static readonly TimeSpan ReborrowBackoff = TimeSpan.FromSeconds(5);
 
     private readonly FtpConnectionPool? _reborrowPool;
     private readonly NetworkPath _network;
@@ -177,8 +182,21 @@ internal sealed class FtpLane : ISegmentLane
         if (_conn != null) return _conn.Client;
         if (_reborrowPool == null)
             throw new IOException($"{Label}: connection was lost and this lane cannot reconnect");
-        _conn = await _reborrowPool.Borrow(ct);
+        _conn = await BorrowWithin(_reborrowPool.Borrow, ReborrowWait, Label, ct);
         return _conn.Client;
+    }
+
+    internal static async Task<T> BorrowWithin<T>(Func<CancellationToken, Task<T>> borrow, TimeSpan wait,
+        string label, CancellationToken ct)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(wait);
+        try { return await borrow(deadline.Token); }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            throw new LaneBackoffException(
+                $"{label}: no free login on the pool within {wait.TotalSeconds:0}s — another transfer holds it", ReborrowBackoff, ex);
+        }
     }
 
     /// <summary>

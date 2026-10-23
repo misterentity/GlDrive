@@ -14,6 +14,7 @@ public sealed class SegmentedTransfer
 {
     private static readonly TimeSpan IdleWait = TimeSpan.FromMilliseconds(200);
     private static readonly TimeSpan WatchInterval = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan SlowWriteReport = TimeSpan.FromSeconds(10);
 
     private readonly IReadOnlyList<TransferFile> _files;
     private readonly SegmentedTransferOptions _options;
@@ -26,6 +27,9 @@ public sealed class SegmentedTransfer
 
     /// <summary>Test seam: called for every staged file right after it is opened.</summary>
     internal Action<StagedFile>? StagedFileOpened { get; set; }
+
+    /// <summary>Test seam: awaited before every staged write (simulates a saturated disk).</summary>
+    internal Func<Task>? BeforeStagedWrite { get; set; }
 
     // Wraps a write/commit failure so lane-failure handling can't mistake it for a lane fault.
     private sealed class DiskFailure(Exception inner) : Exception(inner.Message, inner);
@@ -342,7 +346,9 @@ public sealed class SegmentedTransfer
         using var readCts = CancellationTokenSource.CreateLinkedTokenSource(token);
         var readToken = lane.CanStopEarly ? readCts.Token : token;
         int interrupt = 0; // 1 = yield, 2 = stall
-        int pacing = 0;    // a pacer wait is deliberate silence, not a stall
+        // A pacer wait or a blocked disk write is local silence, not a network stall: the
+        // server is merely flow-controlled, and dropping the connection cannot help.
+        int localWait = 0;
         long lastActivity = Environment.TickCount64;
         Task? watcher = null;
         try
@@ -362,13 +368,20 @@ public sealed class SegmentedTransfer
                 // Any failed open may have left a control reply unread — cancellation included.
                 // Fault quarantines the FTP connection with deferred native teardown;
                 // there is no reader to cleanly finish and return to the pool here.
-                lane.Fault(token.IsCancellationRequested ? new OperationCanceledException(token) : ex);
+                // The stall watcher cancels a hung open the same way it interrupts a read; report
+                // that as the stall it is, not as the bare cancellation that implemented it.
+                var stalled = ex is OperationCanceledException && !token.IsCancellationRequested &&
+                    Volatile.Read(ref interrupt) == 2
+                    ? new IOException($"Could not open {file.Key} within {_options.StallTimeout.TotalSeconds:0}s", ex)
+                    : null;
+                lane.Fault(token.IsCancellationRequested ? new OperationCanceledException(token) : stalled ?? ex);
                 if (ex is OperationCanceledException && !token.IsCancellationRequested &&
                     Volatile.Read(ref interrupt) == 1)
                 {
                     Log.Information("Download lane {Label} yielded while opening {File}", lane.Label, file.LocalPath);
                     return RangeOutcome.Yielded;
                 }
+                if (stalled != null) throw stalled;
                 throw;
             }
             lr.State = LaneState.Active;
@@ -420,14 +433,22 @@ public sealed class SegmentedTransfer
                 bool finalChunk = allowed > 0 && !unknownSize && offset + allowed >= file.Size;
                 if (allowed > 0)
                 {
+                    Volatile.Write(ref localWait, 1);
+                    long writeStart = Environment.TickCount64;
                     try
                     {
+                        if (BeforeStagedWrite != null) await BeforeStagedWrite();
                         await staged.WriteAsync(offset, buffer.AsMemory(0, (int)allowed), token);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException || !token.IsCancellationRequested)
                     {
                         throw new DiskFailure(ex);
                     }
+                    finally { Volatile.Write(ref localWait, 0); }
+                    var writeMs = Environment.TickCount64 - writeStart;
+                    if (writeMs >= SlowWriteReport.TotalMilliseconds)
+                        Log.Information("Download lane {Label}: local disk write took {Seconds:0}s on {File} — the target volume is saturated (not counted as a network stall)",
+                            lane.Label, writeMs / 1000.0, file.LocalPath);
                     if (!finalChunk) MarkWritten(offset, allowed);
                 }
 
@@ -435,7 +456,7 @@ public sealed class SegmentedTransfer
                 _options.OnBytes?.Invoke(lane.NetworkId, n);
                 if (_options.Pacer != null)
                 {
-                    Volatile.Write(ref pacing, 1);
+                    Volatile.Write(ref localWait, 1);
                     try
                     {
                         await _options.Pacer.WaitAsync(lane.NetworkId, n, readToken);
@@ -444,7 +465,7 @@ public sealed class SegmentedTransfer
                     {
                         if (Volatile.Read(ref interrupt) == 1) return await YieldAsync();
                     }
-                    finally { Volatile.Write(ref pacing, 0); }
+                    finally { Volatile.Write(ref localWait, 0); }
                 }
                 Volatile.Write(ref lastActivity, Environment.TickCount64);
 
@@ -534,7 +555,7 @@ public sealed class SegmentedTransfer
                         readCts.Cancel();
                         return;
                     }
-                    if (Volatile.Read(ref pacing) == 1) Volatile.Write(ref lastActivity, Environment.TickCount64);
+                    if (Volatile.Read(ref localWait) == 1) Volatile.Write(ref lastActivity, Environment.TickCount64);
                     else if (_options.StallTimeout > TimeSpan.Zero &&
                         Environment.TickCount64 - Volatile.Read(ref lastActivity) > _options.StallTimeout.TotalMilliseconds)
                     {

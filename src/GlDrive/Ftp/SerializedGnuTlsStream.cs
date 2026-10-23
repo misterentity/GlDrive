@@ -125,6 +125,16 @@ public sealed class SerializedGnuTlsStream : IFtpStream
         }
     }
 
+    private static readonly Type? GnuTlsErrorEnum =
+        typeof(GnuTlsStream).Assembly.GetType("FluentFTP.GnuTLS.Core.EC+errNo");
+
+    // The library's own error-code names (diagnostic only; falls back if a bump renames them).
+    internal static string GnuTlsErrorName(int code)
+    {
+        if (GnuTlsErrorEnum == null) return "GnuTLS error";
+        return Enum.GetName(GnuTlsErrorEnum, Enum.ToObject(GnuTlsErrorEnum, code)) ?? "GnuTLS error";
+    }
+
     /// <summary>
     /// A <see cref="Stream"/> that wraps the real <c>GnuTlsInternalStream</c> and holds
     /// <see cref="_ioLock"/> for the entire duration of every native read/write, so a concurrent
@@ -132,7 +142,7 @@ public sealed class SerializedGnuTlsStream : IFtpStream
     /// is forced to wait. Does NOT own/dispose the inner stream — that is done, serialized, by the
     /// owning <see cref="SerializedGnuTlsStream"/>.
     /// </summary>
-    private sealed class SerializingStream : Stream
+    internal sealed class SerializingStream : Stream
     {
         private readonly SerializedGnuTlsStream _owner;
         private readonly Stream _inner;
@@ -194,6 +204,7 @@ public sealed class SerializedGnuTlsStream : IFtpStream
         {
             _lock.Wait();
             try { ThrowIfFreed(); _inner.Write(buffer, offset, count); }
+            catch (ArgumentOutOfRangeException ex) when (IsFailedSend(ex)) { throw SendFailed(ex); }
             finally { _lock.Release(); }
         }
 
@@ -201,7 +212,24 @@ public sealed class SerializedGnuTlsStream : IFtpStream
         {
             await _lock.WaitAsync(cancellationToken).ConfigureAwait(false);
             try { ThrowIfFreed(); await Task.Run(() => _inner.Write(buffer, offset, count), CancellationToken.None).ConfigureAwait(false); }
+            catch (ArgumentOutOfRangeException ex) when (IsFailedSend(ex)) { throw SendFailed(ex); }
             finally { _lock.Release(); }
+        }
+
+        // GnuTlsInternalStream.Write (FluentFTP.GnuTLS 1.0.38) leaves its retry loop holding a
+        // FATAL gnutls_record_send result and then uses it as an Array.Copy source index, so a
+        // dead socket (-53 PUSH_ERROR) or session (-10 INVALID_SESSION) throws
+        // ArgumentOutOfRangeException("sourceIndex", <error code>) — and skips the library's own
+        // IsSessionUsable = false. Report it as the transport failure it is, and do what the
+        // library skipped so the pool's health check and teardown see a dead session.
+        private static bool IsFailedSend(ArgumentOutOfRangeException ex) =>
+            ex.ParamName == "sourceIndex" && ex.ActualValue is int code && code < 0;
+
+        private IOException SendFailed(ArgumentOutOfRangeException ex)
+        {
+            var code = (int)ex.ActualValue!;
+            FtpConnectionPool.MarkGnuTlsSessionUnusable(_inner);
+            return new IOException($"GnuTLS send failed: {GnuTlsErrorName(code)} ({code}) — connection lost", ex);
         }
 
         public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)

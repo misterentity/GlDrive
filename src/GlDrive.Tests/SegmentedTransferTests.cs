@@ -429,6 +429,52 @@ public sealed class SegmentedTransferTests : IDisposable
         Assert.Contains(stalled.Faults, e => e.Message.StartsWith("No data for"));
     }
 
+    // v3.11.28 — 2026-10-22 16:47/16:54: both lanes of a download "stalled" at the same instant
+    // while two 6 GB extractions saturated the same SMR disk. Time blocked in a local write is
+    // not network silence; tearing the connection down for it cannot make the disk faster.
+    [Fact]
+    public async Task SlowDiskWrite_IsNotANetworkStall()
+    {
+        var f = AddFile("slowdisk.r00", 64 * 1024);
+        var lane = new FakeLane(_source, "main") { ReadDelayMs = 1 };
+        var opts = new SegmentedTransferOptions
+        {
+            BufferSize = 8 * 1024, MinSplitBytes = 16 * 1024, MaxLaneFailures = 1,
+            LaneRetryDelay = TimeSpan.FromMilliseconds(1), StallTimeout = TimeSpan.FromMilliseconds(300),
+        };
+        int blocked = 0;
+        var transfer = new SegmentedTransfer([f], opts)
+        {
+            BeforeStagedWrite = () => Interlocked.Exchange(ref blocked, 1) == 0 ? Task.Delay(900) : Task.CompletedTask,
+        };
+
+        await transfer.RunAsync([lane], null, null, default);
+
+        AssertOnDisk(f);
+        Assert.Empty(lane.Faults);
+        Assert.Single(lane.Opens);
+    }
+
+    // v3.11.28 — a stall while OPENING was rethrown as the bare cancellation that implemented it,
+    // so the lane retired "after 3 consecutive failures: The operation was canceled."
+    [Fact]
+    public async Task StalledOpen_FailsWithAnHonestMessage()
+    {
+        var f = AddFile("a.r00", 100_000);
+        var lane = new FakeLane(_source, "main") { BlockOpens = true };
+        var opts = new SegmentedTransferOptions
+        {
+            BufferSize = 8 * 1024, MinSplitBytes = 16 * 1024, MaxLaneFailures = 1,
+            LaneRetryDelay = TimeSpan.FromMilliseconds(1), StallTimeout = TimeSpan.FromMilliseconds(300),
+        };
+
+        var ex = await Assert.ThrowsAsync<IOException>(() =>
+            new SegmentedTransfer([f], opts).RunAsync([lane], null, null, default));
+
+        Assert.StartsWith("Could not open", ex.Message);
+        Assert.Single(lane.Faults);
+    }
+
     [Fact]
     public async Task CancelledOpen_FaultsTheLane()
     {
