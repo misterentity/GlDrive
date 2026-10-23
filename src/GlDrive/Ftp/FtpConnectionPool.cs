@@ -1183,6 +1183,33 @@ public class FtpConnectionPool : IAsyncDisposable
     }
 
     /// <summary>
+    /// Set GnuTlsInternalStream.IsSessionUsable=false (private setter) so the library skips
+    /// gnutls_bye and the pool's health check reads the session as dead.
+    /// </summary>
+    internal static void MarkGnuTlsSessionUnusable(object gnuTlsInternal)
+    {
+        try
+        {
+            var usableProp = gnuTlsInternal.GetType().GetProperty("IsSessionUsable");
+            if (usableProp?.CanWrite == true)
+            {
+                usableProp.SetValue(gnuTlsInternal, false);
+            }
+            else
+            {
+                // Fallback: use backing field if setter is private
+                var backingField = gnuTlsInternal.GetType().GetField("<IsSessionUsable>k__BackingField",
+                    BindingFlags.NonPublic | BindingFlags.Instance);
+                backingField?.SetValue(gnuTlsInternal, false);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "MarkGnuTlsSessionUnusable: failed (non-fatal)");
+        }
+    }
+
+    /// <summary>
     /// Neutralize GnuTLS before disposal to prevent native crashes.
     /// GnuTLS calls gnutls_bye() during stream Dispose, which can crash the process
     /// with a native access violation if the underlying socket is dead or the TLS
@@ -1224,20 +1251,7 @@ public class FtpConnectionPool : IAsyncDisposable
                         BindingFlags.Public | BindingFlags.Instance);
                 var gnuTlsInternal = baseStreamField?.GetValue(customStream);
                 if (gnuTlsInternal != null)
-                {
-                    var usableProp = gnuTlsInternal.GetType().GetProperty("IsSessionUsable");
-                    if (usableProp?.CanWrite == true)
-                    {
-                        usableProp.SetValue(gnuTlsInternal, false);
-                    }
-                    else
-                    {
-                        // Fallback: use backing field if setter is private
-                        var backingField = gnuTlsInternal.GetType().GetField("<IsSessionUsable>k__BackingField",
-                            BindingFlags.NonPublic | BindingFlags.Instance);
-                        backingField?.SetValue(gnuTlsInternal, false);
-                    }
-                }
+                    MarkGnuTlsSessionUnusable(gnuTlsInternal);
 
                 // Detach the wrapper from the FtpSocketStream so FluentFTP's own
                 // Dispose() chain (which runs immediately, possibly under a live native

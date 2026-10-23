@@ -12,6 +12,21 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.11.28 — honest transport failures and download-lane stalls (2026-10-23)
+
+- Report a GnuTLS send on a dead connection as an `IOException` naming the
+  GnuTLS error (e.g. `GNUTLS_E_PUSH_ERROR (-53)`), and mark the session
+  unusable. FluentFTP.GnuTLS 1.0.38 surfaced it as
+  `ArgumentOutOfRangeException: sourceIndex ('-53')` and left the session
+  flagged usable.
+- Stop counting local waits as network stalls in multi-stream downloads: time
+  blocked in a disk write no longer trips the 90s "No data" watcher, and writes
+  slower than 10s are logged as disk saturation.
+- A lane re-borrowing a busy main pool now backs off instead of failing, so it
+  is no longer retired with "The operation was canceled". A stalled open is
+  reported as `Could not open <file> within 90s`. See the
+  [release notes](releases/v3.11.28.md).
+
 ## v3.11.27 — direct FXP completion validation (2026-10-22)
 
 - Require successful completion replies from both servers before crediting a
