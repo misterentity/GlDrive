@@ -2671,7 +2671,7 @@ public class SpreadJob : IDisposable
     }
 
     private static BorrowStarvationDiagnoser.PoolState SnapshotPool(FtpConnectionPool p) =>
-        new(p.IsInCooldown, p.IsExhausted, p.TotalCreated, p.ActiveCount, p.MaxSize,
+        new(p.IsInCooldown, p.IsExhausted, p.TotalCreated, p.ActiveCount, p.EffectiveMaxSize,
             p.IsInLoginGateBackoff, p.IsHostUnreachable);
 
     private async Task ExecuteTransfer(SpreadFileInfo file, string srcId, string dstId,
@@ -3023,8 +3023,9 @@ public class SpreadJob : IDisposable
             if (srcPool != null && dstPool != null)
                 Log.Warning("FXP borrow timeout: {File} ({Src} -> {Dst}) — {Cause}",
                     file.Name, srcName, dstName,
-                    BorrowStarvationDiagnoser.Describe(
-                        srcName, SnapshotPool(srcPool), dstName, SnapshotPool(dstPool)));
+                    BorrowStarvationDiagnoser.DescribeBorrowFailure(
+                        srcName, SnapshotPool(srcPool), srcConn != null,
+                        dstName, SnapshotPool(dstPool), dstConn != null));
             // Congestion (no login permit free), NOT corruption. The borrow timed
             // out DURING Borrow, before any STOR/RETR — so the surviving peer (if
             // any) never touched its GnuTLS data channel and is pristine. Do NOT
@@ -3068,9 +3069,9 @@ public class SpreadJob : IDisposable
                 // full stack trace.
                 Log.Information("FXP setup deferred: {File} ({Src} -> {Dst}) — {Error}; {Cause}",
                     file.Name, srcId, dstId, ex.Message,
-                    BorrowStarvationDiagnoser.Describe(
-                        _serverConfigs[srcId].Name, SnapshotPool(srcPool!),
-                        _serverConfigs[dstId].Name, SnapshotPool(dstPool!)));
+                    BorrowStarvationDiagnoser.DescribeBorrowFailure(
+                        _serverConfigs[srcId].Name, SnapshotPool(srcPool!), srcConn != null,
+                        _serverConfigs[dstId].Name, SnapshotPool(dstPool!), dstConn != null));
             }
             else
             {

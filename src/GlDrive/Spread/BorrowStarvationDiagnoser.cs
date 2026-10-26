@@ -28,12 +28,12 @@ namespace GlDrive.Spread;
 ///                      refused a recent login" — the exact class of misattribution
 ///                      this type exists to prevent. 2026-08-10/11: 1 real refusal
 ///                      vs 1,009 gate backoffs, all reported as refusals.
-///   - empty pool     — every connection really was discarded. THIS is the case
-///                      where ghost sessions are a plausible cause.
+///   - empty pool     — no connection is available. Counters alone cannot distinguish
+///                      failed connection establishment from discarded connections.
 ///   - at capacity    — the pool holds its max and they are all busy; this is
 ///                      concurrency pressure, nothing is broken.
-///   - login cap      — below max but no free account login permit, i.e. some
-///                      other pool for the same account is holding them.
+///   - below capacity — connection creation or login contention may be delaying
+///                      recovery; counters alone do not establish a login cap.
 /// </summary>
 public static class BorrowStarvationDiagnoser
 {
@@ -76,16 +76,33 @@ public static class BorrowStarvationDiagnoser
                    "DNS or routing, not the server — nothing was refused and no login was attempted";
 
         if (s.IsExhausted || (s.Created <= 0 && s.Active <= 0))
-            return $"pool empty — every connection was discarded (created=0/{s.MaxSize}); " +
-                   "ghost sessions are plausible here, try a !username login";
+            return $"pool empty — no connection is available (created=0/{s.MaxSize}); " +
+                   "connection establishment failed or previous connections were discarded";
+
+        if (s.Active < s.Created)
+            return $"pool has unborrowed or connecting capacity now (created={s.Created}/{s.MaxSize}, active={s.Active}); " +
+                   "the earlier wait cannot be diagnosed from this snapshot";
 
         if (s.Created >= s.MaxSize)
             return $"pool at capacity — all {s.MaxSize} connection(s) busy (active={s.Active}); " +
                    "concurrency pressure, not a fault";
 
-        return $"account login cap — no free login permit for a new connection " +
-               $"(created={s.Created}/{s.MaxSize}, active={s.Active}); another pool on this " +
-               "account is holding the permits";
+        return $"connection unavailable below capacity (created={s.Created}/{s.MaxSize}, active={s.Active}); " +
+               "connection creation or account login contention may be delaying recovery";
+    }
+
+    /// <summary>
+    /// A successful peer borrow is held until the failed peer completes. Its active
+    /// count includes this transfer itself, so it cannot explain this borrow failure.
+    /// </summary>
+    public static string DescribeBorrowFailure(string srcName, PoolState src, bool srcAcquired,
+        string dstName, PoolState dst, bool dstAcquired)
+    {
+        if (srcAcquired && dstAcquired)
+            return "both pool connections were acquired; setup failed after borrowing";
+        if (srcAcquired) return $"{dstName}: {Describe(dst)}";
+        if (dstAcquired) return $"{srcName}: {Describe(src)}";
+        return Describe(srcName, src, dstName, dst);
     }
 
     /// <summary>
