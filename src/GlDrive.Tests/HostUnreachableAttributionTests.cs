@@ -104,16 +104,17 @@ public class HostUnreachableAttributionTests
         Assert.Contains("unreachable", text, StringComparison.OrdinalIgnoreCase);
     }
 
-    // ...and the ghost advice must survive for the case it was written for, or this
-    // fix would just have deleted a true diagnosis along with the false one.
+    // Empty counters also occur during remote resets and connection timeouts.
+    // They cannot establish that stale sessions should be killed.
     [Fact]
-    public void AGenuinelyEmptiedPoolStillGetsTheGhostAdvice()
+    public void AnEmptyPoolReportsTheObservationWithoutGhostAdvice()
     {
         var text = BorrowStarvationDiagnoser.Describe(
             new State(IsInCooldown: false, IsExhausted: true, Created: 0, Active: 0,
                       MaxSize: 3, IsInLoginGateBackoff: false, IsHostUnreachable: false));
 
-        Assert.Contains("ghost", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("pool empty", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("ghost", text, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

@@ -1291,7 +1291,7 @@ public class FtpConnectionPool : IAsyncDisposable
     /// Free the GnuTLS wrapper that <see cref="NeutralizeGnuTls"/> detached. Safe to call only
     /// once the native recv has drained (after <see cref="AbandonedReclaimDelay"/>, or on an
     /// idle connection); <c>SerializedGnuTlsStream.Dispose</c> additionally serializes against
-    /// any read still holding the I/O lock and leaks (with a warning) rather than free under it.
+    /// any read still holding the I/O lock and defers cleanup until it drains rather than free under it.
     /// With IsSessionUsable already false, the library skips gnutls_bye and just runs
     /// gnutls_deinit + gnutls_certificate_free_credentials.
     /// </summary>

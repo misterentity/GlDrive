@@ -30,11 +30,12 @@ public class BorrowStarvationDiagnoserTests
         IsInCooldown: false, IsExhausted: false, Created: 3, Active: 1, MaxSize: 3);
 
     [Fact]
-    public void LoginCapStall_IsNotReportedAsExhaustion()
+    public void BelowCapacityStall_DoesNotAssertAnUnobservedCause()
     {
         var msg = BorrowStarvationDiagnoser.Describe(LoginCapped);
 
-        Assert.Contains("login cap", msg);
+        Assert.Contains("below capacity", msg);
+        Assert.DoesNotContain("another pool", msg);
         Assert.Contains("created=2/3", msg);
         Assert.DoesNotContain("empty", msg);
     }
@@ -49,12 +50,13 @@ public class BorrowStarvationDiagnoserTests
     }
 
     [Fact]
-    public void GenuinelyEmptyPool_StillSuggestsGhostSessions()
+    public void EmptyPool_DoesNotPrescribeGhostKillingWithoutEvidence()
     {
         var msg = BorrowStarvationDiagnoser.Describe(Empty);
 
         Assert.Contains("pool empty", msg);
-        Assert.Contains("!username", msg);
+        Assert.DoesNotContain("!username", msg);
+        Assert.DoesNotContain("ghost", msg);
     }
 
     [Fact]

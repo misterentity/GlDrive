@@ -12,6 +12,15 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.11.30 — deferred TLS cleanup and accurate timeout diagnostics (2026-10-26)
+
+- Reclaim native TLS resources after a timed-out read eventually drains, while
+  preserving the lock that prevents teardown during native I/O. Reject new
+  operations once disposal starts and allow only one teardown owner.
+- Attribute transfer setup failures only to connections that were not acquired;
+  use the effective account capacity and avoid speculative ghost-login advice.
+  See the [release notes](releases/v3.11.30.md).
+
 ## v3.11.29 — TLS read failure recovery (2026-10-23)
 
 - Report native GnuTLS read failures as transport `IOException`s, preserving the

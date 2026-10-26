@@ -26,10 +26,10 @@ namespace GlDrive.Ftp;
 ///
 /// FIX: wrap the custom stream so every read AND the dispose take the SAME per-connection
 /// <see cref="SemaphoreSlim"/>. A recv and <c>sess.Dispose()</c> are now mutually exclusive:
-/// Dispose blocks until any in-flight recv returns (native recv is floored at GnuTLS CommTimeout
-/// ~15s), then frees the session with nothing reading it. If a recv somehow never returns, we
-/// LEAK the session rather than free it under a live read — a bounded native leak is always
-/// preferable to a process crash.
+/// Dispose waits up to 20 seconds for in-flight I/O, then retains one asynchronous cleanup waiter.
+/// New I/O is rejected as soon as disposal starts. Cleanup frees the session only after obtaining
+/// the same lock; if native I/O never returns, its session remains retained rather than being freed
+/// under a live read. A slow read that eventually drains no longer leaks its session permanently.
 ///
 /// This type is a drop-in <see cref="IFtpStream"/> for <c>Config.CustomStream</c> that composes
 /// the package's <see cref="GnuTlsStream"/> (so TLS handshake / session-resumption behaviour is
@@ -43,7 +43,7 @@ public sealed class SerializedGnuTlsStream : IFtpStream
     private readonly SemaphoreSlim _ioLock = new(1, 1);
 
     // The real package stream — does the TLS handshake and owns the GnuTlsInternalStream.
-    private readonly GnuTlsStream _inner = new();
+    private readonly IFtpStream _inner;
 
     // The serializing view FluentFTP reads/writes through.
     private SerializingStream? _wrapper;
@@ -56,16 +56,24 @@ public sealed class SerializedGnuTlsStream : IFtpStream
     internal Stream? BaseStream;
 
     /// <summary>
-    /// Max time <see cref="Dispose"/> waits for an in-flight recv/send to finish before freeing the
-    /// session. Must exceed the GnuTLS CommTimeout floor (~15s) so a normal recv always drains in
-    /// time; on the rare timeout we skip the free (leak, never crash).
+    /// Maximum synchronous wait for in-flight I/O. A timeout transfers cleanup to an asynchronous
+    /// waiter; it never authorizes freeing a session while native I/O still holds the lock.
     /// </summary>
-    private static readonly TimeSpan DisposeDrainTimeout = TimeSpan.FromSeconds(20);
+    private readonly TimeSpan _disposeDrainTimeout;
 
-    private volatile bool _disposed;
-    // Set true UNDER _ioLock after the session is freed. The read wrapper checks it after acquiring
-    // the lock so a read that was queued behind Dispose fails cleanly instead of touching a freed sess.
-    private volatile bool _sessionFreed;
+    public SerializedGnuTlsStream() : this(new GnuTlsStream(), TimeSpan.FromSeconds(20)) { }
+
+    // Instance-only seam for deterministic native-lifetime regression tests.
+    internal SerializedGnuTlsStream(IFtpStream inner, TimeSpan disposeDrainTimeout)
+    {
+        _inner = inner;
+        _disposeDrainTimeout = disposeDrainTimeout;
+    }
+
+    // Atomic ownership prevents duplicate cleanup, including the native library's global refcount.
+    // Requesting disposal also closes I/O admission before the native session can actually be freed.
+    private int _disposeRequested;
+    private bool DisposeRequested => Volatile.Read(ref _disposeRequested) != 0;
 
     public void Init(BaseFtpClient client, string targetHost, Socket socket,
         CustomRemoteCertificateValidationCallback customRemoteCertificateValidation,
@@ -81,13 +89,13 @@ public sealed class SerializedGnuTlsStream : IFtpStream
         _wrapper = new SerializingStream(this, BaseStream, _ioLock);
     }
 
-    public bool Validate() => _inner.Validate();
+    public bool Validate() => _inner is not GnuTlsStream native || native.Validate();
 
     public Stream GetBaseStream() => _wrapper ?? _inner.GetBaseStream();
 
-    public bool CanRead() => _inner.CanRead();
+    public bool CanRead() => !DisposeRequested && _inner.CanRead();
 
-    public bool CanWrite() => _inner.CanWrite();
+    public bool CanWrite() => !DisposeRequested && _inner.CanWrite();
 
     public SslProtocols GetSslProtocol() => _inner.GetSslProtocol();
 
@@ -95,34 +103,38 @@ public sealed class SerializedGnuTlsStream : IFtpStream
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
+        if (Interlocked.Exchange(ref _disposeRequested, 1) != 0) return;
 
         // Serialize the session free (sess.Dispose inside _inner.Dispose) against any in-flight recv.
         // Acquire the SAME lock the read wrapper holds during a native recv — this is the whole fix.
-        var acquired = false;
-        try { acquired = _ioLock.Wait(DisposeDrainTimeout); }
-        catch (ObjectDisposedException) { /* already torn down */ }
+        if (_ioLock.Wait(_disposeDrainTimeout))
+        {
+            try { _inner.Dispose(); }
+            finally { _ioLock.Release(); }
+            return;
+        }
 
+        Log.Warning("GnuTLS: native I/O did not drain within {Timeout}s — deferring session cleanup until I/O completes",
+            _disposeDrainTimeout.TotalSeconds);
+        // Keep the owner/session reachable without blocking a worker thread. Task.Run also keeps
+        // cleanup off the Dispose caller if the lock becomes available just after the timeout.
+        _ = Task.Run(DisposeWhenDrainedAsync);
+    }
+
+    private async Task DisposeWhenDrainedAsync()
+    {
+        await _ioLock.WaitAsync().ConfigureAwait(false);
         try
         {
-            if (acquired)
-            {
-                _inner.Dispose(); // GnuTlsStream.Dispose → GnuTlsInternalStream.Dispose → sess.Dispose()
-                _sessionFreed = true; // any read queued behind this lock must now bail, not touch freed sess
-            }
-            else
-            {
-                // A recv is still live after DisposeDrainTimeout (> CommTimeout). Freeing the session
-                // now would fault the process. Leak it instead — bounded, and never a crash.
-                Log.Warning("GnuTLS: recv did not drain within {Timeout}s — leaking session instead of freeing under a live read",
-                    (int)DisposeDrainTimeout.TotalSeconds);
-            }
+            // FluentFTP may already have closed the socket after our synchronous Dispose returned.
+            // Skip gnutls_bye and pending-record reads on that stale transport. Mutation and native
+            // deallocation both remain under the I/O lock, after the active operation has returned.
+            if (BaseStream != null) FtpConnectionPool.MarkGnuTlsSessionUnusable(BaseStream);
+            _inner.Dispose();
+            Log.Information("GnuTLS: deferred session cleanup completed after native I/O drained");
         }
-        finally
-        {
-            if (acquired) _ioLock.Release();
-        }
+        catch (Exception ex) { Log.Warning(ex, "GnuTLS: deferred session cleanup failed"); }
+        finally { _ioLock.Release(); }
     }
 
     private static readonly Type? GnuTlsErrorEnum =
@@ -160,16 +172,17 @@ public sealed class SerializedGnuTlsStream : IFtpStream
             _lock = ioLock;
         }
 
-        private void ThrowIfFreed()
+        private void ThrowIfDisposed()
         {
-            if (_owner._sessionFreed)
-                throw new ObjectDisposedException(nameof(SerializedGnuTlsStream), "GnuTLS session was disposed");
+            if (_owner.DisposeRequested)
+                throw new ObjectDisposedException(nameof(SerializedGnuTlsStream), "GnuTLS session disposal has started");
         }
 
         public override int Read(byte[] buffer, int offset, int count)
         {
+            ThrowIfDisposed();
             _lock.Wait();
-            try { ThrowIfFreed(); return _inner.Read(buffer, offset, count); }
+            try { ThrowIfDisposed(); return _inner.Read(buffer, offset, count); }
             catch (GnuTlsException ex) { throw ReadFailed(ex); }
             finally { _lock.Release(); }
         }
@@ -180,8 +193,9 @@ public sealed class SerializedGnuTlsStream : IFtpStream
             // implementation) rather than the base ReadAsync — the base would dispatch it to the pool
             // UNTRACKED, which is the exact bug. The native recv can't be cancelled; once started it
             // runs to CommTimeout, and we keep the lock until it returns so Dispose waits it out.
+            ThrowIfDisposed();
             await _lock.WaitAsync(cancellationToken).ConfigureAwait(false);
-            try { ThrowIfFreed(); return await Task.Run(() => _inner.Read(buffer, offset, count), CancellationToken.None).ConfigureAwait(false); }
+            try { ThrowIfDisposed(); return await Task.Run(() => _inner.Read(buffer, offset, count), CancellationToken.None).ConfigureAwait(false); }
             catch (GnuTlsException ex) { throw ReadFailed(ex); }
             finally { _lock.Release(); }
         }
@@ -219,16 +233,18 @@ public sealed class SerializedGnuTlsStream : IFtpStream
 
         public override void Write(byte[] buffer, int offset, int count)
         {
+            ThrowIfDisposed();
             _lock.Wait();
-            try { ThrowIfFreed(); _inner.Write(buffer, offset, count); }
+            try { ThrowIfDisposed(); _inner.Write(buffer, offset, count); }
             catch (ArgumentOutOfRangeException ex) when (IsFailedSend(ex)) { throw SendFailed(ex); }
             finally { _lock.Release(); }
         }
 
         public override async Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
         {
+            ThrowIfDisposed();
             await _lock.WaitAsync(cancellationToken).ConfigureAwait(false);
-            try { ThrowIfFreed(); await Task.Run(() => _inner.Write(buffer, offset, count), CancellationToken.None).ConfigureAwait(false); }
+            try { ThrowIfDisposed(); await Task.Run(() => _inner.Write(buffer, offset, count), CancellationToken.None).ConfigureAwait(false); }
             catch (ArgumentOutOfRangeException ex) when (IsFailedSend(ex)) { throw SendFailed(ex); }
             finally { _lock.Release(); }
         }
@@ -269,8 +285,8 @@ public sealed class SerializedGnuTlsStream : IFtpStream
         }
 
         public override void Flush() => _inner.Flush();
-        public override bool CanRead => _inner.CanRead;
-        public override bool CanWrite => _inner.CanWrite;
+        public override bool CanRead => !_owner.DisposeRequested && _inner.CanRead;
+        public override bool CanWrite => !_owner.DisposeRequested && _inner.CanWrite;
         public override bool CanSeek => false;
         public override long Length => throw new NotSupportedException();
         public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
