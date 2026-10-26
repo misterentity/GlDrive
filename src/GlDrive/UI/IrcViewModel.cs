@@ -81,12 +81,12 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
     // Per-channel message buffers: key = "serverId:target"
     private readonly Dictionary<string, List<IrcMessageVm>> _messageBuffers = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<string>> _nickBuffers = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<string> _subscribedServices = new();
     // Items shown during scrollback hydration that may still be queued for live
     // delivery (subscribe-vs-hydrate race) — consulted once each by OnIrcMessage.
     private readonly HashSet<IrcMessageItem> _hydratedRecent = new();
-    // Track subscribed handlers for cleanup
-    private readonly Dictionary<string, (Action<string, IrcMessageItem> msg, Action<string> names, Action<string, string> topic, Action<IrcServiceState> state)> _serviceHandlers = new();
+    // Subscribed INSTANCE per server id: a remount (any config change) replaces the
+    // server's IrcService under the same id, so the id alone can't say "subscribed".
+    private readonly Dictionary<string, (IrcService irc, Action<string, IrcMessageItem> msg, Action<string> names, Action<string, string> topic, Action<IrcServiceState> state)> _serviceHandlers = new();
     private const int MaxMessages = 500;
 
     // Nick colors (deterministic)
@@ -266,7 +266,21 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
         // Always ensure the server window exists so users can see connection status/errors
         EnsureChannelVm(irc.ServerId, irc.ServerName, "*");
 
-        if (_subscribedServices.Add(irc.ServerId))
+        // Bound to a disposed predecessor: the dashboard showed the live channel list
+        // (read from the new instance) but no messages, nicks or topics ever arrived.
+        var replaced = false;
+        if (_serviceHandlers.TryGetValue(irc.ServerId, out var current) && !ReferenceEquals(current.irc, irc))
+        {
+            Unsubscribe(current);
+            _serviceHandlers.Remove(irc.ServerId);
+            // The new instance re-seeds its scrollback from disk — hydrating on top of
+            // the old buffers would show every line twice.
+            foreach (var key in _messageBuffers.Keys.Where(k => k.StartsWith(irc.ServerId + ":", StringComparison.Ordinal)).ToList())
+                _messageBuffers.Remove(key);
+            replaced = true;
+        }
+
+        if (!_serviceHandlers.ContainsKey(irc.ServerId))
         {
             Action<string, IrcMessageItem> msgHandler = (target, item) =>
                 Application.Current?.Dispatcher.InvokeAsync(() => OnIrcMessage(irc.ServerId, irc.ServerName, target, item));
@@ -281,12 +295,15 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
             irc.NamesUpdated += namesHandler;
             irc.TopicChanged += topicHandler;
             irc.StateChanged += stateHandler;
-            _serviceHandlers[irc.ServerId] = (msgHandler, namesHandler, topicHandler, stateHandler);
+            _serviceHandlers[irc.ServerId] = (irc, msgHandler, namesHandler, topicHandler, stateHandler);
 
             // Hydrate history from the service-lifetime scrollback: channels, PMs and
             // system lines all survive there across dashboard close/reopen, and the
             // service seeds it from disk at startup so app restarts keep history too.
             HydrateFromScrollback(irc);
+
+            if (replaced && _selectedChannel?.ServerId == irc.ServerId)
+                SwitchToChannel(_selectedChannel);
         }
 
         // Runs on EVERY call (incl. IrcStateChanged), not just first subscribe, so
@@ -758,19 +775,17 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
         if (_disposed) return;
         _disposed = true;
         _serverManager.IrcStateChanged -= _ircStateHandler;
-        foreach (var (serverId, handlers) in _serviceHandlers)
-        {
-            var irc = _serverManager.GetIrcService(serverId);
-            if (irc != null)
-            {
-                irc.MessageReceived -= handlers.msg;
-                irc.NamesUpdated -= handlers.names;
-                irc.TopicChanged -= handlers.topic;
-                irc.StateChanged -= handlers.state;
-            }
-        }
+        foreach (var handlers in _serviceHandlers.Values)
+            Unsubscribe(handlers);
         _serviceHandlers.Clear();
-        _subscribedServices.Clear();
+    }
+
+    private static void Unsubscribe((IrcService irc, Action<string, IrcMessageItem> msg, Action<string> names, Action<string, string> topic, Action<IrcServiceState> state) h)
+    {
+        h.irc.MessageReceived -= h.msg;
+        h.irc.NamesUpdated -= h.names;
+        h.irc.TopicChanged -= h.topic;
+        h.irc.StateChanged -= h.state;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
