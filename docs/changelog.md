@@ -12,6 +12,13 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.11.32 — SITE DISKFREE verdict owned by the mount (2026-10-26)
+
+- Stop re-sending `SITE DISKFREE` every 30s to servers that answer `500`
+  (1,278 sends in 7.2h, 54% of all 5xx replies, each borrowing a main-pool login).
+- Stop a single borrow timeout from disabling drive free-space reporting for
+  the life of the mount. See the [release notes](releases/v3.11.32.md).
+
 ## v3.11.30 — deferred TLS cleanup and accurate timeout diagnostics (2026-10-26)
 
 - Reclaim native TLS resources after a timed-out read eventually drains, while
