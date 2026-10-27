@@ -247,36 +247,74 @@ public class FtpOperations
         }
     }
 
+    internal enum DiskFreeVerdict { Parsed, Unsupported, Transient }
+
+    // Owned here, not by a caller: the dashboard (every 30s) and the filesystem (every 5 min)
+    // both poll, and each used to decide "unsupported" its own way — the dashboard never, the
+    // filesystem on any null including a borrow timeout. One instance per mount, so a remount
+    // re-probes once.
+    private volatile bool _diskFreeUnsupported;
+    public bool DiskFreeUnsupported => _diskFreeUnsupported;
+
     /// <summary>
-    /// Try SITE DISKFREE to get server disk usage. Returns (totalBytes, freeBytes) or null if unsupported.
-    /// glftpd responds: "200 Total: X MB Free: Y MB"
+    /// Try SITE DISKFREE to get server disk usage. Returns (totalBytes, freeBytes), or null if
+    /// unsupported or the attempt failed. glftpd responds: "200 Total: X MB Free: Y MB"
     /// </summary>
-    public async Task<(long totalBytes, long freeBytes)?> GetDiskFree(CancellationToken ct = default)
-    {
-        try
+    public Task<(long totalBytes, long freeBytes)?> GetDiskFree(CancellationToken ct = default) =>
+        GetDiskFree(async token =>
         {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(token);
             cts.CancelAfter(TimeSpan.FromSeconds(5));
             await using var conn = await _pool.Borrow(cts.Token);
             var reply = await conn.Client.Execute("SITE DISKFREE", cts.Token);
-            if (!reply.Success) return null;
+            return (reply.Code ?? "", reply.Message ?? "");
+        }, ct);
 
-            // Parse glftpd format: "200 Total: 1234 MB Free: 567 MB"
-            // Also handle KB/GB variants
-            var msg = reply.Message;
-            var totalMatch = DiskTotalRegex.Match(msg);
-            var freeMatch = DiskFreeRegex.Match(msg);
-
-            if (!totalMatch.Success || !freeMatch.Success) return null;
-
-            var total = ParseDiskSize(long.Parse(totalMatch.Groups[1].Value), totalMatch.Groups[2].Value);
-            var free = ParseDiskSize(long.Parse(freeMatch.Groups[1].Value), freeMatch.Groups[2].Value);
-            return (total, free);
+    internal async Task<(long totalBytes, long freeBytes)?> GetDiskFree(
+        Func<CancellationToken, Task<(string code, string message)>> execute, CancellationToken ct)
+    {
+        if (_diskFreeUnsupported) return null;
+        try
+        {
+            var (code, message) = await execute(ct);
+            switch (ClassifyDiskFreeReply(code, message, out var total, out var free))
+            {
+                case DiskFreeVerdict.Parsed:
+                    return (total, free);
+                case DiskFreeVerdict.Unsupported:
+                    _diskFreeUnsupported = true;
+                    Log.Debug("SITE DISKFREE unsupported ({Code} {Message}) — not asking again on this mount",
+                        code, message);
+                    return null;
+                default:
+                    return null;
+            }
         }
         catch
         {
+            // Borrow timeout, cancellation, socket fault: nothing was learned about the server.
             return null;
         }
+    }
+
+    /// <summary>
+    /// RFC 959: a 5yz reply is a permanent negative completion, and a 2xx body we cannot read
+    /// will read the same way next time. Only those are findings; a 4yz or a missing reply is not.
+    /// </summary>
+    internal static DiskFreeVerdict ClassifyDiskFreeReply(string code, string message,
+        out long totalBytes, out long freeBytes)
+    {
+        totalBytes = freeBytes = 0;
+        if (code.StartsWith('5')) return DiskFreeVerdict.Unsupported;
+        if (!code.StartsWith('2')) return DiskFreeVerdict.Transient;
+
+        var totalMatch = DiskTotalRegex.Match(message);
+        var freeMatch = DiskFreeRegex.Match(message);
+        if (!totalMatch.Success || !freeMatch.Success) return DiskFreeVerdict.Unsupported;
+
+        totalBytes = ParseDiskSize(long.Parse(totalMatch.Groups[1].Value), totalMatch.Groups[2].Value);
+        freeBytes = ParseDiskSize(long.Parse(freeMatch.Groups[1].Value), freeMatch.Groups[2].Value);
+        return DiskFreeVerdict.Parsed;
     }
 
     private static long ParseDiskSize(long value, string unit)

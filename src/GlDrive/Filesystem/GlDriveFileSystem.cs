@@ -58,7 +58,6 @@ public class GlDriveFileSystem : FileSystemBase
     // DateTime read/write would tear. Initialized to "now" to delay first query 5min.
     private long _lastDiskQueryTicks = DateTime.UtcNow.Ticks;
     private int _diskQueryRunning; // 0 = idle, 1 = running
-    private bool _diskQueryUnsupported;
 
     public GlDriveFileSystem(FtpOperations ftp, DirectoryCache cache, string rootPath, string volumeLabel,
         int fileInfoTimeoutMs = 1000, int dirListTimeoutSeconds = 30, int readBufferSpillThresholdMb = 50)
@@ -125,9 +124,10 @@ public class GlDriveFileSystem : FileSystemBase
         volumeInfo.SetVolumeLabel(_volumeLabel);
 
         // Refresh disk info in background every 5 minutes (skip if unsupported or already running).
+        // FtpOperations owns the unsupported verdict; a failed attempt here just retries next window.
         // Interlocked.Read the timestamp — same synchronization discipline as the sibling cached fields.
         var lastDiskQuery = new DateTime(Interlocked.Read(ref _lastDiskQueryTicks), DateTimeKind.Utc);
-        if (!_diskQueryUnsupported &&
+        if (!_ftp.DiskFreeUnsupported &&
             (DateTime.UtcNow - lastDiskQuery).TotalMinutes >= 5 &&
             Interlocked.CompareExchange(ref _diskQueryRunning, 1, 0) == 0)
         {
@@ -142,16 +142,8 @@ public class GlDriveFileSystem : FileSystemBase
                         Interlocked.Exchange(ref _cachedFreeSize, disk.freeBytes);
                         Log.Debug("SITE DISKFREE: total={Total} free={Free}", disk.totalBytes, disk.freeBytes);
                     }
-                    else
-                    {
-                        _diskQueryUnsupported = true;
-                        Log.Debug("SITE DISKFREE not supported — using defaults");
-                    }
                 }
-                catch
-                {
-                    _diskQueryUnsupported = true;
-                }
+                catch { }
                 finally
                 {
                     // Interlocked.Exchange the timestamp ticks — consistent with the read site above.
