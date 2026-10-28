@@ -88,7 +88,7 @@ public sealed class DownloadQueueCancellationTests
             .SetValue(downloader, pool);
         var manager = new DownloadManager(store, null!, downloader,
             new DownloadConfig { MaxConcurrentDownloads = 1, MaxRetries = 0 });
-        var slot = (SemaphoreSlim)typeof(DownloadManager)
+        var slot = (LiveConcurrencyGate)typeof(DownloadManager)
             .GetField("_concurrency", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(manager)!;
         var item = new DownloadItem { LocalPath = Path.Combine(root, "release"), RemotePath = "/release" };
         var absentDrive = "ZYXWVUTQ".Select(c => c + @":\").First(r => !Directory.Exists(r));
@@ -105,7 +105,7 @@ public sealed class DownloadQueueCancellationTests
         {
             store.Add(item);
             store.Add(sentinel);
-            slot.Wait();
+            await slot.WaitAsync();
             manager.Start(); // deterministically pauses the processor at the occupied slot
             manager.Cancel(item.Id);
             if (remove) store.Remove(item.Id);

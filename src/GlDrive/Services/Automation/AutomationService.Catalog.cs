@@ -37,16 +37,16 @@ public sealed partial class AutomationService
                 JsonSerializer.SerializeToElement(new { type = "object", properties, required, additionalProperties = false }),
                 readOnly, destructive));
         }
-        Add("servers.list", "List configured servers, mount/IRC state, credits, and live FTP pool health. Passwords are omitted.", true, false);
-        Add("servers.get", "Read a server's live mount state, FTP pool health and site statistics.", true, false, "serverId");
-        Add("servers.mount", "Mount a configured server and start its download/search/IRC services.", false, false, "serverId");
+        Add("servers.list", "List configured servers, mount/IRC state, credits, live FTP pool health, and authentication hold/retry time. Passwords are omitted.", true, false);
+        Add("servers.get", "Read a server's live mount state, FTP pool health, site statistics, and authentication hold/retry time.", true, false, "serverId");
+        Add("servers.mount", "Mount a configured server and start its download/search/IRC services. This explicit action permits one authentication retry.", false, false, "serverId");
         Add("servers.unmount", "Unmount a server and stop its running FTP, download, spread and IRC services.", false, true, "serverId");
-        Add("servers.remount", "Stop and recreate a server's live services from the current settings.", false, true, "serverId");
-        Add("servers.mount_all", "Mount enabled servers configured to mount on startup, and ensure enabled IRC services are running.", false, false);
+        Add("servers.remount", "Stop and recreate a server's live services from the current settings, permitting one authentication retry.", false, true, "serverId");
+        Add("servers.mount_all", "Mount enabled servers configured to mount on startup, permitting one authentication retry per connecting account, and ensure enabled IRC services are running.", false, false);
         Add("servers.unmount_all", "Unmount all currently mounted servers and stop their services.", false, true);
         Add("servers.cache_clear", "Invalidate the mounted filesystem directory cache.", false, false, "serverId");
         Add("servers.stats_refresh", "Fetch fresh site credits and ratio.", false, false, "serverId");
-        Add("servers.pool_reinitialize", "Recover an exhausted main FTP pool using the app's connection recovery policy.", false, false, "serverId");
+        Add("servers.pool_reinitialize", "Recover an exhausted main FTP pool using the app's connection recovery policy, permitting one authentication retry.", false, false, "serverId");
 
         Add("ftp.list", "List an FTP directory using the server's normal or CPSV transport. Results are paginated.", true, false, "serverId", "path", "offset?:integer", "limit?:integer");
         Add("ftp.stat", "Read existence, type, size and modified time for an absolute FTP path.", true, false, "serverId", "path");
@@ -60,7 +60,7 @@ public sealed partial class AutomationService
         Add("ftp.command", "Execute a single FTP control command, including SITE commands. The borrowed connection is discarded afterward to isolate protocol state. Data-transfer commands are rejected; use ftp tools for data.", false, true, "serverId", "command");
 
         Add("downloads.list", "Read FTP and BitTorrent download queues/history. Use serverId=__torrents for the application torrent queue. Magnet links and private tracker URLs are omitted.", true, false, "serverId?", "status?:Queued|Downloading|Extracting|Completed|Failed|Cancelled|Paused", "offset?:integer", "limit?:integer");
-        Add("downloads.enqueue", "Queue an FTP release directory for download. Omit localPath to use the configured category destination.", false, false, "serverId", "path", "releaseName?", "category?", "localPath?", "wishlistItemId?");
+        Add("downloads.enqueue", "Queue an FTP release directory for download. Omit localPath to select the exact section destination, then a logical TV/Movies destination inferred from releaseName, then localPath from download settings; the release gets one dedicated subfolder. An explicit localPath is preserved.", false, false, "serverId", "path", "releaseName?", "category?", "localPath?", "wishlistItemId?");
         Add("downloads.cancel", "Cancel a queued, downloading, paused or extracting item. Use serverId=__torrents for torrents.", false, true, "serverId", "id");
         Add("downloads.retry", "Retry a failed or cancelled download, retaining partial bytes for resume. A refused torrent needs explicit skipBlockedFiles=true to exclude blocked files; escaping paths cannot be approved.", false, false, "serverId", "id", "skipBlockedFiles?:boolean");
         Add("downloads.pause", "Pause a queued or downloading item and retain partial data. Use serverId=__torrents for torrents. Extraction cannot be paused.", false, false, "serverId", "id");
@@ -72,7 +72,7 @@ public sealed partial class AutomationService
         Add("search.refresh", "Rebuild one server's FTP search index. May run for several minutes.", false, false, "serverId");
 
         Add("wishlist.list", "Read the persisted wishlist, including media metadata, quality, watching/paused/completed state and grabbed releases.", true, false, "offset?:integer", "limit?:integer");
-        Add("wishlist.upsert", "Add a wishlist item or patch an existing item by item.id. item fields: id, title, type (Movie/TvShow), year, imdbId, tvMazeId, quality (Any/SD/Q720p/Q1080p/Q2160p), status (Watching/Completed/Paused), grabbedReleases, posterUrl, plot, rating, genres, dead. Unspecified existing fields are preserved.", false, false, "item:object");
+        Add("wishlist.upsert", "Add a wishlist item or patch an existing item by item.id. item fields: id, title, type (Movie/TvShow), year, imdbId, tvMazeId, quality (Any/SD/Q720p/Q1080p/Q2160p), status (Watching/Completed/Paused), grabbedReleases, posterUrl, plot, rating, genres, dead. New items with omitted quality use downloads.qualityDefault (invalid defaults fall back to 1080p). Unspecified existing fields are preserved.", false, false, "item:object");
         Add("wishlist.remove", "Delete a wishlist item by ID.", false, true, "id");
         Add("wishlist.match", "Evaluate a known FTP release against the wishlist and allow the normal configured auto-download behavior.", false, false, "serverId", "category", "releaseName", "path");
         Add("notifications.list", "Read stored release notifications, optionally filtered by server.", true, false, "serverId?", "offset?:integer", "limit?:integer");
@@ -100,7 +100,7 @@ public sealed partial class AutomationService
 
         Add("spread.status", "Read active races, queued requests, connected sites, pool health and historical summary.", true, false);
         Add("spread.detail", "Read the full file/site/transfer detail of an active race.", true, false, "id");
-        Add("spread.start", "Start or queue a race between at least two connected sites. Omit serverIds to select connected enabled sites with sections.", false, false, "section", "releaseName", "serverIds?:strings", "sourceServerId?", "sourcePath?");
+        Add("spread.start", "Request a race between at least two connected sites. Returns started, queued with queuePosition, already_active, duplicate, suppressed with retryAfterSeconds/reason, or unavailable. Position is a snapshot among eligible queued work. Omit serverIds to select connected enabled sites with sections.", false, false, "section", "releaseName", "serverIds?:strings", "sourceServerId?", "sourcePath?");
         Add("spread.stop", "Stop an active race.", false, true, "id");
         Add("spread.pause", "Pause an active race.", false, false, "id");
         Add("spread.resume", "Resume a paused race.", false, false, "id");

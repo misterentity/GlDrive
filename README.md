@@ -26,6 +26,7 @@ glftpd sites have quirks that off-the-shelf FTP clients handle badly. Each of th
 - **Multi-server**: several glftpd sites mounted at once, each on its own drive letter and WinFsp prefix (`\GlDrive\{serverId}`)
 - **Optional drive**: connect a server without a drive letter and still get search, downloads, notifications, IRC and racing
 - **Bounded FTPS pool** per server with ghost-kill (`!username`), poisoned-connection tracking, login-cap accounting and auto-reinitialize on exhaustion
+- **Authentication hold** shared by all logins for an account: rejected credentials stop automatic login attempts and produce one notice. A changed password, explicit Connect/retry, or one probe after 30 minutes can recover it. Other connection faults receive a short shared backoff.
 - **TTL + LRU directory cache** with stale-while-revalidate; listings that race a delete or rename are discarded instead of resurrecting files
 - **Whole-file read/write buffering** with auto-spill to `DeleteOnClose` temp files above 50 MB
 - **SOCKS5 proxy** per server, credentials in Credential Manager
@@ -35,15 +36,17 @@ glftpd sites have quirks that off-the-shelf FTP clients handle badly. Each of th
 - **Multi-stream / multi-network** (plexo-style): a second FTP lane borrows the site's idle race login, and data sockets can bind to several network uplinks at once. Per-network speed limits and daily/weekly/monthly data allowances. The **stream matrix** shows which lane fetched each block
 - **Resume** via `.gdpart` staging files validated by size + `MDTM`, so a changed remote file restarts cleanly
 - **Auto-retry** with backoff, CRC32 SFV verification, and **auto-extraction** of RAR (old-style `.r00` and modern `.part01.rar`), ZIP and 7z
-- **Category download paths**: route `TV` to `D:\TV`, `Movies` to `D:\Movies`, etc.
+- **Category download paths**: exact site-section keys win, followed by logical `TV` or `Movies` keys inferred from the release, then `localPath`. Logical roots do not gain a duplicate `TV`/`Movies` folder; exact section mappings retain their existing layout. TV includes episodes, season packs and valid dated video episodes; a year or bare `WEB` alone does not classify music/software as Movies.
 - Global and per-server speed limits plus a tray **Slow mode** toggle; the PC is kept awake while transfers run
 - Duplicate detection, NFO pre-check, disk-space validation, drag-drop from Notifications or Search
 
 ### Notifications & wishlist
 - `/recent` polling with excluded-category filters and debounced toast notifications. Exclusions save category LISTs; IRC announces still feed wishlist matching in excluded categories, with shared deduplication across both sources.
+- Downloads recover release folders moved after an announce by checking the watch path, section paths and matching category mappings through the existing connection pool. Each item permits at most three relocation lookups, spaced at least five minutes apart; the budget survives restarts.
 - **Wishlist** with TVMaze/TMDB/OMDB metadata and quality profiles (Any/SD/720p/1080p/2160p)
 - **Auto-download** of matching releases across *all* connected servers via `SceneNameParser` + `WishlistMatcher`
 - Wishlist import/export as JSON; completion toasts with optional sound
+- New wishlist entries from Upcoming, metadata search, import and MCP use `downloads.qualityDefault` when no quality is specified. Invalid defaults fall back to 1080p; explicit qualities and existing entries are preserved.
 
 ### Spread / FXP (cbftp-style race engine)
 - **Four FXP modes** picked automatically by `FxpModeDetector`: PASV-PASV, CPSV-PASV, PASV-CPSV and **Relay** (CPSV-CPSV piped through local memory)
@@ -51,6 +54,8 @@ glftpd sites have quirks that off-the-shelf FTP clients handle badly. Each of th
 - **Global per-server transfer gates**: every transfer acquires src + dst `ServerGate` semaphores in sorted-id order (deadlock-free), capping concurrent logins per site
 - **BNC auto-tune**: a `530 restricted to N simultaneous logins` shrinks the gate and pool to `N − 1`. Shrink-only by design
 - **Persistent race queue**: queued races survive restarts (`race-queue.json`)
+- Starting a race reports whether it started, queued (with position), was already active/queued, or is temporarily suppressed (with time remaining), in both the Spread tab and MCP.
+- **Bounded partial-race recovery**: payload progress resets the idle timeout; an absolute cap defaults to 90 minutes. Stopped partials can resume up to three times behind fresh races. A ten-hour deadline triggers guarded cleanup of incomplete directories GlDrive created, with cleanup notices and persisted history.
 - **Zipscript-aware completion**, alternate-source failover, mid-race source relocation (`/incoming` → `/recent`), and `-MISSING` placeholder / leading-dot metadata filtering
 - **Scoring 0–65535**: SFV first, NFO after 15 s, then size + route speed (rolling 10-sample history) + site priority + ownership − failure penalty
 - **PRET** support cached per host; `TYPE I` canary, `SSCN ON`, deferred `MKD`, completion sweep
@@ -86,6 +91,7 @@ glftpd sites have quirks that off-the-shelf FTP clients handle badly. Each of th
 
 ### AI assistance
 - **Nightly self-tuning agent**: records per-stream JSONL telemetry under `ai-data/`, then proposes config changes through an LLM (OpenRouter). Every change passes a frozen-path check, a confidence threshold, per-category budgets and a validator that owns the actual write. Dry-run by default, with a full audit trail, undo, frozen fields and a memo to steer future runs
+- Unknown race winners are excluded from win rates; digests show global, server and section winner coverage. AI priority and download-only proposals conservatively require at least 50% measured winner coverage for that server, including previews and manual applies. Coverage comes from local telemetry, never the model's claims. Explicit undo and direct Settings/config edits remain available; scheduled role changes still require manual review.
 - **AI Setup**: analyze a site's rules and section layout from the server editor
 
 ### Automation: MCP + control API
@@ -102,6 +108,7 @@ glftpd sites have quirks that off-the-shelf FTP clients handle badly. Each of th
 - Numbered sidebar navigation, an Overview with live throughput, pool usage and process stats, and a `?` keyboard-shortcut overlay
 - System tray with a dynamic per-server menu and state-colored glyph
 - 5-step first-run wizard; settings hot-reload (new servers mount without restart)
+- Settings rebuild FTP resources only for connection, TLS, drive-mount and login-budget changes. Download options, server speed limits, cache options and spread rules apply without reconnecting; notification and search edits restart only their own workers, and IRC changes restart IRC independently. Active races retain their existing destination paths; new races use updated section routes. WinFsp's `fileInfoTimeoutMs` is a volume parameter and takes effect on the next drive mount. Removing spread sections retains the conservative main-pool size until that next connection rebuild.
 - **Auto-update** from GitHub Releases: SHA-256 mandatory, Authenticode issuer check when signed, installs automatically once no race is running
 - **Watchdog subprocess** + Windows Restart Manager for native crash recovery
 - Embedded WebView2 tabs (World Monitor / Discord / Streems) with serialized init and a fallback UI

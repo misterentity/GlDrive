@@ -312,7 +312,7 @@
                         <TextBlock Text="Transfer Timeout (seconds):" Margin="0,0,0,4"/>
                         <TextBox Text="{Binding SpreadTransferTimeout, UpdateSourceTrigger=PropertyChanged}"
                                  Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
-                        <TextBlock Text="Hard Timeout (seconds, max race duration):" Margin="0,0,0,4"/>
+                        <TextBlock Text="Idle Timeout (seconds without payload progress):" Margin="0,0,0,4"/>
                         <TextBox Text="{Binding SpreadHardTimeout, UpdateSourceTrigger=PropertyChanged}"
                                  Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"/>
                         <TextBlock Text="Max Concurrent Races:" Margin="0,0,0,4"/>

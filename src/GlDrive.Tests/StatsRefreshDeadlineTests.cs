@@ -38,7 +38,8 @@ public sealed class StatsRefreshDeadlineTests : IDisposable
         await using var fixture = await Fixture.Create("reply");
         var previous = new SiteStats("12GB", "1:3", DateTime.UtcNow.AddMinutes(-5));
         typeof(MountService).GetProperty(nameof(MountService.Stats))!.SetValue(fixture.Mount, previous);
-        Set(fixture.Mount, "_workingStatsCommand", "SITE STATS");
+        var cache = Get<StatsProbeCache>(fixture.Mount, "_statsProbeCache");
+        Assert.True(cache.TryPublish(cache.Read() with { WorkingCommand = "SITE STATS" }));
         var notifications = 0;
         fixture.Mount.StatsChanged += () => notifications++;
 
@@ -46,8 +47,8 @@ public sealed class StatsRefreshDeadlineTests : IDisposable
         {
             await fixture.Mount.RefreshStatsAsync().WaitAsync(TimeSpan.FromSeconds(15));
             Assert.Same(previous, fixture.Mount.Stats);
-            Assert.Equal("SITE STATS", Get<string>(fixture.Mount, "_workingStatsCommand"));
-            Assert.Equal(DateTime.MinValue, Get<DateTime>(fixture.Mount, "_statsUnavailableUntil"));
+            Assert.Equal("SITE STATS", cache.Read().WorkingCommand);
+            Assert.Equal(DateTime.MinValue, cache.Read().UnavailableUntil);
             Assert.Equal(0, notifications);
             Assert.Equal(0, fixture.Server.StatsCommands);
             Assert.Equal(1, fixture.Pool.ActiveCount);
@@ -78,7 +79,7 @@ public sealed class StatsRefreshDeadlineTests : IDisposable
 
         Assert.Equal(1, fixture.Server.StatsCommands);
         Assert.Same(previous, fixture.Mount.Stats);
-        Assert.Equal(DateTime.MinValue, Get<DateTime>(fixture.Mount, "_statsUnavailableUntil"));
+        Assert.Equal(DateTime.MinValue, Get<StatsProbeCache>(fixture.Mount, "_statsProbeCache").Read().UnavailableUntil);
         var warning = Assert.Single(RefreshEvents(), e => e.Level == LogEventLevel.Warning);
         Assert.NotNull(warning.Exception);
         if (behavior == "stall") Assert.IsAssignableFrom<OperationCanceledException>(warning.Exception);

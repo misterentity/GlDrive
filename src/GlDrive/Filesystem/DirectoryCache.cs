@@ -11,8 +11,8 @@ public class DirectoryCache
     // Serializes the capacity check + evict + insert in Set() so concurrent writers
     // can't each pass the `Count < max` gate and overgrow the cache past _maxEntries.
     private readonly object _setLock = new();
-    private readonly int _ttlSeconds;
-    private readonly int _maxEntries;
+    private int _ttlSeconds;
+    private int _maxEntries;
 
     // A LIST that started before a DELE/RNTO/STOR can finish after that change invalidated the
     // directory; storing it would resurrect the old state for a whole TTL (release smoke
@@ -41,12 +41,22 @@ public class DirectoryCache
         _maxEntries = Math.Max(1, maxEntries);
     }
 
+    public void UpdateOptions(int ttlSeconds, int maxEntries)
+    {
+        lock (_setLock)
+        {
+            Volatile.Write(ref _ttlSeconds, Math.Max(0, ttlSeconds));
+            _maxEntries = Math.Max(1, maxEntries);
+            while (_cache.Count > _maxEntries) EvictOldest();
+        }
+    }
+
     public bool TryGet(string remotePath, out FtpListItem[] items)
     {
         var key = NormalizePath(remotePath);
         if (_cache.TryGetValue(key, out var cached))
         {
-            if (!cached.IsExpired(_ttlSeconds))
+            if (!cached.IsExpired(Volatile.Read(ref _ttlSeconds)))
             {
                 Interlocked.Increment(ref _hits);
                 items = cached.Items;
@@ -185,7 +195,7 @@ public class DirectoryCache
         var parent = idx <= 0 ? "/" : normalized[..idx];
         var name = idx < 0 ? normalized : normalized[(idx + 1)..];
 
-        if (!_cache.TryGetValue(parent, out var cached) || cached.IsExpired(_ttlSeconds))
+        if (!_cache.TryGetValue(parent, out var cached) || cached.IsExpired(Volatile.Read(ref _ttlSeconds)))
             return null;
 
         Interlocked.Increment(ref _hits);

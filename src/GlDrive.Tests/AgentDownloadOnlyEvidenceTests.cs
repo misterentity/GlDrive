@@ -31,6 +31,8 @@ public sealed class AgentDownloadOnlyEvidenceTests : IDisposable
         Assert.Equal(1, digest.TotalRaces);
         Assert.Equal(1, digest.CompletionRateBySection["tv"]);
         Assert.Equal(0, digest.KnownWinnerSamplesByServer["destination"]);
+        Assert.Equal(0, digest.WinnerCoverage);
+        Assert.Equal(0, digest.WinnerCoverageByServer["destination"]);
         Assert.Equal(1, digest.DestinationRacesWithFilesByServer["destination"]);
         Assert.Equal(24, digest.DestinationFilesObservedByServer["destination"]);
         Assert.DoesNotContain("source", digest.DestinationFilesObservedByServer.Keys);
@@ -43,6 +45,8 @@ public sealed class AgentDownloadOnlyEvidenceTests : IDisposable
         Assert.Equal(1, digest.WinRateByServer["destination"]);
         Assert.Equal(0, digest.WinRateByServer["source"]);
         Assert.Equal(1, digest.KnownWinnerSamplesByServer["destination"]);
+        Assert.Equal(0.5, digest.WinnerCoverage);
+        Assert.Equal(0.5, digest.WinnerCoverageByServer["destination"]);
     }
 
     [Fact]
@@ -55,6 +59,7 @@ public sealed class AgentDownloadOnlyEvidenceTests : IDisposable
         Assert.Equal(1155, row.OurRaces);
         Assert.Equal(2400, row.FilesIn);
         Assert.Equal(0, row.KnownWinnerRaces);
+        Assert.Equal(0, row.WinnerCoverage);
         Assert.Contains("\"ourWinRate\":null", JsonSerializer.Serialize(row));
     }
 
@@ -69,6 +74,7 @@ public sealed class AgentDownloadOnlyEvidenceTests : IDisposable
         Assert.Equal(0.6, row.OurWinRate);
         Assert.Equal(5, row.KnownWinnerRaces);
         Assert.Equal(130, row.OurRaces);
+        Assert.Equal(5.0 / 130, row.WinnerCoverage);
         Assert.Equal(3120, row.FilesIn);
     }
 
@@ -111,12 +117,12 @@ public sealed class AgentDownloadOnlyEvidenceTests : IDisposable
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public void Suggestion_preview_and_explicit_manual_apply_remain_available(bool dryRun)
+    public void Unsupported_winner_claim_is_rejected_even_for_preview_or_manual_apply(bool dryRun)
     {
         var (config, applier, proposal, rows) = Fixture(false, "/servers/destination/spread/downloadOnly");
         applier.Apply([proposal], config, config.Agent, "review-fixture", dryRun, rows.Add, configOnly: dryRun);
-        Assert.True(Assert.Single(rows).Applied);
-        Assert.Equal(!dryRun, config.Servers[0].SpreadSite.DownloadOnly);
+        Assert.Equal("insufficient-winner-coverage", Assert.Single(rows).RejectionReason);
+        Assert.False(config.Servers[0].SpreadSite.DownloadOnly);
     }
 
     [Fact]

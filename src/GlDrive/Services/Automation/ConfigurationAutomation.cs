@@ -94,7 +94,7 @@ public sealed class ConfigurationAutomation : IAutomationModule
         schema = BuildSchema(typeof(AppConfig)),
         defaults = Redact(JsonSerializer.SerializeToNode(new AppConfig(), Json)!, false),
         patchFormat = "RFC 6902 subset: add, replace, remove, test; paths use RFC 6901 JSON Pointer; array append uses /-.",
-        runtime = "Settings are persisted atomically and shared configuration objects are updated. Restart GlDrive to fully apply connections, listeners, logging, scheduling and UI state.",
+        runtime = "Settings are persisted atomically. Server/download settings schedule a serialized runtime refresh: connection, TLS, mount and login-budget changes remount; other changes update their owning services. IRC restarts independently. Active race destination paths remain pinned. WinFsp fileInfoTimeoutMs applies on the next drive mount; unrelated listeners, logging, scheduling and UI state may still require restart.",
         secrets = "[redacted] is a read-only placeholder; explicit allowSecrets is required to change secrets. The control API token cannot be read; use Regenerate control-API token in MCP settings, or a secret-enabled config_patch. External credentials use credentials_manage."
     };
 
@@ -131,16 +131,23 @@ public sealed class ConfigurationAutomation : IAutomationModule
                 _persist(candidate);
                 Reconcile(_config, candidate);
                 try { _settingsApplied?.Invoke(); }
-                catch (Exception ex) { Serilog.Log.Warning(ex, "Settings saved, but applying live download rate settings failed"); }
+                catch (Exception ex) { Serilog.Log.Warning(ex, "Settings saved, but scheduling the runtime settings refresh failed"); }
             }
             return new { saved = changed, revision = Revision(canonical), restartRequired = changed,
-                message = changed ? "Saved. Restart GlDrive to fully apply runtime settings." : "No settings changed." };
+                message = changed ? "Saved. Server/download runtime refresh scheduled when connected; unrelated settings may require restart. WinFsp fileInfoTimeoutMs applies on the next drive mount." : "No settings changed." };
         }
     }
 
     public object Credentials(string action, string kind, string? serverId = null, string? service = null, string? value = null, bool includeValue = false)
     {
-        lock (_gate) return CredentialsCore(action, kind, serverId, service, value, includeValue);
+        object result;
+        lock (_gate) result = CredentialsCore(action, kind, serverId, service, value, includeValue);
+        if (action != "get")
+        {
+            try { _settingsApplied?.Invoke(); }
+            catch (Exception ex) { Serilog.Log.Warning(ex, "Credential saved, but scheduling the runtime settings refresh failed"); }
+        }
+        return result;
     }
 
     private object CredentialsCore(string action, string kind, string? serverId, string? service, string? value, bool includeValue)
@@ -388,6 +395,22 @@ public sealed class ConfigurationAutomation : IAutomationModule
                 schema["minimum"] = ConfigurationLimits.MinConcurrentDownloads;
                 schema["maximum"] = ConfigurationLimits.MaxConcurrentDownloads;
             }
+            if (type == typeof(SpreadConfig) && property.Name == nameof(SpreadConfig.AbsoluteRaceTimeoutMinutes))
+            {
+                schema["minimum"] = 1;
+                schema["maximum"] = 1440;
+                schema["description"] = "Absolute active race attempt cap in minutes, including while payload progresses. Default 90.";
+            }
+            if (type == typeof(SpreadConfig) && property.Name == nameof(SpreadConfig.PartialRaceDeadlineHours))
+            {
+                schema["minimum"] = 1;
+                schema["maximum"] = 11;
+                schema["description"] = "Finish or clean GlDrive-created partial releases within this many hours from first upload. Default 10.";
+            }
+            if (type == typeof(SpreadConfig) && property.Name == nameof(SpreadConfig.HardTimeoutSeconds))
+                schema["description"] = "Seconds without payload byte progress before stopping; default 1200. This is an idle timeout, not a wall-clock ceiling.";
+            else if (type == typeof(DownloadConfig) && property.Name == nameof(DownloadConfig.CategoryPaths))
+                schema["description"] = "Download root precedence: exact raw section key, then case-insensitive logical TV/Movies inferred from the release, then localPath. A logical root suppresses the extra TV/Movies layout folder; exact section mappings retain their existing layout. Explicit destinations are preserved.";
             else if (type == typeof(MultiStreamConfig) && property.Name == nameof(MultiStreamConfig.HttpLanesPerNetwork))
             {
                 schema["minimum"] = ConfigurationLimits.MinHttpLanesPerNetwork;
@@ -414,6 +437,8 @@ public sealed class ConfigurationAutomation : IAutomationModule
         Range(config.Agent.ConfidenceThreshold_x100, 0, 100, "/agent/confidenceThreshold_x100");
         Range(config.Spread.MaxConcurrentRaces, 1, 100, "/spread/maxConcurrentRaces");
         Range(config.Spread.SpreadPoolSize, 1, 100, "/spread/spreadPoolSize");
+        Range(config.Spread.AbsoluteRaceTimeoutMinutes, 1, 1440, "/spread/absoluteRaceTimeoutMinutes");
+        Range(config.Spread.PartialRaceDeadlineHours, 1, 11, "/spread/partialRaceDeadlineHours");
         if (!new[] { "Verbose", "Debug", "Information", "Warning", "Error", "Fatal" }.Contains(config.Logging.Level, StringComparer.OrdinalIgnoreCase))
             throw new ArgumentException("Unknown logging level");
         foreach (var server in config.Servers)

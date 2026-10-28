@@ -27,6 +27,23 @@ public partial class App
     private AutomationRegistry? _automation;
     private AppConfig? _runtimeConfig;
     private bool _ownsCrashMarker;
+    private Task _runtimeSettingsRefresh = Task.CompletedTask;
+
+    private void QueueRuntimeSettingsRefresh()
+    {
+        // SyncAfterConfigChange serializes overlapping edits. Retain and observe the task;
+        // the synchronous settings transaction never blocks the UI or an active FTP read.
+        _runtimeSettingsRefresh = RefreshAsync();
+        async Task RefreshAsync()
+        {
+            try
+            {
+                if (_serverManager != null)
+                    await (await Dispatcher.InvokeAsync(() => _serverManager.SyncAfterConfigChange()));
+            }
+            catch (Exception ex) { Log.Warning(ex, "Settings saved; runtime service refresh failed"); }
+        }
+    }
 
     public static GlDrive.AiAgent.TelemetryRecorder? TelemetryRecorder { get; private set; }
     public static GlDrive.AiAgent.HealthRollup? HealthRollup { get; private set; }
@@ -281,9 +298,10 @@ public partial class App
             new GlDrive.AiAgent.DownloadOnlyValidator(),
             new GlDrive.AiAgent.RequestFillerValidator()
         };
-        ChangeApplier = new GlDrive.AiAgent.ChangeApplier(validators, FreezeStore!, AuditTrail!);
         LogDigester = new GlDrive.AiAgent.LogDigester(
             System.IO.Path.Combine(ConfigManager.AppDataPath, "ai-data"));
+        ChangeApplier = new GlDrive.AiAgent.ChangeApplier(validators, FreezeStore!, AuditTrail!,
+            cfg => LogDigester.BuildRaceEvidence(cfg.Agent.WindowDays));
         AgentRunner = new GlDrive.AiAgent.AgentRunner(
             LogDigester,
             AgentMemo,
@@ -373,9 +391,10 @@ public partial class App
         // UI (tray automation is unreliable). Off unless explicitly enabled in config.
         _automation = new AutomationRegistry(
             new AutomationService(config, _serverManager, notificationStore),
-            new ConfigurationAutomation(config, settingsApplied: _serverManager.RefreshTorrentDownloadRate),
+            new ConfigurationAutomation(config, settingsApplied: QueueRuntimeSettingsRefresh),
             new DiagnosticAutomation(config),
-            new AgentAutomation(config, () => AgentRunner, () => FreezeStore, () => AuditTrail, () => ChangeApplier),
+            new AgentAutomation(config, () => AgentRunner, () => FreezeStore, () => AuditTrail, () => ChangeApplier,
+                onConfigChanged: QueueRuntimeSettingsRefresh),
             new UiAutomation(() =>
             {
                 var existing = Windows.OfType<DashboardWindow>().FirstOrDefault();

@@ -134,7 +134,7 @@ public sealed class AgentViewModel : INotifyPropertyChanged
             var pending = new List<AuditRow>();
             var undoRunId = "undo-" + Guid.NewGuid().ToString()[..8];
             var report = AgentUndoCompletion.ApplyInverse(row,
-                () => App.ChangeApplier?.Apply(new[] { inverse }, cfg, cfg.Agent, undoRunId, dryRun: false, pending.Add));
+                () => App.ChangeApplier?.Apply(new[] { inverse }, cfg, cfg.Agent, undoRunId, dryRun: false, pending.Add, explicitUndo: true));
             if (report is { Applied: 1, Rejected: 0 })
                 await CommitChanges(baseline, cfg, pending);
             else

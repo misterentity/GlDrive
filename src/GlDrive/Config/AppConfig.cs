@@ -199,15 +199,11 @@ public class DownloadConfig
 
     /// <summary>
     /// Resolves the base download path for a given category.
-    /// If the category has a custom path mapped, use that; otherwise use default LocalPath.
+    /// Exact section mappings take precedence, then a logical media class when a release
+    /// name is supplied, then LocalPath. Call the layout resolver to track class-folder suppression.
     /// </summary>
-    public string GetPathForCategory(string category)
-    {
-        if (!string.IsNullOrEmpty(category) && CategoryPaths.TryGetValue(category, out var customPath)
-            && !string.IsNullOrWhiteSpace(customPath))
-            return customPath;
-        return LocalPath;
-    }
+    public string GetPathForCategory(string category, string? releaseName = null) =>
+        GlDrive.Downloads.DownloadPathResolver.Resolve(this, category, releaseName).BasePath;
     public int MaxConcurrentDownloads { get; set; } = ConfigurationLimits.DefaultConcurrentDownloads;
     public int StreamingBufferSizeKb { get; set; } = 256;
     public int WriteBufferLimitMb { get; set; } = 0;

@@ -24,9 +24,18 @@ public sealed record PersistedRace(
     public string? WaitReason { get; init; }
     public int WaitAttempts { get; init; }
     public bool KeepUntilAvailable { get; init; }
+    // Separate from Resumes, which continues to bound restart/crash recovery.
+    public int ResumeCount { get; init; }
+    public string StopReason { get; init; } = "";
+    public RacePartialState? Partial { get; init; }
+    public DateTime? FirstUploadAtUtc => Partial?.FirstUploadAtUtc;
+    public bool CleanupOnly { get; init; }
+    public int CleanupAttempts { get; init; }
+    internal bool HasOwnedPartial => Partial?.Directories.Count > 0;
 
-    internal bool IsExpired(DateTime nowUtc) => !KeepUntilAvailable && nowUtc - QueuedAtUtc > RaceQueueStore.MaxAge;
-    internal bool IsDue(DateTime nowUtc) => NextProbeAtUtc is not { } at || at <= nowUtc;
+    internal bool IsExpired(DateTime nowUtc) => !HasOwnedPartial && !KeepUntilAvailable && nowUtc - QueuedAtUtc > RaceQueueStore.MaxAge;
+    internal bool IsDue(DateTime nowUtc) => (!CleanupOnly || CleanupAttempts < RaceLifetimePolicy.MaxCleanupAttempts)
+        && (NextProbeAtUtc is not { } at || at <= nowUtc);
 
     internal PersistedRace Defer(DateTime nowUtc, string reason, bool incomplete, bool madeProgress) => this with
     {
@@ -90,7 +99,7 @@ public sealed class RaceQueueStore
     /// Writes the snapshot returned by <paramref name="capture"/>, taken under the
     /// per-path lock so concurrent saves land in order. A null snapshot skips the write.
     /// </summary>
-    public void Save(Func<IReadOnlyList<PersistedRace>?> capture)
+    public bool Save(Func<IReadOnlyList<PersistedRace>?> capture)
     {
         try
         {
@@ -101,10 +110,12 @@ public sealed class RaceQueueStore
                 Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
                 SecureFile.WriteAllTextRestricted(_filePath, JsonSerializer.Serialize(races, Options));
             });
+            return true;
         }
         catch (Exception ex)
         {
             Log.Warning(ex, "Failed to save race queue");
+            return false;
         }
     }
 
@@ -131,7 +142,15 @@ public sealed class RaceQueueStore
             // that a fresh transfer repeatedly crashed the process.
             if (race.WasActive && !race.KeepUntilAvailable)
             {
-                if (race.Resumes >= MaxResumes) { capped++; continue; }
+                if (race.Resumes >= MaxResumes)
+                {
+                    capped++;
+                    // A crash budget cannot erase the only ownership record for an
+                    // uploaded partial. Retain it as bounded cleanup-only work.
+                    if (race.HasOwnedPartial)
+                        kept.Add(RaceLifetimePolicy.CleanupRequest(next, nowUtc, "Restart budget spent; cleaning owned partial"));
+                    continue;
+                }
                 next = next with { Resumes = race.Resumes + 1 };
                 resumed++;
             }

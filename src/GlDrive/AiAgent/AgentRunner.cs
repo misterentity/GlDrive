@@ -314,9 +314,9 @@ public sealed class AgentRunner : IDisposable
             ct.ThrowIfCancellationRequested();
             var auditRows = new List<AuditRow>();
             var applyReport = _applier.Apply(outcome.Result.Changes, cfg, cfg.Agent, runId, dryRun,
-                auditRows.Add, configOnly: true);
+                auditRows.Add, configOnly: true, winnerEvidence: digest.Races);
             var suggestionReport = _applier.Apply(outcome.Result.Suggestions, cfg, cfg.Agent, runId, dryRun: true,
-                auditRows.Add, configOnly: true);
+                auditRows.Add, configOnly: true, winnerEvidence: digest.Races);
             if (cfg.Agent.DryRunsRemaining > 0) cfg.Agent.DryRunsRemaining--;
             ct.ThrowIfCancellationRequested();
             if (_commitConfig != null)

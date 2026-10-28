@@ -69,7 +69,12 @@ public sealed class AgentPrompt
 
         WINNER AVAILABILITY: winRateByServer omits servers with zero knownWinnerSamplesByServer;
         sectionActivity.ourWinRate is null when knownWinnerRaces is zero. Unknown winners mean
-        unavailable measurement, not losses. destinationRacesWithFilesByServer and
+        unavailable measurement, not losses. winnerCoverage and winnerCoverageByServer report
+        measured winners divided by total race participation (0 to 1). Priority and downloadOnly
+        proposals, including suggestions and reviewed applies, require at least 0.5 measured
+        winner coverage for the target server from complete local evidence. This conservative
+        rule applies regardless of the proposal's reasoning; a model claim cannot supply coverage.
+        Explicit user undo and direct Settings edits remain available. destinationRacesWithFilesByServer and
         destinationFilesObservedByServer report final destination ownership, including files from
         other racers; they do not establish a winner or prove upload failures.
 

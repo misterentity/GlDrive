@@ -5,6 +5,7 @@ using FluentFTP;
 using FluentFTP.GnuTLS;
 using FluentFTP.GnuTLS.Enums;
 using GlDrive.Config;
+using GlDrive.Ftp;
 using GlDrive.Tls;
 using Serilog;
 
@@ -202,7 +203,8 @@ public partial class WizardWindow : Window
                 e.Accept = true; // Accept for verification display
             };
 
-            await client.Connect();
+            await GuardedFtpLogin.ConnectAsync(client,
+                new FtpLoginAccount(_hostBox.Text, int.Parse(_portBox.Text), _usernameBox.Text), manualRetry: true);
             await client.Disconnect();
             client.Dispose();
 

@@ -79,6 +79,18 @@ public class NewReleaseMonitor
         _cts = null;
     }
 
+    internal async Task StopAndDrainAsync()
+    {
+        _cts?.Cancel();
+        if (_pollTask != null)
+        {
+            try { await _pollTask; }
+            catch (OperationCanceledException) { }
+        }
+        _cts?.Dispose();
+        _cts = null;
+    }
+
     internal async Task PollLoop(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
