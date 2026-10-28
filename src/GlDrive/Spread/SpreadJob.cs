@@ -537,7 +537,7 @@ public partial class SpreadJob : IDisposable
             // If we have a known source (from notification/search), use it directly
             if (!string.IsNullOrEmpty(_knownSourceServerId) && !string.IsNullOrEmpty(_knownSourcePath)
                 && _pools.ContainsKey(_knownSourceServerId) && !sitePaths.ContainsKey(_knownSourceServerId)
-                && !(_spreadConfig.MergeRaceAnnounces && _announcedSources.ContainsKey(_knownSourceServerId))
+                && !_spreadConfig.MergeRaceAnnounces
                 && _serverConfigs.TryGetValue(_knownSourceServerId, out var knownConfig) && !knownConfig.SpreadSite.NeverSource)
             {
                 sitePaths[_knownSourceServerId] = _knownSourcePath;
@@ -545,7 +545,6 @@ public partial class SpreadJob : IDisposable
                 var srcName = _serverConfigs.TryGetValue(_knownSourceServerId, out var srcCfg) ? srcCfg.Name : _knownSourceServerId;
                 Log.Information("Spread: known source {Server} at {Path}", srcName, _knownSourcePath);
             }
-            ApplyPendingSourceHints(sitePaths, sourceServers);
 
             // Probe outcome accounting. A bare catch used to make "the site said no"
             // and "we never got an answer" indistinguishable, so a borrow timeout was
@@ -561,7 +560,15 @@ public partial class SpreadJob : IDisposable
                 // Probe all section paths AND the notification watch path. The same
                 // list drives the mid-race relocation probe (FindRelocatedSourcePath),
                 // so the two never disagree about where a site may hold a release.
-                var pathsToProbe = CandidateBasePaths(config, Section);
+                var hint = _spreadConfig.MergeRaceAnnounces ? _announcedSources.GetValueOrDefault(serverId) : null;
+                if (_spreadConfig.MergeRaceAnnounces && hint == null && serverId == _knownSourceServerId)
+                    hint = new RaceSourceHint(serverId, Section, _knownSourcePath);
+                if (hint != null && !CanApplySourceHint(config, hint))
+                {
+                    RemoveSourceHint(serverId, hint);
+                    continue;
+                }
+                var pathsToProbe = SourceHintCandidatePaths(config, hint, Section, ReleaseName);
                 if (!_pools.TryGetValue(serverId, out var pool) || pool.IsDisposed)
                 {
                     // A pool disappearing between admission and discovery leaves
@@ -572,15 +579,14 @@ public partial class SpreadJob : IDisposable
                     continue;
                 }
 
-                foreach (var basePath in pathsToProbe)
+                foreach (var probePath in pathsToProbe)
                 {
                     try
                     {
-                        var probePath = basePath.TrimEnd('/') + "/" + ReleaseName;
                         await using var conn = await pool.BorrowFor(FtpBorrowPurpose.Race, ct);
                         var exists = await conn.Client.DirectoryExists(probePath, ct);
                         pathsAnsweredCleanly++;
-                        probedBases.Add($"{config.Name}:{basePath}");
+                        probedBases.Add($"{config.Name}:{probePath}");
                         if (exists)
                         {
                             sitePaths[serverId] = probePath;
@@ -608,12 +614,18 @@ public partial class SpreadJob : IDisposable
                         // is visible next time instead of vanishing into a bare catch.
                         pathsErrored++;
                         Log.Debug(ex, "Spread: probe failed on {Server} at {Base} for {Release}",
-                            config.Name, basePath, ReleaseName);
+                            config.Name, probePath, ReleaseName);
                     }
                 }
+                if (hint != null) RemoveSourceHint(serverId, hint);
             }
-
-            ApplyPendingSourceHints(sitePaths, sourceServers);
+            // An announce can introduce another participant while the ordinary
+            // discovery loop awaits FTP. Verify those buffered candidates before
+            // deciding there is no source; they are not in the initial config map.
+            await ApplyPendingSourceHintsAsync(ct, sitePaths, sourceServers);
+            // Failed or unavailable hinted sources remain buffered for recovery.
+            // A clean negative elsewhere cannot turn that uncertainty into absence.
+            pathsErrored += _announcedSources.Count;
             if (sourceServers.Count == 0)
             {
                 var verdict = CandidatePredicates.ClassifySourceProbe(
@@ -972,7 +984,6 @@ public partial class SpreadJob : IDisposable
                 if (_backgroundScan == null || _backgroundScan.IsCompleted)
                 {
                     ApplyPendingReset();
-                    ApplyPendingSourceHints();
                     // Adaptive interval: 2s during active transfers, 5s idle, and the
                     // (slower) completion-refresh cadence while only awaiting zipscript.
                     int activeCount;
@@ -1532,6 +1543,9 @@ public partial class SpreadJob : IDisposable
     {
         ct.ThrowIfCancellationRequested();
         var readStop = _backgroundReads?.StopToken ?? CancellationToken.None;
+        await ApplyPendingSourceHintsAsync(ct);
+        ct.ThrowIfCancellationRequested();
+        if (readStop.IsCancellationRequested) return;
         // Merge in any alternate sources discovered by failover (read-only snapshot).
         // sitePaths itself is NEVER mutated (the dispatch loop enumerates it elsewhere);
         // we build a separate map for this scan only.
@@ -3396,13 +3410,21 @@ public partial class SpreadJob : IDisposable
         CancellationToken readStop = default)
     {
         if (!_serverConfigs.TryGetValue(serverId, out var config)) return null;
+        return await FindExistingSourcePath(serverId, RelocationCandidatePaths(config, Section, ReleaseName, currentPath), ct, readStop);
+    }
+
+    private async Task<string?> FindExistingSourcePath(string serverId, IEnumerable<string> candidates,
+        CancellationToken ct, CancellationToken readStop = default)
+    {
+        if (!_serverConfigs.TryGetValue(serverId, out var config) &&
+            (config = ServerConfigResolver?.Invoke(serverId)) == null) return null;
         // One connection serves every candidate; a probe that throws poisons it and the
         // next candidate borrows a fresh one.
         PooledConnection? conn = null;
         Exception? probeFailure = null;
         try
         {
-            foreach (var candidate in RelocationCandidatePaths(config, Section, ReleaseName, currentPath))
+            foreach (var candidate in candidates)
             {
                 // A failed borrow says nothing about ANY candidate. Stop this pass
                 // instead of spending another 15s per directory on the same pool,

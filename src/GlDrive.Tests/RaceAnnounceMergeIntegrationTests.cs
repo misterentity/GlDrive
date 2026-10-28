@@ -133,7 +133,7 @@ public sealed class RaceAnnounceMergeIntegrationTests : IDisposable
     }
 
     [Fact]
-    public void Active_merge_buffers_source_without_repinning_receiver_and_persists_latest_request()
+    public async Task Active_merge_buffers_source_without_repinning_receiver_and_persists_latest_request()
     {
         var config = Config();
         // Both-role feeder is source-only when spliced outside this attempt's destinations.
@@ -150,7 +150,7 @@ public sealed class RaceAnnounceMergeIntegrationTests : IDisposable
         Assert.Equal("-TV-", job.Section);
         Assert.Single(job.PendingSourceHints);
         Assert.False(Field<bool>(job, "_forceScan"));
-        Assert.Equal(1, job.ApplyPendingSourceHints());
+        Assert.Equal(1, await job.ApplyPendingSourceHintsAsync());
         Assert.Equal("/pinned/" + Release, paths["dst"]);
         Assert.Equal("/incoming/tv/" + Release, Field<ConcurrentDictionary<string, string>>(job, "_extraSourcePaths")["src"]);
         Assert.Empty(job.CapturePartialState().Directories);
@@ -175,7 +175,7 @@ public sealed class RaceAnnounceMergeIntegrationTests : IDisposable
     }
 
     [Fact]
-    public void Source_hint_is_applied_during_discovery_without_claiming_inventory_or_ownership()
+    public async Task Source_hint_is_applied_during_discovery_without_claiming_inventory_or_ownership()
     {
         var config = Config();
         using var manager = Manager(config);
@@ -183,7 +183,7 @@ public sealed class RaceAnnounceMergeIntegrationTests : IDisposable
         job.QueueSourceHints([new("src", "tv-hd", "/incoming/tv/" + Release)]);
         var paths = new Dictionary<string, string>();
         var sources = new HashSet<string>();
-        Assert.Equal(1, job.ApplyPendingSourceHints(paths, sources));
+        Assert.Equal(1, await job.ApplyPendingSourceHintsAsync(discoveryPaths: paths, discoverySources: sources));
         Assert.Contains("src", sources);
         Assert.Equal("/incoming/tv/" + Release, paths["src"]);
         Assert.False(Field<bool>(job, "_sourceScanSucceeded"));
@@ -193,20 +193,94 @@ public sealed class RaceAnnounceMergeIntegrationTests : IDisposable
         job.Stop();
     }
 
-    [Fact]
-    public void Pending_active_hint_accepts_a_corrected_source_alias_without_repinning()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("/stale/" + Release)]
+    public async Task Pending_active_hint_discovers_watch_path_without_repinning(string? hintedPath)
     {
         var config = Config();
         using var manager = Manager(config);
         var job = Job(config, manager);
-        job.QueueSourceHints([new("src", "-TV-")]);
-        Assert.Equal(0, job.ApplyPendingSourceHints());
-        job.QueueSourceHints([new("src", "tv-hd")]);
-        Assert.Equal(1, job.ApplyPendingSourceHints());
-        Assert.Equal("/incoming/tv/" + Release, Field<ConcurrentDictionary<string, string>>(job, "_extraSourcePaths")["src"]);
+        var probes = new List<string>();
+        job.SourceHintDirectoryExists = (_, path, _) =>
+        {
+            probes.Add(path);
+            return Task.FromResult(path == "/recent/tv-hd/" + Release);
+        };
+        job.QueueSourceHints([new("src", "tv-hd", hintedPath)]);
+        Assert.Equal(1, await job.ApplyPendingSourceHintsAsync());
+        var expected = hintedPath == null
+            ? new[] { "/incoming/tv/" + Release, "/recent/tv-hd/" + Release }
+            : new[] { hintedPath, "/incoming/tv/" + Release, "/recent/tv-hd/" + Release };
+        Assert.Equal(expected, probes);
+        Assert.Equal("/recent/tv-hd/" + Release, Field<ConcurrentDictionary<string, string>>(job, "_extraSourcePaths")["src"]);
         job.QueueSourceHints([new("src", "tv-hd", "/different/" + Release)]);
-        Assert.Equal(0, job.ApplyPendingSourceHints());
-        Assert.Equal("/incoming/tv/" + Release, Field<ConcurrentDictionary<string, string>>(job, "_extraSourcePaths")["src"]);
+        Assert.Equal(0, await job.ApplyPendingSourceHintsAsync());
+        Assert.Equal(expected.Length, probes.Count);
+        Assert.Equal("/recent/tv-hd/" + Release, Field<ConcurrentDictionary<string, string>>(job, "_extraSourcePaths")["src"]);
+        job.Stop();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Unverified_active_hint_cannot_claim_inventory_or_pin_a_missing_path(bool transientFailure)
+    {
+        var config = Config();
+        using var manager = Manager(config);
+        var job = Job(config, manager);
+        job.QueueSourceHints([new("src", "tv-hd")]);
+        job.SourceHintDirectoryExists = (_, _, _) => transientFailure
+            ? Task.FromException<bool>(new IOException("fixture unavailable")) : Task.FromResult(false);
+        Assert.Equal(0, await job.ApplyPendingSourceHintsAsync());
+        Assert.Empty(Field<ConcurrentDictionary<string, string>>(job, "_extraSourcePaths"));
+        Assert.Empty(Field<Dictionary<string, HashSet<string>>>(job, "_fileOwnership"));
+        Assert.False(Field<bool>(job, "_sourceScanSucceeded"));
+        if (transientFailure)
+        {
+            Assert.Single(job.PendingSourceHints);
+            job.SourceHintDirectoryExists = (_, _, _) => Task.FromResult(true);
+            Assert.Equal(1, await job.ApplyPendingSourceHintsAsync());
+        }
+        else Assert.Empty(job.PendingSourceHints);
+        job.Stop();
+    }
+
+    [Theory]
+    [InlineData("corrected")]
+    [InlineData("denied")]
+    [InlineData("pinned")]
+    public async Task State_changed_during_probe_cannot_publish_an_obsolete_source(string change)
+    {
+        var config = Config();
+        using var manager = Manager(config);
+        var job = Job(config, manager);
+        job.QueueSourceHints([new("src", "tv-hd", "/old/" + Release)]);
+        job.SourceHintDirectoryExists = (_, _, _) =>
+        {
+            if (change == "corrected") job.QueueSourceHints([new("src", "tv-hd", "/corrected/" + Release)]);
+            if (change == "denied") config.Servers[0].SpreadSite.NeverSource = true;
+            if (change == "pinned") Set(job, "_sitePathsRef", new Dictionary<string, string> { ["src"] = "/owned/" + Release });
+            return Task.FromResult(true);
+        };
+        Assert.Equal(0, await job.ApplyPendingSourceHintsAsync());
+        Assert.Empty(Field<ConcurrentDictionary<string, string>>(job, "_extraSourcePaths"));
+        if (change == "corrected") Assert.Equal("/corrected/" + Release, Assert.Single(job.PendingSourceHints).Path);
+        if (change == "pinned") Assert.Equal("/owned/" + Release, Field<Dictionary<string, string>>(job, "_sitePathsRef")["src"]);
+        job.Stop();
+    }
+
+    [Fact]
+    public async Task Cancelled_source_probe_does_not_publish_source()
+    {
+        var config = Config();
+        using var manager = Manager(config);
+        var job = Job(config, manager);
+        job.QueueSourceHints([new("src", "tv-hd")]);
+        using var stop = new CancellationTokenSource();
+        job.SourceHintDirectoryExists = (_, _, token) => { stop.Cancel(); return Task.FromCanceled<bool>(token); };
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => job.ApplyPendingSourceHintsAsync(stop.Token));
+        Assert.Empty(Field<ConcurrentDictionary<string, string>>(job, "_extraSourcePaths"));
         job.Stop();
     }
 
@@ -217,7 +291,7 @@ public sealed class RaceAnnounceMergeIntegrationTests : IDisposable
     [InlineData("no-pool")]
     [InlineData("pinned")]
     [InlineData("merge-off")]
-    public void Active_splice_preserves_admission_pool_and_pinned_path_constraints(string blockedBy)
+    public async Task Active_splice_preserves_admission_pool_and_pinned_path_constraints(string blockedBy)
     {
         var config = Config();
         if (blockedBy == "never-source") config.Servers[0].SpreadSite.NeverSource = true;
@@ -229,7 +303,7 @@ public sealed class RaceAnnounceMergeIntegrationTests : IDisposable
         if (blockedBy == "no-pool") job.LivePoolResolver = _ => null;
         if (blockedBy == "pinned") Set(job, "_sitePathsRef", new Dictionary<string, string> { ["src"] = "/old/" + Release });
         job.QueueSourceHints([new("src", "tv-hd", "/incoming/tv/" + Release)]);
-        Assert.Equal(0, job.ApplyPendingSourceHints());
+        Assert.Equal(0, await job.ApplyPendingSourceHintsAsync());
         Assert.Empty(Field<ConcurrentDictionary<string, string>>(job, "_extraSourcePaths"));
         Assert.False(job.AwaitingFirstAnnounceScan());
         Assert.False(Field<bool>(job, "_forceScan"));
@@ -238,7 +312,7 @@ public sealed class RaceAnnounceMergeIntegrationTests : IDisposable
     }
 
     [Fact]
-    public void Rejecting_an_old_snapshot_does_not_remove_a_concurrent_corrected_hint()
+    public async Task Rejecting_an_old_snapshot_does_not_remove_a_concurrent_corrected_hint()
     {
         var config = Config();
         using var manager = Manager(config);
@@ -252,9 +326,9 @@ public sealed class RaceAnnounceMergeIntegrationTests : IDisposable
             job.ServerConfigResolver = next => config.Servers.FirstOrDefault(s => s.Id == next);
             return denied;
         };
-        Assert.Equal(0, job.ApplyPendingSourceHints());
+        Assert.Equal(0, await job.ApplyPendingSourceHintsAsync());
         Assert.Equal("tv-hd", Assert.Single(job.PendingSourceHints).Section);
-        Assert.Equal(1, job.ApplyPendingSourceHints());
+        Assert.Equal(1, await job.ApplyPendingSourceHintsAsync());
         Assert.Equal("/incoming/tv/" + Release, Field<ConcurrentDictionary<string, string>>(job, "_extraSourcePaths")["src"]);
         job.Stop();
     }
@@ -287,6 +361,7 @@ public sealed class RaceAnnounceMergeIntegrationTests : IDisposable
         var job = new SpreadJob("-TV-", Release, SpreadMode.Race, config.Spread, new(), new(), new(), new(), new());
         job.ServerConfigResolver = id => config.Servers.FirstOrDefault(s => s.Id == id);
         job.LivePoolResolver = id => pools.GetValueOrDefault(id);
+        job.SourceHintDirectoryExists = (_, _, _) => Task.FromResult(true);
         return job;
     }
 }

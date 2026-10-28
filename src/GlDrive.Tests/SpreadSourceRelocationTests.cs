@@ -189,10 +189,12 @@ public sealed class SpreadSourceRelocationTests
     [Fact]
     public void Initial_probe_and_relocation_probe_share_one_candidate_list()
     {
-        // Two gates answering "where might this site hold the release?" with different
-        // predicates is the v3.10.45 shape; both must consult CandidateBasePaths.
-        Assert.Contains("var pathsToProbe = CandidateBasePaths(config, Section);", Source);
-        Assert.Contains("RelocationCandidatePaths(config, Section, ReleaseName, currentPath)", Source);
+        var config = new ServerConfig();
+        config.SpreadSite.Sections = new() { ["TV"] = "/incoming/tv", ["Archive"] = "/archive/tv" };
+        config.Notifications.WatchPath = "/recent";
+        var initial = SpreadJob.SourceHintCandidatePaths(config, null, "TV", "Synthetic.Release");
+        var relocated = SpreadJob.RelocationCandidatePaths(config, "TV", "Synthetic.Release", "/gone/Synthetic.Release");
+        Assert.Equal(initial.OrderBy(p => p), relocated.OrderBy(p => p));
     }
 
     [Fact]
