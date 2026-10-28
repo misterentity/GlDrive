@@ -16,12 +16,14 @@ public readonly record struct FtpLoginAccount(string Host, int Port, string User
 
 public sealed record FtpAuthenticationNotice(FtpLoginAccount Account, DateTime NextProbeAtUtc);
 
-public sealed class FtpLoginHeldException(string message, bool authenticationHold, DateTime? retryAtUtc, bool loginRateHold = false)
+public sealed class FtpLoginHeldException(string message, bool authenticationHold, DateTime? retryAtUtc,
+    bool loginRateHold = false, bool siteHealthHold = false)
     : InvalidOperationException(message)
 {
     public bool AuthenticationHold { get; } = authenticationHold;
     public DateTime? RetryAtUtc { get; } = retryAtUtc;
     public bool LoginRateHold { get; } = loginRateHold;
+    public bool SiteHealthHold { get; } = siteHealthHold;
 }
 
 public sealed record FtpLoginObservation(FtpLoginAccount Account, bool Succeeded,
@@ -89,7 +91,8 @@ public static class GuardedFtpLogin
             catch (Exception ex)
             {
                 Log.Warning(ex, "FTP site-health admission state could not be read");
-                throw new FtpLoginHeldException("Site health admission state is unavailable; retry manually", false, null, loginRateHold: true);
+                throw new FtpLoginHeldException("Site health admission state is unavailable; retry manually", false, null,
+                    loginRateHold: true, siteHealthHold: true);
             }
             if (deadline > latest || latest == null) latest = deadline;
         }
@@ -127,7 +130,8 @@ public static class GuardedFtpLogin
             // the site is up; the governor's ghost slot and minute gap still bound it.
             if (!manual && allowRecoveryProbe && !attempt.CredentialChanged && admissionDeadline?.Invoke(account) is { } retryAt &&
                 retryAt > (governor?.UtcNow ?? DateTime.UtcNow))
-                throw new FtpLoginHeldException("Site health supervisor is deferring automatic new logins", false, retryAt, loginRateHold: true);
+                throw new FtpLoginHeldException("Site health supervisor is deferring automatic new logins", false, retryAt,
+                    loginRateHold: true, siteHealthHold: true);
             // A9 already serializes recovery probes; an older successful burst must
             // not prevent the one admitted probe from testing changed credentials.
             governed = governor?.Begin(account, policy, manual || attempt.RecoveryProbe, !allowRecoveryProbe);

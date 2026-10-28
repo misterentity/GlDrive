@@ -183,7 +183,7 @@ internal static class CpsvSharingCheck
         var mainLane = (ISegmentLane)Activator.CreateInstance(laneType,
             [mainConnection, f.Main, true, network, "main", null, null, null])!;
         var sourceType = typeof(SegmentedTransfer).Assembly.GetType("GlDrive.Downloads.Segmented.RaceLoginLaneSource")!;
-        var source = new RecordingSource((ILaneSource)Activator.CreateInstance(sourceType, [f.Manager, f.ServerId, network, null])!);
+        var source = new RecordingSource((ILaneSource)Activator.CreateInstance(sourceType, [f.Manager, f.ServerId, network, null, null])!);
         var localPath = Path.Combine(f.Root, "payload.bin");
         var transfer = new SegmentedTransfer([new TransferFile("/payload.bin", localPath, f.Peer.Payload.Length)],
             new SegmentedTransferOptions
