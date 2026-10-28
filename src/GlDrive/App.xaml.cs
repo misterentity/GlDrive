@@ -348,6 +348,11 @@ public partial class App
         try { notificationStore.Load(); }
         catch (Exception ex) { Log.Warning(ex, "Failed to load notification store"); }
         _serverManager = new ServerManager(config, certManager, notificationStore);
+        GlDrive.AiAgent.OutboundSecretInventory.ReadLiveSecrets = () =>
+            GlDrive.AiAgent.OutboundSecretInventory.ConfigSecrets(System.Text.Json.JsonSerializer.SerializeToNode(config)!)
+            .Concat(_serverManager.GetIrcServices().Values.SelectMany(service =>
+                service.KeyStore.GetAllKeys().Values.SelectMany(key =>
+                    new[] { key.Key, key.AltKey, key.DhSecretHex })));
         _serverManager.StartTorrentDownloads();
         HealthRollup = new GlDrive.AiAgent.HealthRollup(TelemetryRecorder, _serverManager);
         SectionActivityRollup = new GlDrive.AiAgent.SectionActivityRollup(
@@ -563,8 +568,7 @@ public partial class App
         try
         {
             var logsDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "GlDrive", "logs");
+                GlDrive.Util.AppDataPaths.Root, "logs");
             try { Directory.CreateDirectory(logsDir); } catch { }
 
             var now = DateTime.Now;

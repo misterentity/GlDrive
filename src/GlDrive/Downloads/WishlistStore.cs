@@ -30,6 +30,7 @@ public class WishlistStore
         internal readonly Func<string?> Read = read;
         internal readonly Action<string> Write = write;
         internal List<WishlistItem> Items = [];
+        internal readonly WishlistReleaseDeduplicator ReleaseEvaluations = new();
         internal bool Loaded;
     }
 
@@ -96,6 +97,7 @@ public class WishlistStore
         {
             EnsureLoaded();
             _state.Items.RemoveAll(i => i.Id == id);
+            _state.ReleaseEvaluations.ForgetItem(id);
             Save();
         }
     }
@@ -110,6 +112,7 @@ public class WishlistStore
                 _state.Items[idx] = item;
             else
                 return;
+            _state.ReleaseEvaluations.ForgetItem(item.Id);
             Save();
         }
     }
@@ -117,6 +120,41 @@ public class WishlistStore
     public WishlistItem? GetById(string id)
     {
         lock (_state.Sync) { EnsureLoaded(); return _state.Items.FirstOrDefault(i => i.Id == id); }
+    }
+
+    internal bool TryBeginReleaseEvaluation(string itemId, string release)
+    {
+        lock (_state.Sync)
+        {
+            EnsureLoaded();
+            var item = _state.Items.FirstOrDefault(i => i.Id == itemId);
+            return item is { Dead: false, Status: WishlistStatus.Watching }
+                && !item.GrabbedReleases.Contains(release, StringComparer.OrdinalIgnoreCase)
+                && _state.ReleaseEvaluations.TryBegin(itemId, release);
+        }
+    }
+
+    internal void ForgetReleaseEvaluation(string itemId, string release)
+    {
+        lock (_state.Sync) _state.ReleaseEvaluations.Forget(itemId, release);
+    }
+
+    internal void CompleteReleaseEvaluation(string itemId, string release)
+    {
+        lock (_state.Sync) _state.ReleaseEvaluations.Complete(itemId, release);
+    }
+
+    internal void RecordGrab(string itemId, string release)
+    {
+        lock (_state.Sync)
+        {
+            EnsureLoaded();
+            _state.ReleaseEvaluations.Complete(itemId, release);
+            var item = _state.Items.FirstOrDefault(i => i.Id == itemId);
+            if (item == null || item.GrabbedReleases.Contains(release, StringComparer.OrdinalIgnoreCase)) return;
+            item.GrabbedReleases.Add(release);
+            Save();
+        }
     }
 
     /// <summary>

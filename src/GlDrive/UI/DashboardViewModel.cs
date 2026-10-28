@@ -280,8 +280,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         try
         {
             var logsDir = System.IO.Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "GlDrive", "logs");
+                GlDrive.Util.AppDataPaths.Root, "logs");
             if (System.IO.Directory.Exists(logsDir))
             {
                 var latest = new System.IO.DirectoryInfo(logsDir)
@@ -326,8 +325,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     {
         TrustedCerts.Clear();
         var path = System.IO.Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "GlDrive", "trusted_certs.json");
+            GlDrive.Util.AppDataPaths.Root, "trusted_certs.json");
         if (!System.IO.File.Exists(path)) return;
         try
         {

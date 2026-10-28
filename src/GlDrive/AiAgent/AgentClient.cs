@@ -338,7 +338,9 @@ public sealed class AgentClient : IDisposable
         };
 
         var body = JsonSerializer.Serialize(request, JsonOpts);
-        var content = new StringContent(body, Encoding.UTF8, "application/json");
+        if (!OutboundPayloadRedactor.TryPrepare(body, out var safeBody))
+            return new AgentRunOutcome { ErrorMessage = "outbound-redaction-refused" };
+        using var content = new StringContent(safeBody, Encoding.UTF8, "application/json");
 
         try
         {

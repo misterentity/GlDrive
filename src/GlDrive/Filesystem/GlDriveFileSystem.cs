@@ -636,8 +636,7 @@ public class GlDriveFileSystem : FileSystemBase
                     try
                     {
                         var recovery = node.PreserveFailedWrite(Path.Combine(
-                            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                            "GlDrive", "write-recovery"), _volumeLabel);
+                            GlDrive.Util.AppDataPaths.Root, "write-recovery"), _volumeLabel);
                         Log.Error("Upload failed; recover buffered file {RemotePath} from {RecoveryPath}", node.RemotePath, recovery);
                     }
                     catch (Exception ex)

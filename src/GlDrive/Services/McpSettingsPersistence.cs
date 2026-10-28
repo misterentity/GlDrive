@@ -25,6 +25,40 @@ public static class McpSettingsPersistence
                 SecureFile.WriteAllTextRestricted(ConfigManager.ConfigPath, candidate.ToJsonString(Json));
             });
 
+    /// <summary>Replaces only the saved bearer token and publishes it after persistence succeeds.</summary>
+    public static void RegenerateToken(AppConfig runtimeConfig)
+        => RegenerateToken(runtimeConfig, ConfigManager.ConfigPath, LoadSavedSettings,
+            candidate =>
+            {
+                Directory.CreateDirectory(ConfigManager.AppDataPath);
+                SecureFile.WriteAllTextRestricted(ConfigManager.ConfigPath, candidate.ToJsonString(Json));
+            });
+
+    internal static void RegenerateToken(AppConfig runtimeConfig, string configPath,
+        Func<JsonObject> load, Action<JsonObject> save, Func<bool>? isReadOnly = null)
+    {
+        ArgumentNullException.ThrowIfNull(runtimeConfig);
+        ArgumentNullException.ThrowIfNull(load);
+        ArgumentNullException.ThrowIfNull(save);
+        isReadOnly ??= () => ConfigManager.ReadOnly;
+        SecureFile.WithPathLock(configPath, () =>
+        {
+            EnsureWritable(isReadOnly);
+            var candidate = load().DeepClone().AsObject();
+            var listener = candidate["controlApi"] as JsonObject;
+            if (candidate["controlApi"] != null && listener == null)
+                throw new InvalidOperationException("The saved controlApi settings are invalid; token was not changed.");
+            if (listener == null) candidate["controlApi"] = listener = new JsonObject();
+            var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+            listener["token"] = token;
+            EnsureWritable(isReadOnly);
+            save(candidate);
+            // ControlApi reads the shared config token for each request, so this invalidates
+            // the old token immediately without restarting the listener or any connections.
+            (runtimeConfig.ControlApi ??= new ControlApiConfig()).Token = token;
+        });
+    }
+
     /// <summary>Save the full Settings dialog from a detached candidate, retaining the saved bearer token.</summary>
     public static void SaveAll(AppConfig runtimeConfig, Action<AppConfig> applyEdits)
         => SaveAll(runtimeConfig, applyEdits, ConfigManager.ConfigPath, LoadSavedSettings, ConfigManager.Save);

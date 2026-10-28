@@ -19,19 +19,21 @@ public class NewReleaseMonitor
     private Task? _pollTask;
     private bool _seeded;
     private int _consecutiveErrors;
+    public ReleaseMonitorHealth Health { get; }
 
     public event Action<string, string, string>? NewReleaseDetected; // category, release, remotePath
 
-    public NewReleaseMonitor(FtpConnectionPool pool, NotificationConfig config, Func<MountState> getState)
+    public NewReleaseMonitor(FtpConnectionPool pool, NotificationConfig config, Func<MountState> getState,
+        ReleaseMonitorHealth? health = null)
         : this(config, getState, new FtpOperations(pool).ListDirectory,
-            () => pool.ActiveCount, pool.ControlHost)
+            () => pool.ActiveCount, pool.ControlHost, health: health)
     {
     }
 
     internal NewReleaseMonitor(NotificationConfig config, Func<MountState> getState,
         Func<string, CancellationToken, Task<FtpListItem[]>> listDirectory,
         Func<int> activeCount, string server,
-        Func<TimeSpan, CancellationToken, Task>? delay = null)
+        Func<TimeSpan, CancellationToken, Task>? delay = null, ReleaseMonitorHealth? health = null)
     {
         _listDirectory = listDirectory;
         _activeCount = activeCount;
@@ -39,6 +41,7 @@ public class NewReleaseMonitor
         _delay = delay ?? Task.Delay;
         _config = config;
         _getState = getState;
+        Health = health ?? new ReleaseMonitorHealth();
     }
 
     public void Start()
@@ -113,6 +116,10 @@ public class NewReleaseMonitor
         // FtpOperations owns borrow/disposal and quarantines unclean LIST failures,
         // while preserving connections after clean final rejections (425 / 550).
         var categories = await _listDirectory(_config.WatchPath, ct);
+        if (Health.Observe(_config.WatchPath,
+            categories.Count(i => i.Type is FtpObjectType.Directory or FtpObjectType.Link), DateTime.UtcNow))
+            Log.Warning("NewReleaseMonitor[{Server}] found no categories under {WatchPath}; wishlist polling has no categories to watch",
+                _server, _config.WatchPath);
 
         var excluded = _config.ExcludedCategories;
         var categoryDirs = categories

@@ -11,7 +11,17 @@ public static class CredentialStore
     /// Screenshot mode runs in its own short-lived process, so this is deliberately
     /// process-wide rather than an ambient async scope.
     /// </summary>
-    internal static bool AccessDisabled { get; set; }
+    private static bool _accessDisabled;
+    private static bool _testAccessDisabled;
+    internal static bool AccessDisabled
+    {
+        get => _accessDisabled || _testAccessDisabled;
+        set => _accessDisabled = value;
+    }
+
+    // A test may temporarily restore AccessDisabled after exercising screenshot mode;
+    // that must never re-enable access to the user's credential vault in the test host.
+    internal static void DisableAccessForTests() => _testAccessDisabled = true;
 
     private static string GetTargetName(string host, int port, string username) =>
         $"GlDrive:{host}:{port}:{username}";

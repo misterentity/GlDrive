@@ -95,7 +95,7 @@ public sealed class ConfigurationAutomation : IAutomationModule
         defaults = Redact(JsonSerializer.SerializeToNode(new AppConfig(), Json)!, false),
         patchFormat = "RFC 6902 subset: add, replace, remove, test; paths use RFC 6901 JSON Pointer; array append uses /-.",
         runtime = "Settings are persisted atomically and shared configuration objects are updated. Restart GlDrive to fully apply connections, listeners, logging, scheduling and UI state.",
-        secrets = "[redacted] is a read-only placeholder; explicit allowSecrets is required to change secrets. The control API token cannot be read; it can be rotated by a secret-enabled patch followed by restart. External credentials use credentials_manage."
+        secrets = "[redacted] is a read-only placeholder; explicit allowSecrets is required to change secrets. The control API token cannot be read; use Regenerate control-API token in MCP settings, or a secret-enabled config_patch. External credentials use credentials_manage."
     };
 
     public object Apply(JsonArray operations, string? expectedRevision = null, bool allowSecrets = false)

@@ -35,6 +35,11 @@ public partial class McpSettingsPanel : UserControl
         if (DataContext is McpSettingsViewModel vm) await vm.CheckAsync(_lifetime?.Token ?? default);
     }
 
+    private async void RegenerateToken_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is McpSettingsViewModel vm) await vm.RegenerateTokenAsync(_lifetime?.Token ?? default);
+    }
+
     private void Copy_Click(object sender, RoutedEventArgs e)
     {
         if (DataContext is not McpSettingsViewModel vm) return;

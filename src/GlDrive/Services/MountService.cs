@@ -22,6 +22,7 @@ public class MountService : IDisposable
     private FileSystemHost? _host;
     private ConnectionMonitor? _monitor;
     private NewReleaseMonitor? _releaseMonitor;
+    public ReleaseMonitorHealth ReleaseMonitorHealth { get; } = new();
     private StreamingDownloader? _streamingDownloader;
     private DownloadManager? _downloadManager;
     // Process-wide disk reservation shared across all servers' downloads so
@@ -199,7 +200,7 @@ public class MountService : IDisposable
             _monitor.Start();
 
             // Start release monitor
-            _releaseMonitor = new NewReleaseMonitor(_pool, _serverConfig.Notifications, () => CurrentState);
+            _releaseMonitor = new NewReleaseMonitor(_pool, _serverConfig.Notifications, () => CurrentState, ReleaseMonitorHealth);
             _releaseMonitor.NewReleaseDetected += (category, release, remotePath) => NewReleaseDetected?.Invoke(category, release, remotePath);
             _releaseMonitor.Start();
 
@@ -225,9 +226,11 @@ public class MountService : IDisposable
             _wishlistMatcher = new WishlistMatcher(wishlistStore, _downloadManager, _ftp, _downloadConfig,
                 _serverConfig.Id, _serverConfig.Name);
 
-            if (_downloadConfig.AutoDownloadWishlist)
-                _releaseMonitor.NewReleaseDetected += (category, release, remotePath) =>
-                    _wishlistMatcher.OnNewRelease(category, release, remotePath);
+            _releaseMonitor.NewReleaseDetected += (category, release, remotePath) =>
+            {
+                if (_downloadConfig.AutoDownloadWishlist)
+                    _wishlistMatcher?.OnNewRelease(category, release, remotePath);
+            };
 
             _downloadManager.Start();
 
@@ -251,6 +254,12 @@ public class MountService : IDisposable
             Cleanup();
             throw;
         }
+    }
+
+    public void OnIrcRelease(string category, string release)
+    {
+        if (_downloadConfig.AutoDownloadWishlist)
+            _wishlistMatcher?.OnIrcRelease(_serverConfig, category, release);
     }
 
     public async Task UnmountAsync()

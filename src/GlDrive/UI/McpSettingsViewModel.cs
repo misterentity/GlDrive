@@ -184,6 +184,34 @@ public sealed class McpSettingsViewModel : INotifyPropertyChanged
         finally { IsBusy = false; }
     }
 
+    public async Task RegenerateTokenAsync(CancellationToken ct = default)
+    {
+        if (IsBusy || !_readLocalState || ConfigManager.ReadOnly) return;
+        IsBusy = true;
+        var saved = false;
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+            McpSettingsPersistence.RegenerateToken(_config);
+            saved = true;
+            Feedback = "Control-API token regenerated. The MCP bridge reads it automatically on its next request.";
+            await ProbeCoreAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            Status = saved ? "Token regenerated; connection check cancelled." : "Token regeneration cancelled.";
+            ConnectionState = _config.ControlApi.Enabled ? McpConnectionState.Unknown : McpConnectionState.Off;
+        }
+        catch (Exception ex)
+        {
+            Serilog.Log.Warning("MCP token regeneration {Stage} failed ({ErrorType})", saved ? "check" : "save", ex.GetType().Name);
+            Status = saved ? "Token regenerated, but the connection check failed. Check the app log and retry."
+                : "Could not regenerate the token. The existing token is unchanged.";
+            ConnectionState = McpConnectionState.Error;
+        }
+        finally { IsBusy = false; }
+    }
+
     private async Task ProbeCoreAsync(CancellationToken ct)
     {
         Setup = McpSetupService.GetSetup();

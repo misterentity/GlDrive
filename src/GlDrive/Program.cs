@@ -95,7 +95,7 @@ public static class Program
         try
         {
             var logDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GlDrive", "logs");
+                GlDrive.Util.AppDataPaths.Root, "logs");
             if (!Directory.Exists(logDir)) return;
             ActiveLogFile.AppendLine(logDir, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{level}] {message}");
         }
@@ -183,8 +183,7 @@ public static class Program
         // The watchdog may run from a temp update directory that doesn't have
         // System.Text.Json.dll, so touching ConfigManager (which deserializes
         // JSON in its static constructor) would crash with FileNotFoundException.
-        var appData = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GlDrive");
+        var appData = GlDrive.Util.AppDataPaths.Root;
         var crashMarker = Path.Combine(appData, ".running");
         var updateMarker = Path.Combine(appData, ".updating");
 

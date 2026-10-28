@@ -49,8 +49,7 @@ public sealed class ExtractAbandonStore
 
     public ExtractAbandonStore()
     {
-        var dir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        _path = System.IO.Path.Combine(dir, "GlDrive", "extract-abandoned.json");
+        _path = System.IO.Path.Combine(GlDrive.Util.AppDataPaths.Root, "extract-abandoned.json");
     }
 
     /// <summary>Path-override ctor for tests, so they never touch the live store.</summary>

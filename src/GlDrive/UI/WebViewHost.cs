@@ -48,8 +48,7 @@ public class WebViewHost : ContentControl
         try
         {
             var dataDir = System.IO.Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "GlDrive", "WebView2");
+                GlDrive.Util.AppDataPaths.Root, "WebView2");
 
             _webView = new WebView2();
             _webView.CreationProperties = new CoreWebView2CreationProperties

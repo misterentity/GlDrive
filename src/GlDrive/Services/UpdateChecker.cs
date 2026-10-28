@@ -218,7 +218,7 @@ public class UpdateChecker : IDisposable
     }
 
     private static string UpdateStatePath(string name) => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GlDrive", name);
+        GlDrive.Util.AppDataPaths.Root, name);
 
     /// <summary>
     /// Number of consecutive failed auto-install attempts of the SAME release before we stop
@@ -920,12 +920,10 @@ public class UpdateChecker : IDisposable
 
         // Write HMAC-protected .updating marker so the watchdog won't restart on clean update exit
         var appDataUpdating = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "GlDrive", ".updating");
+            GlDrive.Util.AppDataPaths.Root, ".updating");
         UpdateMarkerHmac.Write(appDataUpdating, pid);
         var appDataAuthorization = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "GlDrive", ".update-auth");
+            GlDrive.Util.AppDataPaths.Root, ".update-auth");
         UpdateMarkerHmac.WriteAuthorization(appDataAuthorization, pid, packageDir, installDir);
         try { File.Delete(UpdateCompletionPath(pid)); } catch { }
 
@@ -1285,8 +1283,7 @@ public class UpdateChecker : IDisposable
             }
 
             var authorizationPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "GlDrive", ".update-auth");
+                GlDrive.Util.AppDataPaths.Root, ".update-auth");
 
             if (legacyExtractedHandoff)
             {
@@ -1439,8 +1436,7 @@ public class UpdateChecker : IDisposable
             // Clean up the update marker so the watchdog doesn't interfere on next run
             try { File.Delete(Path.Combine(installDir, "..", "GlDrive", ".updating")); } catch { }
             var appDataUpdating = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "GlDrive", ".updating");
+                GlDrive.Util.AppDataPaths.Root, ".updating");
             try { File.Delete(appDataUpdating); } catch { }
 
             // We are elevated RIGHT NOW and the new files are in place. Register the SYSTEM
@@ -1464,8 +1460,7 @@ public class UpdateChecker : IDisposable
             LogUpdate("Rolling back partial update");
             RollBackUpdateFiles(copiedDestinations, backups, LogUpdate);
 
-            var appData = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GlDrive");
+            var appData = GlDrive.Util.AppDataPaths.Root;
             try { File.Delete(Path.Combine(appData, ".updating")); } catch { }
             try { File.Delete(Path.Combine(appData, ".update-auth")); } catch { }
 
@@ -1835,9 +1830,7 @@ public class UpdateChecker : IDisposable
 /// </summary>
 public static class UpdateMarkerHmac
 {
-    private static readonly string KeyPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "GlDrive", ".updating-key");
+    private static string KeyPath => Path.Combine(GlDrive.Util.AppDataPaths.Root, ".updating-key");
 
     // The first update-marker calls can arrive concurrently (the test runner does this reliably
     // on a clean profile). Without a gate, two callers can both observe a missing key, generate

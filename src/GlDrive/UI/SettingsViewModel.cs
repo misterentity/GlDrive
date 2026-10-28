@@ -271,7 +271,7 @@ public class SettingsViewModel : INotifyPropertyChanged
     public ICommand ResetDryRunsCommand => new RelayCommand(() => { AgentDryRunsRemaining = 3; });
     public ICommand OpenAiDataFolderCommand => new RelayCommand(() =>
     {
-        var path = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GlDrive", "ai-data");
+        var path = System.IO.Path.Combine(GlDrive.Util.AppDataPaths.Root, "ai-data");
         System.IO.Directory.CreateDirectory(path);
         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = path, UseShellExecute = true });
     });
