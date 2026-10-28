@@ -33,7 +33,7 @@ public class MediaStreamServer : IDisposable
     /// Uses %AppData%\GlDrive\Player to avoid depending on the download path (which may be on a mounted FTP drive).
     /// </summary>
     public string LibraryPath { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GlDrive", "Player");
+        GlDrive.Util.AppDataPaths.Root, "Player");
 
     public MediaStreamServer(ServerManager serverManager, AppConfig config)
     {

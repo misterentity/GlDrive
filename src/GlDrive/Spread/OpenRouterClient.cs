@@ -283,7 +283,8 @@ public class OpenRouterClient : IDisposable
             };
 
             var json = JsonSerializer.Serialize(request, JsonOptions);
-            var content = new StringContent(json, Encoding.UTF8, "application/json");
+            if (!GlDrive.AiAgent.OutboundPayloadRedactor.TryPrepare(json, out var safeJson)) return null;
+            using var content = new StringContent(safeJson, Encoding.UTF8, "application/json");
 
             var response = await _http.PostAsync("chat/completions", content, ct);
             var responseBody = await response.Content.ReadAsStringAsync(ct);

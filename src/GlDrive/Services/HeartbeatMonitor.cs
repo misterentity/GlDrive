@@ -22,8 +22,7 @@ namespace GlDrive.Services;
 public sealed class HeartbeatMonitor : IDisposable
 {
     private static readonly string FilePath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "GlDrive", "logs", "last-heartbeat.json");
+        GlDrive.Util.AppDataPaths.Root, "logs", "last-heartbeat.json");
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {

@@ -67,8 +67,7 @@ public sealed class SectionBlacklistStore
 
     public SectionBlacklistStore()
     {
-        var dir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        _path = Path.Combine(dir, "GlDrive", "section-blacklist.json");
+        _path = Path.Combine(GlDrive.Util.AppDataPaths.Root, "section-blacklist.json");
     }
 
     /// <summary>Path-override ctor for tests. The default ctor points at the LIVE

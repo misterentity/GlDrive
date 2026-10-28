@@ -40,6 +40,8 @@ For an installation without the settings control, exit GlDrive first, preserve t
 
 The bridge automatically reads `ControlApi.Port` and `ControlApi.Token` from that file. **Do not paste the token into Claude/Codex configuration.** The app and client should run as the same Windows user. The bridge connects only to `http://127.0.0.1`; it cannot be used as a remote HTTP MCP endpoint.
 
+Use **Regenerate control-API token** in the MCP settings panel to invalidate the current token immediately. This saves only the new token, preserving pending settings edits. The bridge reads it on its next request; no client configuration change is needed unless you set `GLDRIVE_CONTROL_TOKEN` yourself. Automation can also replace `/controlApi/token` through `config_patch` with `allowSecrets=true`; the token is never returned by the bridge.
+
 The installed executable is `<GlDrive installation folder>\mcp\GlDrive.Mcp.exe`. Substitute its actual absolute path in the examples below. The packaged bridge includes its .NET runtime.
 
 The **MCP** panel shows this installation's adapter path and warns if the executable is missing. Choose **Claude Code**, **Codex**, or **Claude Desktop** under **Connect a client**, then copy the generated command or JSON. Commands are ready for PowerShell and already contain the actual path. Run the command, or merge the Desktop JSON into its existing configuration as described below; copying does not register the client automatically. No authentication token is included in the copied text.

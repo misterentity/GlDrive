@@ -56,6 +56,8 @@ public sealed class ChangeApplier
             // every freeze, so malformed model output was audited as "frozen" (2026-10-05).
             if (string.IsNullOrWhiteSpace(change.Category) || string.IsNullOrWhiteSpace(change.Target))
                 reject = "malformed";
+            else if (ConfigSecretPointers.IsSecret(change.Target))
+                reject = "secret-target";
             else if (_freeze.IsFrozen(change.Target) || _freeze.All.Any(entry =>
                 {
                     var frozen = CanonicalizeTarget(entry.Path, config);
@@ -199,8 +201,8 @@ public sealed class ChangeApplier
                 RunId = runId,
                 Category = change.Category,
                 Target = change.Target,
-                Before = change.Before,
-                After = change.After,
+                Before = AuditProposedValue(change.Target, change.Before),
+                After = AuditProposedValue(change.Target, change.After),
                 Reasoning = change.Reasoning,
                 EvidenceRef = change.EvidenceRef,
                 Confidence = change.Confidence,
@@ -218,6 +220,11 @@ public sealed class ChangeApplier
     // touches AppConfig, so a config diff cannot tell whether they took effect.
     private static bool MutatesConfig(string category) =>
         category is not (AgentCategories.WishlistPrune or AgentCategories.ErrorReport);
+
+    private static object? AuditProposedValue(string target, object? value) =>
+        ConfigSecretPointers.IsSecret(target)
+            ? ConfigSecretPointers.Mask(value is null ? null : JsonSerializer.Serialize(value))
+            : value;
 
     private static string? SerializeConfig(GlDrive.Config.AppConfig config)
     {

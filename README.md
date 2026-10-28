@@ -40,7 +40,7 @@ glftpd sites have quirks that off-the-shelf FTP clients handle badly. Each of th
 - Duplicate detection, NFO pre-check, disk-space validation, drag-drop from Notifications or Search
 
 ### Notifications & wishlist
-- `/recent` polling with excluded-category filters and debounced toast notifications
+- `/recent` polling with excluded-category filters and debounced toast notifications. Exclusions save category LISTs; IRC announces still feed wishlist matching in excluded categories, with shared deduplication across both sources.
 - **Wishlist** with TVMaze/TMDB/OMDB metadata and quality profiles (Any/SD/720p/1080p/2160p)
 - **Auto-download** of matching releases across *all* connected servers via `SceneNameParser` + `WishlistMatcher`
 - Wishlist import/export as JSON; completion toasts with optional sound
@@ -223,7 +223,7 @@ Version is read from `<Version>` in `src/GlDrive/GlDrive.csproj`. Run release bu
 
 ## Quick start
 
-1. **Launch**: the first-run wizard asks for host, port, username, password and drive letter. The password goes to Credential Manager; the config JSON holds non-secrets only
+1. **Launch**: the first-run wizard asks for host, port, username, password and drive letter. The password goes to Credential Manager; the config JSON also contains sensitive values such as the local control-API token and configured FiSH channel keys
 2. **TLS**: the first certificate is trusted on first use (TOFU); a later change asks for confirmation
 3. **Explorer**: your drive letter appears as `glFTPd (G:)`
 4. **More servers**: Settings → Servers → Add Server, or Import Sites from FTPRush/FlashFXP. Each server has its own IRC, spread, pool, cache, notification and speed settings
@@ -271,7 +271,7 @@ Everything per-user lives under `%AppData%\GlDrive\`. Full schema with defaults:
 
 | Data | Location |
 |---|---|
-| App config | `appsettings.json` (camelCase JSON, non-secrets only) |
+| App config | `appsettings.json` (camelCase JSON; includes the control-API token and configured FiSH channel keys) |
 | Downloads (per server) | `downloads-{serverId}.json` |
 | Race history / queue | `race-history.json` (max 500), `race-queue.json` |
 | Spread route speeds | `spread-speed-history.json` (rolling 10 samples per src→dst pair) |
@@ -335,7 +335,7 @@ Resume for `RETR` sends `REST <offset>` first. Before every FXP transfer, `TYPE 
 
 | Concern | Measure |
 |---|---|
-| Credentials | Windows Credential Manager (DPAPI); never in config files or logs |
+| Credentials | Passwords and API credentials use Windows Credential Manager (DPAPI). The control-API token and configured FiSH channel keys remain in the restricted config file; treat config backups as sensitive. Outbound AI payloads redact secrets. |
 | Log redaction | FTP `PASS`; IRC redaction keys on *which parameter of a command is a credential*: `PASS`, `OPER`, `JOIN` keys, services logins, `MODE`/`324` key echoes, inbound and outbound |
 | Config telemetry | Credential-valued config changes record a SHA-256 digest, never the value |
 | FiSH keys | DPAPI-encrypted per server in `fish-keys-{serverId}.json` |

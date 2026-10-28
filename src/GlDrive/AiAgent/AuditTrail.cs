@@ -30,7 +30,7 @@ public class AuditRow
     [System.Text.Json.Serialization.JsonIgnore]
     public bool WasApplied => Applied && !DryRun;
     [System.Text.Json.Serialization.JsonIgnore]
-    public bool IsSuggestion => !WasApplied && !Undone && RejectionReason is not ("frozen" or "malformed");
+    public bool IsSuggestion => !WasApplied && !Undone && RejectionReason is not ("frozen" or "malformed" or "secret-target");
     [System.Text.Json.Serialization.JsonIgnore]
     public string Status => Undone ? "Resolved" : WasApplied ? "Applied" : Applied ? "Preview" : "Rejected";
 }

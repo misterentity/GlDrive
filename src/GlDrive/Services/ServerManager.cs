@@ -548,10 +548,8 @@ public partial class ServerManager : IDisposable
         var detector = new IrcPatternDetector(ircService, serverConfig.Id);
         _patternDetectors[serverConfig.Id] = detector;
 
-        // Wire IRC announce listener for auto-racing.
-        // Registered whenever the spread engine exists, so the built-in verbose pattern
-        // works without requiring users to configure custom announce rules.
-        if (_spreadManager != null)
+        // Both consumers use already received announces; wishlist matching needs no
+        // polling and remains available independently of the spread engine.
         {
             var defaultAutoRace = _config.Spread.AutoRaceOnNotification;
             var listener = new IrcAnnounceListener(serverConfig.Id, ircService,
@@ -560,6 +558,8 @@ public partial class ServerManager : IDisposable
             {
                 Log.Information("IRC announce: [{Section}] {Release} (autoRace={AutoRace})",
                     section, release, autoRace);
+                if (_servers.TryGetValue(serverId, out var mount))
+                    mount.OnIrcRelease(section, release);
                 if (autoRace)
                 {
                     // The announcing site usually has the release — pass it as source hint.

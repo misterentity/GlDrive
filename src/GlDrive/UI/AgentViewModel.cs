@@ -73,8 +73,7 @@ public sealed class AgentViewModel : INotifyPropertyChanged
         try
         {
             var dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "GlDrive", "ai-data", "ai-briefs");
+                GlDrive.Util.AppDataPaths.Root, "ai-data", "ai-briefs");
             var latest = Directory.Exists(dir)
                 ? Directory.GetFiles(dir, "*.md").OrderByDescending(f => f).FirstOrDefault()
                 : null;

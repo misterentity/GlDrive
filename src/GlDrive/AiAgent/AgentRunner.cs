@@ -260,7 +260,7 @@ public sealed class AgentRunner : IDisposable
                 return;
             }
 
-            var redacted = AgentPrompt.RedactFrozen(configNode, frozenPaths);
+            var redacted = AgentPrompt.RedactFrozen(OutboundPayloadRedactor.RedactConfig(configNode), frozenPaths);
 
             var lastSummaries = SummarizeRecentRuns(_audit.ReadAll());
 

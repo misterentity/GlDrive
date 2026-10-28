@@ -97,6 +97,10 @@
             </WrapPanel>
             <TextBlock Text="{Binding PendingChangesText}" TextWrapping="Wrap"
                        Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,12"/>
+            <Button Content="Regenerate control-API token" Click="RegenerateToken_Click"
+                    IsEnabled="{Binding IsIdle}" HorizontalAlignment="Left" Padding="10,5" Margin="0,0,0,12"
+                    Style="{DynamicResource SecondaryButton}"
+                    ToolTip="Invalidates the old token immediately. The MCP bridge picks up the new token automatically; pending settings are preserved."/>
 
             <Border x:Name="ConnectionCallout" Style="{StaticResource ConnectionCalloutStyle}" Margin="0,0,0,12">
                 <StackPanel>

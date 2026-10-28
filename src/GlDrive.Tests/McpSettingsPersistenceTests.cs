@@ -20,6 +20,79 @@ public sealed class McpSettingsPersistenceTests : IDisposable
     private void Apply(AppConfig runtime, bool enabled, int port) => McpSettingsPersistence.Apply(runtime, enabled, port, ConfigPath, Load, Save, () => false);
 
     [Fact]
+    public void RegenerateTokenPreservesSavedAndPendingSettingsAndReplacesToken()
+    {
+        File.WriteAllText(ConfigPath, """
+            {"controlApi":{"enabled":true,"port":9123,"token":"old-saved-token","future":true},
+             "downloads":{"theme":"saved-theme"},"unknownOption":42}
+            """);
+        var before = Load();
+        var runtime = new AppConfig { ControlApi = new() { Enabled = true, Port = 9123, Token = "old-runtime-token" } };
+        runtime.Downloads.Theme = "pending-theme";
+        var listener = runtime.ControlApi;
+
+        McpSettingsPersistence.RegenerateToken(runtime, ConfigPath, Load, Save, () => false);
+
+        var after = Load();
+        var token = after["controlApi"]!["token"]!.GetValue<string>();
+        Assert.Equal(64, token.Length);
+        Assert.All(token, character => Assert.True(Uri.IsHexDigit(character)));
+        Assert.NotEqual("old-saved-token", token);
+        Assert.Equal(token, runtime.ControlApi.Token);
+        Assert.Same(listener, runtime.ControlApi);
+        Assert.Equal("pending-theme", runtime.Downloads.Theme);
+        after["controlApi"]!["token"] = "old-saved-token";
+        Assert.True(JsonNode.DeepEquals(before, after));
+
+        McpSettingsPersistence.RegenerateToken(runtime, ConfigPath, Load, Save, () => false);
+        Assert.NotEqual(token, runtime.ControlApi.Token);
+    }
+
+    [Fact]
+    public void RegenerateTokenFailureLeavesRuntimeAndBaselineUnchanged()
+    {
+        var baseline = JsonNode.Parse("""{"controlApi":{"token":"old-saved-token"}}""")!.AsObject();
+        var runtime = new AppConfig { ControlApi = new() { Token = "old-runtime-token" } };
+        Assert.Throws<IOException>(() => McpSettingsPersistence.RegenerateToken(runtime, ConfigPath,
+            () => baseline, _ => throw new IOException("Simulated write failure"), () => false));
+        Assert.Equal("old-saved-token", baseline["controlApi"]!["token"]!.GetValue<string>());
+        Assert.Equal("old-runtime-token", runtime.ControlApi.Token);
+    }
+
+    [Fact]
+    public void RegenerateTokenReadOnlyRejectsBeforeReadOrWrite()
+    {
+        Assert.Throws<InvalidOperationException>(() => McpSettingsPersistence.RegenerateToken(new(), ConfigPath,
+            () => throw new Xunit.Sdk.XunitException("Unexpected read"),
+            _ => throw new Xunit.Sdk.XunitException("Unexpected write"), () => true));
+    }
+
+    [Theory]
+    [InlineData("{ corrupt JSON")]
+    [InlineData("{\"controlApi\":\"invalid\"}")]
+    public void RegenerateTokenDoesNotReplaceCorruptSettings(string json)
+    {
+        File.WriteAllText(ConfigPath, json);
+        var runtime = new AppConfig { ControlApi = new() { Token = "existing-token" } };
+        Assert.ThrowsAny<Exception>(() => McpSettingsPersistence.RegenerateToken(runtime, ConfigPath, Load, Save, () => false));
+        Assert.Equal(json, File.ReadAllText(ConfigPath));
+        Assert.Equal("existing-token", runtime.ControlApi.Token);
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"controlApi\":{\"enabled\":false}}")]
+    public void RegenerateTokenWorksBeforeApiIsEnabled(string json)
+    {
+        File.WriteAllText(ConfigPath, json);
+        var runtime = new AppConfig();
+        McpSettingsPersistence.RegenerateToken(runtime, ConfigPath, Load, Save, () => false);
+        Assert.Equal(64, runtime.ControlApi.Token.Length);
+        Assert.False(runtime.ControlApi.Enabled);
+        Assert.Equal(runtime.ControlApi.Token, Load()["controlApi"]!["token"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ApplyPreservesLatestPersistedEditsTokenAndUnsavedRuntimeSettings()
     {
         File.WriteAllText(ConfigPath, """

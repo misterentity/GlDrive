@@ -8,11 +8,8 @@ namespace GlDrive.Config;
 
 public class ConfigManager
 {
-    private static readonly string AppDataFolder =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GlDrive");
-
-    private static readonly string ConfigFilePath =
-        Path.Combine(AppDataFolder, "appsettings.json");
+    private static string AppDataFolder => AppDataPath;
+    private static string ConfigFilePath => Path.Combine(AppDataPath, "appsettings.json");
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -20,7 +17,13 @@ public class ConfigManager
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
-    public static string AppDataPath => AppDataFolder;
+    public static string AppDataPath => AppDataPaths.Root;
+    // Set once by the test assembly's module initializer, before any store is constructed.
+    internal static string? AppDataPathOverride
+    {
+        get => AppDataPaths.TestOverride;
+        set => AppDataPaths.TestOverride = value;
+    }
     public static string ConfigPath => ConfigFilePath;
     public static bool ConfigExists => File.Exists(ConfigFilePath);
 
