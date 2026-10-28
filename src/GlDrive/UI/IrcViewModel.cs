@@ -14,6 +14,7 @@ namespace GlDrive.UI;
 public class IrcChannelVm : INotifyPropertyChanged
 {
     private int _unreadCount;
+    private int _highlightCount;
 
     public string ServerId { get; set; } = "";
     public string ServerName { get; set; } = "";
@@ -24,7 +25,7 @@ public class IrcChannelVm : INotifyPropertyChanged
     public bool HasFishKey
     {
         get => _hasFishKey;
-        set { _hasFishKey = value; OnPropertyChanged(); }
+        set { if (_hasFishKey == value) return; _hasFishKey = value; OnPropertyChanged(); }
     }
 
     public string DisplayName => IsChannel ? $"{ServerName}: {Name}" : $"{ServerName}: {Name} (PM)";
@@ -33,10 +34,16 @@ public class IrcChannelVm : INotifyPropertyChanged
     public int UnreadCount
     {
         get => _unreadCount;
-        set { _unreadCount = value; OnPropertyChanged(); OnPropertyChanged(nameof(UnreadDisplay)); }
+        set { if (_unreadCount == value) return; _unreadCount = value; OnPropertyChanged(); OnPropertyChanged(nameof(UnreadDisplay)); }
     }
 
     public string UnreadDisplay => _unreadCount > 0 ? $" ({_unreadCount})" : "";
+    public int HighlightCount
+    {
+        get => _highlightCount;
+        set { if (_highlightCount == value) return; _highlightCount = value; OnPropertyChanged(); OnPropertyChanged(nameof(HighlightDisplay)); }
+    }
+    public string HighlightDisplay => _highlightCount > 0 ? $" !{_highlightCount}" : "";
 
     public event PropertyChangedEventHandler? PropertyChanged;
     protected void OnPropertyChanged([CallerMemberName] string? name = null) =>
@@ -50,6 +57,8 @@ public class IrcMessageVm
     public string Text { get; set; } = "";
     public IrcMessageType Type { get; set; }
     public bool WasEncrypted { get; set; }
+    public bool IsHighlight { get; set; }
+    internal IrcUnreadMarker? UnreadMarker { get; set; }
     public SolidColorBrush NickColor { get; set; } = Brushes.White;
 
     public string FormattedLine => Type switch
@@ -77,6 +86,67 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
     private string _statusText = "Not connected";
     private bool _isConnected;
     private bool _disposed;
+    private bool _isReading;
+    private long _unreadTotal;
+    public string UnreadDisplay => _unreadTotal > 0 ? $" ({_unreadTotal})" : "";
+    public void SetReading(bool reading)
+    {
+        if (_disposed) return;
+        _isReading = reading;
+        if (reading) MarkVisibleRead();
+    }
+    public void MarkSelectedRead()
+    {
+        if (_disposed) return;
+        if (_selectedChannel is { } channel) _serverManager.GetIrcService(channel.ServerId)?.MarkRead(channel.Name);
+        RefreshUnread();
+    }
+
+    private void MarkVisibleRead()
+    {
+        if (_disposed || !_isReading || _selectedChannel is not { } channel) return;
+        // Hydrated historic lines have no live acknowledgement marker. The explicit
+        // Mark read action can clear those; timestamps never guess what was displayed.
+        if (Messages.LastOrDefault(m => m.UnreadMarker != null)?.UnreadMarker is { } marker)
+            _serverManager.GetIrcService(channel.ServerId)?.ReadThrough(channel.Name, marker);
+        RefreshUnread();
+    }
+
+    private void RefreshUnread()
+    {
+        long total = 0;
+        foreach (var (_, service) in _serverManager.GetIrcServices())
+        {
+            var entries = service.GetUnread().ToDictionary(e => e.Target, StringComparer.OrdinalIgnoreCase);
+            foreach (var channel in Channels.Where(c => c.ServerId == service.ServerId))
+            {
+                var row = entries.GetValueOrDefault(channel.Name);
+                channel.UnreadCount = row?.Messages ?? 0;
+                channel.HighlightCount = row?.Highlights ?? 0;
+                total += channel.HighlightCount;
+            }
+        }
+        SetUnreadTotal(total);
+    }
+
+    // The live path reads one store entry and touches one row. Full snapshots are
+    // reserved for hydration and explicit read actions, never incoming messages.
+    private void RefreshUnread(IrcService? service, IrcChannelVm channel)
+    {
+        var row = service?.GetUnread(channel.Name);
+        var previous = channel.HighlightCount;
+        channel.UnreadCount = row?.Messages ?? 0;
+        channel.HighlightCount = row?.Highlights ?? 0;
+        SetUnreadTotal(_unreadTotal + channel.HighlightCount - previous);
+    }
+
+    private void SetUnreadTotal(long total)
+    {
+        if (_unreadTotal == total) return;
+        _unreadTotal = total;
+        OnPropertyChanged(nameof(UnreadDisplay));
+        OnPropertyChanged(nameof(CompactStatusText));
+    }
 
     // Per-channel message buffers: key = "serverId:target"
     private readonly Dictionary<string, List<IrcMessageVm>> _messageBuffers = new(StringComparer.OrdinalIgnoreCase);
@@ -142,7 +212,7 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
     private string _compactStatusText = "IRC ○ off";
     public string CompactStatusText
     {
-        get => _compactStatusText;
+        get => _compactStatusText + UnreadDisplay;
         private set { if (_compactStatusText == value) return; _compactStatusText = value; OnPropertyChanged(); }
     }
 
@@ -245,6 +315,7 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
 
         UpdateStatus();
         SelectInitialChannel();
+        RefreshUnread();
     }
 
     /// <summary>
@@ -283,7 +354,7 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
         if (!_serviceHandlers.ContainsKey(irc.ServerId))
         {
             Action<string, IrcMessageItem> msgHandler = (target, item) =>
-                Application.Current?.Dispatcher.InvokeAsync(() => OnIrcMessage(irc.ServerId, irc.ServerName, target, item));
+                Application.Current?.Dispatcher.InvokeAsync(() => OnServiceMessage(irc, target, item));
             Action<string> namesHandler = channel =>
                 Application.Current?.Dispatcher.InvokeAsync(() => OnNamesUpdated(irc.ServerId, channel, irc));
             Action<string, string> topicHandler = (channel, topic) =>
@@ -311,6 +382,7 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
         // while IRC was still connecting — the old Connected-only block inside the
         // subscribe guard was skipped forever in that case.
         HydrateJoinedChannels(irc);
+        RefreshUnread();
     }
 
     private void HydrateJoinedChannels(IrcService irc)
@@ -351,8 +423,10 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
                     total++;
                 }
 
-                // Sidebar entry even if not joined this session (incl. PM windows).
-                EnsureChannelVm(irc.ServerId, irc.ServerName, target);
+                // Persisted counts/history cannot resurrect a channel that was parted.
+                // Retained PM conversations remain available without a channel join.
+                if (!IrcLogStore.IsChannelName(target) || irc.Channels.ContainsKey(target))
+                    EnsureChannelVm(irc.ServerId, irc.ServerName, target);
             }
             if (total > 0)
                 Log.Debug("IRC: hydrated {Count} scrollback messages for {Server}", total, irc.ServerId);
@@ -370,11 +444,20 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
         Text = item.Text,
         Type = item.Type,
         WasEncrypted = item.WasEncrypted,
+        IsHighlight = item.IsHighlight,
+        UnreadMarker = item.UnreadMarker,
         NickColor = GetNickColor(item.Nick)
     };
 
+    internal void OnServiceMessage(IrcService source, string target, IrcMessageItem item)
+    {
+        if (!_disposed && _serviceHandlers.TryGetValue(source.ServerId, out var active) && ReferenceEquals(active.irc, source))
+            OnIrcMessage(source.ServerId, source.ServerName, target, item);
+    }
+
     private void OnIrcMessage(string serverId, string serverName, string target, IrcMessageItem item)
     {
+        if (_disposed) return;
         // Same instance already displayed by HydrateFromScrollback — skip the
         // queued duplicate (IrcMessageItem has reference equality).
         if (_hydratedRecent.Remove(item)) return;
@@ -408,10 +491,10 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
                 Messages.RemoveAt(0);
             ScrollToBottom?.Invoke();
         }
-        else
-        {
-            channelVm.UnreadCount++;
-        }
+        if (_isReading && _selectedChannel?.ServerId == serverId &&
+            _selectedChannel.Name.Equals(target, StringComparison.OrdinalIgnoreCase) && item.UnreadMarker is { } marker)
+            ircService?.ReadThrough(target, marker);
+        RefreshUnread(ircService, channelVm);
     }
 
     private void OnNamesUpdated(string serverId, string channel, IrcService irc)
@@ -492,7 +575,7 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
 
         if (channel == null) return;
 
-        channel.UnreadCount = 0;
+        RefreshUnread();
         var bufferKey = $"{channel.ServerId}:{channel.Name}";
 
         if (_messageBuffers.TryGetValue(bufferKey, out var buffer))
@@ -500,6 +583,7 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
             foreach (var msg in buffer)
                 Messages.Add(msg);
         }
+        MarkVisibleRead();
 
         var irc = _serverManager.GetIrcService(channel.ServerId);
         if (irc != null && irc.Channels.TryGetValue(channel.Name, out var ch))
@@ -774,6 +858,7 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        _isReading = false;
         _serverManager.IrcStateChanged -= _ircStateHandler;
         foreach (var handlers in _serviceHandlers.Values)
             Unsubscribe(handlers);

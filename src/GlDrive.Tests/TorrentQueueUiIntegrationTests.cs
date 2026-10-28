@@ -96,7 +96,7 @@ public sealed class TorrentQueueUiIntegrationTests
         vm.RefreshDownloadQueue();
         Assert.Equal(2, vm.DownloadItems.Count);
         vm.SelectedDownloadItem = vm.DownloadItems.Single(i => i.ServerId == ServerManager.TorrentDownloadQueueId);
-        Invoke(vm, action);
+        if (Invoke(vm, action) is Task pending) await pending;
         vm.RefreshDownloadQueue();
         Assert.Equal(after, torrent.Status);
         Assert.Equal(DownloadStatus.Queued, ftp.Status);
@@ -176,7 +176,7 @@ public sealed class TorrentQueueUiIntegrationTests
     private const BindingFlags Hidden = BindingFlags.Instance | BindingFlags.NonPublic;
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
     private static void Set(object target, string name, object value) => target.GetType().GetField(name, Hidden)!.SetValue(target, value);
-    private static void Invoke(object target, string method) => target.GetType().GetMethod(method, Hidden)!.Invoke(target, null);
+    private static object? Invoke(object target, string method) => target.GetType().GetMethod(method, Hidden)!.Invoke(target, null);
 
     private sealed class Harness : IAsyncDisposable
     {

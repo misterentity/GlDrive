@@ -18,7 +18,7 @@ using Serilog;
 
 namespace GlDrive.UI;
 
-public class DashboardViewModel : INotifyPropertyChanged, IDisposable
+public partial class DashboardViewModel : INotifyPropertyChanged, IDisposable
 {
     private readonly ServerManager _serverManager;
     private readonly AppConfig _config;
@@ -35,7 +35,6 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private readonly SearchRequestCoordinator _searchRequests = new();
     private readonly Dictionary<string, DownloadManager> _subscribedDownloads = new();
     private readonly Action<string, string, MountState> _serverStateHandler;
-    private readonly Action<string, string, string, string, string> _newReleaseHandler;
     private WishlistItemVm? _selectedWishlistItem;
     private DownloadItemVm? _selectedDownloadItem;
     private SearchResultVm? _selectedSearchResult;
@@ -74,7 +73,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private int _preDbHighestId;
 
     // Notification filter state
-    private readonly NotificationProjection _notifications = new();
+    private readonly NotificationProjection _notifications = new(1000);
     private string _notificationFilterText = "";
     private string _notificationFilterCategory = "All";
     private string _notificationFilterServer = "All";
@@ -311,9 +310,8 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     private string FormatSiteHealth(string serverId)
     {
-        if (!_config.Health.Enabled) return "Health supervision disabled";
-        var health = _serverManager.GetSiteHealth(serverId);
-        return health.State + (health.NextRetryUtc is { } retry ? $" · retry {retry.ToLocalTime():ddd HH:mm}" : "");
+        var waiting = _serverManager.GetWaitingState(serverId);
+        return waiting.ReasonCode == "ready" ? waiting.LimitingConstraint : waiting.Description;
     }
 
     private static string[] ReadRecentLogLines(string path, int maxBytes)
@@ -612,6 +610,8 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     }
 
     public bool HasWishlistSelection => _selectedWishlistItem != null;
+    public int? SelectedWishlistMovieTmdbId => _selectedWishlistItem != null &&
+        _wishlistStore.GetById(_selectedWishlistItem.Id) is { Type: MediaType.Movie, TmdbId: > 0 } movie ? movie.TmdbId : null;
     public bool? SelectedWishlistAllowsLowSources
     {
         get => _selectedWishlistItem == null ? null : _wishlistStore.GetById(_selectedWishlistItem.Id)?.AllowLowQualitySources;
@@ -747,19 +747,19 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     public string NotificationFilterText
     {
         get => _notificationFilterText;
-        set { _notificationFilterText = value; OnPropertyChanged(); ApplyNotificationFilter(); }
+        set { if (_notificationFilterText == value) return; _notificationFilterText = value; SelectedFeedView = null; OnPropertyChanged(); ApplyNotificationFilter(); }
     }
 
     public string NotificationFilterCategory
     {
         get => _notificationFilterCategory;
-        set { _notificationFilterCategory = value; OnPropertyChanged(); ApplyNotificationFilter(); }
+        set { if (_notificationFilterCategory == value) return; _notificationFilterCategory = value; SelectedFeedView = null; OnPropertyChanged(); ApplyNotificationFilter(); }
     }
 
     public string NotificationFilterServer
     {
         get => _notificationFilterServer;
-        set { _notificationFilterServer = value; OnPropertyChanged(); ApplyNotificationFilter(); }
+        set { if (_notificationFilterServer == value) return; _notificationFilterServer = value; SelectedFeedView = null; OnPropertyChanged(); ApplyNotificationFilter(); }
     }
 
     // Status bar properties
@@ -1040,8 +1040,8 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
         AddMovieCommand = new RelayCommand(() => AddMedia(MediaType.Movie));
         AddTvShowCommand = new RelayCommand(() => AddMedia(MediaType.TvShow));
-        RemoveWishlistCommand = new RelayCommand(RemoveWishlistItem);
-        TogglePauseCommand = new RelayCommand(TogglePause);
+        RemoveWishlistCommand = new RelayCommand(ScheduleWishlistRemoval);
+        TogglePauseCommand = new RelayCommand(ToggleWishlistSelection);
         CancelDownloadCommand = new RelayCommand(CancelDownload);
         PauseDownloadCommand = new RelayCommand(PauseDownload);
         ResumeDownloadCommand = new RelayCommand(ResumeDownload);
@@ -1051,12 +1051,13 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             else PauseDownload();
         });
         RetryDownloadCommand = new RelayCommand(RetryDownload);
-        ClearCompletedCommand = new RelayCommand(ClearCompleted);
-        ClearFailedCommand = new RelayCommand(ClearFailed);
-        ClearCancelledCommand = new RelayCommand(ClearCancelled);
-        ClearAllFinishedCommand = new RelayCommand(ClearAllFinished);
+        ClearCompletedCommand = new RelayCommand(() => ScheduleFinishedDownloadRemoval(DownloadStatus.Completed));
+        ClearFailedCommand = new RelayCommand(() => ScheduleFinishedDownloadRemoval(DownloadStatus.Failed));
+        ClearCancelledCommand = new RelayCommand(() => ScheduleFinishedDownloadRemoval(DownloadStatus.Cancelled));
+        ClearAllFinishedCommand = new RelayCommand(() => ScheduleFinishedDownloadRemoval());
         RemoveSelectedDownloadsCommand = new RelayCommand(RemoveSelectedDownloads);
-        ClearNotificationsCommand = new RelayCommand(ClearNotifications);
+        ClearNotificationsCommand = new RelayCommand(() => ScheduleNotificationRemoval(_notificationStore.Items.Select(item => item.Id).ToArray()));
+        InitializeBulkActions();
         DownloadNotificationCommand = new RelayCommand(DownloadNotification);
         RaceNotificationCommand = new RelayCommand(RaceNotification);
         SearchCommand = new RelayCommand(async () => await PerformSearch());
@@ -1148,6 +1149,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             await Application.Current.Dispatcher.InvokeAsync(async () =>
                 await SearchAndDownloadRelease(releaseName));
 
+        InitializeFeedViews();
         RefreshNotifications();
         RefreshWishlist();
         RefreshDownloads();
@@ -1173,27 +1175,6 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         };
         _serverManager.ServerStateChanged += _serverStateHandler;
 
-        // Live notifications — add to collection when new releases arrive
-        _newReleaseHandler = (serverId, serverName, category, release, remotePath) =>
-        {
-            Application.Current?.Dispatcher.BeginInvoke(() =>
-            {
-                if (_disposed) return;
-                var vm = new NotificationItemVm
-                {
-                    ServerId = serverId,
-                    ServerName = serverName,
-                    Category = category,
-                    ReleaseName = release,
-                    RemotePath = remotePath,
-                    TimeDisplay = DateTime.Now.ToString("g")
-                };
-                var removed = _notifications.Add(vm);
-                if (removed != null && ReferenceEquals(SelectedNotificationItem, removed))
-                    SelectedNotificationItem = null;
-            });
-        };
-        _serverManager.NewReleaseDetected += _newReleaseHandler;
     }
 
     private void SubscribeToDownloads(string queueId, DownloadManager manager)
@@ -1234,32 +1215,15 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
-    private void RemoveWishlistItem()
+    private async Task CancelDownload()
     {
-        if (SelectedWishlistItem == null) return;
-        var wasWatchlistImport = _wishlistStore.GetById(SelectedWishlistItem.Id)?.Source == GlDrive.Plex.PlexWatchlistSync.Source;
-        _wishlistStore.Remove(SelectedWishlistItem.Id);
-        RefreshWishlist();
-        if (wasWatchlistImport)
-            MessageBox.Show("This item is inactive in GlDrive and will stay excluded from watchlist sync. Remove it from your Plex Watchlist too if you no longer want it there.",
-                "Watchlist item inactive", MessageBoxButton.OK, MessageBoxImage.Information);
-    }
-
-    private void TogglePause()
-    {
-        if (SelectedWishlistItem == null) return;
-        var item = _wishlistStore.GetById(SelectedWishlistItem.Id);
-        if (item == null) return;
-
-        item.Status = item.Status == WishlistStatus.Paused ? WishlistStatus.Watching : WishlistStatus.Paused;
-        _wishlistStore.Update(item);
-        RefreshWishlist();
-    }
-
-    private void CancelDownload()
-    {
-        if (SelectedDownloadItem == null) return;
-        _serverManager.GetDownloadManager(SelectedDownloadItem.ServerId)?.Cancel(SelectedDownloadItem.Id);
+        var selected = SelectedDownloadItems?.ToArray() ?? [];
+        if (selected.Length == 0 && SelectedDownloadItem is { } item) selected = [item];
+        var ids = selected.Select(item => (item.ServerId, item.Id)).Distinct().ToArray();
+        if (ids.Length == 0) return;
+        var cancelled = await Task.Run(() => ids.GroupBy(item => item.ServerId).Sum(group =>
+            _serverManager.GetDownloadManager(group.Key)?.CancelMany(group.Select(item => item.Id)) ?? 0));
+        if (!_disposed) BulkStatus = $"Cancelled {cancelled} selected downloads; kept history and local files.";
     }
 
     private void PauseDownload()
@@ -1304,51 +1268,10 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         "Torrent contains executable files", MessageBoxButton.YesNo, MessageBoxImage.Warning,
         MessageBoxResult.No) == MessageBoxResult.Yes;
 
-    private void ClearCompleted()
-    {
-        foreach (var manager in _serverManager.GetDownloadManagers())
-            manager.RemoveCompleted();
-        RefreshDownloads();
-    }
-
-    private void ClearFailed()
-    {
-        foreach (var manager in _serverManager.GetDownloadManagers())
-            manager.RemoveFailed();
-        RefreshDownloads();
-    }
-
-    private void ClearCancelled()
-    {
-        foreach (var manager in _serverManager.GetDownloadManagers())
-            manager.RemoveCancelled();
-        RefreshDownloads();
-    }
-
-    private void ClearAllFinished()
-    {
-        foreach (var manager in _serverManager.GetDownloadManagers())
-            manager.RemoveFinished();
-        RefreshDownloads();
-    }
-
-    /// <summary>Cancel/remove multiple selected downloads.</summary>
+    /// <summary>Defer removal of selected terminal history, keeping active workers and local files.</summary>
     public void RemoveSelectedDownloads()
     {
-        var selected = SelectedDownloadItems?.ToList();
-        if (selected == null || selected.Count == 0) return;
-
-        foreach (var item in selected)
-        {
-            var manager = _serverManager.GetDownloadManager(item.ServerId);
-            if (manager == null) continue;
-
-            if (item.Status is "Queued" or "Downloading" or "Extracting" or "Paused")
-                manager.Cancel(item.Id);
-            else
-                manager.Store.Remove(item.Id);
-        }
-        RefreshDownloads();
+        ScheduleSelectedDownloadRemoval();
     }
 
     // Set from code-behind on SelectionChanged
@@ -1983,15 +1906,10 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private void RefreshNotifications()
     {
         if (_disposed) return;
-        _notifications.Reset(_notificationStore.Items.Select(item => new NotificationItemVm
-            {
-                ServerId = item.ServerId,
-                ServerName = item.ServerName,
-                Category = item.Category,
-                ReleaseName = item.ReleaseName,
-                RemotePath = item.RemotePath,
-                TimeDisplay = item.Timestamp.ToLocalTime().ToString("g")
-            }));
+        var selectedId = SelectedNotificationItem?.Id;
+        _notifications.Reset(_notificationStore.Items.Select(NotificationVm));
+        SelectedNotificationItem = _notifications.Items.FirstOrDefault(item => item.Id == selectedId);
+        RefreshFeedViewCounts();
     }
 
     private void ApplyNotificationFilter()
@@ -2073,42 +1991,72 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
-    private void DownloadNotification()
+    internal const int FeedAdmissionLimit = 25;
+    private bool _feedAdmissionRunning;
+    internal Func<string, int, bool> ConfirmFeedAdmission { get; set; } = (action, count) => MessageBox.Show(
+        $"{action} {count} selected releases? This can use site credits, bandwidth and disk space.",
+        $"Confirm {action.ToLowerInvariant()}", MessageBoxButton.YesNo, MessageBoxImage.Question,
+        MessageBoxResult.No) == MessageBoxResult.Yes;
+
+    internal bool TryApproveFeedAdmission(string action, int count)
     {
-        if (SelectedNotificationItem == null) return;
-
-        var n = SelectedNotificationItem;
-        if (string.IsNullOrEmpty(n.RemotePath)) return;
-
-        var server = _serverManager.GetServer(n.ServerId);
-        if (server?.Downloads == null) return;
-
-        var localPath = DownloadPathResolver.ForScene(_config.Downloads, n.Category, n.ReleaseName);
-
-        var item = new DownloadItem
+        if (count <= 0 || _feedAdmissionRunning) return false;
+        if (count > FeedAdmissionLimit)
         {
-            RemotePath = n.RemotePath,
-            ReleaseName = n.ReleaseName,
-            LocalPath = localPath,
-            Category = n.Category,
-            ServerId = n.ServerId,
-            ServerName = n.ServerName
-        };
-
-        if (!server.Downloads.Enqueue(item))
-        {
-            SearchStatus = $"Skipped: {n.ReleaseName} (duplicate or already exists)";
-            return;
+            BulkStatus = $"Select at most {FeedAdmissionLimit} releases to {action.ToLowerInvariant()} at once. No releases were queued.";
+            return false;
         }
-        RefreshDownloads();
+        if (count > 1 && !ConfirmFeedAdmission(action, count))
+        {
+            BulkStatus = $"{action} cancelled; no releases were queued.";
+            return false;
+        }
+        return true;
     }
 
-    private void RaceNotification()
+    private async Task DownloadNotification()
     {
-        if (SelectedNotificationItem == null) return;
-        var n = SelectedNotificationItem;
-        // Pass the known source server and remote path so spread doesn't have to probe
-        RaceByName(n.Category, n.ReleaseName, n.ServerId, n.RemotePath);
+        var selected = NotificationSelection();
+        if (!TryApproveFeedAdmission("Download", selected.Length)) return;
+        _feedAdmissionRunning = true;
+        try
+        {
+            var queued = await Task.Run(() => selected.Where(n => !string.IsNullOrEmpty(n.RemotePath))
+                .GroupBy(n => n.ServerId).Sum(group => _serverManager.GetServer(group.Key)?.Downloads?.EnqueueMany(group.Select(n => new DownloadItem
+            {
+                RemotePath = n.RemotePath, ReleaseName = n.ReleaseName,
+                LocalPath = DownloadPathResolver.ForScene(_config.Downloads, n.Category, n.ReleaseName),
+                Category = n.Category, ServerId = n.ServerId, ServerName = n.ServerName
+            })) ?? 0));
+            if (_disposed) return;
+            BulkStatus = $"Queued {queued} downloads; skipped {selected.Length - queued} duplicate or unavailable entries.";
+            RefreshDownloads();
+        }
+        catch (Exception ex) { if (!_disposed) BulkStatus = $"Download admission stopped: {ex.Message}. Check Downloads for admitted rows."; }
+        finally { _feedAdmissionRunning = false; }
+    }
+
+    private async Task RaceNotification()
+    {
+        var selected = NotificationSelection();
+        if (!TryApproveFeedAdmission("Race", selected.Length)) return;
+        var spread = _serverManager.Spread;
+        if (spread == null) { BulkStatus = "Spread engine not available"; return; }
+        var connectedIds = spread.GetConnectedServerIds();
+        var serverIds = _config.Servers.Where(s => s.Enabled && connectedIds.Contains(s.Id) && s.SpreadSite.Sections.Count > 0)
+            .Select(s => s.Id).ToList();
+        if (serverIds.Count < 2) { BulkStatus = "Need 2+ connected servers with sections configured"; return; }
+        var requests = selected.Select(n => new RaceBatchRequest(n.Category, n.ReleaseName, serverIds,
+            Spread.SpreadMode.Race, n.ServerId, n.RemotePath)).ToArray();
+        _feedAdmissionRunning = true;
+        try
+        {
+            var outcomes = await Task.Run(() => spread.EnqueueRacesDetailed(requests));
+            if (!_disposed) BulkStatus = "Race admission: " + string.Join(", ", outcomes.GroupBy(outcome => outcome.Outcome)
+                .Select(group => $"{group.Count()} {group.Key}"));
+        }
+        catch (Exception ex) { if (!_disposed) BulkStatus = $"Race admission stopped: {ex.Message}. Check Spread for admitted requests."; }
+        finally { _feedAdmissionRunning = false; }
     }
 
     /// <summary>
@@ -2138,14 +2086,14 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     }
 
     /// <summary>Start a race for a release, optionally with a known source server and path.</summary>
-    private void RaceByName(string sectionHint, string releaseName,
+    private RaceStartResult? RaceByName(string sectionHint, string releaseName,
         string? knownSourceServerId = null, string? knownSourcePath = null)
     {
         var spread = _serverManager.Spread;
         if (spread == null)
         {
             SearchStatus = "Spread engine not available";
-            return;
+            return null;
         }
 
         // Pass ALL connected servers with any sections — the job handles discovery
@@ -2158,26 +2106,21 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         if (serverIds.Count < 2)
         {
             SearchStatus = $"Need 2+ connected servers with sections configured";
-            return;
+            return null;
         }
 
         try
         {
-            spread.StartRace(sectionHint, releaseName, serverIds, Spread.SpreadMode.Race,
+            var admission = spread.StartRaceDetailed(sectionHint, releaseName, serverIds, Spread.SpreadMode.Race,
                 knownSourceServerId, knownSourcePath);
-            SearchStatus = $"Race queued: {releaseName} [{sectionHint}]";
+            SearchStatus = SpreadStartStatus.Format(admission, serverIds.Count);
+            return admission;
         }
         catch (Exception ex)
         {
             SearchStatus = $"Race failed: {ex.Message}";
+            return null;
         }
-    }
-
-    private void ClearNotifications()
-    {
-        _notificationStore.Clear();
-        _notifications.Reset([]);
-        SelectedNotificationItem = null;
     }
 
     private void RefreshWishlist()
@@ -2601,6 +2544,9 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        _bulkTimer?.Stop();
+        _bulkTimer = null;
+        _bulkAction.Dispose();
         _calendarStop.Cancel();
         // Cancellation starts immediately; native lease cleanup is awaited asynchronously
         // so closing a window never blocks its dispatcher or tears down a shared FTP pool.
@@ -2622,7 +2568,8 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         _preDbCts = null;
         _preDbClient.Dispose();
         _serverManager.ServerStateChanged -= _serverStateHandler;
-        _serverManager.NewReleaseDetected -= _newReleaseHandler;
+        _notificationStore.Changed -= FeedNotificationChanged;
+        _notificationStore.FeedViews.Changed -= FeedPreferencesChanged;
         UnsubscribeAllServers();
         _ircViewModel.Dispose();
         _plexViewModel.Dispose();
@@ -2727,7 +2674,8 @@ public class DownloadItemVm : INotifyPropertyChanged
 
     internal static string DescribeProgress(DownloadItem item) => item.Status switch
     {
-        DownloadStatus.Queued or DownloadStatus.Failed when !string.IsNullOrWhiteSpace(item.ErrorMessage)
+        DownloadStatus.Queued => DownloadWaiting.Describe(item)!.Description,
+        DownloadStatus.Failed when !string.IsNullOrWhiteSpace(item.ErrorMessage)
             => item.ErrorMessage,
         DownloadStatus.Downloading => LiveProgressText(item.DownloadedBytes, item.TotalBytes, null, item.StatusDetail),
         DownloadStatus.Paused when item.TotalBytes > 0 => $"Paused at {ProgressFraction(item.DownloadedBytes, item.TotalBytes) * 100:F0}%",
@@ -2885,6 +2833,7 @@ public class UpcomingMovieVm : INotifyPropertyChanged
 
 public class NotificationItemVm
 {
+    public string Id { get; set; } = "";
     public string ServerId { get; set; } = "";
     public string ServerName { get; set; } = "";
     public string Category { get; set; } = "";

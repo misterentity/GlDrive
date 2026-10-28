@@ -38,10 +38,17 @@ public sealed class QueuedRaceProjectionTests
     }
 
     [Fact]
-    public void Stable_waiting_rows_have_value_equality_to_avoid_periodic_collection_churn()
+    public void Stable_waiting_rows_do_not_notify_or_change_identity_on_refresh()
     {
         var race = Request() with { WaitReason = "Waiting for server reconnection", NextProbeAtUtc = Now.AddMinutes(2) };
-        Assert.Equal(QueuedRaceVm.From(race, Now), QueuedRaceVm.From(race, Now.AddSeconds(2)));
+        var row = QueuedRaceVm.From(race, Now);
+        var notices = 0; row.PropertyChanged += (_, _) => notices++;
+        var hash = row.GetHashCode();
+        Assert.False(row.UpdateFrom(QueuedRaceVm.From(race, Now.AddSeconds(2))));
+        Assert.Equal(0, notices);
+        Assert.True(row.UpdateFrom(QueuedRaceVm.From(race with { WaitReason = "Waiting for slot" }, Now)));
+        Assert.Equal(1, notices);
+        Assert.Equal(hash, row.GetHashCode());
     }
 
     private static PersistedRace Request() => new("TV", "Show.Release-GRP", ["a", "b"],

@@ -17,6 +17,7 @@ public class DownloadStore
     private volatile bool _closed;
     private volatile bool _loaded;
     private bool _saveWarning;
+    private readonly Action<string>? _writeOverride;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -37,9 +38,11 @@ public class DownloadStore
     /// <summary>Open an explicitly located queue without consulting the application-state directory.</summary>
     public static DownloadStore ForFile(string filePath) => new(new FileInfo(filePath));
 
-    private DownloadStore(FileInfo storageFile)
+    internal DownloadStore(FileInfo storageFile, Action<string>? writeOverride = null)
     {
         _filePath = storageFile.FullName;
+        _writeOverride = writeOverride;
+        using var flow = ExecutionContext.IsFlowSuppressed() ? default : ExecutionContext.SuppressFlow();
         // Debounced save: coalesces rapid updates into a single disk write
         _debounceTimer = new Timer(_ => FlushSave(), null, Timeout.Infinite, Timeout.Infinite);
         lock (RegistryLock) OpenStores.Add(new WeakReference<DownloadStore>(this));
@@ -131,7 +134,8 @@ public class DownloadStore
                 string json;
                 lock (_lock) json = JsonSerializer.Serialize(_items, JsonOptions);
                 Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
-                SecureFile.WriteAllTextRestricted(_filePath, json);
+                if (_writeOverride != null) _writeOverride(json);
+                else SecureFile.WriteAllTextRestricted(_filePath, json);
                 _savePending = false;
                 _saveWarning = false;
                 return true;
@@ -148,9 +152,16 @@ public class DownloadStore
 
     public void Add(DownloadItem item)
     {
-        lock (_lock) _items.Add(item);
-        _loaded = true;
+        AddManyInMemory([item]);
         Save(); // Immediate — new item must persist
+    }
+
+    // The manager commits the admitted batch while holding its queue lock, then
+    // saves once after releasing admission/worker locks.
+    internal void AddManyInMemory(IReadOnlyList<DownloadItem> items)
+    {
+        lock (_lock) _items.AddRange(items);
+        _loaded = true;
     }
 
     public void Update(DownloadItem item)
@@ -171,6 +182,16 @@ public class DownloadStore
     {
         lock (_lock) _items.RemoveAll(i => i.Id == id);
         Save(); // Immediate — deletion must persist
+    }
+
+    internal int RemoveTerminal(IEnumerable<string> ids)
+    {
+        var selected = ids.ToHashSet(StringComparer.Ordinal);
+        int removed;
+        lock (_lock) removed = _items.RemoveAll(item => selected.Contains(item.Id) &&
+            item.Status is DownloadStatus.Completed or DownloadStatus.Failed or DownloadStatus.Cancelled);
+        if (removed > 0) Save();
+        return removed;
     }
 
     public DownloadItem? GetById(string id) { lock (_lock) return _items.FirstOrDefault(i => i.Id == id); }

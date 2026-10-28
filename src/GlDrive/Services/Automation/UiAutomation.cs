@@ -22,14 +22,18 @@ public sealed class UiAutomation(Func<DashboardWindow> getDashboard) : IAutomati
         "ClearSearchCommand", "SearchTorrentCommand", "PlayTorrentCommand", "PauseDownloadCommand", "ResumeDownloadCommand",
         "CastToDeviceCommand", "StopCastingCommand", "LeftGoCommand", "RightGoCommand",
         "LeftDoubleClickCommand", "RightDoubleClickCommand", "PauseJobCommand", "ResumeJobCommand",
-        "DismissJobCommand", "ClearFinishedCommand", "RefreshServersCommand", "RefreshCommand", "TestConnectionCommand"
+        "DismissJobCommand", "ClearFinishedCommand", "RefreshServersCommand", "RefreshCommand", "TestConnectionCommand",
+        "SetWishlistQualityCommand", "SetWishlistStatusCommand", "RemoveWishlistCommand",
+        "RemoveSelectedNotificationsCommand", "RemoveSelectedDownloadsCommand", "UndoBulkCommand", "RemoveSelectedQueuedRacesCommand",
+        "AddSelectedQueuedSitesCommand", "RemoveSelectedQueuedSitesCommand"
     };
     private static readonly HashSet<string> Editable = new(StringComparer.Ordinal)
     {
         "SearchText", "SearchQuery", "SearchFilterQuality", "SearchFilterSource", "SearchFilterBigSize",
         "SelectedSearchServer", "SelectedSearchCategory", "ShowSearchText", "PreDbSearchText", "PreDbCategory",
         "Volume", "AudioTrackIndex", "SubtitleTrackIndex", "ShowLibrary", "LeftServer", "LeftPath", "RightServer", "RightPath",
-        "SelectedSection", "SpreadReleaseName", "InviteTarget", "AllowDownloads", "SelectedNotificationCategory", "SelectedNotificationServer"
+        "SelectedSection", "SpreadReleaseName", "InviteTarget", "AllowDownloads", "SelectedNotificationCategory", "SelectedNotificationServer",
+        "BulkWishlistQuality"
     };
     private static object Schema(object properties, string[] required) => new { type = "object", properties, required, additionalProperties = false };
     private static readonly object Screen = new { type = "string", @enum = Screens };
@@ -39,7 +43,8 @@ public sealed class UiAutomation(Func<DashboardWindow> getDashboard) : IAutomati
         AutomationToolDefinition.Create("ui.state", "Inspect desktop screen state, available editable fields, collections and callable commands. Opens the dashboard if needed. Collections are bounded to 200 rows. Embedded third-party websites are outside this API.", Schema(new { screen = Screen }, ["screen"])),
         AutomationToolDefinition.Create("ui.set", "Set a field listed in ui.state editableFields, on the UI dispatcher.", Schema(new { screen = Screen, property = Text, value = new { } }, ["screen", "property", "value"])),
         AutomationToolDefinition.Create("ui.select", "Select an existing collection item by index into a Selected... property. Inspect ui.state first.", Schema(new { screen = Screen, property = Text, collection = Text, index = new { type = "integer", minimum = 0 } }, ["screen", "property", "collection", "index"])),
-        AutomationToolDefinition.Create("ui.invoke", "Await an available command from ui.state. Optional parameter may be scalar, or select a collection/index for commands taking a row. Inspect state afterward for UI status and errors.", Schema(new { screen = Screen, command = Text, parameter = new { }, collection = Text, index = new { type = "integer", minimum = 0 } }, ["screen", "command"])),
+        AutomationToolDefinition.Create("ui.select_many", "Select visible wishlist, feed, download or queued-race rows by their exact Id (RequestId for races). Inspect ui.state first. Up to 200 distinct IDs; an empty array clears selection. Missing or hidden rows reject the entire selection.", Schema(new { screen = Screen, property = Text, collection = Text, ids = new { type = "array", maxItems = 200, uniqueItems = true, items = Text } }, ["screen", "property", "collection", "ids"])),
+        AutomationToolDefinition.Create("ui.invoke", "Await an available command from ui.state. Commands may remove persisted rows or change queued race membership. Optional parameter may be scalar, or select a collection/index for commands taking a row. Inspect state afterward for UI status and errors.", Schema(new { screen = Screen, command = Text, parameter = new { }, collection = Text, index = new { type = "integer", minimum = 0 } }, ["screen", "command"]), destructive: true),
         AutomationToolDefinition.Create("player.seek", "Seek the desktop player to a position from 0 to 1.", Schema(new { position = new { type = "number", minimum = 0, maximum = 1 } }, ["position"])),
         AutomationToolDefinition.Create("player.play_local", "Play a local media file in the desktop player.", Schema(new { path = new { type = "string", minLength = 1, maxLength = 4096 } }, ["path"])),
         AutomationToolDefinition.Create("player.download_torrent", "Queue a magnet in the main Downloads list and return its durable id and queueId. The item uses a dedicated subfolder of directory. Follow and control it with downloads tools; skipBlockedFiles explicitly approves downloading only permitted files.", Schema(new { magnet = new { type = "string", maxLength = 16384 }, directory = new { type = "string", maxLength = 4096 }, skipBlockedFiles = new { type = "boolean" } }, ["magnet", "directory"]))
@@ -54,6 +59,14 @@ public sealed class UiAutomation(Func<DashboardWindow> getDashboard) : IAutomati
             var screen = operation.StartsWith("player.", StringComparison.Ordinal) ? "player" : args.GetProperty("screen").GetString()!;
             var model = getDashboard().GetAutomationModel(screen);
             if (operation == "ui.state") return State(model);
+            if (operation == "ui.select_many")
+            {
+                var property = args.GetProperty("property").GetString()!;
+                var rows = ResolveMany(model, screen, property, args.GetProperty("collection").GetString()!,
+                    args.GetProperty("ids").EnumerateArray().Select(id => id.GetString()!).ToArray());
+                getDashboard().ApplyAutomationSelection(screen, property, rows);
+                return State(model);
+            }
             if (operation == "player.seek") { ((PlayerViewModel)model).SeekTo(args.GetProperty("position").GetDouble() * 100); return State(model); }
             if (operation == "player.play_local")
             { await ((PlayerViewModel)model).AutomationPlayLocal(args.GetProperty("path").GetString()!); return State(model); }
@@ -69,6 +82,8 @@ public sealed class UiAutomation(Func<DashboardWindow> getDashboard) : IAutomati
                 {
                     if (!Editable.Contains(name) || !Scalar(property.PropertyType)) throw new ArgumentException("Property is not editable through ui.set");
                     value = args.GetProperty("value").Deserialize(property.PropertyType);
+                    if (property.PropertyType.IsEnum && (value == null || !Enum.IsDefined(property.PropertyType, value)))
+                        throw new ArgumentException("Unknown enum value");
                     if (name == "Volume" && value is double volume && (volume < 0 || volume > 100)) throw new ArgumentException("Volume must be 0..100");
                 }
                 else
@@ -105,6 +120,33 @@ public sealed class UiAutomation(Func<DashboardWindow> getDashboard) : IAutomati
             }
             throw new KeyNotFoundException("Unknown UI operation");
         }, System.Windows.Threading.DispatcherPriority.Normal, ct));
+    }
+
+    internal static object[] ResolveMany(object model, string screen, string property, string collection, IReadOnlyList<string> ids)
+    {
+        var identity = (screen, property, collection) switch
+        {
+            ("dashboard", "SelectedWishlistItems", "WishlistItems") => "Id",
+            ("dashboard", "SelectedNotificationItems", "NotificationItems") => "Id",
+            ("dashboard", "SelectedDownloadItems", "DownloadItems") => "Id",
+            ("spread", "SelectedQueuedRaces", "QueuedRaces") => "RequestId",
+            _ => throw new ArgumentException("Unsupported bulk selection")
+        };
+        if (ids.Count > 200 || ids.Any(id => string.IsNullOrEmpty(id) || id.Length > 256) || ids.Distinct(StringComparer.Ordinal).Count() != ids.Count)
+            throw new ArgumentException("Provide at most 200 distinct nonempty IDs");
+        var target = model.GetType().GetProperty(property);
+        if (target?.SetMethod?.IsPublic != true) throw new ArgumentException("Selection is unavailable");
+        var sequence = model.GetType().GetProperty(collection)?.GetValue(model) as IEnumerable
+            ?? throw new ArgumentException("Unknown collection");
+        var requested = ids.ToHashSet(StringComparer.Ordinal);
+        var found = new Dictionary<string, object>(StringComparer.Ordinal);
+        foreach (var row in sequence.Cast<object>())
+        {
+            if (row.GetType().GetProperty(identity)?.GetValue(row) is not string id || !requested.Contains(id)) continue;
+            if (!found.TryAdd(id, row)) throw new ArgumentException("Row identity is ambiguous");
+        }
+        if (found.Count != ids.Count) throw new ArgumentException("A selected row no longer exists; inspect state again");
+        return ids.Select(id => found[id]).ToArray();
     }
 
     private static object Row(object model, JsonElement args)

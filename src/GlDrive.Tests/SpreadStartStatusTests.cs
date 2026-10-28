@@ -9,6 +9,16 @@ namespace GlDrive.Tests;
 public sealed class SpreadStartStatusTests
 {
     [Theory]
+    [InlineData(RaceStartOutcome.Started, 202)]
+    [InlineData(RaceStartOutcome.Queued, 202)]
+    [InlineData(RaceStartOutcome.AlreadyActive, 200)]
+    [InlineData(RaceStartOutcome.Duplicate, 200)]
+    [InlineData(RaceStartOutcome.Suppressed, 409)]
+    [InlineData(RaceStartOutcome.Unavailable, 503)]
+    public void Http_admission_distinguishes_accepted_queue_work_from_rejection(RaceStartOutcome outcome, int status)
+        => Assert.Equal(status, GlDrive.Services.Control.Endpoints.SpreadEndpoints.AdmissionStatusCode(outcome));
+
+    [Theory]
     [InlineData(RaceStartOutcome.Started, "Race started", "started")]
     [InlineData(RaceStartOutcome.Queued, "Race queued", "queued")]
     [InlineData(RaceStartOutcome.AlreadyActive, "Race already active", "already_active")]

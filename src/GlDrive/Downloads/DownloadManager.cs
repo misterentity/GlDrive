@@ -183,36 +183,42 @@ public class DownloadManager : IDisposable
         // Dispose the source together with their semaphores after they finish.
     }
 
-    public bool Enqueue(DownloadItem item)
+    public bool Enqueue(DownloadItem item) => EnqueueMany([item]) == 1;
+
+    public int EnqueueMany(IEnumerable<DownloadItem> items)
     {
+        var admitted = new List<DownloadItem>();
         lock (_activeCts)
         lock (_queueLock)
         {
+            if (_disposed != 0) return 0;
             // Duplicate dedup AND the _store.Add/_pendingQueue.Add below run under the
             // SAME _queueLock — so the check-then-add is atomic. Two concurrent
             // Enqueue() calls for one RemotePath serialize here: the first commits the
             // item (immediately visible via the _store.Items snapshot), the second
             // observes it and returns false. No TOCTOU between concurrent enqueues.
-            var existing = FindPendingOrActive(item.RemotePath);
-            if (existing != null)
+            foreach (var item in items)
             {
-                Log.Information("Skipped duplicate download: {Release} (already {Status})", item.ReleaseName, existing.Status);
-                return false;
+                var existing = FindPendingOrActive(item.RemotePath);
+                if (existing != null || admitted.Any(accepted => accepted.RemotePath == item.RemotePath || accepted.Id == item.Id))
+                    continue;
+                if (item.SourceKind == DownloadSourceKind.Ftp && Directory.Exists(item.LocalPath))
+                    continue;
+                admitted.Add(item);
             }
-
-            if (item.SourceKind == DownloadSourceKind.Ftp && Directory.Exists(item.LocalPath))
-            {
-                Log.Information("Skipped download: {Release} (local path already exists)", item.ReleaseName);
-                return false;
-            }
-
-            _store.Add(item);
-            _pendingQueue.Add(item);
+            if (admitted.Count == 0) return 0;
+            _store.AddManyInMemory(admitted);
+            _pendingQueue.AddRange(admitted);
         }
-        _queueSignal.Release();
-        NotifyDownloadStatus(item);
-        Log.Information("Enqueued download: {Release}", item.ReleaseName);
-        return true;
+        _store.Save();
+        try { _queueSignal.Release(admitted.Count); }
+        catch (ObjectDisposedException) { /* Shutdown already flushed the admitted rows. */ }
+        foreach (var item in admitted)
+        {
+            NotifyDownloadStatus(item);
+            Log.Information("Enqueued download: {Release}", item.ReleaseName);
+        }
+        return admitted.Count;
     }
 
     /// <summary>Background correction callbacks may only admit into the current running manager.</summary>
@@ -258,6 +264,30 @@ public class DownloadManager : IDisposable
         NotifyDownloadStatus(item);
     }
 
+    /// <summary>Cancel selected live work without removing history or payload files.</summary>
+    public int CancelMany(IEnumerable<string> ids)
+    {
+        var changed = new List<DownloadItem>();
+        lock (_activeCts)
+        {
+            if (_disposed != 0) return 0;
+            foreach (var id in ids.Distinct(StringComparer.Ordinal))
+            {
+                var item = _store.GetById(id);
+                if (item == null || item.Status is not (DownloadStatus.Queued or DownloadStatus.Downloading or DownloadStatus.Extracting or DownloadStatus.Paused))
+                    continue;
+                _restartAfterExit.Remove(id);
+                item.Status = DownloadStatus.Cancelled;
+                item.ErrorMessage = null;
+                if (_activeCts.TryGetValue(id, out var cts)) cts.Cancel();
+                changed.Add(item);
+            }
+        }
+        if (changed.Count > 0) _store.Save();
+        foreach (var item in changed) NotifyDownloadStatus(item);
+        return changed.Count;
+    }
+
     public void Pause(string id)
     {
         var item = _store.GetById(id);
@@ -291,6 +321,7 @@ public class DownloadManager : IDisposable
             item.Status = DownloadStatus.Queued;
             item.ErrorMessage = null;
             item.StatusDetail = null;
+            item.RuntimeWait = null;
         }
         _store.Update(item);
         EnqueueForProcessing(item);
@@ -315,6 +346,7 @@ public class DownloadManager : IDisposable
         }
         // Don't reset DownloadedBytes — resume will pick up from partial
         item.ErrorMessage = null;
+        item.RuntimeWait = null;
         _store.Update(item);
         EnqueueForProcessing(item);
         NotifyDownloadStatus(item);
@@ -324,6 +356,13 @@ public class DownloadManager : IDisposable
     public void RemoveFailed() => _store.RemoveFailed();
     public void RemoveCancelled() => _store.RemoveCancelled();
     public void RemoveFinished() => _store.RemoveFinished();
+
+    /// <summary>Forget terminal history only; live writers, retries and all local files remain owned.</summary>
+    public int RemoveTerminalHistory(IEnumerable<string> ids)
+    {
+        lock (_activeCts)
+            return _store.RemoveTerminal(ids.Where(id => !_activeCts.ContainsKey(id) && !_activeItems.ContainsKey(id) && !_restartAfterExit.Contains(id)));
+    }
 
     public void MoveUp(string id)
     {
@@ -384,6 +423,9 @@ public class DownloadManager : IDisposable
                         : hour >= _config.ScheduleStartHour || hour < _config.ScheduleEndHour;
                     if (!inWindow)
                     {
+                        lock (_queueLock)
+                            foreach (var waiting in _pendingQueue.Where(i => i.Status == DownloadStatus.Queued))
+                                waiting.RuntimeWait = new("download-schedule", "Outside the configured download hours", DateTimeOffset.UtcNow.AddMinutes(1));
                         // Re-signal so we check again later
                         _queueSignal.Release();
                         await Task.Delay(TimeSpan.FromSeconds(60), ct);
@@ -414,11 +456,13 @@ public class DownloadManager : IDisposable
                 // to clear — no RetryCount cost (like the race engine's cooldown skip).
                 if (_source?.IsInCooldown == true)
                 {
+                    fresh.RuntimeWait = new("pool-cooldown", "Existing download pool is in cooldown", DateTimeOffset.UtcNow.AddSeconds(15));
                     EnqueueForProcessing(fresh);
                     await Task.Delay(TimeSpan.FromSeconds(15), ct);
                     continue;
                 }
 
+                fresh.RuntimeWait = new("download-slot", "Waiting for the configured download concurrency slot");
                 await _concurrency.WaitAsync(ct);
                 tasks.Add(ProcessItem(fresh, ct));
                 ObserveAndPrune(tasks);
@@ -435,11 +479,14 @@ public class DownloadManager : IDisposable
     /// StopAsync can drain it, and generation-guarded so a retry scheduled before a
     /// Stop()/Start() cycle no-ops instead of resurrecting into the new run.
     /// </summary>
-    private void ScheduleRetry(DownloadItem item, int delaySeconds)
+    private void ScheduleRetry(DownloadItem item, int delaySeconds, string reasonCode = "download-retry", DateTimeOffset? admissionDeadline = null)
     {
         var gen = Volatile.Read(ref _generation);
         var source = _cts;
         if (source == null || source.IsCancellationRequested) return;
+        var scheduledCheck = DateTimeOffset.UtcNow.AddSeconds(delaySeconds);
+        item.RuntimeWait = new(reasonCode, item.ErrorMessage ?? item.StatusDetail ?? "Waiting for the existing retry schedule",
+            admissionDeadline > scheduledCheck ? admissionDeadline : scheduledCheck);
         var token = source.Token;
         Task task = null!;
         task = Task.Run(async () =>
@@ -451,8 +498,14 @@ public class DownloadManager : IDisposable
                 {
                     if (Volatile.Read(ref _generation) == gen &&
                         ReferenceEquals(_store.GetById(item.Id), item) && item.Status == DownloadStatus.Queued)
+                    {
+                        item.RuntimeWait = new("download-queue", "Awaiting a download slot and normal admission");
                         EnqueueForProcessing(item);
+                    }
+                    else return;
                 }
+                try { DownloadStatusChanged?.Invoke(item); }
+                catch (Exception ex) { Log.Debug(ex, "Download waiting-state observer failed"); }
             }
             catch (OperationCanceledException) { }
             catch (ObjectDisposedException) { /* _cts disposed mid-delay during stop */ }
@@ -462,6 +515,9 @@ public class DownloadManager : IDisposable
             }
         });
         lock (_retryLock) _retryTasks.Add(task);
+        // Diagnostics cannot prevent the retry from being registered or change wishlist state.
+        try { DownloadStatusChanged?.Invoke(item); }
+        catch (Exception ex) { Log.Debug(ex, "Download waiting-state observer failed"); }
     }
 
     /// <summary>
@@ -497,6 +553,7 @@ public class DownloadManager : IDisposable
             _activeCts[item.Id] = itemCts;
             _activeItems[item.Id] = item;
             item.Status = DownloadStatus.Downloading;
+            item.RuntimeWait = null;
             item.ErrorMessage = null;
             item.StatusDetail = null;
             item.RequiresContentApproval = false;
@@ -787,7 +844,7 @@ public class DownloadManager : IDisposable
                             }
                             Log.Information("{Reason}: {Release}", repair.Reason, item.ReleaseName);
                             NotifyDownloadStatus(item);
-                            ScheduleRetry(item, Math.Max(1, SfvRepairRecheckSeconds));
+                            ScheduleRetry(item, Math.Max(1, SfvRepairRecheckSeconds), "sfv-repair");
                             return;
                         }
                         FailVerification(item, repair.Reason, itemCts.Token);
@@ -918,7 +975,7 @@ public class DownloadManager : IDisposable
             item.ErrorMessage = $"Waiting for drive {root} — destination volume is not mounted";
             _store.Update(item);
             NotifyDownloadStatus(item);
-            ScheduleRetry(item, (int)delay.TotalSeconds);
+            ScheduleRetry(item, (int)delay.TotalSeconds, "destination-drive");
         }
         catch (GlDrive.Downloads.Segmented.NetworkAllowanceExhaustedException ex)
         {
@@ -930,7 +987,7 @@ public class DownloadManager : IDisposable
             item.ErrorMessage = $"Waiting: {ex.Message}";
             _store.Update(item);
             NotifyDownloadStatus(item);
-            ScheduleRetry(item, 15 * 60);
+            ScheduleRetry(item, 15 * 60, "network-allowance");
         }
         catch (Exception ex)
         {
@@ -958,7 +1015,7 @@ public class DownloadManager : IDisposable
                         NotifyDownloadStatus(item);
                         if (relocation.Outcome == RelocationOutcome.Relocated)
                             Log.Information("Download {Release} {Relocation}", item.ReleaseName, relocation.Reason);
-                        ScheduleRetry(item, Math.Max(1, (int)Math.Ceiling(relocation.Delay.TotalSeconds)));
+                        ScheduleRetry(item, Math.Max(1, (int)Math.Ceiling(relocation.Delay.TotalSeconds)), "source-relocation");
                         return;
                     }
                     if (relocation.Outcome == RelocationOutcome.Exhausted)
@@ -995,7 +1052,7 @@ public class DownloadManager : IDisposable
                 NotifyDownloadStatus(item);
                 // NOTE: item.RetryCount is post-increment here — means "scheduling retry attempt N".
                 EmitDownloadOutcome(item, "retried");
-                ScheduleRetry(item, delay);
+                ScheduleRetry(item, delay, DownloadWaiting.RetryReason(ex), ex is FtpLoginHeldException held ? held.RetryAtUtc : null);
             }
             else
             {
@@ -1060,7 +1117,7 @@ public class DownloadManager : IDisposable
             _store.Update(item);
         }
         NotifyDownloadStatus(item);
-        ScheduleRetry(item, Math.Max(1, BackgroundPullRecheckSeconds));
+        ScheduleRetry(item, Math.Max(1, BackgroundPullRecheckSeconds), "race-priority");
     }
 
     private void EmitTransferMeasured(long bytes, TimeSpan elapsed)
@@ -1116,7 +1173,7 @@ public class DownloadManager : IDisposable
         NotifyDownloadStatus(item);
         Log.Information("Download waiting for release completion: {Release} — {Reason}; rechecking in {Delay}",
             item.ReleaseName, reason, delay);
-        ScheduleRetry(item, (int)delay.TotalSeconds);
+        ScheduleRetry(item, (int)delay.TotalSeconds, "source-incomplete");
     }
 
     private void FailVerification(DownloadItem item, string reason, CancellationToken ct)

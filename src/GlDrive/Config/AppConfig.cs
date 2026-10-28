@@ -16,6 +16,7 @@ public class AppConfig
     public LibraryConfig Library { get; set; } = new();
     public HookConfig Hooks { get; set; } = new();
     public NukeWatchConfig NukeWatch { get; set; } = new();
+    public IrcAttentionConfig IrcAttention { get; set; } = new();
 
     public string ResolveAgentModel() => string.IsNullOrWhiteSpace(Agent.ModelId)
         ? "anthropic/claude-sonnet-4-6" : Agent.ModelId;

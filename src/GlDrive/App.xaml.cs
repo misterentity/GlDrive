@@ -432,11 +432,13 @@ public partial class App
             new ConfigHistoryAutomation(ConfigChanges, configuration),
             new DiagnosticAutomation(config),
             new AlertAutomation(() => _trayViewModel!.Alerts),
+            new FeedAutomation(notificationStore),
             new HookAutomation(() => _serverManager!.Hooks),
             new LibraryAutomation(config, indexRefreshed: _serverManager.ObserveLibraryIndex,
                 ownedObserved: _serverManager.NukeWatch.ObserveOwned, nukeWatch: _serverManager.NukeWatch.Store.Snapshot),
             new NukeWatchAutomation(config, () => _serverManager!.NukeWatch),
             new WatchlistAutomation(config, () => _serverManager!.Watchlist),
+            new CollectionAutomation(() => _serverManager!.Collections),
             new AgentAutomation(config, () => AgentRunner, () => FreezeStore, () => AuditTrail, () => ChangeApplier,
                 onConfigChanged: QueueRuntimeSettingsRefresh),
             new UiAutomation(() =>

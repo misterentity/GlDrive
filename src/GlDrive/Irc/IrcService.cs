@@ -1,8 +1,10 @@
 using System.Security.Cryptography;
+using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 using GlDrive.Config;
 using GlDrive.Services;
+using GlDrive.Services.Alerts;
 using GlDrive.Tls;
 using Serilog;
 
@@ -20,6 +22,8 @@ public class IrcMessageItem
     public string Text { get; set; } = "";
     public IrcMessageType Type { get; set; }
     public bool WasEncrypted { get; set; }
+    public bool IsHighlight { get; set; }
+    internal IrcUnreadMarker? UnreadMarker { get; set; }
 }
 
 public class IrcChannel
@@ -41,6 +45,11 @@ public class IrcService : IDisposable
     // PmHistoryStore at construction, an app restart. Never cleared on reconnect.
     private readonly IrcScrollbackBuffer _scrollback = new();
     private readonly PmHistoryStore _pmHistory;
+    private readonly IrcUnreadStore _unread;
+    private readonly Func<IrcAttentionConfig> _attention;
+    private IrcAttentionPolicy? _attentionPolicy;
+    private IrcAttentionThrottle? _attentionThrottle;
+    private int _attentionWarned;
     private IrcClient? _client;
     private CancellationTokenSource? _cts;
     private Task? _serviceTask;
@@ -161,6 +170,14 @@ public class IrcService : IDisposable
     public IReadOnlyList<string> GetScrollbackTargets() => _scrollback.Targets;
     /// <summary>Chronological snapshot of one target's scrollback.</summary>
     public IReadOnlyList<IrcMessageItem> GetScrollback(string target) => _scrollback.Snapshot(target);
+    public IReadOnlyList<IrcUnreadEntry> GetUnread() => _unread.Snapshot();
+    public IrcUnreadEntry? GetUnread(string target) => _unread.Get(target);
+    public void MarkRead(string target) => _unread.MarkRead(target);
+    public void ReadThrough(string target, IrcUnreadMarker marker) => _unread.ReadThrough(target, marker);
+    // Search results belong exclusively to the local window, never automation or the agent.
+    public Task<IrcSearchResult> SearchHistoryAsync(string pattern, bool includePrivate, CancellationToken cancellationToken = default) =>
+        IrcLogSearch.SearchAsync(Path.Combine(ConfigManager.AppDataPath, "irc-logs"), ServerId, pattern,
+            includePrivate, () => _pmHistory.GetAll(), cancellationToken);
     public string CurrentNick => _currentNick;
     public FishKeyStore KeyStore => _fishKeyStore;
     public Func<string, CancellationToken, Task<string?>>? SiteInviteFunc { get; set; }
@@ -175,19 +192,22 @@ public class IrcService : IDisposable
 
     public event Action<IrcServiceState>? StateChanged;
     public event Action<string, IrcMessageItem>? MessageReceived; // target, message
+    public event Action<AlertEvent>? AttentionReceived;
     public event Action<string>? NamesUpdated; // channel
     public event Action<string, string>? TopicChanged; // channel, topic
 
     // Resolved legacy fallback charset for FiSH decode (peers not using UTF-8). Null = UTF-8 only.
     private readonly Encoding? _fishFallbackCharset;
 
-    public IrcService(ServerConfig serverConfig, CertificateManager certManager)
+    public IrcService(ServerConfig serverConfig, CertificateManager certManager, Func<IrcAttentionConfig>? attention = null)
     {
         _serverConfig = serverConfig;
         _certManager = certManager;
         _fishKeyStore = new FishKeyStore(serverConfig.Id);
         _fishFallbackCharset = ResolveFallbackCharset(serverConfig.Irc.FallbackCharset);
         _pmHistory = new PmHistoryStore(serverConfig.Id);
+        _unread = new IrcUnreadStore(Path.Combine(ConfigManager.AppDataPath, $"irc-unread-{serverConfig.Id}.dat"));
+        _attention = attention ?? (() => new IrcAttentionConfig());
         SeedScrollback();
     }
 
@@ -1796,7 +1816,46 @@ public class IrcService : IDisposable
         if (target != "*" && !IsChannel(target) &&
             (item.Type == IrcMessageType.Normal || item.Type == IrcMessageType.Action))
             _pmHistory.Append(target, item);
+        TrackAttention(target, item);
         MessageReceived?.Invoke(target, item);
+    }
+
+    private void TrackAttention(string target, IrcMessageItem item)
+    {
+        // Attention is observational. No storage or subscriber failure may drop an announce.
+        try
+        {
+            var ownNicks = new[] { _currentNick, _serverConfig.Irc.Nick, _serverConfig.Irc.AltNick };
+            if (target == "*" || item.Type is not (IrcMessageType.Normal or IrcMessageType.Action or IrcMessageType.Notice) ||
+                ownNicks.Any(n => !string.IsNullOrEmpty(n) && IrcHighlightMatcher.SameNick(n, item.Nick))) return;
+            var settings = _attention();
+            var isPrivate = !IsChannel(target);
+            // Service notices (for example registration and authentication chatter) are
+            // not private conversations; use the same boundary as encrypted PM history.
+            if (isPrivate && item.Type == IrcMessageType.Notice) return;
+            var candidate = !isPrivate && IrcHighlightMatcher.IsHighlight(item.Text, item.Nick, ownNicks, settings);
+            var automated = (candidate || isPrivate) &&
+                (_attentionPolicy ??= new(_serverConfig.Irc)).IsAutomated(target, item.Nick, item.Text);
+            item.IsHighlight = candidate && !automated;
+            var now = DateTime.UtcNow;
+            item.UnreadMarker = _unread.Record(target, item.IsHighlight || (isPrivate && !automated), now);
+            if (item.IsHighlight || (isPrivate && !automated && settings.PrivateMessageAlertsEnabled))
+            {
+                var count = (_attentionThrottle ??= new()).Record(target, now);
+                if (count == 0) return;
+                var kind = isPrivate ? AlertKind.IrcPrivateMessage : AlertKind.IrcMention;
+                // Generic notices keep PM text and peer/channel names out of the plaintext alert inbox.
+                var incident = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(IrcHighlightMatcher.Fold(target))));
+                AttentionReceived?.Invoke(new(kind, AlertSeverity.Information, "IRC",
+                    isPrivate ? $"{count} new private message(s)." : $"{count} new IRC mention(s).",
+                    ServerId, Incident: incident, LocalOnly: true));
+            }
+        }
+        catch
+        {
+            if (Interlocked.Exchange(ref _attentionWarned, 1) == 0)
+                Log.Warning("IRC attention update failed; message processing continues");
+        }
     }
 
     private void AddSystemMessage(string target, string text)
@@ -1821,6 +1880,7 @@ public class IrcService : IDisposable
         try { _cts?.Cancel(); } catch (Exception ex) { Log.Debug(ex, "IRC dispose: cts cancel"); }
         try { _client?.Dispose(); } catch (Exception ex) { Log.Debug(ex, "IRC dispose: client"); }
         try { _pmHistory.Dispose(); } catch (Exception ex) { Log.Debug(ex, "IRC dispose: PM history flush"); }
+        try { _unread.Dispose(); } catch (Exception ex) { Log.Debug(ex, "IRC dispose: unread flush"); }
         GC.SuppressFinalize(this);
     }
 }

@@ -45,6 +45,7 @@ public partial class ServerManager : IDisposable
     public event Action<string, string, MountState>? ServerStateChanged; // serverId, serverName, state
     public event Action<string, string, string, string, string>? NewReleaseDetected; // serverId, serverName, category, release, remotePath
     public event Action<string, string, IrcServiceState>? IrcStateChanged; // serverId, serverName, state
+    public event Action<Alerts.AlertEvent>? IrcAttentionReceived;
     public event Action<string, string>? BncRateLimitDetected; // serverName, message
     public event Action<FtpAuthenticationNotice>? AuthenticationRejected;
 
@@ -65,6 +66,7 @@ public partial class ServerManager : IDisposable
         InitializeNukes();
         InitializeWanted();
         InitializeWatchlist();
+        InitializeCollections();
         InitializeNukeWatch();
         InitializeAnnounceFeedHealth();
         GuardedFtpLogin.AuthenticationRejected += OnAuthenticationRejected;
@@ -677,7 +679,8 @@ public partial class ServerManager : IDisposable
         if (_disposed) return;
         if (_ircServices.ContainsKey(serverConfig.Id)) return;
 
-        var ircService = new IrcService(serverConfig, _certManager);
+        var ircService = new IrcService(serverConfig, _certManager, () => _config.IrcAttention);
+        ircService.AttentionReceived += alert => IrcAttentionReceived?.Invoke(alert);
         // A connected mount is the whole precondition: SITE INVITE reuses an idle pooled login,
         // and any new login it needs is already deferred at GuardedFtpLogin. Gating on the
         // recorded health state kept invite-only announce channels unjoined after one transient

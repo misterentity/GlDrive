@@ -76,11 +76,14 @@ public sealed class RaceQueueStore
 
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
     private readonly string _filePath;
+    private readonly Action<string, string> _write;
+    private int _warnedWrite;
 
-    internal RaceQueueStore(string filePath)
+    internal RaceQueueStore(string filePath, Action<string, string>? write = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
         _filePath = filePath;
+        _write = write ?? SecureFile.WriteAllTextRestricted;
     }
 
     public List<PersistedRace> Load()
@@ -115,13 +118,13 @@ public sealed class RaceQueueStore
                 var races = capture();
                 if (races == null) return;
                 Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
-                SecureFile.WriteAllTextRestricted(_filePath, JsonSerializer.Serialize(races, Options));
+                _write(_filePath, JsonSerializer.Serialize(races, Options));
             });
             return true;
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "Failed to save race queue");
+            if (Interlocked.Exchange(ref _warnedWrite, 1) == 0) Log.Warning(ex, "Failed to save race queue; retaining live state in memory");
             return false;
         }
     }

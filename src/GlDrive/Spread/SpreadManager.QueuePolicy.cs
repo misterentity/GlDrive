@@ -33,7 +33,7 @@ public partial class SpreadManager
         return PredictRaceNoLock(merged);
     }
 
-    private RaceStartResult? MergeDuplicateNoLock(PersistedRace incoming, DateTime now)
+    private RaceStartResult? MergeDuplicateNoLock(PersistedRace incoming, DateTime now, bool includeQueuePosition = true)
     {
         var active = _activeJobs.FirstOrDefault(j => IsSameRace(j.Section, j.ReleaseName, incoming.Section, incoming.ReleaseName));
         var starting = _startingRequests.FindIndex(r => IsSameRace(r.Section, r.ReleaseName, incoming.Section, incoming.ReleaseName));
@@ -66,7 +66,7 @@ public partial class SpreadManager
         var updated = _config.Spread.MergeRaceAnnounces && !queued.CleanupOnly ? MergeRaceNoLock(queued, incoming, true) : queued;
         _raceQueue[duplicate] = updated;
         return new(RaceStartOutcome.Duplicate, incoming.Section, incoming.ReleaseName,
-            QueuePosition: QueuePositionNoLock(updated, now), Reason: updated.WaitReason ?? "Release is already queued",
+            QueuePosition: includeQueuePosition ? QueuePositionNoLock(updated, now) : null, Reason: updated.WaitReason ?? "Release is already queued",
             HintsMerged: !ReferenceEquals(updated, queued));
     }
 

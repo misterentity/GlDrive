@@ -88,6 +88,7 @@ public sealed class AlertRouter : IDisposable, IAsyncDisposable
 
     private void QueueDelivery(AlertEvent alert, string? entryId = null)
     {
+        if (IsLocalOnly(alert)) return;
         foreach (var target in _config.Alerts.Targets.ToArray())
         {
             if (target.Kind == "webhook" || alert.Kind == AlertKind.Hook)
@@ -176,6 +177,7 @@ public sealed class AlertRouter : IDisposable, IAsyncDisposable
 
     private async Task DeliverAsync(string id, TargetDelivery delivery, PendingDelivery pending)
     {
+        if (IsLocalOnly(pending.Alert)) return;
         if (_now() < delivery.RetryAt) return;
         var retries = Math.Clamp(_config.Alerts.RetryCount, 0, 5);
         for (var attempt = 0; attempt <= retries && !_stop.IsCancellationRequested; attempt++)
@@ -191,7 +193,7 @@ public sealed class AlertRouter : IDisposable, IAsyncDisposable
                 var body = AlertPayload.Build(alert, current, _config, secrets);
                 if (alert.Kind == AlertKind.Digest)
                 {
-                    var rows = Store.Snapshot().Where(e => e.LastUtc >= _now().AddDays(-1) && e.Alert.Kind is not (AlertKind.Digest or AlertKind.Heartbeat))
+                    var rows = Store.Snapshot().Where(e => e.LastUtc >= _now().AddDays(-1) && !IsLocalOnly(e.Alert) && e.Alert.Kind is not (AlertKind.Digest or AlertKind.Heartbeat))
                         .Select(e => AlertPayload.Build(e.Alert, current, _config, secrets)).Distinct();
                     body = string.Join("\n", rows);
                     if (body.Length == 0) body = AlertPayload.Build(alert, current, _config, secrets);
@@ -226,6 +228,7 @@ public sealed class AlertRouter : IDisposable, IAsyncDisposable
     }
 
     private static TimeSpan Max(TimeSpan a, TimeSpan b) => a > b ? a : b;
+    internal static bool IsLocalOnly(AlertEvent alert) => alert.LocalOnly || alert.Kind is AlertKind.IrcMention or AlertKind.IrcPrivateMessage;
 
     public void Dispose()
     {

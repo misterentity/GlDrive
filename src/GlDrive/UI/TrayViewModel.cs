@@ -44,6 +44,7 @@ public class TrayViewModel : INotifyPropertyChanged
         Alerts = new AlertRouter(config, (title, message, severity) =>
             Application.Current?.Dispatcher.BeginInvoke(() => ShowNotificationRequested?.Invoke(title, message, severity)));
         _serverManager.Hooks.Alerts = Alerts;
+        _serverManager.IrcAttentionReceived += alert => Alerts.Publish(alert);
         _serverManager.NukeWatch.Flagged += entry =>
             ShowNotification("Owned release nuked", $"{entry.Owned.ReleaseName}: {entry.Reason}",
                 AlertKind.OwnedReleaseNuke, AlertSeverity.Warning, release: entry.Owned.ReleaseName);

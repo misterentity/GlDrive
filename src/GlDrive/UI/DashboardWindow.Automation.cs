@@ -24,5 +24,29 @@ public partial class DashboardWindow
         };
     }
 
+    internal void ApplyAutomationSelection(string screen, string property, object[] rows)
+    {
+        Dispatcher.VerifyAccess();
+        var (title, controlName) = (screen, property) switch
+        {
+            ("dashboard", "SelectedWishlistItems") => ("Wishlist", "WishlistGrid"),
+            ("dashboard", "SelectedNotificationItems") => ("Notifications", "NotificationsGrid"),
+            ("dashboard", "SelectedDownloadItems") => ("Downloads", "DownloadsGrid"),
+            ("spread", "SelectedQueuedRaces") => ("Spread", "QueuedRacesList"),
+            _ => throw new ArgumentException("Unsupported bulk selection")
+        };
+        MainTabControl.SelectedItem = MainTabControl.Items.OfType<TabItem>().First(tab => GetTabName(tab) == title);
+        var control = FindName(controlName) as ItemsControl ?? throw new InvalidOperationException("Selection control is unavailable");
+        if (rows.Any(row => !control.Items.Contains(row))) throw new ArgumentException("A selected row is hidden; adjust the view before selecting");
+        var selected = control switch
+        {
+            DataGrid grid => grid.SelectedItems,
+            ListBox list => list.SelectedItems,
+            _ => throw new InvalidOperationException("Control does not support bulk selection")
+        };
+        selected.Clear();
+        foreach (var row in rows) selected.Add(row);
+    }
+
     private static RoutedEvent SelectorEvent() => System.Windows.Controls.Primitives.Selector.SelectionChangedEvent;
 }

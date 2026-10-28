@@ -5,7 +5,7 @@ using Serilog;
 
 namespace GlDrive.Downloads;
 
-public class TmdbClient : IDisposable
+public partial class TmdbClient : IDisposable
 {
     private readonly HttpClient _http;
     private readonly string _apiKey;
@@ -88,10 +88,10 @@ public class TmdbClient : IDisposable
     internal static string NormalizeRegion(string? region) => region is { Length: 2 } && region.All(char.IsAsciiLetter)
         ? region.ToUpperInvariant() : "US";
 
-    private async Task<string> ReadCalendarJson(string path, CancellationToken ct)
+    private async Task<string> ReadCalendarJson(string path, CancellationToken ct, TimeSpan? requestTimeout = null)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        deadline.CancelAfter(CalendarRequestTimeout);
+        deadline.CancelAfter(requestTimeout ?? CalendarRequestTimeout);
         ct = deadline.Token;
         using var response = await _http.GetAsync(path, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
@@ -305,6 +305,11 @@ public class TmdbMovieDetail
     public double VoteAverage { get; set; }
     public TmdbGenre[]? Genres { get; set; }
     public int? Runtime { get; set; }
+    // Provider optional fields may be absent, null or malformed without invalidating
+    // the usable movie detail. Collection lookup validates its own required evidence.
+    [JsonPropertyName("belongs_to_collection")]
+    public JsonElement? BelongsToCollection { get; set; }
+    [JsonIgnore] public int? CollectionId => TmdbCollectionParser.CollectionId(BelongsToCollection);
 
     [JsonIgnore] public string? PosterUrl => PosterPath != null ? $"https://image.tmdb.org/t/p/w185{PosterPath}" : null;
     [JsonIgnore] public string GenreText => Genres != null ? string.Join(", ", Genres.Select(g => g.Name)) : "";

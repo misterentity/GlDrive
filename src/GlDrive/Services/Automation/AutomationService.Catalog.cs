@@ -37,8 +37,8 @@ public sealed partial class AutomationService
                 JsonSerializer.SerializeToElement(new { type = "object", properties, required, additionalProperties = false }),
                 readOnly, destructive));
         }
-        Add("servers.list", "List configured servers, mount/IRC state, credits, live FTP pool health, and authentication hold/retry time. Passwords are omitted.", true, false);
-        Add("servers.get", "Read live mount/site health, persistent retry time, account login budget, active pool borrow purposes, announce feed health and site statistics.", true, false, "serverId");
+        Add("servers.list", "List configured servers, mount/IRC state, credits, live FTP pool health, read-only waiting constraints/deadlines, and authentication hold/retry time. Passwords are omitted.", true, false);
+        Add("servers.get", "Read live mount/site health, persistent retry time, account login budget, active pool borrow purposes, announce feed health, read-only waiting constraints/deadlines and site statistics.", true, false, "serverId");
         Add("servers.mount", "Mount a configured server and start its download/search/IRC services. This explicit action permits one authentication retry.", false, false, "serverId");
         Add("servers.unmount", "Unmount a server and stop its running FTP, download, spread and IRC services.", false, true, "serverId");
         Add("servers.remount", "Stop and recreate a server's live services from the current settings, permitting one authentication retry.", false, true, "serverId");
@@ -59,7 +59,7 @@ public sealed partial class AutomationService
         Add("ftp.delete", "Delete an FTP file or directory. Nonempty directories require recursive=true; the FTP root is protected.", false, true, "serverId", "path", "recursive?:boolean");
         Add("ftp.command", "Execute a single FTP control command, including SITE commands. The borrowed connection is discarded afterward to isolate protocol state. Data-transfer commands are rejected; use ftp tools for data.", false, true, "serverId", "command");
 
-        Add("downloads.list", "Read FTP and BitTorrent download queues/history. Use serverId=__torrents for the application torrent queue. Magnet links and private tracker URLs are omitted.", true, false, "serverId?", "status?:Queued|Downloading|Extracting|Completed|Failed|Cancelled|Paused", "offset?:integer", "limit?:integer");
+        Add("downloads.list", "Read FTP and BitTorrent download queues/history with read-only waiting reasons and next check times. Use serverId=__torrents for the application torrent queue. Magnet links and private tracker URLs are omitted.", true, false, "serverId?", "status?:Queued|Downloading|Extracting|Completed|Failed|Cancelled|Paused", "offset?:integer", "limit?:integer");
         Add("downloads.enqueue", "Queue an FTP release directory for download. Omit localPath to select the exact section destination, then a logical TV/Movies destination inferred from releaseName, then localPath from download settings; the release gets one dedicated subfolder. An explicit localPath is preserved.", false, false, "serverId", "path", "releaseName?", "category?", "localPath?", "wishlistItemId?");
         Add("downloads.cancel", "Cancel a queued, downloading, paused or extracting item. Use serverId=__torrents for torrents.", false, true, "serverId", "id");
         Add("downloads.retry", "Retry a failed or cancelled download, retaining partial bytes for resume. A refused torrent needs explicit skipBlockedFiles=true to exclude blocked files; escaping paths cannot be approved.", false, false, "serverId", "id", "skipBlockedFiles?:boolean");
@@ -86,6 +86,7 @@ public sealed partial class AutomationService
         Add("notifications.clear", "Clear the persisted release notification history.", false, true);
 
         Add("irc.status", "Read IRC state, channels, members, targets and per-channel learned silence health with local diagnosis.", true, false, "serverId");
+        Add("irc.search", "Get local-only IRC log search instructions. Does not accept a pattern, search logs, or return matches; use Dashboard > IRC > Search logs.", true, false, "serverId");
         Add("irc.history", "Read chronological scrollback for a channel, private-message nickname, or '*' for system messages. Returns the latest limit messages.", true, false, "serverId", "target", "limit?:integer");
         Add("irc.start", "Start IRC for an enabled configured IRC server, independently of FTP mounting.", false, false, "serverId");
         Add("irc.stop", "Disconnect and stop a server's IRC service.", false, true, "serverId");
@@ -105,7 +106,7 @@ public sealed partial class AutomationService
         Add("irc.key_mode", "Set ECB/CBC mode for an existing FiSH key.", false, false, "serverId", "target", "mode:ECB|CBC");
         Add("irc.key_exchange", "Initiate a real DH1080 key-exchange NOTICE with a nickname.", false, false, "serverId", "target");
 
-        Add("spread.status", "Read active races, queued requests, connected sites, pool health and historical summary.", true, false);
+        Add("spread.status", "Read active races, queued requests, connected sites, pool health and historical summary. queuedWaiting maps request IDs to read-only reasons, constraints, queue positions and approximate ETAs.", true, false);
         Add("spread.detail", "Read the full file/site/transfer detail of an active race.", true, false, "id");
         Add("spread.start", "Request a race between at least two connected sites. Returns started, queued with queuePosition, already_active, duplicate, suppressed with retryAfterSeconds/reason, or unavailable. hintsMerged reports duplicate source/participant enrichment when enabled. Queue position follows the configured size-aware or FIFO policy among eligible work. Omit serverIds to select connected enabled sites with sections.", false, false, "section", "releaseName", "serverIds?:strings", "sourceServerId?", "sourcePath?");
         Add("spread.stop", "Stop an active race.", false, true, "id");

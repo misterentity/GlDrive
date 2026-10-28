@@ -241,16 +241,25 @@ internal sealed class LoginAttemptGovernor
     {
         lock (_sync)
         {
-            var state = Get(account.Key);
-            Prune(state);
-            var hold = state.HoldUntilStamp > _clock.GetTimestamp();
+            // Diagnostics must not create account state or consume bookkeeping capacity.
+            if (!_states.TryGetValue(account.Key, out var state))
+                return new(true, 8, 0, 1, null, LoginHoldReason.None, _persistenceHealthy);
+            var now = _clock.GetTimestamp();
+            var cutoff = now - (long)(Window.TotalSeconds * _clock.TimestampFrequency);
+            var attempts = state.Attempts.Where(attempt => attempt.Stamp > cutoff).ToArray();
+            var ordinary = attempts.Where(attempt => !attempt.Ghost).ToArray();
+            var hold = state.Enabled && state.HoldUntilStamp > now;
             DateTime? retry = hold ? state.HoldUntilUtc : null;
-            if (state.Attempts.Count >= state.Limit || state.Attempts.Count(attempt => !attempt.Ghost) >= state.Limit - 1)
+            if (attempts.Length >= state.Limit || ordinary.Length >= state.Limit - 1)
             {
-                var rateRetry = state.Attempts.Min(entry => entry.Utc) + Window;
+                var relevant = attempts.Length >= state.Limit ? attempts : ordinary;
+                var oldest = relevant.MinBy(attempt => attempt.Stamp)!;
+                var remaining = TimeSpan.FromSeconds((oldest.Stamp +
+                    (long)(Window.TotalSeconds * _clock.TimestampFrequency) - now) / (double)_clock.TimestampFrequency);
+                var rateRetry = UtcNow + remaining;
                 if (retry == null || rateRetry > retry) retry = rateRetry;
             }
-            return new(state.Enabled, state.Limit, state.Attempts.Count, 1, state.Enabled ? retry : null,
+            return new(state.Enabled, state.Limit, attempts.Length, 1, state.Enabled ? retry : null,
                 hold ? state.Reason : LoginHoldReason.None, _persistenceHealthy);
         }
     }

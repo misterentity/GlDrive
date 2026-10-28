@@ -33,6 +33,31 @@ public partial class DashboardWindow : Window
     private readonly AutoExpandLatch _streamsExpandLatch = new();
     private bool _expandingStreams;
 
+    private void CollectionGaps_Click(object sender, RoutedEventArgs e)
+    {
+        if (_demoMode || DataContext is not DashboardViewModel vm) return;
+        new CollectionGapsWindow(_serverManager.Collections, vm.SelectedWishlistMovieTmdbId) { Owner = this }.Show();
+    }
+
+    private void UpdateIrcReading()
+    {
+        if (_demoMode) return;
+        if (DataContext is DashboardViewModel vm)
+            vm.Irc.SetReading(IsActive && IsVisible && MainTabControl.SelectedItem is TabItem tab && GetTabName(tab) == "IRC");
+    }
+
+    private void IrcMarkRead_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is DashboardViewModel vm) vm.Irc.MarkSelectedRead();
+    }
+
+    private void IrcSearch_Click(object sender, RoutedEventArgs e)
+    {
+        if (_demoMode || DataContext is not DashboardViewModel vm || vm.Irc.SelectedChannel is not { } selected) return;
+        if (_serverManager.GetIrcService(selected.ServerId) is { } service)
+            new IrcSearchWindow(service) { Owner = this }.Show();
+    }
+
     public DashboardWindow(ServerManager serverManager, AppConfig config, NotificationStore notificationStore, bool demoMode = false)
     {
         _demoMode = demoMode;
@@ -43,6 +68,8 @@ public partial class DashboardWindow : Window
         Height = Math.Min(Height, SystemParameters.WorkArea.Height);
         var vm = new DashboardViewModel(serverManager, config, notificationStore);
         DataContext = vm;
+        Activated += (_, _) => UpdateIrcReading();
+        Deactivated += (_, _) => vm.Irc.SetReading(false);
         vm.PropertyChanged += Vm_StreamMatrixChanged;
         Closed += (_, _) =>
         {
@@ -94,6 +121,13 @@ public partial class DashboardWindow : Window
         // Toggle keyboard-shortcuts overlay with `?` (Shift+/) and dismiss with Esc.
         PreviewKeyDown += (s, e) =>
         {
+            if (e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.Control &&
+                MainTabControl.SelectedItem is TabItem ircTab && GetTabName(ircTab) == "IRC")
+            {
+                IrcSearch_Click(this, new RoutedEventArgs());
+                e.Handled = true;
+                return;
+            }
             if (e.Key == System.Windows.Input.Key.Escape && ShortcutsOverlay.Visibility == Visibility.Visible)
             {
                 ToggleShortcuts();
@@ -224,6 +258,8 @@ public partial class DashboardWindow : Window
         if (_demoMode) return;
         var vm = DataContext as DashboardViewModel;
 
+        UpdateIrcReading();
+
         if (header == "IRC")
             ScrollIrcToBottom();
 
@@ -317,6 +353,7 @@ public partial class DashboardWindow : Window
         {
             _spreadLoaded = true;
             _spreadVm = new SpreadViewModel(_serverManager, _config);
+            if (vm != null) _spreadVm.SetBulkScheduler(vm.TryScheduleBulk);
             _spreadVm.SetOpenSettingsAction(async () =>
             {
                 var window = new SettingsWindow(_config, _serverManager) { Owner = this };
@@ -627,6 +664,19 @@ public partial class DashboardWindow : Window
     {
         if (DataContext is DashboardViewModel vm)
             vm.SelectedDownloadItems = DownloadsGrid.SelectedItems.Cast<DownloadItemVm>();
+    }
+
+    private void WishlistGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (DataContext is DashboardViewModel vm) vm.SelectedWishlistItems = WishlistGrid.SelectedItems.Cast<WishlistItemVm>().ToArray();
+    }
+    private void NotificationsGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (DataContext is DashboardViewModel vm) vm.SelectedNotificationItems = NotificationsGrid.SelectedItems.Cast<NotificationItemVm>().ToArray();
+    }
+    private void QueuedRacesList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_spreadVm != null) _spreadVm.SelectedQueuedRaces = QueuedRacesList.SelectedItems.Cast<QueuedRaceVm>().ToArray();
     }
 
     // Drag-and-drop: handle drop on Downloads grid

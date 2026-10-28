@@ -14,7 +14,6 @@ public sealed class LibraryAutomation : IAutomationModule
     private readonly Func<PlexConfig, PlexClient?> _plex;
     private readonly SafeLibraryImporter _importer;
     private readonly SemaphoreSlim _imports = new(1, 1);
-    private readonly LibraryIndex _libraryIndex = new();
     private readonly Action<LibraryIndexSnapshot>? _indexRefreshed;
     private readonly Action<OwnedReleaseObservation>? _ownedObserved;
     private readonly Func<IReadOnlyList<OwnedNukeEntry>>? _nukeWatch;
@@ -26,7 +25,7 @@ public sealed class LibraryAutomation : IAutomationModule
         Func<IReadOnlyList<OwnedNukeEntry>>? nukeWatch = null)
     {
         _config = config;
-        _plex = plex ?? CreatePlex;
+        _plex = plex ?? LibraryInventoryReader.CreatePlex;
         _importer = importer ?? new SafeLibraryImporter();
         _indexRefreshed = indexRefreshed;
         _ownedObserved = ownedObserved;
@@ -138,28 +137,9 @@ public sealed class LibraryAutomation : IAutomationModule
 
     private async Task<object> Refresh(AppConfig config, CancellationToken ct)
     {
-        var items = new List<PlexLibraryItem>();
-        var plexStatus = "unconfigured";
-        try
-        {
-            using var client = _plex(config.Plex);
-            if (client != null)
-            {
-                plexStatus = "complete";
-                var sections = await client.GetLibrarySectionsAsync(config.Plex.ServerUri, ct);
-                foreach (var section in sections.Where(s => s.Type is "movie" or "show"))
-                    items.AddRange(await client.GetLibraryItemsAsync(config.Plex.ServerUri, section, ct));
-            }
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex)
-        {
-            Serilog.Log.Debug(ex, "Read-only Plex library inventory is incomplete");
-            plexStatus = "incomplete";
-        }
-        var diskSnapshot = await Task.Run(() => _libraryIndex.Refresh(
-            new[] { config.Library.MovieRoot, config.Library.TvRoot }.Where(p => !string.IsNullOrWhiteSpace(p)), items, ct), ct);
-        var snapshot = diskSnapshot with { Complete = diskSnapshot.Complete && plexStatus == "complete" };
+        var inventory = await LibraryInventoryReader.ReadAsync(config, ct, _plex);
+        var snapshot = inventory.Snapshot;
+        var plexStatus = inventory.PlexStatus;
         Volatile.Write(ref _inventory, new(snapshot, plexStatus));
         try { _indexRefreshed?.Invoke(snapshot); }
         catch { Serilog.Log.Warning("Library ownership observer unavailable; index refresh remains complete"); }
@@ -177,12 +157,4 @@ public sealed class LibraryAutomation : IAutomationModule
         return "requested";
     }
 
-    private static PlexClient? CreatePlex(PlexConfig config)
-    {
-        if (string.IsNullOrWhiteSpace(config.ServerUri)) return null;
-        var token = CredentialStore.GetApiKey("plex");
-        if (string.IsNullOrEmpty(token)) return null;
-        return new PlexClient(string.IsNullOrWhiteSpace(config.ClientIdentifier) ? "gldrive-library-readonly" : config.ClientIdentifier,
-            "GlDrive", UpdateChecker.CurrentVersion.ToString(), token);
-    }
 }

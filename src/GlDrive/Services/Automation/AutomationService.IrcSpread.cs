@@ -21,6 +21,8 @@ public sealed partial class AutomationService
             return new { serverId = id, state = _servers.GetIrcService(id)?.State.ToString() ?? "Disconnected" };
         }
         if (op == "irc.patterns") return _servers.DetectIrcPatterns(id);
+        if (op == "irc.search") return new { localOnly = true, resultsAvailableViaAutomation = false,
+            instructions = "Open Dashboard > IRC > Search logs. Search results remain in the local window and are never returned to automation or the LLM." };
         var irc = _servers.GetIrcService(id) ?? throw new InvalidOperationException("IRC service is not running.");
         if (op == "irc.status")
             return new
@@ -30,6 +32,7 @@ public sealed partial class AutomationService
                 announceHealth = _servers.AnnounceHealth(id),
                 announceHealthPersistenceHealthy = _servers.AnnounceHealthPersistenceHealthy,
                 targets = irc.GetScrollbackTargets()
+                , unread = irc.GetUnread().Sum(e => (long)e.Messages), highlights = irc.GetUnread().Sum(e => (long)e.Highlights), localSearchAvailable = true
             };
         if (op == "irc.history")
             return irc.GetScrollback(Target(a)).TakeLast(Integer(a, "limit", 200, 1, 2000)).ToArray();
@@ -131,6 +134,7 @@ public sealed partial class AutomationService
                 jobs = spread.ActiveJobs.Select(j => new { j.Id, j.ReleaseName, j.Section, state = j.State.ToString(), j.StartedAt, j.Score, j.LastError,
                     stopReason = j.StopReason.ToString(), j.ResumeCount, j.FirstUploadAtUtc }).ToArray(),
                 queued = spread.QueuedRaces, connectedServerIds = spread.GetConnectedServerIds(),
+                queuedWaiting = spread.GetQueuedWaitingStates(),
                 pools = spread.PoolHealth(), summary = spread.History.Summarize()
             };
             case "spread.history": return Page(spread.History.Items.OrderByDescending(r => r.StartedAt).ToArray(), a);

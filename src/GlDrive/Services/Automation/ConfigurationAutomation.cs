@@ -125,6 +125,7 @@ public sealed class ConfigurationAutomation : IAutomationModule
                 if (SecretValuesChanged(original, next)) throw new ArgumentException("Secret changes are not supported by preview");
                 ConfigManager.NormalizeLibraryEnable(original, next);
                 var candidate = next.Deserialize<AppConfig>(Json)!;
+                RejectInvalidAttentionChanges(original, next, candidate);
                 Validate(candidate);
                 var baseline = original.Deserialize<AppConfig>(Json)!;
                 var servers = baseline.Servers.Select(s => s.Id).Union(candidate.Servers.Select(s => s.Id)).Select(id =>
@@ -162,6 +163,7 @@ public sealed class ConfigurationAutomation : IAutomationModule
                 throw new ArgumentException("Changing secrets requires allowSecrets=true");
             ConfigManager.NormalizeLibraryEnable(original, next);
             var candidate = next.Deserialize<AppConfig>(Json) ?? throw new ArgumentException("Settings must be an object");
+            RejectInvalidAttentionChanges(original, next, candidate);
             Validate(candidate);
             var canonical = JsonSerializer.SerializeToNode(candidate, Json)!;
             var changed = !JsonNode.DeepEquals(original, canonical);
@@ -178,6 +180,12 @@ public sealed class ConfigurationAutomation : IAutomationModule
             return new { saved = changed, revision = Revision(canonical), restartRequired = changed,
                 message = changed ? "Saved. Server/download runtime refresh scheduled when connected; unrelated settings may require restart. WinFsp fileInfoTimeoutMs applies on the next drive mount." : "No settings changed." };
         }
+    }
+
+    private static void RejectInvalidAttentionChanges(JsonNode original, JsonNode next, AppConfig candidate)
+    {
+        if (candidate.IrcAttention.UnparsedJson != null && !JsonNode.DeepEquals(original["ircAttention"], next["ircAttention"]))
+            throw new ArgumentException("Invalid /ircAttention settings. Use booleans and arrays of at most 64 strings, each at most 128 characters.");
     }
 
     private static void RejectHookChanges(JsonNode original, JsonNode next)
@@ -398,7 +406,7 @@ public sealed class ConfigurationAutomation : IAutomationModule
             var existing = property.GetValue(destination);
             // Hook definitions are restart-only snapshots, including retained raw JSON.
             // Recursive POCO reconciliation would lose their private parse state.
-            if (property.PropertyType == typeof(HookConfig)) property.SetValue(destination, value);
+            if (property.PropertyType == typeof(HookConfig) || property.PropertyType == typeof(IrcAttentionConfig)) property.SetValue(destination, value);
             else if (value is IList sourceList && existing is IList targetList && !property.PropertyType.IsArray)
             {
                 var previous = targetList.Cast<object>().ToList();
@@ -441,6 +449,21 @@ public sealed class ConfigurationAutomation : IAutomationModule
         {
             var name = JsonNamingPolicy.CamelCase.ConvertName(property.Name);
             var schema = BuildSchema(property.PropertyType);
+            if (type == typeof(IrcAttentionConfig))
+            {
+                schema["description"] = property.Name switch
+                {
+                    nameof(IrcAttentionConfig.NickHighlightsEnabled) => "Default true. Passive local-only notices for whole-token current/configured nick mentions; no network work.",
+                    nameof(IrcAttentionConfig.PrivateMessageAlertsEnabled) => "Default true. Generic local-only PM notices; no message text in alert history or outbound targets.",
+                    nameof(IrcAttentionConfig.Keywords) => "Empty by default. Up to 64 literal whole-token highlight words/phrases, each at most 128 characters. Never regex or credentials.",
+                    _ => "Empty by default. Up to 64 nicks excluded from channel highlights; PM unread counts are retained."
+                };
+                if (property.PropertyType == typeof(List<string>))
+                {
+                    schema["maxItems"] = 64;
+                    if (schema["items"] is JsonObject itemSchema) itemSchema["maxLength"] = 128;
+                }
+            }
             if (type == typeof(PlexConfig) && property.Name == nameof(PlexConfig.WatchlistSyncEnabled))
                 schema["description"] = "Default false. One-way Plex Watchlist import using the existing token. GET only, IDs and current default quality/profile, preserves manual choices. Verified ownership can mark imported items Completed. No Plex writes or FTP traffic.";
             if (type == typeof(PlexConfig) && property.Name == nameof(PlexConfig.WatchlistSyncMinutes))
@@ -601,6 +624,12 @@ public sealed class ConfigurationAutomation : IAutomationModule
     internal static void Validate(AppConfig config)
     {
         ValidateObject(config, "");
+        if (config.IrcAttention.UnparsedJson == null)
+        {
+            foreach (var words in new[] { config.IrcAttention.Keywords, config.IrcAttention.IgnoredNicks })
+                if (words.Count > 64 || words.Any(word => word == null || word.Length > 128))
+                    throw new ArgumentException("/ircAttention lists allow at most 64 strings of at most 128 characters");
+        }
         Range(config.Plex.WatchlistSyncMinutes, 5, 1440, "/plex/watchlistSyncMinutes");
         Range(config.NukeWatch.WatchDays, 1, 90, "/nukeWatch/watchDays");
         Range(config.NukeWatch.HistoryCapacity, 1, 10000, "/nukeWatch/historyCapacity");

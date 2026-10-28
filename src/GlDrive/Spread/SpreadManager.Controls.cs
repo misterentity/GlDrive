@@ -63,7 +63,7 @@ public partial class SpreadManager
         return StartRaceDetailed(history.Section, history.ReleaseName, serverIds, history.Mode);
     }
 
-    public RaceControlResult EditQueuedRaceSite(string section, string release, string serverId, bool add)
+    public RaceControlResult EditQueuedRaceSite(string section, string release, string serverId, bool add, string? expectedRequestId = null)
     {
         PersistedRace? previous = null, updated = null;
         lock (_lock)
@@ -75,6 +75,8 @@ public partial class SpreadManager
             var index = _raceQueue.FindIndex(r => IsSameRace(r.Section, r.ReleaseName, section, release));
             if (index < 0) return new(false, "not-queued", "Queued request was not found");
             previous = _raceQueue[index];
+            if (expectedRequestId != null && previous.RequestId != expectedRequestId)
+                return new(false, "request-changed", "The selected queued request has been replaced");
             if (_controlRequestsInFlight.Contains(previous.RequestId)) return new(false, "control-busy", "Another queue edit is being saved");
             var server = _config.Servers.FirstOrDefault(s => s.Id == serverId);
             var available = server is { Enabled: true } && server.SpreadSite.Sections.Count > 0 &&

@@ -145,6 +145,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="56"/>
             <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="26"/>
         </Grid.RowDefinitions>
 
@@ -431,6 +432,8 @@
                                     ToolTip="Start FXP race for selected release across all configured servers" IsEnabled="{Binding SelectedItem, ElementName=NotificationsGrid, Converter={StaticResource HasSelectionConverter}}"/>
                             <Button Content="Clear All" Command="{Binding ClearNotificationsCommand}"
                                     Padding="12,6" Margin="0,0,12,0" Style="{DynamicResource SecondaryButton}"/>
+                            <Button Content="Remove selected" Command="{Binding RemoveSelectedNotificationsCommand}"
+                                    Padding="12,6" Margin="0,0,12,0" Style="{DynamicResource SecondaryButton}"/>
                             <TextBlock Text="Filter releases" VerticalAlignment="Center" Margin="4,0,8,0" Foreground="{DynamicResource ForegroundDimBrush}"/>
                             <TextBox AutomationProperties.Name="Filter notifications by release name" Text="{Binding NotificationFilterText, UpdateSourceTrigger=PropertyChanged}"
                                      Width="160" VerticalContentAlignment="Center" Margin="0,0,6,0"
@@ -442,6 +445,22 @@
                                       SelectedItem="{Binding NotificationFilterServer}" AutomationProperties.Name="Filter notifications by server"
                                       Width="110" ToolTip="Filter by server"/>
                         </WrapPanel>
+                    </Border>
+                    <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}" Padding="8,6" Margin="0,0,0,10">
+                        <StackPanel>
+                            <WrapPanel>
+                                <TextBlock Text="Saved views" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="{DynamicResource ForegroundDimBrush}"/>
+                                <ComboBox ItemsSource="{Binding FeedViews}" SelectedItem="{Binding SelectedFeedView}" DisplayMemberPath="Display"
+                                          Width="230" Margin="0,0,6,0" AutomationProperties.Name="Saved feed views with unread counts"/>
+                                <TextBox Text="{Binding FeedViewName, UpdateSourceTrigger=PropertyChanged}" Width="140" Margin="0,0,6,0"
+                                         MaxLength="80" AutomationProperties.Name="Feed view name" ToolTip="Name for the current release, category and server filters"/>
+                                <Button Content="Save view" Command="{Binding SaveFeedViewCommand}" Style="{DynamicResource SecondaryButton}" Margin="0,0,6,0" Padding="8,4"/>
+                                <Button Content="Mark view read" Command="{Binding MarkFeedViewReadCommand}" Style="{DynamicResource SecondaryButton}" Margin="0,0,6,0" Padding="8,4"/>
+                                <Button Content="Remove view" Command="{Binding RemoveFeedViewCommand}" Style="{DynamicResource SecondaryButton}" Margin="0,0,6,0" Padding="8,4"/>
+                                <Button Content="Clear feed mutes" Command="{Binding ClearFeedMutesCommand}" Style="{DynamicResource SecondaryButton}" Padding="8,4"/>
+                            </WrapPanel>
+                            <TextBlock Text="{Binding FeedViewStatus}" Foreground="{DynamicResource ForegroundDimBrush}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                        </StackPanel>
                     </Border>
                     <!-- DETAIL HUD panel -->
                     <Border DockPanel.Dock="Bottom" Height="180" Margin="0,10,0,0"
@@ -498,7 +517,7 @@
 <DataGrid ItemsSource="{Binding NotificationItems}"
                                           SelectedItem="{Binding SelectedNotificationItem}"
                                           AutoGenerateColumns="False" IsReadOnly="True"
-                                          SelectionMode="Single" GridLinesVisibility="Horizontal"
+                                          SelectionMode="Extended" SelectionChanged="NotificationsGrid_SelectionChanged" GridLinesVisibility="Horizontal"
                                           HeadersVisibility="Column" CanUserAddRows="False"
                                           Background="Transparent" BorderThickness="0"
                                           x:Name="NotificationsGrid"
@@ -508,9 +527,12 @@
                                         <ContextMenu>
                                             <MenuItem Header="Download" Command="{Binding DownloadNotificationCommand}" FontWeight="Bold"/>
                                             <MenuItem Header="Race / Spread" Command="{Binding RaceNotificationCommand}"/>
+                                            <MenuItem Header="Remove selected from feed" Command="{Binding RemoveSelectedNotificationsCommand}"/>
                                             <Separator/>
                                             <MenuItem Header="Search on Servers" Command="{Binding SearchNotificationOnServersCommand}"/>
                                             <MenuItem Header="Copy Release Name" Command="{Binding CopyNotificationReleaseCommand}"/>
+                                            <Separator/>
+                                            <MenuItem Header="Mute category in feed for this server" Command="{Binding MuteFeedCategoryCommand}"/>
                                         </ContextMenu>
                                     </DataGrid.ContextMenu>
                                     <DataGrid.InputBindings>
@@ -577,12 +599,19 @@
                                     Padding="12,6" Margin="0,0,6,0" Style="{DynamicResource SecondaryButton}" IsEnabled="{Binding SelectedItem, ElementName=WishlistGrid, Converter={StaticResource HasSelectionConverter}}"/>
                             <Button Content="Pause / Resume" Command="{Binding TogglePauseCommand}"
                                     Padding="12,6" Margin="0,0,6,0" Style="{DynamicResource SecondaryButton}" IsEnabled="{Binding SelectedItem, ElementName=WishlistGrid, Converter={StaticResource HasSelectionConverter}}"/>
+                            <ComboBox ItemsSource="{Binding WishlistQualities}" SelectedItem="{Binding BulkWishlistQuality}" Width="100" Margin="0,0,6,0"
+                                      AutomationProperties.Name="Resolution for selected wishlist items"/>
+                            <Button Content="Set resolution" Command="{Binding SetWishlistQualityCommand}" Padding="10,6" Margin="0,0,6,0" Style="{DynamicResource SecondaryButton}"/>
+                            <Button Content="Completed" Command="{Binding SetWishlistStatusCommand}" CommandParameter="Completed" Padding="10,6" Margin="0,0,6,0" Style="{DynamicResource SecondaryButton}"/>
+                            <Button Content="Watching" Command="{Binding SetWishlistStatusCommand}" CommandParameter="Watching" Padding="10,6" Margin="0,0,6,0" Style="{DynamicResource SecondaryButton}"/>
                             <Button Content="Refresh Info" Command="{Binding RefreshMetadataCommand}"
                                     Padding="12,6" Margin="0,0,6,0" Style="{DynamicResource SecondaryButton}"
                                     ToolTip="Fetch posters, ratings, and plots for all items"/>
                             <Button Content="Release dates" Command="{Binding RefreshWishlistCalendarCommand}"
                                     Padding="12,6" Margin="0,0,6,0" Style="{DynamicResource SecondaryButton}"
                                     ToolTip="Look up the selected movie's dates; unknown dates never block downloads"/>
+                            <Button Content="Collection gaps" Click="CollectionGaps_Click" Padding="12,6" Margin="0,0,6,0" Style="{DynamicResource SecondaryButton}"
+                                    ToolTip="Explicitly compare a movie's TMDB collection with the library and downloads"/>
                             <CheckBox Content="Allow CAM/TS/TC" IsThreeState="True" IsChecked="{Binding SelectedWishlistAllowsLowSources}"
                                       IsEnabled="{Binding HasWishlistSelection}" VerticalAlignment="Center" Margin="4,0,10,0"
                                       ToolTip="Indeterminate uses the default/profile. Checked permits low sources; unchecked blocks them. Low sources always keep the movie open."/>
@@ -635,7 +664,7 @@
 <DataGrid x:Name="WishlistGrid" ItemsSource="{Binding WishlistItems}"
                               SelectedItem="{Binding SelectedWishlistItem}"
                               AutoGenerateColumns="False" IsReadOnly="True"
-                              SelectionMode="Single" GridLinesVisibility="Horizontal"
+                              SelectionMode="Extended" SelectionChanged="WishlistGrid_SelectionChanged" GridLinesVisibility="Horizontal"
                               HeadersVisibility="Column" CanUserAddRows="False">
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="Title" Binding="{Binding Title}" Width="*" ElementStyle="{StaticResource TruncatedCellText}"/>
@@ -753,8 +782,8 @@
                                                     Command="{Binding PauseResumeDownloadCommand}" AutomationProperties.Name="Pause or resume selected download"
                                                     Padding="10,6" Margin="0,0,6,4" Style="{DynamicResource SecondaryButton}"
                                                     IsEnabled="{Binding SelectedDownloadItem.CanPauseOrResume, FallbackValue=False}"/>
-                                            <Button Content="Cancel" Command="{Binding CancelDownloadCommand}"
-                                                    Padding="10,6" Margin="0,0,6,4" Style="{DynamicResource SecondaryButton}" IsEnabled="{Binding SelectedDownloadItem.CanCancel, FallbackValue=False}"/>
+                                            <Button Content="Cancel selected" Command="{Binding CancelDownloadCommand}"
+                                                    Padding="10,6" Margin="0,0,6,4" Style="{DynamicResource SecondaryButton}"/>
                                             <Button Content="{Binding SelectedDownloadItem.RetryLabel, TargetNullValue=Retry, FallbackValue=Retry}" Command="{Binding RetryDownloadCommand}"
                                                     ToolTip="Retry a failed or cancelled download; review blocked torrent files before choosing to skip them"
                                                     Padding="10,6" Margin="0,0,6,4" Style="{DynamicResource SecondaryButton}" IsEnabled="{Binding SelectedDownloadItem.CanRetry, FallbackValue=False}"/>
@@ -788,11 +817,11 @@
                             <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
                                 <MenuItem Header="Pause" Command="{Binding PauseDownloadCommand}" IsEnabled="{Binding SelectedDownloadItem.CanPause, FallbackValue=False}"/>
                                 <MenuItem Header="Resume" Command="{Binding ResumeDownloadCommand}" IsEnabled="{Binding SelectedDownloadItem.CanResume, FallbackValue=False}"/>
-                                <MenuItem Header="Cancel" Command="{Binding CancelDownloadCommand}" IsEnabled="{Binding SelectedDownloadItem.CanCancel, FallbackValue=False}"/>
+                                <MenuItem Header="Cancel selected" Command="{Binding CancelDownloadCommand}"/>
                                 <MenuItem Header="{Binding SelectedDownloadItem.RetryLabel, TargetNullValue=Retry, FallbackValue=Retry}" Command="{Binding RetryDownloadCommand}" IsEnabled="{Binding SelectedDownloadItem.CanRetry, FallbackValue=False}"/>
                                 <MenuItem Header="Open Folder" Command="{Binding OpenFolderCommand}"/>
                                 <Separator/>
-                                <MenuItem Header="Remove Selected" Command="{Binding RemoveSelectedDownloadsCommand}"/>
+                                <MenuItem Header="Remove selected terminal history" Command="{Binding RemoveSelectedDownloadsCommand}"/>
                             </ContextMenu>
                         </ListBox.ContextMenu>
                         <ListBox.InputBindings>
@@ -1796,6 +1825,7 @@
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="09" Style="{DynamicResource MicroTextStyle}" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="IRC" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="2" Text="{Binding Irc.UnreadDisplay}" Foreground="{DynamicResource AccentBrush}" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
                 <DockPanel Margin="12">
@@ -1814,6 +1844,10 @@
                                             <Button DockPanel.Dock="Right" Content="Reconnect" Command="{Binding Irc.ReconnectCommand}"
                                                     Padding="10,2" Margin="4,0,0,0" Style="{DynamicResource SecondaryButton}" FontSize="12"/>
                                             <Button DockPanel.Dock="Right" Content="Disconnect" Command="{Binding Irc.DisconnectCommand}"
+                                                    Padding="10,2" Margin="8,0,0,0" Style="{DynamicResource SecondaryButton}" FontSize="12"/>
+                                            <Button DockPanel.Dock="Right" Content="Search logs" Click="IrcSearch_Click"
+                                                    Padding="10,2" Margin="8,0,0,0" Style="{DynamicResource SecondaryButton}" FontSize="12"/>
+                                            <Button DockPanel.Dock="Right" Content="Mark read" Click="IrcMarkRead_Click"
                                                     Padding="10,2" Margin="8,0,0,0" Style="{DynamicResource SecondaryButton}" FontSize="12"/>
                                             <TextBlock Text="{Binding Irc.TopicText}" TextTrimming="CharacterEllipsis"
                                                        Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"
@@ -1860,6 +1894,7 @@
                                                                     <TextBlock Text="{Binding SidebarDisplay}" Foreground="{DynamicResource ForegroundBrush}"/>
                                                                     <TextBlock Text="{Binding UnreadDisplay}" Foreground="{DynamicResource AccentBrush}"
                                                                                FontWeight="Bold"/>
+                                                                    <TextBlock Text="{Binding HighlightDisplay}" Foreground="{DynamicResource AccentBrush}" FontWeight="Bold"/>
                                                                 </StackPanel>
                                                             </DataTemplate>
                                                         </ListBox.ItemTemplate>
@@ -1889,10 +1924,15 @@
                                                                     <TextBlock ui:ReleaseTextHelper.Message="{Binding}"
                                                                                ui:ReleaseTextHelper.ClickCommand="{Binding DataContext.Irc.ReleaseLinkClickedCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                                                TextWrapping="Wrap"
-                                                                               Foreground="{Binding NickColor}" FontFamily="Consolas" FontSize="12.5">
+                                                                               FontFamily="Consolas" FontSize="12.5">
                                                                         <TextBlock.Style>
                                                                             <Style TargetType="TextBlock">
+                                                                                <Setter Property="Foreground" Value="{Binding NickColor}"/>
                                                                                 <Style.Triggers>
+                                                                                    <DataTrigger Binding="{Binding IsHighlight}" Value="True">
+                                                                                        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+                                                                                        <Setter Property="FontWeight" Value="Bold"/>
+                                                                                    </DataTrigger>
                                                                                     <DataTrigger Binding="{Binding IsSystemMessage}" Value="True">
                                                                                         <Setter Property="Foreground" Value="{DynamicResource ForegroundDimBrush}"/>
                                                                                         <Setter Property="FontStyle" Value="Italic"/>
@@ -2242,13 +2282,29 @@
                                                        Foreground="{DynamicResource ForegroundDimBrush}"/>
                                             <ComboBox ItemsSource="{Binding RaceSiteOptions}" SelectedItem="{Binding SelectedQueuedSite}"
                                                       DisplayMemberPath="Name" MinWidth="150" AutomationProperties.Name="Site for queued race controls"/>
+                                            <Button Content="Add site to selected" Command="{Binding AddSelectedQueuedSitesCommand}" Margin="8,0,0,0" Padding="8,4" Style="{DynamicResource SecondaryButton}"/>
+                                            <Button Content="Remove site from selected" Command="{Binding RemoveSelectedQueuedSitesCommand}" Margin="8,0,0,0" Padding="8,4" Style="{DynamicResource SecondaryButton}"/>
+                                            <Button Content="Remove selected requests" Command="{Binding RemoveSelectedQueuedRacesCommand}" Margin="8,0,0,0" Padding="8,4" Style="{DynamicResource SecondaryButton}"/>
                                         </StackPanel>
-                                        <ItemsControl ItemsSource="{Binding QueuedRaces}">
-                                            <ItemsControl.ItemTemplate>
+                                        <ListBox x:Name="QueuedRacesList" ItemsSource="{Binding QueuedRaces}" SelectionMode="Extended"
+                                                 SelectionChanged="QueuedRacesList_SelectionChanged" HorizontalContentAlignment="Stretch"
+                                                 Background="{DynamicResource SurfaceBrush}" BorderThickness="0" AutomationProperties.Name="Queued race requests">
+                                            <ListBox.ItemTemplate>
                                                 <DataTemplate>
                                                     <Border Margin="0,0,0,10" Padding="14,10"
-                                                            Background="{DynamicResource SurfaceBrush}"
-                                                            BorderBrush="{DynamicResource LineBrush}" BorderThickness="1">
+                                                            Background="{DynamicResource SurfaceBrush}">
+                                                        <Border.Style>
+                                                            <Style TargetType="Border">
+                                                                <Setter Property="BorderBrush" Value="{DynamicResource LineBrush}"/>
+                                                                <Setter Property="BorderThickness" Value="1"/>
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                                                                        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+                                                                        <Setter Property="BorderThickness" Value="2"/>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Border.Style>
                                                         <DockPanel>
                                                             <Button DockPanel.Dock="Right" Content="Cancel" Margin="12,0,0,0"
                                                                     VerticalAlignment="Center" Padding="8,4"
@@ -2284,8 +2340,8 @@
                                                         </DockPanel>
                                                     </Border>
                                                 </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
+                                            </ListBox.ItemTemplate>
+                                        </ListBox>
                                         <ListBox ItemsSource="{Binding SpreadJobs}" SelectedItem="{Binding SelectedSpreadJob, Mode=TwoWay}"
                                                  AutomationProperties.Name="Race cards" Background="{DynamicResource SurfaceBrush}"
                                                  BorderThickness="0" ScrollViewer.VerticalScrollBarVisibility="Disabled"
@@ -2940,6 +2996,15 @@
                 <ui:AgentView/>
             </TabItem>
         </TabControl>
+        <Border Grid.Row="2" Margin="10,4" Padding="12,8" Background="{DynamicResource SurfaceBrush}"
+                BorderBrush="{DynamicResource AccentBrush}" BorderThickness="1"
+                Visibility="{Binding HasBulkStatus, Converter={StaticResource BoolToVisibility}}">
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Content="Undo" Command="{Binding UndoBulkCommand}" Margin="12,0,0,0"
+                        Style="{DynamicResource PrimaryButton}" Visibility="{Binding HasPendingBulk, Converter={StaticResource BoolToVisibility}}"/>
+                <TextBlock Text="{Binding BulkStatus}" TextWrapping="Wrap" VerticalAlignment="Center" Foreground="{DynamicResource ForegroundBrush}"/>
+            </DockPanel>
+        </Border>
 
         <!-- ============================================================== -->
         <!-- BOTTOM STATUS STRIP (live status; no simulated metrics)        -->
@@ -2947,7 +3012,7 @@
         <!-- tooltip; IRC actions stay on the IRC tab). Empty segments and  -->
         <!-- their separators are never drawn.                              -->
         <!-- ============================================================== -->
-        <Border Grid.Row="2" Background="{DynamicResource MarqueeBackgroundBrush}"
+        <Border Grid.Row="3" Background="{DynamicResource MarqueeBackgroundBrush}"
                 BorderBrush="{DynamicResource LineBrush}" BorderThickness="0,1,0,0"
                 ClipToBounds="True">
             <Grid>
@@ -3044,7 +3109,7 @@
         </Border>
 
         <!-- Keyboard shortcuts overlay (toggle with `?`) -->
-        <Border x:Name="ShortcutsOverlay" Grid.RowSpan="3"
+        <Border x:Name="ShortcutsOverlay" Grid.RowSpan="4"
                 Background="#CC03070D"
                 Visibility="Collapsed" Panel.ZIndex="9999" Focusable="True" KeyboardNavigation.TabNavigation="Cycle"
                 MouseLeftButtonDown="ShortcutsOverlay_Click">
@@ -3089,7 +3154,7 @@
                             <TextBlock Grid.Row="5" Grid.Column="1" Text="Nick completion / cycle through matches" Style="{DynamicResource DimTextStyle}" Margin="14,4"/>
 
                             <TextBlock Grid.Row="6" Grid.Column="0" Text="Delete (Downloads)" Style="{DynamicResource AccentTextStyle}" Margin="0,4"/>
-                            <TextBlock Grid.Row="6" Grid.Column="1" Text="Remove selected download(s)" Style="{DynamicResource DimTextStyle}" Margin="14,4"/>
+                            <TextBlock Grid.Row="6" Grid.Column="1" Text="Remove selected terminal history with Undo; local files stay" Style="{DynamicResource DimTextStyle}" Margin="14,4"/>
 
                             <TextBlock Grid.Row="7" Grid.Column="0" Text="R (Downloads)" Style="{DynamicResource AccentTextStyle}" Margin="0,4"/>
                             <TextBlock Grid.Row="7" Grid.Column="1" Text="Retry selected failed download(s)" Style="{DynamicResource DimTextStyle}" Margin="14,4"/>

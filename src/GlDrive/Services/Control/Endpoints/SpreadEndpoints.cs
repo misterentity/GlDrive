@@ -161,18 +161,28 @@ public sealed class SpreadEndpoints : IControlEndpoint
 
         try
         {
-            var job = spread.StartRace(section!, release!, serverIds, SpreadMode.Race);
-            if (job == null)
+            var admission = spread.StartRaceDetailed(section!, release!, serverIds, SpreadMode.Race);
+            if (admission.Outcome == RaceStartOutcome.Started)
+                Log.Information("Control API started race {Id}: [{Section}] {Release}", admission.Job?.Id, section, release);
+            await r.RespondAsync(AdmissionStatusCode(admission.Outcome), new
             {
-                await r.ErrorAsync(409, "conflict", "race not started (queued or rejected)");
-                return;
-            }
-            Log.Information("Control API started race {Id}: [{Section}] {Release}", job.Id, section, release);
-            await r.RespondAsync(202, new { id = job.Id, release = job.ReleaseName, section = job.Section });
+                id = admission.Job?.Id, release = admission.ReleaseName, section = admission.Section,
+                outcome = admission.Outcome.ToString(), queuePosition = admission.QueuePosition,
+                reason = admission.Reason, suppressedForSeconds = admission.SuppressedFor?.TotalSeconds,
+                hintsMerged = admission.HintsMerged
+            });
         }
         catch (Exception ex)
         {
             await r.ErrorAsync(500, "internal", ex.Message);
         }
     }
+
+    internal static int AdmissionStatusCode(RaceStartOutcome outcome) => outcome switch
+    {
+        RaceStartOutcome.Started or RaceStartOutcome.Queued => 202,
+        RaceStartOutcome.AlreadyActive or RaceStartOutcome.Duplicate => 200,
+        RaceStartOutcome.Suppressed => 409,
+        _ => 503
+    };
 }
