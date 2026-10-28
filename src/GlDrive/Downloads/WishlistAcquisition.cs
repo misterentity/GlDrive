@@ -16,6 +16,24 @@ internal static class WishlistAcquisition
 
     internal static ScoredQualityProfile? ResolveProfile(WishlistItem item, DownloadConfig config)
     {
+        var profile = ResolveConfiguredProfile(item, config);
+        if (profile == null || item.AllowLowQualitySources is not { } allow || profile.AllowLowQualitySources == allow) return profile;
+        // Per-item source permission changes only this decision's source gate.
+        // The shared profile and its resolution, size, score and upgrade choices stay intact.
+        return new ScoredQualityProfile
+        {
+            Id = profile.Id, Name = profile.Name, AllowedResolutions = profile.AllowedResolutions,
+            AllowUnknownResolution = profile.AllowUnknownResolution, AllowFullDisc = profile.AllowFullDisc,
+            AllowLowQualitySources = allow, AllowUnknownSize = profile.AllowUnknownSize,
+            MinimumBytes = profile.MinimumBytes, MaximumBytes = profile.MaximumBytes,
+            MinimumScore = profile.MinimumScore, CutoffScore = profile.CutoffScore,
+            AllowUpgrades = profile.AllowUpgrades, PreferProperRepack = profile.PreferProperRepack,
+            UpgradeProperRepackAfterCutoff = profile.UpgradeProperRepackAfterCutoff, CustomFormats = profile.CustomFormats
+        };
+    }
+
+    private static ScoredQualityProfile? ResolveConfiguredProfile(WishlistItem item, DownloadConfig config)
+    {
         var id = item.ProfileId;
         if (string.IsNullOrWhiteSpace(id)) return ScoredQualityProfile.Legacy(item.Quality);
         var custom = config.Profiles.FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase));
@@ -55,7 +73,7 @@ internal static class WishlistAcquisition
         return separator >= 0 ? Identity(item) + copy.Key[separator..] : "";
     }
 
-    internal static IReadOnlyList<string> Keys(WishlistItem item, string release)
+    internal static IReadOnlyList<string> Keys(WishlistItem item, string release, ParsedRelease? parsed = null)
     {
         if (string.IsNullOrWhiteSpace(release) || release.Length > 1024) return [];
         var identity = Identity(item);
@@ -80,21 +98,24 @@ internal static class WishlistAcquisition
             }
             return episodes.Order().Select(e => $"{identity}:S{season:D2}E{e:D2}").ToArray();
         }
-        var parsed = SceneNameParser.Parse(release);
+        parsed ??= SceneNameParser.Parse(release);
         if (parsed.Season is { } pack) return [$"{identity}:S{pack:D2}"];
         if (SceneNameParser.TryEpisodeDate(release, out var date)) return [$"{identity}:{date:yyyy-MM-dd}"];
         return [];
     }
 
     internal static bool MatchesTitle(WishlistItem item, string release)
+        => MatchesTitle(item, release, SceneNameParser.Parse(release));
+
+    internal static bool MatchesTitle(WishlistItem item, string release, ParsedRelease parsed)
     {
         if (item.Type == MediaType.Movie)
-            return SceneNameParser.MatchesMovie(release, item.Title, item.Year, QualityProfile.Any);
-        if (SceneNameParser.MatchesTvEpisode(release, item.Title, QualityProfile.Any)) return true;
+            return SceneNameParser.MatchesMovie(parsed, item.Title, item.Year, QualityProfile.Any);
+        if (SceneNameParser.MatchesTvEpisode(parsed, item.Title, QualityProfile.Any)) return true;
         // The legacy parser retains Sxx in a season-pack title. Do not let that
         // or a date token become part of the series identity.
         if (SceneNameParser.LogicalCategorySeason(release) != null)
-            return Normalize(SceneNameParser.LogicalCategoryTitle(release)) == Normalize(item.Title);
+            return Normalize(SceneNameParser.LogicalCategoryTitle(release, parsed)) == Normalize(item.Title);
         if (SceneNameParser.TryEpisodeDate(release, out var date))
         {
             var normalized = release.Replace('_', '.').Replace(' ', '.');

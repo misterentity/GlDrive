@@ -157,13 +157,51 @@ public sealed class SafeLibraryImporter
             throw new IOException("Destination hash verification failed.");
     }
 
+    // Callers must hold DirectoryLocks for both parent directories. These operations
+    // act on the opened identity and never overwrite a destination or follow a link.
+    internal static void RenameStagedFile(string source, string destination, long length, DateTime lastWriteUtc)
+    {
+        using var handle = Open(source, GenericRead | DeleteAccess, ShareRead, OpenExisting, OpenReparsePoint);
+        ValidateStagedIdentity(handle, source, length, lastWriteUtc);
+        var error = Rename(handle, destination);
+        if (error != 0) throw NativeFailure("The staged file was retained; quarantine could not be created", error);
+    }
+
+    internal static void DeleteStagedFile(string path, long length, DateTime lastWriteUtc)
+    {
+        using var handle = Open(path, GenericRead | DeleteAccess, ShareRead, OpenExisting, OpenReparsePoint);
+        ValidateStagedIdentity(handle, path, length, lastWriteUtc);
+        MarkSourceForDeletion(handle);
+    }
+
+    internal static void DeleteEmptyStagedDirectory(string path)
+    {
+        using var handle = Open(path, ListDirectory | ReadAttributes | DeleteAccess, ShareRead, OpenExisting,
+            BackupSemantics | OpenReparsePoint);
+        var info = Information(handle);
+        if ((info.Attributes & ReparseAttribute) != 0 || (info.Attributes & DirectoryAttribute) == 0 ||
+            !SamePath(FinalPath(handle), path))
+            throw new IOException("The staging directory identity changed; it was retained.");
+        // Windows refuses this operation for a nonempty directory. The opened
+        // identity cannot be swapped and no descendants are ever deleted.
+        MarkSourceForDeletion(handle);
+    }
+
+    private static void ValidateStagedIdentity(SafeFileHandle handle, string path, long length, DateTime lastWriteUtc)
+    {
+        var info = Information(handle);
+        if ((info.Attributes & (ReparseAttribute | DirectoryAttribute)) != 0 || info.Links != 1 ||
+            info.Length != length || info.LastWriteUtc != lastWriteUtc || !SamePath(FinalPath(handle), path))
+            throw new IOException("The staged file identity changed; it was retained.");
+    }
+
     private static byte[] Hash(FileStream stream)
     {
         stream.Position = 0;
         return SHA256.HashData(stream);
     }
 
-    private sealed class DirectoryLocks : IDisposable
+    internal sealed class DirectoryLocks : IDisposable
     {
         private readonly Dictionary<string, SafeFileHandle> _handles = new(StringComparer.OrdinalIgnoreCase);
         internal void Acquire(string root, string directory, bool create)

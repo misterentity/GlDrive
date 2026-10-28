@@ -77,16 +77,20 @@ public class MountService : IDisposable
 
     private readonly GlDrive.Downloads.Segmented.IRaceLoginLender? _raceLoginLender;
     private readonly WantedAcquisitionCoordinator? _wantedCoordinator;
+    private readonly Hooks.HookRunner? _hooks;
+    private readonly Action? _completedDownload;
 
     public MountService(ServerConfig serverConfig, DownloadConfig downloadConfig, CertificateManager certManager,
         GlDrive.Downloads.Segmented.IRaceLoginLender? raceLoginLender = null,
-        WantedAcquisitionCoordinator? wantedCoordinator = null)
+        WantedAcquisitionCoordinator? wantedCoordinator = null, Hooks.HookRunner? hooks = null, Action? completedDownload = null)
     {
         _serverConfig = serverConfig;
         _downloadConfig = downloadConfig;
         _certManager = certManager;
         _raceLoginLender = raceLoginLender;
         _wantedCoordinator = wantedCoordinator;
+        _hooks = hooks;
+        _completedDownload = completedDownload;
     }
 
     public async Task Mount(CancellationToken ct = default)
@@ -228,6 +232,9 @@ public class MountService : IDisposable
                 _pool, _serverConfig.Id, _downloadConfig, _serverConfig.SpeedLimitKbps, _raceLoginLender);
             _downloadManager = new DownloadManager(downloadStore, _ftp, _streamingDownloader,
                 _downloadConfig, _diskReservation);
+            if (_hooks != null) _downloadManager.DownloadSettled += _hooks.Publish;
+            if (_completedDownload != null) _downloadManager.DownloadSettled += ev =>
+            { if (ev.Event == "download.complete") _completedDownload(); };
             _downloadManager.BackgroundPullMayRun = () => !_stopping &&
                 (_raceLoginLender?.IsRaceIdle(_serverConfig.Id) ?? true);
             if (_raceLoginLender is GlDrive.Spread.SpreadManager spread)
@@ -238,6 +245,8 @@ public class MountService : IDisposable
             _searchService.StartIndexer();
             _wishlistMatcher = new WishlistMatcher(wishlistStore, _downloadManager, _ftp, _downloadConfig,
                 _serverConfig.Id, _serverConfig.Name);
+            if (_hooks != null) _wishlistMatcher.MatchFound += (_, category, release) =>
+                _hooks.Publish(new("wishlist.grab", release, category, SceneNameParser.Parse(release).Quality.ToString(), "Queued"));
             if (_wantedCoordinator != null) _wishlistMatcher.AttachWantedCoordinator(_wantedCoordinator);
 
             _releaseMonitor.NewReleaseDetected += (category, release, remotePath) =>

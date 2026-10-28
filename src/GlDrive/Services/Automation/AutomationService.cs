@@ -49,7 +49,9 @@ public sealed partial class AutomationService : IAutomationModule
                 "ftp" => await FtpAsync(operation, arguments, ct),
                 "downloads" => Downloads(operation, arguments),
                 "search" => await SearchAsync(operation, arguments, ct),
-                "wishlist" => Wishlist(operation, arguments),
+                "wishlist" => operation == "wishlist.calendar_refresh"
+                    ? await new MovieCalendar(_config.Downloads, _wishlist).RefreshAsync(Required(arguments, "itemId", 128), ct)
+                    : Wishlist(operation, arguments),
                 "notifications" => Notifications(operation, arguments),
                 "irc" => await IrcAsync(operation, arguments, ct),
                 "spread" => await SpreadAsync(operation, arguments, ct),

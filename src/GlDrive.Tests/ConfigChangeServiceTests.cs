@@ -45,6 +45,32 @@ public sealed class ConfigChangeServiceTests : IDisposable
     private ConfigLease Lease(ConfigChangeService service, bool idle = false) => service.CreateLease(
         "/downloads/multiStream/slowMode", JsonValue.Create(true), _now.AddHours(1), "Temporary slow mode", idle, _now);
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Invalid_hook_draft_does_not_block_unrelated_edit_lease_expiry_or_restore(bool enabled)
+    {
+        _live.Hooks = new() { QueueCapacity = -1, Commands = [new() { Id = "draft", Enabled = enabled,
+            Executable = "relative.bat", Events = [], TimeoutSeconds = -1 }, null!] };
+        _saved = Clone(_live);
+        var expected = JsonSerializer.Serialize(_live.Hooks);
+        Edit("/downloads/maxRetries", JsonValue.Create(7));
+        Assert.Equal(7, _live.Downloads.MaxRetries);
+        var service = Service();
+        Lease(service);
+        service.Reconcile(_now.AddHours(2));
+        Assert.False(_live.Downloads.MultiStream.SlowMode);
+        Assert.Equal("reverted", Assert.Single(service.Leases()).Status);
+        var snapshot = _configuration.CurrentSnapshot();
+        snapshot["downloads"]!["maxRetries"] = 4;
+        snapshot["hooks"] = new JsonObject();
+        service.Restore(snapshot, "restore:test");
+        Assert.Equal(4, _live.Downloads.MaxRetries);
+        Assert.Equal(expected, JsonSerializer.Serialize(_live.Hooks));
+        Assert.Throws<ArgumentException>(() => Edit("/hooks", new JsonObject()));
+        Assert.Throws<ArgumentException>(() => service.CreateLease("/hooks/queueCapacity", JsonValue.Create(8), _now.AddHours(1), "Trial", nowOverride: _now));
+    }
+
     [Fact]
     public void Active_lease_survives_restart_and_expiry_uses_attributed_save_path()
     {

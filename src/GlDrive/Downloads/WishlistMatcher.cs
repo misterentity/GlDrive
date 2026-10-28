@@ -131,6 +131,11 @@ public class WishlistMatcher
                     };
 
                     string? missReason = matches ? null : ClassifyMissReason(releaseName, item);
+                    if (matches && !WishlistSourceFloor.Allows(item, releaseName, _config))
+                    {
+                        matches = false;
+                        missReason = "wishlist-CAM-TS-TC-floor";
+                    }
                     int? qualityScore = null;
                     if (matches)
                     {

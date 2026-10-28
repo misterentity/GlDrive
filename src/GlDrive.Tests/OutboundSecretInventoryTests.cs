@@ -1,8 +1,11 @@
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using GlDrive.AiAgent;
+using GlDrive.Config;
+using GlDrive.Services.Alerts;
 using Xunit;
 
 namespace GlDrive.Tests;
@@ -28,6 +31,46 @@ public sealed class OutboundSecretInventoryTests : IDisposable
         foreach (var secret in new[] { "control-value", "channel-value", "password-value", "legacy-value", "nested-one", "nested-two" })
             Assert.Contains(secret, values);
         Assert.DoesNotContain("#public", values);
+    }
+
+    [Fact]
+    public void Default_config_contributes_no_secret_values()
+    {
+        Assert.Empty(OutboundSecretInventory.ConfigSecrets(JsonSerializer.SerializeToNode(new AppConfig())!));
+    }
+
+    [Fact]
+    public void Non_string_scalars_are_not_secrets_but_short_credential_strings_are()
+    {
+        var values = OutboundSecretInventory.ConfigSecrets(JsonNode.Parse("""
+            {"token":64,"password":true,"privateSecret":[false,20,null,"5","ab",{"hooks":"nested-credential"}]}
+            """)!);
+        Assert.Equal(new[] { "5", "ab", "nested-credential" }, values);
+    }
+
+    [Theory]
+    [InlineData("agent prompt")]
+    [InlineData("AI Setup SITE RULES")]
+    public void Hook_configuration_does_not_rewrite_outbound_request_or_webhook_fields(string source)
+    {
+        var config = new AppConfig { Hooks = new() { QueueCapacity = 64, Commands = [new()
+        {
+            Id = "copy", Enabled = true, Events = ["download.complete"], Executable = @"C:\Tools\copy.exe",
+            Arguments = ["x264", "Completed"], TimeoutSeconds = 5, OutputLimitCharacters = 0
+        }] } };
+        var node = JsonSerializer.SerializeToNode(config)!;
+        var values = OutboundSecretInventory.ConfigSecrets(node);
+        Assert.Empty(values);
+        var body = JsonSerializer.Serialize(new { messages = new[] { new { content = source + " Movie.2026.x264.H264 64 download.complete Completed" } }, max_tokens = 32000, temperature = 0.2 });
+        Assert.Equal(body, OutboundPayloadRedactor.Prepare(body, values));
+        Assert.DoesNotContain("copy.exe", OutboundPayloadRedactor.RedactConfig(node).ToJsonString());
+        var webhook = AlertPayload.Build(new(AlertKind.Hook, AlertSeverity.Information, "", "")
+            { HookEvent = "download.complete", HookStatus = "Completed", Release = "Movie.2026.x264" },
+            new() { IncludeReleaseNames = true }, config, values);
+        var payload = JsonNode.Parse(webhook)!;
+        Assert.Equal("download.complete", payload["event"]!.GetValue<string>());
+        Assert.Equal("Movie.2026.x264", payload["release"]!.GetValue<string>());
+        Assert.Equal("Completed", payload["status"]!.GetValue<string>());
     }
 
     [Theory]

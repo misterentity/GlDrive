@@ -73,16 +73,16 @@ public class ReleaseScorerTests
     }
 
     [Theory]
-    [InlineData("Film.2026.COMPLETE.BLURAY-GRP", true)]
-    [InlineData("Film.2026.BDRip.x264-GRP", true)]
-    [InlineData("Film.2026.1080p.HDCAM-GRP", true)]
-    [InlineData("Film.2026.1080p.WEB.H264-GRP", true)]
-    [InlineData("Film.2026.2160p.WEB.H265-GRP", false)]
-    public void Legacy_profile_preserves_the_resolution_acceptance_set(string name, bool expected)
+    [InlineData("Film.2026.COMPLETE.BLURAY-GRP", true, true)]
+    [InlineData("Film.2026.BDRip.x264-GRP", true, true)]
+    [InlineData("Film.2026.1080p.HDCAM-GRP", true, false)]
+    [InlineData("Film.2026.1080p.WEB.H264-GRP", true, true)]
+    [InlineData("Film.2026.2160p.WEB.H265-GRP", false, false)]
+    public void Legacy_profile_preserves_acceptance_while_camera_sources_keep_cutoff_open(string name, bool expected, bool cutoff)
     {
         var score = ReleaseScorer.Score(name, ScoredQualityProfile.Legacy(QualityProfile.Q1080p));
         Assert.Equal(expected, score.Accepted);
-        Assert.Equal(expected, score.MeetsCutoff);
+        Assert.Equal(cutoff, score.MeetsCutoff);
     }
 
     [Theory]

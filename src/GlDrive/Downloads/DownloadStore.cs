@@ -16,6 +16,7 @@ public class DownloadStore
     private readonly object _saveLock = new();
     private volatile bool _closed;
     private volatile bool _loaded;
+    private bool _saveWarning;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -86,6 +87,8 @@ public class DownloadStore
         catch (Exception ex)
         {
             Log.Warning(ex, "Failed to load downloads, starting empty");
+            try { File.Copy(_filePath, _filePath + ".corrupt", overwrite: true); }
+            catch (Exception copyError) { Log.Debug(copyError, "Could not preserve unreadable download queue"); }
             _items = [];
         }
         _loaded = true;
@@ -103,23 +106,26 @@ public class DownloadStore
     }
 
     /// <summary>Immediate save — used for critical state changes (add, remove, complete).</summary>
-    public void Save()
+    public void Save() => TrySave();
+
+    /// <summary>Durability acknowledgement for a destructive staged repair; normal saves remain fail-open.</summary>
+    internal bool TrySave()
     {
         lock (_saveLock)
         {
-            if (_closed) return;
+            if (_closed) return false;
             _debounceTimer.Change(Timeout.Infinite, Timeout.Infinite);
-            FlushSave();
+            return FlushSave();
         }
     }
 
-    private void FlushSave()
+    private bool FlushSave()
     {
         // Order snapshot creation AND persistence together. Locking just the final
         // file write allowed an older timer snapshot to overwrite a newer Save().
         lock (_saveLock)
         {
-            if (_closed) return;
+            if (_closed) return false;
             try
             {
                 string json;
@@ -127,11 +133,15 @@ public class DownloadStore
                 Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
                 SecureFile.WriteAllTextRestricted(_filePath, json);
                 _savePending = false;
+                _saveWarning = false;
+                return true;
             }
             catch (Exception ex)
             {
                 _savePending = true;
-                Log.Error(ex, "Failed to save downloads");
+                if (!_saveWarning) Log.Warning(ex, "Failed to save downloads; retaining queue state in memory");
+                _saveWarning = true;
+                return false;
             }
         }
     }

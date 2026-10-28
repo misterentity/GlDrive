@@ -580,10 +580,18 @@
                             <Button Content="Refresh Info" Command="{Binding RefreshMetadataCommand}"
                                     Padding="12,6" Margin="0,0,6,0" Style="{DynamicResource SecondaryButton}"
                                     ToolTip="Fetch posters, ratings, and plots for all items"/>
+                            <Button Content="Release dates" Command="{Binding RefreshWishlistCalendarCommand}"
+                                    Padding="12,6" Margin="0,0,6,0" Style="{DynamicResource SecondaryButton}"
+                                    ToolTip="Look up the selected movie's dates; unknown dates never block downloads"/>
+                            <CheckBox Content="Allow CAM/TS/TC" IsThreeState="True" IsChecked="{Binding SelectedWishlistAllowsLowSources}"
+                                      IsEnabled="{Binding HasWishlistSelection}" VerticalAlignment="Center" Margin="4,0,10,0"
+                                      ToolTip="Indeterminate uses the default/profile. Checked permits low sources; unchecked blocks them. Low sources always keep the movie open."/>
                             <Button Content="Export" Command="{Binding ExportWishlistCommand}"
                                     Padding="12,6" Margin="0,0,6,0" Style="{DynamicResource SecondaryButton}"/>
                             <Button Content="Import" Command="{Binding ImportWishlistCommand}"
                                     Padding="12,6" Style="{DynamicResource SecondaryButton}"/>
+                            <TextBlock Text="{Binding CalendarStatus}" VerticalAlignment="Center" Margin="10,0,0,0"
+                                       Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"/>
                         </WrapPanel>
                     </Border>
                     <Border DockPanel.Dock="Bottom" Height="155"
@@ -636,6 +644,9 @@
                             <DataGridTextColumn Header="Quality" Binding="{Binding Quality}" Width="80"/>
                             <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="80"/>
                             <DataGridTextColumn Header="Downloaded" Binding="{Binding GrabbedCount}" Width="100"/>
+                            <DataGridTextColumn Header="Theatrical" Binding="{Binding TheatricalDate}" Width="95"/>
+                            <DataGridTextColumn Header="Digital" Binding="{Binding DigitalDate}" Width="95"/>
+                            <DataGridTextColumn Header="Physical" Binding="{Binding PhysicalDate}" Width="95"/>
                         </DataGrid.Columns>
                     </DataGrid>
                         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24,48,24,24" MaxWidth="460" IsHitTestVisible="False">
@@ -1507,6 +1518,8 @@
                                     Padding="12,6" Margin="0,0,6,0" Style="{DynamicResource PrimaryButton}"/>
                             <Button Content="Add to Wishlist" Command="{Binding AddUpcomingToWishlistCommand}"
                                     Padding="12,6" Margin="0,0,12,0" Style="{DynamicResource PrimaryButton}"/>
+                            <Button Content="Release dates" Command="{Binding RefreshUpcomingCalendarCommand}"
+                                    Padding="12,6" Margin="0,0,12,0" Style="{DynamicResource SecondaryButton}" ToolTip="Look up dates for the selected movie"/>
                             <TextBlock Text="Quality:" VerticalAlignment="Center" Margin="0,0,6,0"/>
                             <ComboBox ItemsSource="{Binding QualityOptions}"
                                       SelectedItem="{Binding UpcomingQualityText}" Width="90"/>
@@ -1612,6 +1625,9 @@
                                     <DataGridTextColumn Header="Title" Binding="{Binding Title}" Width="*" ElementStyle="{StaticResource TruncatedCellText}"/>
                                     <DataGridTextColumn Header="Year" Binding="{Binding Year}" Width="50"/>
                                     <DataGridTextColumn Header="Date" Binding="{Binding ReleaseDateDisplay}" Width="85"/>
+                                    <DataGridTextColumn Header="Theatrical" Binding="{Binding TheatricalDate}" Width="95"/>
+                                    <DataGridTextColumn Header="Digital" Binding="{Binding DigitalDate}" Width="95"/>
+                                    <DataGridTextColumn Header="Physical" Binding="{Binding PhysicalDate}" Width="95"/>
                                     <DataGridTextColumn Header="Genres" Binding="{Binding Genres}" Width="110"/>
                                 </DataGrid.Columns>
                             </DataGrid>

@@ -134,6 +134,9 @@ public sealed class LibraryIndex
         var candidates = local.Length == 0 ? matches : local;
         var best = (QualityProfile)candidates.Max(e => (int)e.Identity.Quality);
         if (local.Length == 0) return new("catalog-only", best, false, false, false, snapshot.Complete, matches);
+        var usable = candidates.Where(e => !WishlistSourceFloor.IsLowQualityLibrary(e)).ToArray();
+        if (usable.Length == 0) return new("upgrade", best, true, false, true, snapshot.Complete, matches);
+        best = (QualityProfile)usable.Max(e => (int)e.Identity.Quality);
         if (wanted.Quality != QualityProfile.Any && best == QualityProfile.Any)
             return new("unknown-quality", best, true, false, false, snapshot.Complete, matches);
         var meets = wanted.Quality == QualityProfile.Any || best >= wanted.Quality;

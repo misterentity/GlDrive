@@ -1,6 +1,7 @@
 using System.IO;
 using System.IO.Compression;
 using System.Text.Json;
+using GlDrive.Downloads;
 using Serilog;
 
 namespace GlDrive.AiAgent;
@@ -9,15 +10,17 @@ public sealed class LogDigester
 {
     private readonly string _aiDataRoot;
     private readonly Func<string, Stream> _openRead;
+    private readonly Func<IReadOnlyList<WishlistItem>>? _wishlist;
     private int _parseSkips;
 
-    public LogDigester(string aiDataRoot) : this(aiDataRoot,
-        path => new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)) { }
+    public LogDigester(string aiDataRoot, Func<IReadOnlyList<WishlistItem>>? wishlist = null) : this(aiDataRoot,
+        path => new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete), wishlist) { }
 
-    internal LogDigester(string aiDataRoot, Func<string, Stream> openRead)
+    internal LogDigester(string aiDataRoot, Func<string, Stream> openRead, Func<IReadOnlyList<WishlistItem>>? wishlist = null)
     {
         _aiDataRoot = aiDataRoot;
         _openRead = openRead;
+        _wishlist = wishlist;
     }
 
     /// <summary>
@@ -59,7 +62,8 @@ public sealed class LogDigester
         bundle.Nukes           = new NukesDigester().Build(ReadStream<NukeDetectedEvent>("nukes", windowStart, now, cancellationToken));
         bundle.SiteHealth      = new SiteHealthDigester().Build(ReadStream<SiteHealthEvent>("site-health", windowStart, now, cancellationToken));
         bundle.Announces       = new AnnouncesDigester().Build(ReadStream<AnnounceNoMatchEvent>("announces-nomatch", windowStart, now, cancellationToken));
-        bundle.Wishlist        = new WishlistDigester().Build(ReadStream<WishlistAttemptEvent>("wishlist-attempts", windowStart, now, cancellationToken));
+        bundle.Wishlist        = new WishlistDigester().Build(ReadStream<WishlistAttemptEvent>("wishlist-attempts", windowStart, now, cancellationToken),
+            WishlistSnapshot(), new DateTimeOffset(now));
         bundle.Overrides       = new OverridesDigester().Build(ReadStream<ConfigOverrideEvent>("overrides", windowStart, now, cancellationToken));
         bundle.Downloads       = new DownloadsDigester().Build(ReadStream<DownloadOutcomeEvent>("downloads", windowStart, now, cancellationToken));
         bundle.Transfers       = new TransfersDigester().Build(ReadStream<FileTransferEvent>("transfers", windowStart, now, cancellationToken), cancellationToken);
@@ -84,6 +88,12 @@ public sealed class LogDigester
                 _parseSkips, _aiDataRoot, windowDays);
 
         return bundle;
+    }
+
+    private IReadOnlyList<WishlistItem> WishlistSnapshot()
+    {
+        try { return _wishlist?.Invoke() ?? []; }
+        catch { Log.Warning("Wishlist calendar evidence unavailable; continuing digest without it"); return []; }
     }
 
     /// <summary>

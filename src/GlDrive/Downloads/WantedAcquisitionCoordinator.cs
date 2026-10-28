@@ -255,12 +255,13 @@ public sealed class WantedAcquisitionCoordinator
         var matches = item.Type == MediaType.Movie
             ? SceneNameParser.MatchesMovie(release, item.Title, item.Year, item.Quality)
             : SceneNameParser.MatchesTvEpisode(release, item.Title, item.Quality);
-        if (!matches) return (false, 0);
+        if (!matches || !WishlistSourceFloor.Allows(item, release, _config)) return (false, 0);
         var keys = WishlistAcquisition.Keys(item, release);
         // In unscored mode, choose one accepted variant per movie/episode; an
         // arbitrary quality ranking would silently enable the B1 scorer.
         var alreadyGrabbed = _wishlist.Items.Where(other => WishlistAcquisition.SameTitle(item, other))
             .SelectMany(other => other.GrabbedReleases)
+            .Where(previous => item.Type != MediaType.Movie || !WishlistSourceFloor.IsLowQuality(previous))
             .Any(previous => WishlistAcquisition.Keys(item, previous)
                 .Any(previousKey => keys.Any(key => WishlistAcquisition.Overlaps(key, previousKey))));
         return (keys.Count != 0 && !alreadyGrabbed, 0);

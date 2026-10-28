@@ -79,6 +79,14 @@ public static class LibraryPlanner
         };
         var stem = identity.Kind == "movie" ? folder
             : $"{folder} - S{identity.Season:00}E{identity.Episode:00}";
+        // Preserve positive low-source evidence from the original release through
+        // normalization so a later index refresh cannot call this copy cutoff-owned.
+        if (identity.Kind == "movie")
+            stem += ReleaseTraits.Parse(releaseName).Source switch
+            {
+                ReleaseSource.Cam => " - CAM", ReleaseSource.Telesync => " - TS",
+                ReleaseSource.Telecine => " - TC", _ => ""
+            };
         var destination = identity.Kind == "movie"
             ? Path.Combine(root, folder, stem + quality + Path.GetExtension(source).ToLowerInvariant())
             : Path.Combine(root, folder, $"Season {identity.Season:00}", stem + quality + Path.GetExtension(source).ToLowerInvariant());

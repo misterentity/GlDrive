@@ -65,6 +65,7 @@ public sealed class DashboardLifetimeTests
                 // dashboard disposal, timer, publication and subscription methods.
                 vm = EmptyDashboard();
                 var poll = (DashboardDiskPoll)Field(vm, "_diskPoll").GetValue(vm)!;
+                var calendarStop = (CancellationTokenSource)Field(vm, "_calendarStop").GetValue(vm)!;
                 var subscribers = (Dictionary<string, DownloadManager>)Field(vm, "_subscribedDownloads").GetValue(vm)!;
                 var manager = (DownloadManager)RuntimeHelpers.GetUninitializedObject(typeof(DownloadManager));
                 var callbacks = 0;
@@ -89,6 +90,7 @@ public sealed class DashboardLifetimeTests
                 vm.Dispose();
                 vm.Dispose();
                 Assert.True(token.IsCancellationRequested);
+                Assert.True(calendarStop.IsCancellationRequested);
                 Assert.False(vm.DiskPollShutdown.IsCompleted);
                 Assert.False(initialTimer.IsEnabled);
                 Assert.False(refreshTimer.IsEnabled);
@@ -183,6 +185,7 @@ public sealed class DashboardLifetimeTests
     private static DashboardViewModel EmptyDashboard()
     {
         var vm = Raw<DashboardViewModel>();
+        Set(vm, "_calendarStop", new CancellationTokenSource());
         Set(vm, "_diskPoll", new DashboardDiskPoll());
         var servers = Raw<ServerManager>();
         var config = new AppConfig();

@@ -78,6 +78,14 @@ public static class OutboundPayloadRedactor
         return result;
     }
 
+    public static string PrepareText(string text, IEnumerable<string> liveSecrets)
+    {
+        // Use a property rather than a JSON scalar so the same string walk and
+        // verification as outbound request bodies also covers plain diagnostics.
+        var prepared = Prepare(new JsonObject { ["text"] = text }.ToJsonString(), liveSecrets);
+        return JsonNode.Parse(prepared)!["text"]!.GetValue<string>();
+    }
+
     private static IEnumerable<string> Variants(string value)
     {
         // Prompts may contain a serialized config or telemetry row inside the outer request JSON.

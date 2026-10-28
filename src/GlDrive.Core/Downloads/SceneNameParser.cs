@@ -116,8 +116,10 @@ public static partial class SceneNameParser
 
     /// <summary>Title for a newly selected logical media root; legacy exact-section layouts stay unchanged.</summary>
     public static string LogicalCategoryTitle(string releaseName)
+        => LogicalCategoryTitle(releaseName, Parse(releaseName));
+
+    public static string LogicalCategoryTitle(string releaseName, ParsedRelease parsed)
     {
-        var parsed = Parse(releaseName);
         var season = CategoryTvRegex().Match(releaseName);
         var normalized = releaseName.Replace('.', ' ').Replace('_', ' ');
         return season.Success && season.Index < parsed.Title.Length ? normalized[..season.Index].Trim() : parsed.Title;
@@ -130,8 +132,10 @@ public static partial class SceneNameParser
     }
 
     public static bool MatchesMovie(string releaseName, string title, int? year, QualityProfile quality)
+        => MatchesMovie(Parse(releaseName), title, year, quality);
+
+    public static bool MatchesMovie(ParsedRelease parsed, string title, int? year, QualityProfile quality)
     {
-        var parsed = Parse(releaseName);
         if (parsed.Season != null || parsed.Episode != null) return false;
 
         if (!TitlesMatch(parsed.Title, title)) return false;
@@ -142,8 +146,10 @@ public static partial class SceneNameParser
     }
 
     public static bool MatchesTvEpisode(string releaseName, string showTitle, QualityProfile quality)
+        => MatchesTvEpisode(Parse(releaseName), showTitle, quality);
+
+    public static bool MatchesTvEpisode(ParsedRelease parsed, string showTitle, QualityProfile quality)
     {
-        var parsed = Parse(releaseName);
         if (parsed.Season == null) return false;
 
         if (!TitlesMatch(parsed.Title, showTitle)) return false;

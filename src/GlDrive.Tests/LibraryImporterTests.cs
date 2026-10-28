@@ -57,6 +57,25 @@ public sealed class LibraryImporterTests : IDisposable
     }
 
     [Theory]
+    [InlineData("HDCAMRIP", "CAM")]
+    [InlineData("HDTSRIP", "TS")]
+    [InlineData("HDTCRIP", "TC")]
+    public async Task Imported_low_source_evidence_survives_normalized_name_and_index_refresh(string source, string retained)
+    {
+        var release = $"Synthetic.Film.2024.1080p.{source}-TEST";
+        var plan = LibraryPlanner.Plan(_config, Source(), release);
+        Assert.Contains(" - " + retained + " - 1080p", plan.DestinationPath);
+        var imported = await new SafeLibraryImporter(_ => { }).ImportAsync(plan, _config);
+        Assert.True(imported.Verified);
+        var snapshot = new LibraryIndex().Refresh([_config.MovieRoot], []);
+        var entry = Assert.Single(snapshot.Entries);
+        Assert.True(WishlistSourceFloor.IsLowQualityLibrary(entry));
+        Assert.Equal("upgrade", LibraryIndex.Lookup(snapshot, plan.Identity).Status);
+        var movie = new WishlistItem { Title = "Synthetic Film", Year = 2024, Quality = QualityProfile.Q1080p, AllowLowQualitySources = true };
+        Assert.False(WishlistOwnership.IsOwned(movie, new(), snapshot, [], DateTimeOffset.UtcNow));
+    }
+
+    [Theory]
     [InlineData("Synthetic.Film.2024.1080p.WEB-TEST")]
     [InlineData("Synthetic.Show.2024.S02E03.480p.WEB-TEST")]
     public void Planned_names_round_trip_through_read_only_identity_parser(string release)

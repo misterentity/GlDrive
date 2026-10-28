@@ -8,6 +8,9 @@ namespace GlDrive.Config;
 /// </summary>
 public class PlexConfig
 {
+    /// <summary>One-way read-only Plex Watchlist import. Explicit opt-in.</summary>
+    public bool WatchlistSyncEnabled { get; set; }
+    public int WatchlistSyncMinutes { get; set; } = 30;
     /// <summary>Stable per-install client identifier. Plex ties the OAuth token to
     /// this GUID, so it is generated once and then preserved for the life of the
     /// install. Empty until first use; PlexService.EnsureClientId fills it.</summary>

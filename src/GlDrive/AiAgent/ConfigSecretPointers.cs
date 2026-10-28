@@ -26,6 +26,7 @@ public static class ConfigSecretPointers
     public static bool IsSecret(string? jsonPointer)
     {
         if (string.IsNullOrEmpty(jsonPointer)) return false;
+        if (jsonPointer.Equals("/hooks", StringComparison.OrdinalIgnoreCase) || jsonPointer.StartsWith("/hooks/", StringComparison.OrdinalIgnoreCase)) return true;
 
         var lastSlash = jsonPointer.LastIndexOf('/');
         var leaf = lastSlash >= 0 ? jsonPointer[(lastSlash + 1)..] : jsonPointer;
@@ -35,6 +36,7 @@ public static class ConfigSecretPointers
     private static bool IsSecretLeaf(string leaf)
     {
         if (leaf.Length == 0) return false;
+        if (leaf.Equals("hooks", StringComparison.OrdinalIgnoreCase)) return true;
 
         foreach (var suffix in SecretLeafSuffixes)
             if (leaf.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))

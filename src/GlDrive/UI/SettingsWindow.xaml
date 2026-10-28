@@ -206,6 +206,11 @@
                         <ComboBox ItemsSource="{Binding QualityOptions}"
                                   SelectedItem="{Binding QualityDefault}" Width="120"
                                   HorizontalAlignment="Left" Margin="0,0,0,8"/>
+                          <CheckBox Content="Block CAM / TS / TC wishlist grabs unless explicitly allowed"
+                                    IsChecked="{Binding BlockLowQualityWishlistSources}" Margin="0,0,0,8"/>
+                          <TextBlock Text="Movie release-date region (two letters):" Margin="0,0,0,4"/>
+                          <TextBox Text="{Binding MovieCalendarRegion, UpdateSourceTrigger=PropertyChanged}" MaxLength="2"
+                                   Width="60" HorizontalAlignment="Left" Margin="0,0,0,8"/>
 
                         <Separator Margin="0,8,0,14"/>
                         <TextBlock Text="Search &amp; AI services" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,10"/>
@@ -238,8 +243,20 @@
                         <TextBlock Text="After a download" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,8"/>
                         <CheckBox Content="Auto-download wishlist matches"
                                   IsChecked="{Binding AutoDownloadWishlist}" Margin="0,8,0,4"/>
+                        <CheckBox Content="Import my Plex Watchlist into the wishlist"
+                                  IsChecked="{Binding PlexWatchlistSyncEnabled}" Margin="0,0,0,4"
+                                  ToolTip="Requires Plex sign-in. Imported items stay open until owned; Plex is never changed."/>
                         <CheckBox Content="Auto-extract RAR archives after download"
                                   IsChecked="{Binding AutoExtract}" Margin="0,0,0,4"/>
+                        <CheckBox Content="Flag nukes on recently completed or imported releases"
+                                  IsChecked="{Binding NukeWatchEnabled}" Margin="0,0,0,4"/>
+                        <CheckBox Content="Automatically download matching PROPER / REPACK fixes"
+                                  IsChecked="{Binding NukeWatchAutoQueueFixes}" Margin="0,0,0,4"
+                                  ToolTip="Requires a quality nuke and an available completed correction. Keeps the original library file."/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <TextBlock Text="Watch owned releases for days:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <TextBox Text="{Binding NukeWatchDays, UpdateSourceTrigger=PropertyChanged}" Width="60"/>
+                        </StackPanel>
                         <CheckBox Content="Delete archives after successful extraction"
                                   IsChecked="{Binding DeleteArchivesAfterExtract}" Margin="0,0,0,4"/>
                         <CheckBox Content="Skip incomplete releases (require .nfo file)"

@@ -21,6 +21,13 @@ public sealed record ReleaseTraits(
         var groupMatch = Regex.Match(releaseName, @"-([a-z0-9]+)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
             TimeSpan.FromMilliseconds(50));
         var name = groupMatch.Success ? releaseName[..groupMatch.Index] : releaseName;
+        // TV episode/season identities cannot describe a cinema recording. Guest and
+        // episode titles can contain CAM, TS or TC without changing the actual source.
+        var television = Regex.IsMatch(name, @"(?:^|[. _-])S[0-9]{1,2}(?:E[0-9]{1,3})*(?:$|[. _-])",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking,
+            TimeSpan.FromMilliseconds(50)) || SceneNameParser.TryEpisodeDate(name, out _);
+        name = Regex.Replace(name, @"\(((?:19|20)[0-9]{2})\)", " $1 ",
+            RegexOptions.CultureInvariant | RegexOptions.NonBacktracking, TimeSpan.FromMilliseconds(50));
         // A reliable year/episode boundary separates title words from format tokens.
         // Use the last year so titles beginning with a year do not hide their actual release year.
         var boundaries = Regex.Matches(name, @"(?:^|[. _-])(?:(?:19|20)[0-9]{2}|S[0-9]{1,2}(?:E[0-9]{1,3})*)(?:$|[. _-])",
@@ -39,8 +46,9 @@ public sealed record ReleaseTraits(
             Has("1080p|1080i") ? QualityProfile.Q1080p : Has("720p") ? QualityProfile.Q720p :
             Has("480p|576p|sdtv") ? QualityProfile.SD : QualityProfile.Any;
         // Bad acquisition sources take precedence over attractive but contradictory tokens.
-        var source = Has("CAM|HDCAM") ? ReleaseSource.Cam : Has("TS|HDTS|TELESYNC") ? ReleaseSource.Telesync :
-            Has("TC|HDTC|TELECINE") ? ReleaseSource.Telecine : Has("BLU[. _-]?RAY|BDREMUX") ? ReleaseSource.BluRay :
+        var source = !television && Has("(?:HD|HQ)?CAM(?:RIP)?|P(?:RE)?DVD(?:RIP)?") ? ReleaseSource.Cam :
+            !television && Has("(?:HD|HQ)?TS(?:RIP)?|TELESYNCH?(?:RIP)?") ? ReleaseSource.Telesync :
+            !television && Has("(?:HD|HQ)?TC(?:RIP)?|TELECINE(?:RIP)?") ? ReleaseSource.Telecine : Has("BLU[. _-]?RAY|BDREMUX") ? ReleaseSource.BluRay :
             Has("WEB[. _-]?RIP") ? ReleaseSource.WebRip : Has("WEB(?:[. _-]?DL)?") ? ReleaseSource.Web :
             Has("HDTV|PDTV") ? ReleaseSource.Broadcast : Has("BDRIP|BRRIP|DVDRIP|DVD|DVDSCR|SCREENER") ? ReleaseSource.Dvd :
             ReleaseSource.Unknown;

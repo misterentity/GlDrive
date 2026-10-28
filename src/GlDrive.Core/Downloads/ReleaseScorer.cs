@@ -51,8 +51,9 @@ public static class ReleaseScorer
         var qualityScore = score;
         if (profile.PreferProperRepack && (traits.Proper || traits.RepackRevision > 0)) score += 20;
         if (score < profile.MinimumScore) return Reject("score is below the floor");
-        return new(true, score, score >= profile.CutoffScore,
-            $"{traits.Source}, {traits.Resolution}: score {score}" + (score >= profile.CutoffScore ? " meets cutoff" : " below cutoff"),
+        var meetsCutoff = !traits.LowQualitySource && score >= profile.CutoffScore;
+        return new(true, score, meetsCutoff,
+            $"{traits.Source}, {traits.Resolution}: score {score}" + (meetsCutoff ? " meets cutoff" : " below cutoff"),
             traits, qualityScore);
     }
 
@@ -76,7 +77,7 @@ public static class ReleaseScorer
             (IsCorrection(candidate, existing, profile) && candidate.QualityScore >= existing.QualityScore);
     }
 
-    private static bool IsCorrection(ReleaseScore candidate, ReleaseScore existing, ScoredQualityProfile profile) =>
+    public static bool IsCorrection(ReleaseScore candidate, ReleaseScore existing, ScoredQualityProfile profile) =>
         profile.PreferProperRepack && SameTier(candidate.Traits, existing.Traits) &&
             ((candidate.Traits.Proper && !existing.Traits.Proper) ||
              (candidate.Traits.RepackRevision > existing.Traits.RepackRevision &&

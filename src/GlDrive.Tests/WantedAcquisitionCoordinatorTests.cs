@@ -64,6 +64,27 @@ public sealed class WantedAcquisitionCoordinatorTests
     }
 
     [Fact]
+    public void Unscored_window_excludes_camera_candidate_before_ranking_and_keeps_web()
+    {
+        var f = new Fixture(); f.Config.ScoredQualityEnabled = false;
+        f.Offer("Example.Movie.2026.1080p.HDTS.H264-ONE");
+        f.Offer(Web);
+        Assert.Equal(Web, Assert.Single(f.Coordinator.Snapshot()).BestRelease);
+        f.Close();
+        Assert.Equal(Web, Assert.Single(f.Downloads).ReleaseName);
+    }
+
+    [Fact]
+    public void Unscored_window_prior_allowed_camera_grab_does_not_suppress_web()
+    {
+        var f = new Fixture(); f.Config.ScoredQualityEnabled = false;
+        f.Item.AllowLowQualitySources = true;
+        f.Item.GrabbedReleases.Add("Example.Movie.2026.1080p.CAM.H264-ONE");
+        f.Offer(Web); f.Close();
+        Assert.Equal(Web, Assert.Single(f.Downloads).ReleaseName);
+    }
+
+    [Fact]
     public void HigherScoreUnknownCandidateCannotBeatCompleteOne()
     {
         var f = new Fixture(); f.Offer(); f.Offer(Bluray, complete: false);

@@ -7,6 +7,9 @@ namespace GlDrive.Downloads;
 internal enum SfvIssueKind { Missing, ChecksumMismatch, Error }
 internal sealed record SfvIssue(string FileName, SfvIssueKind Kind, string Detail)
 {
+    internal string? LocalPath { get; init; }
+    internal uint? ExpectedCrc { get; init; }
+    internal uint? ActualCrc { get; init; }
     public override string ToString() => $"{FileName} ({Detail})";
 }
 internal sealed record SfvVerificationResult(IReadOnlyList<SfvIssue> Issues, IReadOnlySet<string> ReferencedFiles);
@@ -85,7 +88,8 @@ public static class SfvVerifier
                     var hash = crc.GetCurrentHashAsUInt32();
                     if (hash != expectedCrc)
                         issues.Add(new SfvIssue(fileName, SfvIssueKind.ChecksumMismatch,
-                            $"CRC mismatch: expected {expectedCrc:X8}, got {hash:X8}"));
+                            $"CRC mismatch: expected {expectedCrc:X8}, got {hash:X8}")
+                        { LocalPath = filePath, ExpectedCrc = expectedCrc, ActualCrc = hash });
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

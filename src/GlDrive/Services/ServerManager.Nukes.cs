@@ -40,7 +40,10 @@ public partial class ServerManager
             // of the same episode shares that prefix with the release we raced.
             if (resolved != null) observation = observation with { Release = resolved };
         }
+        var known = _nukes.IsNuked(serverId, observation.Release);
         var alert = _nukes.ObservePoll(serverId, server.Connection.Username, observation);
+        if (!known && !observation.ReleaseTruncated && _nukes.IsNuked(serverId, observation.Release))
+            Hooks.Publish(new("nuke", observation.Release, observation.Section, "", "Nuked"));
         _spreadManager?.RefreshNukeHolds();
         if (_nukes.IsNuked(serverId, observation.Release)) _wantedCoordinator.Invalidate(serverId, observation.Release);
         NotifyOwnNuke(alert);
@@ -54,6 +57,8 @@ public partial class ServerManager
         var server = _config.Servers.FirstOrDefault(s => s.Id == observation.ServerId);
         if (server != null)
         {
+            if (observation.Kind == SitebotEventKind.Nuke && !_nukes.IsNuked(observation.ServerId, observation.Release))
+                Hooks.Publish(new("nuke", observation.Release, observation.Section, "", "Nuked"));
             NotifyOwnNuke(_nukes.ObserveSitebot(observation, server.Connection.Username));
             _spreadManager?.RefreshNukeHolds();
         }

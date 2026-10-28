@@ -115,10 +115,12 @@ public sealed partial class AutomationService
     {
         item.Id, item.RemotePath, item.ReleaseName, item.LocalPath, item.TotalBytes,
         item.DownloadedBytes, item.Status, item.QueuedAt, item.StartedAt, item.CompletedAt,
-        item.ErrorMessage, item.WishlistItemId, item.Category,
+        item.ErrorMessage, item.WishlistItemId, item.Category, item.NukeCorrectionForRelease,
         ServerId = queueId ?? item.ServerId, ServerName = queueName ?? item.ServerName,
         item.RetryCount, item.SourceCompletionPending, item.SourceKind, item.StatusDetail,
-        item.SkipBlockedTorrentFiles, item.RequiresContentApproval
+        item.SkipBlockedTorrentFiles, item.RequiresContentApproval, item.SfvIntegrityHold,
+        SfvRepairs = (item.SfvRepairFiles ?? []).Where(file => file.Attempts > 0)
+            .Select(file => new { file.LocalPath, file.Attempts, file.Pending }).ToArray()
     };
 
     private async Task<object?> SearchAsync(string op, JsonElement a, CancellationToken ct)
@@ -250,9 +252,11 @@ public sealed partial class AutomationService
             case "wishlist.remove":
             {
                 var id = Required(a, "id", 128);
-                if (_wishlist.GetById(id) == null) throw new KeyNotFoundException($"Unknown wishlist item: {id}");
+                var removed = _wishlist.GetById(id) ?? throw new KeyNotFoundException($"Unknown wishlist item: {id}");
                 _wishlist.Remove(id);
-                return new { removed = id };
+                return new { removed = id, retainedInactive = removed.Source == GlDrive.Plex.PlexWatchlistSync.Source,
+                    message = removed.Source == GlDrive.Plex.PlexWatchlistSync.Source
+                        ? "Inactive in GlDrive and excluded from future sync. Remove it from your Plex Watchlist too if no longer wanted there." : null };
             }
             case "wishlist.upsert":
             {
@@ -267,7 +271,8 @@ public sealed partial class AutomationService
                 foreach (var property in input.EnumerateObject())
                 {
                     if (!node.ContainsKey(property.Name)) throw new ArgumentException($"Unknown wishlist field: {property.Name}");
-                    if (property.Name is "bestOwned" or "pendingGrabs" or "seriesInventory" or "seriesInventoryUpdatedAtUtc" or "seriesInventoryLastAttemptAtUtc") throw new ArgumentException($"{property.Name} is maintained by outcomes or metadata refresh and is read-only.");
+                    if (property.Name is "bestOwned" or "pendingGrabs" or "seriesInventory" or "seriesInventoryUpdatedAtUtc" or "seriesInventoryLastAttemptAtUtc" or
+                        "source" or "plexWatchlistId" or "watchlistSeriesEnded" or "watchlistMetadataCheckedAtUtc" or "releaseDates") throw new ArgumentException($"{property.Name} is maintained by outcomes or metadata refresh and is read-only.");
                     node[property.Name] = JsonNode.Parse(property.Value.GetRawText());
                 }
                 // Editing the legacy resolution also updates its migrated profile unless
@@ -292,6 +297,8 @@ public sealed partial class AutomationService
                     item.SeriesInventory = [];
                     item.SeriesInventoryUpdatedAtUtc = null;
                     item.SeriesInventoryLastAttemptAtUtc = null;
+                    item.WatchlistSeriesEnded = false;
+                    item.WatchlistMetadataCheckedAtUtc = null;
                 }
                 if (item.GrabbedReleases == null) throw new ArgumentException("grabbedReleases cannot be null.");
                 if (WishlistAcquisition.ResolveProfile(item, _config.Downloads) == null)

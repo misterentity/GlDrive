@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using GlDrive.Util;
@@ -139,7 +140,11 @@ public class ConfigManager
         try { if (beforeJson != null) before = JsonNode.Parse(beforeJson); }
         catch (JsonException) { /* Unknown prior enablement cannot authorize destructive imports. */ }
         NormalizeLibraryEnable(before, next);
-        json = next.ToJsonString(JsonOptions);
+        // Preserve the hand-edited optional block byte-for-byte when normalization
+        // only changes other settings (including an unparseable hooks draft).
+        var hookSource = before is JsonObject && JsonNode.DeepEquals(before["hooks"], next["hooks"])
+            ? beforeJson! : json;
+        json = PreserveHookText(next.ToJsonString(JsonOptions), hookSource);
         SecureFile.WriteAllTextRestricted(ConfigFilePath, json);
 
         if (SettingsSaved is { } saved)
@@ -190,6 +195,24 @@ public class ConfigManager
             catch (Exception ex) { Log.Debug(ex, "ConfigOverride emit failed"); }
         }
         return json;
+    }
+
+    internal static string PreserveHookText(string serialized, string source)
+    {
+        using var original = JsonDocument.Parse(source);
+        if (!original.RootElement.TryGetProperty("hooks", out var hooks)) return serialized;
+        var bytes = Encoding.UTF8.GetBytes(serialized);
+        var reader = new Utf8JsonReader(bytes);
+        while (reader.Read())
+        {
+            if (reader.TokenType != JsonTokenType.PropertyName || reader.CurrentDepth != 1 || !reader.ValueTextEquals("hooks")) continue;
+            reader.Read();
+            var start = checked((int)reader.TokenStartIndex);
+            reader.Skip();
+            return Encoding.UTF8.GetString(bytes.AsSpan(0, start)) + hooks.GetRawText() +
+                Encoding.UTF8.GetString(bytes.AsSpan(checked((int)reader.BytesConsumed)));
+        }
+        return serialized;
     }
 
     internal static void NormalizeLibraryEnable(JsonNode? before, JsonNode after)

@@ -41,7 +41,7 @@ public sealed class MaintenanceAutomation : IAutomationModule
             new { type = "object", properties = new { name = new { type = "string" }, includeSecrets = new { type = "boolean" } }, required = new[] { "name" }, additionalProperties = false }, readOnly: true),
         AutomationToolDefinition.Create("config_snapshot_create", "Create a private, atomic snapshot of current application settings, including stored channel keys. External Credential Manager passwords are not copied.",
             new { type = "object", properties = new { }, additionalProperties = false }),
-        AutomationToolDefinition.Create("config_snapshot_restore", "Restore a named configuration snapshot through typed validation and atomic persistence, saving a pre-restore snapshot first. Restores saved secrets except the current control API token, which is retained. Restart required. Optional expectedRevision prevents overwriting newer settings.",
+        AutomationToolDefinition.Create("config_snapshot_restore", "Restore a named configuration snapshot through typed validation and atomic persistence, saving a pre-restore snapshot first. Retains the current control API token and executable hook definitions. Restart required. Optional expectedRevision prevents overwriting newer settings.",
             new { type = "object", properties = new { name = new { type = "string" }, expectedRevision = new { type = "string" } }, required = new[] { "name" }, additionalProperties = false }, destructive: true),
         AutomationToolDefinition.Create("config_snapshot_delete", "Delete one named configuration snapshot from the app's snapshot directory.",
             new { type = "object", properties = new { name = new { type = "string" } }, required = new[] { "name" }, additionalProperties = false }, destructive: true)
@@ -114,17 +114,7 @@ public sealed class MaintenanceAutomation : IAutomationModule
         using var attribution = ConfigWriteScope.Begin("restore:snapshot");
         CheckWritable();
         var name = Required(arguments, "name");
-        var snapshot = ReadSnapshot(name).Deserialize<AppConfig>(ConfigurationAutomation.Json) ?? throw new ArgumentException("Snapshot does not contain app settings");
-        // A historic bearer token would disconnect the authenticated MCP bridge and could
-        // revive a revoked credential. Restore ordinary listener settings, retain identity.
-        snapshot.ControlApi ??= new();
-        snapshot.ControlApi.Token = _configuration.CurrentSnapshot()["controlApi"]!["token"]!.GetValue<string>();
-        ConfigurationAutomation.Validate(snapshot);
-        var replacements = JsonSerializer.SerializeToNode(snapshot, ConfigurationAutomation.Json)!.AsObject();
-        var operations = new JsonArray(replacements.Select(p => (JsonNode?)new JsonObject
-        {
-            ["op"] = "replace", ["path"] = "/" + p.Key, ["value"] = p.Value?.DeepClone()
-        }).ToArray());
+        var candidate = ReadSnapshot(name);
         object? result = null;
         SecureFile.WithPathLock(ConfigManager.ConfigPath, () =>
         {
@@ -134,6 +124,20 @@ public sealed class MaintenanceAutomation : IAutomationModule
                 var current = JsonSerializer.SerializeToElement(_configuration.Get()).GetProperty("revision").GetString();
                 if (current != revision) throw new InvalidOperationException("Settings changed since they were read; fetch them again before restoring");
             }
+            // Restore ordinary settings without reviving a revoked token or substituting
+            // executable code. Preserve these values before parsing the historical config.
+            var currentSettings = _configuration.CurrentSnapshot();
+            candidate["controlApi"] ??= new JsonObject();
+            candidate["controlApi"]!["token"] = currentSettings["controlApi"]?["token"]?.DeepClone();
+            candidate["hooks"] = currentSettings["hooks"]?.DeepClone();
+            var snapshot = candidate.Deserialize<AppConfig>(ConfigurationAutomation.Json)
+                ?? throw new ArgumentException("Snapshot does not contain app settings");
+            ConfigurationAutomation.Validate(snapshot);
+            var replacements = JsonSerializer.SerializeToNode(snapshot, ConfigurationAutomation.Json)!.AsObject();
+            var operations = new JsonArray(replacements.Select(p => (JsonNode?)new JsonObject
+            {
+                ["op"] = "replace", ["path"] = "/" + p.Key, ["value"] = p.Value?.DeepClone()
+            }).ToArray());
             var backup = SaveSnapshot("pre-restore");
             var saved = _configuration.Apply(operations, revision, allowSecrets: true);
             result = new { name, backup, result = saved, restartRequired = true };

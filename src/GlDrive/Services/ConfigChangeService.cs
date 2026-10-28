@@ -288,6 +288,7 @@ public sealed class ConfigChangeService : IDisposable
             // version snapshots and are restored only by this explicit user action.
             candidate["controlApi"] ??= new JsonObject();
             candidate["controlApi"]!["token"] = _configuration.CurrentSnapshot()["controlApi"]?["token"]?.DeepClone();
+            candidate["hooks"] = _configuration.CurrentSnapshot()["hooks"]?.DeepClone();
             var typed = candidate.Deserialize<AppConfig>(ConfigurationAutomation.Json) ?? throw new ArgumentException("Invalid snapshot");
             ConfigurationAutomation.Validate(typed);
             var canonical = JsonSerializer.SerializeToNode(typed, ConfigurationAutomation.Json)!.AsObject();

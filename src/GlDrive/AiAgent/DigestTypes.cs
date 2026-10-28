@@ -90,11 +90,23 @@ public sealed class WishlistDigest
 {
     [JsonPropertyName("deadItems")] public List<DeadItem> DeadItems { get; set; } = [];
     [JsonPropertyName("nearMissPatterns")] public List<NearMiss> NearMissPatterns { get; set; } = [];
+    [JsonPropertyName("movieAvailability")] public List<MovieAvailability> MovieAvailabilityItems { get; set; } = [];
     public sealed class DeadItem
     {
         [JsonPropertyName("itemId")] public string ItemId { get; set; } = "";
-        [JsonPropertyName("daysSinceLastMatch")] public int DaysSinceLastMatch { get; set; }
+        [JsonPropertyName("daysSinceLastMatch")] public int? DaysSinceLastMatch { get; set; }
         [JsonPropertyName("attemptsInWindow")] public int AttemptsInWindow { get; set; }
+        [JsonPropertyName("evidence")] public string Evidence { get; set; } = "No match observed in this window; age and availability are not established.";
+    }
+    public sealed class MovieAvailability
+    {
+        [JsonPropertyName("itemId")] public string ItemId { get; set; } = "";
+        [JsonPropertyName("theatricalDate")] public string? TheatricalDate { get; set; }
+        [JsonPropertyName("digitalDate")] public string? DigitalDate { get; set; }
+        [JsonPropertyName("physicalDate")] public string? PhysicalDate { get; set; }
+        [JsonPropertyName("calendarStatus")] public string CalendarStatus { get; set; } = "unknown";
+        [JsonPropertyName("lowSourceSightings")] public int LowSourceSightings { get; set; }
+        [JsonPropertyName("daysSinceLastMatch")] public int? DaysSinceLastMatch { get; set; }
     }
     public sealed class NearMiss
     {

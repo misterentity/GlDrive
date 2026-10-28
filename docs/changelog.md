@@ -12,6 +12,16 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.16.0 — CAM floor, nuke watch, hooks, SFV repair, Plex Watchlist (2026-10-28)
+
+- Wishlist movies no longer grab CAM/TS/TC copies by default (items stay open); on-demand TMDB
+  release dates.
+- Passive nuke watch on recently owned releases (on); automatic PROPER/REPACK fixes are opt-in.
+- Opt-in post-event scripts (hand-edited only; never via MCP or the agent) and webhooks; opt-in
+  targeted SFV re-fetch; opt-in read-only Plex Watchlist import.
+- Review: 19 findings fixed before release. The worst would have redacted every "64" (x264, H264)
+  out of all nightly agent and AI Setup requests. See the [release notes](releases/v3.16.0.md).
+
 ## v3.15.2 — source discovery after merged announcements (2026-10-28)
 
 - Prevent pathless or stale source hints from bypassing the configured directory
