@@ -110,6 +110,18 @@ public sealed partial class AutomationService
                 pools = spread.PoolHealth(), summary = spread.History.Summarize()
             };
             case "spread.history": return Page(spread.History.Items.OrderByDescending(r => r.StartedAt).ToArray(), a);
+            case "spread.report":
+                return new RaceReportReader(Path.Combine(ConfigManager.AppDataPath, "ai-data"))
+                    .Build(Integer(a, "days", 1, 1, 90), spread.History.Items, cancellationToken: ct);
+            case "spread.sitebot_facts":
+            {
+                var serverId = Optional(a, "serverId", 128);
+                if (serverId != null) Server(serverId);
+                var releaseName = Optional(a, "releaseName", 512);
+                return Page(spread.SitebotFacts.Snapshot().Where(f =>
+                    (serverId == null || f.ServerId == serverId) &&
+                    (releaseName == null || f.Release.Equals(releaseName, StringComparison.OrdinalIgnoreCase))).ToArray(), a);
+            }
             case "spread.blacklist_list": return spread.Blacklist.GetAll();
             case "spread.blacklist_clear": spread.Blacklist.Clear(); return new { cleared = true };
             case "spread.blacklist_remove":
@@ -195,7 +207,8 @@ public sealed partial class AutomationService
         releaseName = result.ReleaseName,
         queuePosition = result.QueuePosition,
         retryAfterSeconds = result.SuppressedFor is { } remaining ? (long?)Math.Max(0, Math.Ceiling(remaining.TotalSeconds)) : null,
-        reason = result.Reason
+        reason = result.Reason,
+        hintsMerged = result.HintsMerged
     };
 
     private async Task<int> FxpDirectory(string source, string sourcePath, string destination, string destinationPath, int depth, CancellationToken ct)

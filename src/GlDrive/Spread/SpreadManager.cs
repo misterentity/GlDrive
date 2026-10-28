@@ -127,7 +127,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
     /// <summary>A detached snapshot of requests waiting for a race slot.</summary>
     public IReadOnlyList<PersistedRace> QueuedRaces
     {
-        get { lock (_lock) return _raceQueue.Select(r => r with { ServerIds = r.ServerIds.ToList(), Partial = r.Partial?.Copy() }).ToArray(); }
+        get { lock (_lock) return _raceQueue.Select(r => r with { ServerIds = r.ServerIds.ToList(), SourceHints = r.SourceHints.ToList(), Partial = r.Partial?.Copy() }).ToArray(); }
     }
 
     /// <summary>Cancel a waiting request without interrupting already active transfers.</summary>
@@ -224,7 +224,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
         _config = config;
         _history = new RaceHistoryStore(Path.Combine(stateDirectory, "race-history.json"));
         _blacklist = new SectionBlacklistStore(Path.Combine(stateDirectory, "section-blacklist.json"));
-        _metadataFilter = new MetadataFilterService(config);
+        _metadataFilter = new MetadataFilterService(config, SitebotFacts);
         _history.Load();
         _blacklist.Load();
         // Read-only (screenshot) managers must not overwrite the live app's queue.
@@ -482,22 +482,11 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             if (_disposed) return new(RaceStartOutcome.Unavailable, section, releaseName, Reason: "Spread engine is stopped");
             var now = AdmissionUtcNow();
             var maxRaces = Math.Max(_config.Spread.MaxConcurrentRaces, 1);
-            // Dedup: skip if this release is already racing or queued.
-            var active = _activeJobs.FirstOrDefault(j => IsSameRace(j.Section, j.ReleaseName, section, releaseName));
-            if (active != null ||
-                _startingRequests.Any(r => IsSameRace(r.Section, r.ReleaseName, section, releaseName)))
+            request = new PersistedRace(section, releaseName, serverIds.ToList(), mode,
+                knownSourceServerId, knownSourcePath, now);
+            queued = MergeDuplicateNoLock(request, now);
+            if (queued == null)
             {
-                Log.Information("Race already active, skipping duplicate: {Release}", releaseName);
-                return new(RaceStartOutcome.AlreadyActive, section, releaseName, Job: active,
-                    Reason: active == null ? "Race admission is already in progress" : "Release is already racing");
-            }
-            var duplicate = _raceQueue.FirstOrDefault(q => IsSameRace(q.Section, q.ReleaseName, section, releaseName));
-            if (duplicate != null)
-            {
-                Log.Information("Race already queued, skipping duplicate: {Release}", releaseName);
-                return new(RaceStartOutcome.Duplicate, section, releaseName,
-                    QueuePosition: QueuePositionNoLock(duplicate, now), Reason: duplicate.WaitReason ?? "Release is already queued");
-            }
 
             // Issue #4 (+ v1.66 expansion): short-circuit re-queues of a release
             // that recently failed with a known dead-end class (affil-blocked,
@@ -509,8 +498,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
                 return new(RaceStartOutcome.Suppressed, section, releaseName, SuppressedFor: remaining, Reason: deadReason);
             }
 
-            request = new PersistedRace(section, releaseName, serverIds.ToList(), mode,
-                knownSourceServerId, knownSourcePath, now);
+            request = _config.Spread.MergeRaceAnnounces ? MergeRaceNoLock(request, request, true) : PredictRaceNoLock(request);
             if (_activeJobs.Count + _startingRequests.Count >= maxRaces)
             {
                 _raceQueue.Add(request);
@@ -522,6 +510,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             else
             {
                 _startingRequests.Add(request);
+            }
             }
         }
         if (queued != null)
@@ -536,7 +525,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             // A subscriber failure after registration is not a rejected admission.
             // Preserve the exception instead of claiming a live job was unavailable.
             lock (_lock)
-                if (_activeRequests.Values.Any(r => ReferenceEquals(r, request))) throw;
+                if (_activeRequests.Values.Any(r => r.RequestId == request.RequestId)) throw;
             return new(RaceStartOutcome.Unavailable, section, releaseName, Reason: ex.Message);
         }
     }
@@ -548,12 +537,11 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
                 with { StopReason = RaceStopReason.Deadline.ToString() }
             : request;
 
-    private IEnumerable<int> EligibleQueueIndicesNoLock(DateTime now) => _raceQueue
+    private IEnumerable<int> EligibleQueueIndicesNoLock(DateTime now) => RaceQueuePolicy.Order(_raceQueue
         .Select((request, index) => (Request: QueueRequestAt(request, now), Index: index))
         .Where(p => !p.Request.IsExpired(now) && p.Request.IsDue(now)
             && (p.Request.CleanupOnly || p.Request.ServerIds.Count(id => _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed) >= 2))
-        .OrderBy(p => RaceLifetimePolicy.QueuePriority(p.Request))
-        .Select(p => p.Index);
+        .Select(p => (PredictRaceNoLock(p.Request), p.Index)), now, _config.Spread.SizeAwareRaceQueue, _config.Spread.RaceQueueMaxAgeMinutes);
 
     private int? QueuePositionNoLock(PersistedRace request, DateTime now)
     {
@@ -578,8 +566,13 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             {
                 // Previously queued work retains its age, source hint and resume
                 // count for a later drain. A rejected direct call stays rejected.
-                if (_startingRequests.Remove(request) && retainOnFailure && !_disposed)
-                    _raceQueue.Insert(0, request);
+                var index = StartingIndexNoLock(request);
+                if (index >= 0)
+                {
+                    var latest = _startingRequests[index];
+                    _startingRequests.RemoveAt(index);
+                    if (retainOnFailure && !_disposed) _raceQueue.Insert(0, latest);
+                }
             }
             PersistQueue();
             throw;
@@ -594,6 +587,10 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
 
         lock (_lock)
         {
+            var startingIndex = StartingIndexNoLock(request);
+            if (startingIndex < 0) throw new OperationCanceledException("Race request cancelled during admission");
+            request = _startingRequests[startingIndex];
+            (section, releaseName, serverIds, mode, knownSourceServerId, knownSourcePath, _, _, _) = request;
             pools = serverIds
                 .Where(id => _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed)
                 .ToDictionary(id => id, id => _spreadPools[id]);
@@ -620,10 +617,34 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             }
         }
 
-        var job = new SpreadJob(section, releaseName, mode, _config.Spread,
-            pools, mainPools, configs, _speedTracker, _skiplist, _blacklist,
-            knownSourceServerId, knownSourcePath);
-        job.RestorePartial(request);
+        SpreadJob job;
+        lock (_lock)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var startingIndex = StartingIndexNoLock(request);
+            if (startingIndex < 0) throw new OperationCanceledException("Race request cancelled during admission");
+            // Main-pool callbacks may have admitted another announce. Construct
+            // and register from its canonical request in the same critical section.
+            request = _startingRequests[startingIndex];
+            (section, releaseName, serverIds, mode, knownSourceServerId, knownSourcePath, _, _, _) = request;
+            pools = serverIds.Where(id => _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed)
+                .ToDictionary(id => id, id => _spreadPools[id]);
+            configs = serverIds.Where(id => _config.Servers.Any(s => s.Id == id))
+                .ToDictionary(id => id, id => _config.Servers.First(s => s.Id == id));
+            if (!request.CleanupOnly && pools.Count < 2)
+                throw new InvalidOperationException("Spread pools changed during race admission");
+            job = new SpreadJob(section, releaseName, mode, _config.Spread,
+                pools, mainPools, configs, _speedTracker, _skiplist, _blacklist,
+                knownSourceServerId, knownSourcePath);
+            job.RestorePartial(request);
+            job.SitebotFacts = SitebotFacts;
+            // Resume timestamps include previous active work, not just queue wait.
+            job.QueuedAtUtc = request.ResumeCount == 0 && request.Resumes == 0 ? request.QueuedAtUtc : null;
+            if (_config.Spread.MergeRaceAnnounces) job.QueueSourceHints(request.SourceHints);
+            _startingRequests.RemoveAt(startingIndex);
+            _activeJobs.Add(job);
+            _activeRequests[job] = request;
+        }
         job.PartialStateChanged += j => SavePartialState(j, request);
         job.PartialCleanupMessage += message => PartialCleanupNotice?.Invoke(releaseName, message);
 
@@ -668,25 +689,6 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
         };
         job.ServerConfigResolver = id => _config.Servers.FirstOrDefault(s => s.Id == id);
 
-        try
-        {
-            lock (_lock)
-            {
-                ObjectDisposedException.ThrowIf(_disposed, this);
-                // A pool can disappear while the main-pool callback runs. Reject
-                // registration; the caller decides whether to retain the request.
-                var currentPools = serverIds.Where(id => _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed)
-                    .ToDictionary(id => id, id => _spreadPools[id]);
-                if (!request.CleanupOnly && currentPools.Count < 2)
-                    throw new InvalidOperationException("Spread pools changed during race admission");
-                job.UpdatePools(currentPools);
-                if (!_startingRequests.Remove(request))
-                    throw new OperationCanceledException("Race request cancelled during admission");
-                _activeJobs.Add(job);
-                _activeRequests[job] = request;
-            }
-        }
-        catch { job.Dispose(); throw; }
         PersistQueue();
         JobStarted?.Invoke(job);
 
@@ -742,13 +744,14 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
                 bool wasActive;
                 bool waiting;
                 var partial = job.CapturePartialState();
-                var finishedRequest = request with
-                {
-                    Partial = partial, StopReason = job.StopReason == RaceStopReason.None ? request.StopReason : job.StopReason.ToString()
-                };
                 PersistedRace? followup = null;
                 lock (_lock)
                 {
+                    var latest = _activeRequests.GetValueOrDefault(job) ?? request;
+                    var finishedRequest = latest with
+                    {
+                        Partial = partial, StopReason = job.StopReason == RaceStopReason.None ? latest.StopReason : job.StopReason.ToString()
+                    };
                     wasActive = _activeJobs.Remove(job);
                     var stillRequested = _activeRequests.Remove(job);
                     waiting = job.State == SpreadJobState.Waiting;
@@ -838,6 +841,8 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
                 StopReason = job.StopReason == RaceStopReason.None ? "" : job.StopReason.ToString(),
                 ResumeCount = job.ResumeCount,
                 FirstUploadAtUtc = job.FirstUploadAtUtc,
+                DestinationOutcomes = job.DestinationOutcomes(),
+                QueueWaitSeconds = job.QueueWaitSeconds,
             });
         }
         catch (Exception ex)
@@ -923,8 +928,8 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
     }
 
     /// <summary>
-    /// Starts queued races while there is capacity. Takes the first race whose servers
-    /// have at least two connected pools; the rest wait for <see cref="TryInitializePool"/>
+    /// Starts queued races while there is capacity. Ranks eligible requests using the
+    /// configured queue policy; unavailable pools wait for <see cref="TryInitializePool"/>
     /// to drain them. Dequeuing blindly threw "Need at least 2 connected spread pools"
     /// and dropped the race whenever a pool was briefly down - and a restored queue is
     /// always ahead of the pools at startup.
@@ -949,7 +954,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
 
                 for (var i = 0; i < _raceQueue.Count; i++)
                 {
-                    _raceQueue[i] = QueueRequestAt(_raceQueue[i], now);
+                    _raceQueue[i] = PredictRaceNoLock(QueueRequestAt(_raceQueue[i], now));
                 }
                 // Cleanup deadlines get a bounded turn even when the source is
                 // unavailable. All fresh due races outrank ordinary resume attempts.
@@ -1242,7 +1247,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             var metaFilter = serverConfig.SpreadSite.MetadataFilter;
             if (metaFilter.Enabled)
             {
-                var verdict = await _metadataFilter.EvaluateAsync(metaFilter, releaseName, parsed);
+                var verdict = await _metadataFilter.EvaluateAsync(metaFilter, releaseName, parsed, sourceServerId: sourceServerId);
                 if (debug)
                     Log.Information("[DEBUG] {Server} metadata filter: allowed={Allowed} reason={Reason}",
                         serverConfig.Name, verdict.Allowed, verdict.Reason);

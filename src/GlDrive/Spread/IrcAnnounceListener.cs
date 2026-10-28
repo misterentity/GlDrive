@@ -24,6 +24,7 @@ public class IrcAnnounceListener : IDisposable
     private readonly HashSet<string> _recentAnnounces = new(StringComparer.OrdinalIgnoreCase);
     private readonly Lock _lock = new();
     private readonly bool _defaultAutoRace;
+    private readonly IReadOnlyList<IrcChannelConfig> _channels;
 
     // Built-in pattern for common glftpd verbose announces:
     //   [ NEW ] in [ section ] Release.Name OK pred 2s ago.
@@ -77,14 +78,16 @@ public class IrcAnnounceListener : IDisposable
     }
 
     public event Action<string, string, string, bool>? ReleaseAnnounced; // serverId, section, releaseName, autoRace
+    public event Action<SitebotEvent>? SitebotEventReceived;
 
     public IrcAnnounceListener(string serverId, IrcService ircService,
-        List<IrcAnnounceRule> rules, bool defaultAutoRace)
+        List<IrcAnnounceRule> rules, bool defaultAutoRace, IReadOnlyList<IrcChannelConfig>? channels = null)
     {
         _serverId = serverId;
         _ircService = ircService;
         _rules = rules;
         _defaultAutoRace = defaultAutoRace;
+        _channels = channels ?? [];
 
         // Pre-compile regex patterns
         foreach (var rule in rules.Where(r => r.Enabled && !string.IsNullOrEmpty(r.Pattern)))
@@ -121,6 +124,25 @@ public class IrcAnnounceListener : IDisposable
         // the no-match path below, write PM plaintext into the plaintext ai-data telemetry.
         if (!IrcLogStore.IsChannelName(target))
             return;
+
+        var channel = _channels.FirstOrDefault(c => c.Name.Equals(target, StringComparison.OrdinalIgnoreCase));
+        if (channel?.Sitebot is { Enabled: true } sitebot && !string.IsNullOrWhiteSpace(sitebot.BotNick))
+        {
+            // Configuring channel trust also protects its legacy NEW rules. Empty trust
+            // retains existing configuration behavior without learning a sender implicitly.
+            if (!SitebotEventParser.IsTrusted(sitebot, message.Nick, message.UserHost)) return;
+            var observation = SitebotEventParser.ParseTrusted(_serverId, target, message.Nick, message.UserHost,
+                message.Text, sitebot, message.Timestamp.ToUniversalTime());
+            if (observation != null)
+            {
+                try { SitebotEventReceived?.Invoke(observation); }
+                catch (Exception ex) { Log.Warning(ex, "Sitebot event consumer failed for {Server}", _serverId); }
+            }
+            // Completion, metadata and removal notices must not become NEW races
+            // through a broad legacy section/release regex.
+            if (observation is { Kind: not SitebotEventKind.New } ||
+                SitebotEventParser.IsNonNewMessage(message.Text, sitebot.Templates)) return;
+        }
 
         // IrcService has already removed IRC formatting. Reject removal events
         // before either matcher, deduplication or announce-learning telemetry.

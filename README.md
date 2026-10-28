@@ -47,6 +47,9 @@ glftpd sites have quirks that off-the-shelf FTP clients handle badly. Each of th
 - **Auto-download** of matching releases across *all* connected servers via `SceneNameParser` + `WishlistMatcher`
 - Wishlist import/export as JSON; completion toasts with optional sound
 - New wishlist entries from Upcoming, metadata search, import and MCP use `downloads.qualityDefault` when no quality is specified. Invalid defaults fall back to 1080p; explicit qualities and existing entries are preserved.
+- Optional scored wishlist profiles add source/resolution/HDR/edition preferences, size limits, PROPER/REPACK upgrades, pending-copy dedupe and a successful-download cutoff. Enable `downloads.scoredQualityEnabled` and select a wishlist `profileId`; existing resolution-only profiles remain compatible. Superseded local copies are retained. See [quality profile configuration](docs/configuration-guide.md#scored-wishlist-profiles).
+- **Typed sitebot observations** from explicitly trusted channel bots capture completion sizes, progress, metadata and nuke hints without FTP traffic. Explicit final winners are recorded per destination only after normal listing confirmation; unknown outcomes remain unknown. MCP `spread.report` provides a daily/section/site scoreboard with evidence coverage.
+- **Size-aware race queue** uses announced bytes, existing route speeds and history medians to order eligible work with ageing. Duplicate announces merge source hints instead of discarding them. Both behaviors have settings; the single race slot, login budgets, partial-resume priorities and ownership checks remain in force.
 
 ### Spread / FXP (cbftp-style race engine)
 - **Four FXP modes** picked automatically by `FxpModeDetector`: PASV-PASV, CPSV-PASV, PASV-CPSV and **Relay** (CPSV-CPSV piped through local memory)

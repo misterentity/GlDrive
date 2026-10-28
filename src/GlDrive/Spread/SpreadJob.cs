@@ -531,13 +531,16 @@ public partial class SpreadJob : IDisposable
 
             // If we have a known source (from notification/search), use it directly
             if (!string.IsNullOrEmpty(_knownSourceServerId) && !string.IsNullOrEmpty(_knownSourcePath)
-                && _pools.ContainsKey(_knownSourceServerId))
+                && _pools.ContainsKey(_knownSourceServerId) && !sitePaths.ContainsKey(_knownSourceServerId)
+                && !(_spreadConfig.MergeRaceAnnounces && _announcedSources.ContainsKey(_knownSourceServerId))
+                && _serverConfigs.TryGetValue(_knownSourceServerId, out var knownConfig) && !knownConfig.SpreadSite.NeverSource)
             {
                 sitePaths[_knownSourceServerId] = _knownSourcePath;
                 sourceServers.Add(_knownSourceServerId);
                 var srcName = _serverConfigs.TryGetValue(_knownSourceServerId, out var srcCfg) ? srcCfg.Name : _knownSourceServerId;
                 Log.Information("Spread: known source {Server} at {Path}", srcName, _knownSourcePath);
             }
+            ApplyPendingSourceHints(sitePaths, sourceServers);
 
             // Probe outcome accounting. A bare catch used to make "the site said no"
             // and "we never got an answer" indistinguishable, so a borrow timeout was
@@ -605,6 +608,7 @@ public partial class SpreadJob : IDisposable
                 }
             }
 
+            ApplyPendingSourceHints(sitePaths, sourceServers);
             if (sourceServers.Count == 0)
             {
                 var verdict = CandidatePredicates.ClassifySourceProbe(
@@ -961,6 +965,7 @@ public partial class SpreadJob : IDisposable
                 // 1. Background scan with adaptive debounce — faster during active racing
                 if (_backgroundScan == null || _backgroundScan.IsCompleted)
                 {
+                    ApplyPendingSourceHints();
                     // Adaptive interval: 2s during active transfers, 5s idle, and the
                     // (slower) completion-refresh cadence while only awaiting zipscript.
                     int activeCount;
@@ -1087,8 +1092,9 @@ public partial class SpreadJob : IDisposable
                     }
 
                     var waitingForRelease = HasPendingReleaseInventory();
+                    var waitingForAnnounce = HasUnverifiedAnnounceSources();
                     var poolsUnavailable = sitePaths.Keys.Any(id => ResolveSpreadPool(id) == null);
-                    var done = !waitingForRelease && !poolsUnavailable && (_spreadConfig.WaitForDestinationComplete
+                    var done = !waitingForRelease && !waitingForAnnounce && !poolsUnavailable && (_spreadConfig.WaitForDestinationComplete
                         ? AllDestinationsTerminal(sitePaths, sourceServers)
                         : IsJobComplete());
                     if (done)
@@ -1119,7 +1125,7 @@ public partial class SpreadJob : IDisposable
                         return;
                     }
 
-                    if (activeCount == 0 && (waitingForRelease || poolsUnavailable))
+                    if (activeCount == 0 && (waitingForRelease || waitingForAnnounce || poolsUnavailable))
                     {
                         // Finish our current metadata reads before returning the race
                         // slot. A queued retry must not overlap an old scan or SFV read.
@@ -1127,7 +1133,7 @@ public partial class SpreadJob : IDisposable
                         lock (_ownershipLock) sfvsPending = _pendingSfvs.Count > 0;
                         // Nor park on listings that predate the last delivery: the stub or
                         // progress marker they show may be the one that delivery cleared.
-                        if (_backgroundScan is { IsCompleted: false } || _sfvParseTask is { IsCompleted: false } || sfvsPending || (waitingForRelease && DeliveryAwaitingListing(DateTime.UtcNow)))
+                        if (_backgroundScan is { IsCompleted: false } || AwaitingFirstAnnounceScan() || _sfvParseTask is { IsCompleted: false } || sfvsPending || (waitingForRelease && DeliveryAwaitingListing(DateTime.UtcNow)))
                         {
                             await Task.Delay(TimeSpan.FromSeconds(1), token);
                             continue;
@@ -1136,7 +1142,8 @@ public partial class SpreadJob : IDisposable
                         {
                             token.ThrowIfCancellationRequested();
                             WaitingForIncompleteRelease = waitingForRelease;
-                            WaitReason = poolsUnavailable ? "Waiting for server reconnection" : "Waiting for remaining release files";
+                            WaitReason = poolsUnavailable ? "Waiting for server reconnection"
+                                : waitingForRelease ? "Waiting for remaining release files" : "Waiting for announced source verification";
                             State = SpreadJobState.Waiting;
                         }
                         Log.Information("Spread queued: {Reason}: {Release}", WaitReason, ReleaseName);
@@ -1462,6 +1469,8 @@ public partial class SpreadJob : IDisposable
                 EndedAt = DateTime.UtcNow.ToString("O"),
                 Participants = participants,
                 Winner = null,
+                DestinationOutcomes = DestinationOutcomes(),
+                QueueWaitSeconds = QueueWaitSeconds,
                 StopReason = StopReason == RaceStopReason.None ? "" : StopReason.ToString(),
                 ResumeCount = ResumeCount,
                 FirstUploadAtUtc = FirstUploadAtUtc?.ToString("O"),
@@ -1583,7 +1592,7 @@ public partial class SpreadJob : IDisposable
                 })));
         }
 
-        var results = new List<(string serverId, List<SpreadFileInfo> files, ScanSignals signals, long listingEpoch,
+        var results = new List<(string serverId, List<SpreadFileInfo> files, ScanSignals signals, long listingEpoch, DateTime listingStartedAtUtc,
             Dictionary<string, UploadListingProgress> uploadAttempts)>();
         var scanLock = new Lock();
         var hardFailureCount = 0;
@@ -1592,6 +1601,8 @@ public partial class SpreadJob : IDisposable
         var tasks = scanTargets.Select(async kvp =>
         {
             var (serverId, basePath) = kvp;
+            NoteAnnounceScanAttempt(serverId);
+            var listingStartedAtUtc = DateTime.UtcNow;
             var serverName = _serverConfigs.TryGetValue(serverId, out var cfg) ? cfg.Name : serverId;
 
             var mainPool = ResolveMainPool(serverId);
@@ -1729,7 +1740,7 @@ public partial class SpreadJob : IDisposable
             if (scanDone)
             {
                 Log.Debug("Spread scan: {Server} returned {Count} files", serverName, files.Count);
-                lock (scanLock) results.Add((serverId, files, signals, listingEpoch, uploadAttempts));
+                lock (scanLock) results.Add((serverId, files, signals, listingEpoch, listingStartedAtUtc, uploadAttempts));
             }
             else if (!yieldedToTransfers)
             {
@@ -1773,7 +1784,7 @@ public partial class SpreadJob : IDisposable
         // Process all results under lock once
         lock (_ownershipLock)
         {
-            foreach (var (serverId, files, signals, listingEpoch, uploadAttempts) in results)
+            foreach (var (serverId, files, signals, listingEpoch, listingStartedAtUtc, uploadAttempts) in results)
             {
                 foreach (var file in files)
                     if (_uploadListingProgress.TryGetValue((file.Name, serverId), out var progress))
@@ -1791,8 +1802,10 @@ public partial class SpreadJob : IDisposable
                     suspectedSourceMigrations.Add(serverId);
                 }
                 ProcessFiles(serverId, files, listingEpoch);
+                _unverifiedAnnouncedSources.Remove(serverId);
                 _destSawMarker[serverId] = signals.SawCompletionMarker;
                 _destHasMissingStub[serverId] = signals.HasMissingStub;
+                _sitebotListingStartedAtUtc[serverId] = listingStartedAtUtc;
                 if (_sourceServersField.Contains(serverId))
                     _sourceScanSucceeded = true;
                 // Any entry (real file or zipscript artifact) proves the release
@@ -2160,7 +2173,7 @@ public partial class SpreadJob : IDisposable
                 // first file, which zeroed FilesDelivered in race history and
                 // mislabeled roles in telemetry.
                 progress.IsSource = _sourceServersField.Contains(serverId)
-                    && (serverId == _primarySourceServerId || !IsReceivingSite(serverId));
+                    && (serverId == _primarySourceServerId || !IsReceivingSite(serverId) || _sitePathsRef?.ContainsKey(serverId) == false);
                 progress.IsComplete = owned >= total && total > 0;
             }
         }

@@ -409,25 +409,7 @@ public partial class ServerEditDialog : Window
         _serverConfig.Irc.FallbackCharset = IrcFishCharsetBox.Text.Trim();
 
         // Parse channels (prefix with - to disable auto-join)
-        _serverConfig.Irc.Channels = (IrcChannelsBox.Text ?? "")
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(l => l.Length > 0)
-            .Select(line =>
-            {
-                var autoJoin = true;
-                if (line.StartsWith('-'))
-                {
-                    autoJoin = false;
-                    line = line[1..];
-                }
-                var parts = line.Split(' ', 2);
-                return new IrcChannelConfig
-                {
-                    Name = parts[0],
-                    Key = parts.Length > 1 ? parts[1] : "",
-                    AutoJoin = autoJoin
-                };
-            }).ToList();
+        _serverConfig.Irc.Channels = IrcChannelEditor.Parse(IrcChannelsBox.Text, _serverConfig.Irc.Channels);
 
         // Spread — SectionMappings is the source of truth; derive the
         // legacy Sections dict so SpreadJob / DashboardViewModel / MountService

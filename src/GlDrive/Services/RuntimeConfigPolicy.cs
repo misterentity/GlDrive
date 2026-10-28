@@ -23,7 +23,7 @@ internal static class RuntimeConfigPolicy
             [typeof(CacheConfig)] = Map("DirectoryListingTtlSeconds MaxCachedDirectories DirectoryListTimeoutSeconds ReadBufferSpillThresholdMb", deferred: "FileInfoTimeoutMs"),
             [typeof(NotificationConfig)] = Map(notifications: "Enabled PollIntervalSeconds WatchPath ExcludedCategories"),
             [typeof(SearchConfig)] = Map(search: "SearchPaths MaxDepth Method IndexCacheMinutes"),
-            [typeof(DownloadConfig)] = Map("LocalPath CategoryPaths MaxConcurrentDownloads StreamingBufferSizeKb WriteBufferLimitMb QualityDefault OmdbApiKey TmdbApiKey OpenRouterModel AutoDownloadWishlist AutoExtract DeleteArchivesAfterExtract SpeedLimitKbps SkipIncompleteReleases MaxRetries RetryDelaySeconds ScheduleEnabled ScheduleStartHour ScheduleEndHour VerifySfv MultiStream PlaySoundOnComplete Theme CyberpunkPromoted"),
+            [typeof(DownloadConfig)] = Map("LocalPath CategoryPaths MaxConcurrentDownloads StreamingBufferSizeKb WriteBufferLimitMb QualityDefault ScoredQualityEnabled Profiles OmdbApiKey TmdbApiKey OpenRouterModel AutoDownloadWishlist AutoExtract DeleteArchivesAfterExtract SpeedLimitKbps SkipIncompleteReleases MaxRetries RetryDelaySeconds ScheduleEnabled ScheduleStartHour ScheduleEndHour VerifySfv MultiStream PlaySoundOnComplete Theme CyberpunkPromoted"),
             [typeof(MultiStreamConfig)] = Map("Enabled BorrowIdleRaceLogin HttpLanesPerNetwork FtpMinSplitMb SlowMode SlowModeKbps Networks"),
             [typeof(NetworkPathConfig)] = Map("AdapterId AdapterName FriendlyName Enabled SpeedLimitKbps AllowanceGb Period"),
             [typeof(SiteSpreadConfig)] = Map("Sections Priority MaxUploadSlots MaxDownloadSlots DownloadOnly NeverSource Skiplist Affils SectionMappings MetadataFilter"),
@@ -31,7 +31,7 @@ internal static class RuntimeConfigPolicy
             [typeof(SectionMapping)] = Map("IrcSection RemoteSection Path TriggerRegex TagRules Enabled"),
             [typeof(SkiplistRule)] = Map("Pattern IsRegex Action Scope MatchDirectories MatchFiles Section Expression"),
             [typeof(IrcConfig)] = Map(irc: "Enabled Host Port UseTls Nick AltNick RealName AutoConnect InviteNick FishEnabled FishMode FallbackCharset Channels AnnounceRules RequestFiller"),
-            [typeof(IrcChannelConfig)] = Map(irc: "Name Key AutoJoin"),
+            [typeof(IrcChannelConfig)] = Map(irc: "Name Key AutoJoin Sitebot"),
             [typeof(IrcAnnounceRule)] = Map(irc: "Enabled Channel Pattern AutoRace"),
             [typeof(RequestFillerConfig)] = Map(irc: "Enabled Pattern Channel MaxPerHour CooldownSeconds")
         };

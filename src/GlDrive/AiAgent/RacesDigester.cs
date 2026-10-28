@@ -12,7 +12,7 @@ public sealed class RacesDigester
         // fabricated 0% rates caused the agent to disable a healthy destination.
         var serverParticipation = list
             .SelectMany(r => r.Participants.Select(p => p.ServerId).Distinct(StringComparer.Ordinal).Select(id => (ServerId: id,
-                known: HasObservedWinner(r), won: r.Winner == id)))
+                known: HasObservedWinner(r, id), won: IsOwnWin(r, id))))
             .GroupBy(x => x.ServerId);
         foreach (var g in serverParticipation)
         {
@@ -65,6 +65,29 @@ public sealed class RacesDigester
     }
 
     internal static bool HasObservedWinner(RaceOutcomeEvent race)
+        => HasLegacyWinner(race) || race.Participants.Any(p => HasObservedWinner(race, p.ServerId));
+
+    internal static bool HasObservedWinner(RaceOutcomeEvent race, string serverId)
+    {
+        var destination = ObservedDestination(race, serverId);
+        return destination != null || HasLegacyWinner(race);
+    }
+
+    internal static bool IsOwnWin(RaceOutcomeEvent race, string serverId)
+    {
+        var destination = ObservedDestination(race, serverId);
+        return destination != null ? GlDrive.Spread.SitebotOutcomePolicy.IsOwnWin(destination)
+            : HasLegacyWinner(race) && race.Winner == serverId;
+    }
+
+    private static GlDrive.Spread.RaceDestinationOutcome? ObservedDestination(RaceOutcomeEvent race, string serverId)
+    {
+        if (!race.Participants.Any(p => p.ServerId == serverId && p.Role == "dst")) return null;
+        var outcomes = (race.DestinationOutcomes ?? []).Where(d => d.ServerId == serverId).ToArray();
+        return outcomes.Length == 1 && GlDrive.Spread.SitebotOutcomePolicy.HasObservedWinner(outcomes[0]) ? outcomes[0] : null;
+    }
+
+    private static bool HasLegacyWinner(RaceOutcomeEvent race)
         => !string.IsNullOrWhiteSpace(race.Winner)
            && race.Participants.Any(p => p.ServerId == race.Winner);
 }

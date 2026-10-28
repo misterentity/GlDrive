@@ -49,6 +49,7 @@ public class IrcChannelConfig
     public string Name { get; set; } = "";
     public string Key { get; set; } = "";
     public bool AutoJoin { get; set; } = true;
+    public GlDrive.Spread.SitebotChannelConfig Sitebot { get; set; } = new();
 }
 
 /// <summary>

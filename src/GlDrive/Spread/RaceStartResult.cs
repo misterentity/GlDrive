@@ -10,4 +10,5 @@ public sealed record RaceStartResult(
     SpreadJob? Job = null,
     int? QueuePosition = null,
     TimeSpan? SuppressedFor = null,
-    string? Reason = null);
+    string? Reason = null,
+    bool HintsMerged = false);

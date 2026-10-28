@@ -24,6 +24,7 @@ public class WishlistMatcher
         : this(wishlist, downloadManager.Enqueue, config, serverId, serverName,
             attempt => App.TelemetryRecorder?.Record(TelemetryStream.WishlistAttempts, attempt))
     {
+        downloadManager.AttachWishlist(wishlist, serverId);
     }
 
     internal WishlistMatcher(WishlistStore wishlist, Func<DownloadItem, bool> enqueue,
@@ -48,7 +49,7 @@ public class WishlistMatcher
         OnNewRelease(section, releaseName, remotePath, fromIrc: true);
     }
 
-    public void OnNewRelease(string category, string releaseName, string remotePath, bool fromIrc = false)
+    public void OnNewRelease(string category, string releaseName, string remotePath, bool fromIrc = false, long? sizeBytes = null)
     {
         try
         {
@@ -56,10 +57,14 @@ public class WishlistMatcher
             {
                 // Shared across matchers/sites, and claimed before evaluation. No store
                 // lock is held while calling DownloadManager or raising UI events.
-                if (!_wishlist.TryBeginReleaseEvaluation(item.Id, releaseName)) continue;
+                var scored = _config.ScoredQualityEnabled;
+                var allowCompleted = scored && WishlistAcquisition.ResolveProfile(item, _config)?.UpgradeProperRepackAfterCutoff == true;
+                if (!_wishlist.TryBeginReleaseEvaluation(item.Id, releaseName, allowCompleted)) continue;
+                DownloadItem? downloadItem = null;
+                bool reservation = false, enqueueAttempted = false;
                 try
                 {
-                    bool matches = item.Type switch
+                    bool matches = scored ? WishlistAcquisition.MatchesTitle(item, releaseName) : item.Type switch
                     {
                         MediaType.Movie => SceneNameParser.MatchesMovie(releaseName, item.Title, item.Year, item.Quality),
                         MediaType.TvShow => SceneNameParser.MatchesTvEpisode(releaseName, item.Title, item.Quality),
@@ -67,13 +72,32 @@ public class WishlistMatcher
                     };
 
                     string? missReason = matches ? null : ClassifyMissReason(releaseName, item);
+                    int? qualityScore = null;
+                    if (matches)
+                    {
+                        downloadItem = new DownloadItem
+                        {
+                            RemotePath = remotePath, ReleaseName = releaseName,
+                            LocalPath = BuildLocalPath(item, category!, releaseName),
+                            WishlistItemId = item.Id, Category = category!,
+                            ServerId = _serverId ?? "", ServerName = _serverName,
+                            TotalBytes = sizeBytes is > 0 ? sizeBytes.Value : 0
+                        };
+                        if (scored)
+                        {
+                            var decision = _wishlist.TryReserveScoredGrab(item.Id, downloadItem, _config, sizeBytes);
+                            matches = reservation = decision.Accepted;
+                            qualityScore = decision.Score;
+                            missReason = matches ? null : decision.Reason;
+                        }
+                    }
                     try
                     {
                         _recordAttempt?.Invoke(new WishlistAttemptEvent
                             {
                                 WishlistItemId = item.Id,
                                 Release = releaseName,
-                                Score = matches ? 1.0 : 0.0,
+                                Score = qualityScore ?? (matches ? 1.0 : 0.0),
                                 Matched = matches,
                                 MissReason = missReason,
                                 Section = category ?? "",
@@ -91,24 +115,16 @@ public class WishlistMatcher
                     Log.Information("Wishlist match: [{Category}] {Release} -> {Title} (server: {Server})",
                         category, releaseName, item.Title, _serverName);
 
-                    var localPath = BuildLocalPath(item, category!, releaseName);
-                    var downloadItem = new DownloadItem
+                    enqueueAttempted = true;
+                    if (!_enqueue(downloadItem!))
                     {
-                        RemotePath = remotePath,
-                        ReleaseName = releaseName,
-                        LocalPath = localPath,
-                        WishlistItemId = item.Id,
-                        Category = category!,
-                        ServerId = _serverId ?? "",
-                        ServerName = _serverName
-                    };
-                    if (!_enqueue(downloadItem))
-                    {
+                        if (reservation) _wishlist.ReleaseScoredReservation(item.Id, downloadItem!.Id, releaseName);
                         _wishlist.ForgetReleaseEvaluation(item.Id, releaseName);
                         Log.Information("Wishlist match skipped (duplicate): {Release}", releaseName);
                         continue;
                     }
-                    _wishlist.RecordGrab(item.Id, releaseName);
+                    if (scored) _wishlist.ConfirmScoredGrab(item.Id, downloadItem!.Id, releaseName);
+                    else _wishlist.RecordGrab(item.Id, releaseName);
                     if (fromIrc)
                         Log.Information("Wishlist grab from IRC: [{Category}] {Release} -> {Title} (server: {Server})",
                             category, releaseName, item.Title, _serverName);
@@ -116,6 +132,11 @@ public class WishlistMatcher
                 }
                 catch
                 {
+                    // Once enqueue was attempted its exception may come from an
+                    // observer after durable admission. Keep that claim until the
+                    // download lifecycle or authoritative restart reconciliation.
+                    if (reservation && !enqueueAttempted)
+                        _wishlist.ReleaseScoredReservation(item.Id, downloadItem!.Id, releaseName);
                     _wishlist.ForgetReleaseEvaluation(item.Id, releaseName);
                     throw;
                 }

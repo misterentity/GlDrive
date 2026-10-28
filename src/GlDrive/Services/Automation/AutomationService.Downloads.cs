@@ -216,6 +216,28 @@ public sealed partial class AutomationService
     {
         switch (op)
         {
+            case "wishlist.profiles":
+                return new
+                {
+                    enabled = _config.Downloads.ScoredQualityEnabled,
+                    builtIn = Enum.GetValues<QualityProfile>().SelectMany(q => new[]
+                    {
+                        ScoredQualityProfile.Legacy(q), ScoredQualityProfile.Recommended(q)
+                    }).ToArray(),
+                    configured = _config.Downloads.Profiles
+                };
+            case "wishlist.score":
+            {
+                var itemId = Required(a, "itemId", 128);
+                if (_wishlist.GetById(itemId) == null) throw new KeyNotFoundException($"Unknown wishlist item: {itemId}");
+                long? size = null;
+                if (a.TryGetProperty("sizeBytes", out var sizeValue))
+                {
+                    if (sizeValue.ValueKind != JsonValueKind.Number || !sizeValue.TryGetInt64(out var bytes) || bytes <= 0) throw new ArgumentException("sizeBytes must be a positive integer.");
+                    size = bytes;
+                }
+                return _wishlist.EvaluateScoredRelease(itemId, Line(Required(a, "releaseName", 512), "releaseName"), _config.Downloads, size);
+            }
             case "wishlist.list": return Page(_wishlist.Items.ToArray(), a);
             case "wishlist.remove":
             {
@@ -237,14 +259,22 @@ public sealed partial class AutomationService
                 foreach (var property in input.EnumerateObject())
                 {
                     if (!node.ContainsKey(property.Name)) throw new ArgumentException($"Unknown wishlist field: {property.Name}");
+                    if (property.Name is "bestOwned" or "pendingGrabs") throw new ArgumentException($"{property.Name} is maintained by download outcomes and is read-only.");
                     node[property.Name] = JsonNode.Parse(property.Value.GetRawText());
                 }
+                // Editing the legacy resolution also updates its migrated profile unless
+                // the caller explicitly selected a scored/custom profile.
+                if (input.TryGetProperty("quality", out _) && !input.TryGetProperty("profileId", out _) &&
+                    (existing?.ProfileId == null || existing.ProfileId.StartsWith("legacy-", StringComparison.OrdinalIgnoreCase)))
+                    node["profileId"] = null;
                 var item = node.Deserialize<WishlistItem>(Json) ?? throw new ArgumentException("Invalid wishlist item.");
                 if (string.IsNullOrWhiteSpace(item.Id) || string.IsNullOrWhiteSpace(item.Title) || item.Title.Length > 512)
                     throw new ArgumentException("Wishlist items require a nonempty id and a title of at most 512 characters.");
                 if (!Enum.IsDefined(item.Type) || !Enum.IsDefined(item.Quality) || !Enum.IsDefined(item.Status))
                     throw new ArgumentException("Invalid wishlist type, quality or status.");
                 if (item.GrabbedReleases == null) throw new ArgumentException("grabbedReleases cannot be null.");
+                if (WishlistAcquisition.ResolveProfile(item, _config.Downloads) == null)
+                    throw new ArgumentException("Unknown profileId; use wishlist.profiles to list available quality profiles.");
                 if (existing == null) _wishlist.Add(item); else _wishlist.Update(item);
                 return item;
             }

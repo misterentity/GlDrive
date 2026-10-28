@@ -12,6 +12,14 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.13.0 — size-aware race queue, scored quality, sitebot events (2026-10-28)
+
+- Race queue uses highest-response-ratio ordering with ageing and merges duplicate announces'
+  source hints (both on); synthetic replay median wait 2,469 s → 687 s.
+- Opt-in scored quality profiles with floor, cutoff, upgrades and pending-copy dedupe.
+- Typed events from trusted sitebots feed queue sizing, verified race outcomes and a new
+  `spread.report` MCP tool; decision consumers stay opt-in. See the [release notes](releases/v3.13.0.md).
+
 ## v3.12.0 — feature-gap review, Phase A defects (2026-10-28)
 
 - **Security:** one outbound redactor for every AI request (structural plus a final value scan,

@@ -20,6 +20,11 @@ public sealed record PersistedRace(
     int Resumes = 0,
     bool WasActive = false)
 {
+    public string RequestId { get; init; } = Guid.NewGuid().ToString("N");
+    public List<RaceSourceHint> SourceHints { get; init; } = [];
+    public long? ExpectedBytes { get; init; }
+    public double? PredictedSeconds { get; init; }
+    public string? PredictionBasis { get; init; }
     public DateTime? NextProbeAtUtc { get; init; }
     public string? WaitReason { get; init; }
     public int WaitAttempts { get; init; }
@@ -46,6 +51,8 @@ public sealed record PersistedRace(
         KeepUntilAvailable = KeepUntilAvailable || incomplete
     };
 }
+
+public sealed record RaceSourceHint(string ServerId, string Section, string? Path = null);
 
 public readonly record struct RaceQueueRestore(
     List<PersistedRace> Races, int Resumed, int DroppedStale, int DroppedResumeCap);

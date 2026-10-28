@@ -6,7 +6,7 @@ using Serilog;
 
 namespace GlDrive.Downloads;
 
-public class WishlistStore
+public partial class WishlistStore
 {
     // Production instances share one list and ordered persistence gate. Isolated stores
     // use the same implementation without initializing AppData or touching user state.
@@ -31,6 +31,7 @@ public class WishlistStore
         internal readonly Action<string> Write = write;
         internal List<WishlistItem> Items = [];
         internal readonly WishlistReleaseDeduplicator ReleaseEvaluations = new();
+        internal readonly HashSet<string> AdmissionsInFlight = [];
         internal bool Loaded;
     }
 
@@ -55,6 +56,7 @@ public class WishlistStore
             {
                 var json = _state.Read();
                 _state.Items = json == null ? [] : JsonSerializer.Deserialize<List<WishlistItem>>(json, JsonOptions) ?? [];
+                foreach (var item in _state.Items) NormalizeQualityState(item);
             }
             catch (Exception ex)
             {
@@ -86,6 +88,7 @@ public class WishlistStore
         lock (_state.Sync)
         {
             EnsureLoaded();
+            NormalizeQualityState(item);
             _state.Items.Add(item);
             Save();
         }
@@ -107,6 +110,7 @@ public class WishlistStore
         lock (_state.Sync)
         {
             EnsureLoaded();
+            NormalizeQualityState(item);
             var idx = _state.Items.FindIndex(i => i.Id == item.Id);
             if (idx >= 0)
                 _state.Items[idx] = item;
@@ -122,13 +126,14 @@ public class WishlistStore
         lock (_state.Sync) { EnsureLoaded(); return _state.Items.FirstOrDefault(i => i.Id == id); }
     }
 
-    internal bool TryBeginReleaseEvaluation(string itemId, string release)
+    internal bool TryBeginReleaseEvaluation(string itemId, string release, bool allowCompleted = false)
     {
         lock (_state.Sync)
         {
             EnsureLoaded();
             var item = _state.Items.FirstOrDefault(i => i.Id == itemId);
-            return item is { Dead: false, Status: WishlistStatus.Watching }
+            return item is { Dead: false } && (item.Status == WishlistStatus.Watching ||
+                    allowCompleted && item.Status == WishlistStatus.Completed)
                 && !item.GrabbedReleases.Contains(release, StringComparer.OrdinalIgnoreCase)
                 && _state.ReleaseEvaluations.TryBegin(itemId, release);
         }
@@ -184,6 +189,8 @@ public class WishlistStore
                     Id = Guid.NewGuid().ToString("N"), Type = item.Type, Title = item.Title,
                     Year = item.Year, ImdbId = item.ImdbId, TvMazeId = item.TvMazeId,
                     Quality = item.Quality, Status = item.Status, AddedAt = item.AddedAt,
+                    ProfileId = item.ProfileId ?? ScoredQualityProfile.Legacy(item.Quality).Id,
+                    BestOwned = item.BestOwned.Select(CloneCopy).ToList(),
                     GrabbedReleases = item.GrabbedReleases == null ? null! : new List<string>(item.GrabbedReleases),
                     PosterUrl = item.PosterUrl, Plot = item.Plot, Rating = item.Rating,
                     Genres = item.Genres, Dead = item.Dead

@@ -15,6 +15,7 @@ public class IrcMessageItem
 {
     public DateTime Timestamp { get; set; } = DateTime.Now;
     public string Nick { get; set; } = "";
+    public string UserHost { get; set; } = "";
     public string Text { get; set; } = "";
     public IrcMessageType Type { get; set; }
     public bool WasEncrypted { get; set; }
@@ -780,7 +781,7 @@ public class IrcService : IDisposable
         if (autoRekeyTarget != null)
             TriggerAutoReKey(autoRekeyTarget);
 
-        AddMessage(effectiveTarget, new IrcMessageItem { Nick = nick, Text = StripFormatting(text), WasEncrypted = wasEncrypted });
+        AddMessage(effectiveTarget, new IrcMessageItem { Nick = nick, UserHost = msg.UserHost, Text = StripFormatting(text), WasEncrypted = wasEncrypted });
     }
 
     /// <summary>
@@ -903,7 +904,7 @@ public class IrcService : IDisposable
         if (string.IsNullOrEmpty(nick))
             AddSystemMessage("*", text);
         else
-            AddMessage(effectiveTarget, new IrcMessageItem { Nick = nick, Text = text, Type = IrcMessageType.Notice, WasEncrypted = wasEncrypted });
+            AddMessage(effectiveTarget, new IrcMessageItem { Nick = nick, UserHost = msg.UserHost, Text = text, Type = IrcMessageType.Notice, WasEncrypted = wasEncrypted });
     }
 
     private void HandleJoin(IrcMessage msg)

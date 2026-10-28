@@ -14,6 +14,11 @@ public class WishlistItem
     public string? ImdbId { get; set; }
     public int? TvMazeId { get; set; }
     public QualityProfile Quality { get; set; } = QualityProfile.Q1080p;
+    public string? ProfileId { get; set; }
+    /// <summary>Verified successful downloads, separately for each movie or episode.</summary>
+    public List<WishlistCopy> BestOwned { get; set; } = [];
+    /// <summary>Durable reservations shared by every source server.</summary>
+    public List<WishlistCopy> PendingGrabs { get; set; } = [];
     public WishlistStatus Status { get; set; } = WishlistStatus.Watching;
     public DateTime AddedAt { get; set; } = DateTime.UtcNow;
     public List<string> GrabbedReleases { get; set; } = [];
@@ -23,6 +28,17 @@ public class WishlistItem
     public string? Genres { get; set; }
     /// <summary>Soft-deleted by AI agent pruning — excluded from auto-matching but retained for history.</summary>
     public bool Dead { get; set; }
+}
+
+public sealed class WishlistCopy
+{
+    public string Key { get; set; } = "";
+    public string ReleaseName { get; set; } = "";
+    public string DownloadId { get; set; } = "";
+    public string ServerId { get; set; } = "";
+    public long? SizeBytes { get; set; }
+    public string? LocalPath { get; set; }
+    public DateTime? CompletedAt { get; set; }
 }
 
 public class DownloadItem

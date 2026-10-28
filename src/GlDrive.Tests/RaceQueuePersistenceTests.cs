@@ -92,7 +92,15 @@ public sealed class RaceQueuePersistenceTests : IDisposable
     public void Store_RoundTripsAndSkipsNullSnapshots()
     {
         var store = new RaceQueueStore(QueuePath);
-        var races = new List<PersistedRace> { Race("A", TimeSpan.Zero, active: true), Race("B", TimeSpan.Zero) };
+        var races = new List<PersistedRace>
+        {
+            Race("A", TimeSpan.Zero, active: true) with
+            {
+                SourceHints = [new("source", "tv-hd", "/incoming/A")],
+                ExpectedBytes = 123456789, PredictedSeconds = 45.5, PredictionBasis = "announced-size/route-speed"
+            },
+            Race("B", TimeSpan.Zero)
+        };
         store.Save(() => races);
         store.Save(() => null);
 
@@ -174,11 +182,12 @@ public sealed class RaceQueuePersistenceTests : IDisposable
     private sealed class PersistedRaceComparer : IEqualityComparer<PersistedRace>
     {
         private static readonly List<string> Shared = [];
+        private static readonly List<RaceSourceHint> SharedHints = [];
 
         public bool Equals(PersistedRace? x, PersistedRace? y) =>
             x is not null && y is not null &&
-            x with { ServerIds = Shared } == y with { ServerIds = Shared } &&
-            x.ServerIds.SequenceEqual(y.ServerIds);
+            x with { ServerIds = Shared, SourceHints = SharedHints } == y with { ServerIds = Shared, SourceHints = SharedHints } &&
+            x.ServerIds.SequenceEqual(y.ServerIds) && x.SourceHints.SequenceEqual(y.SourceHints);
 
         public int GetHashCode(PersistedRace obj) => obj.ReleaseName.GetHashCode();
     }
