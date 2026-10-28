@@ -13,8 +13,17 @@ public class WishlistItem
     public int? Year { get; set; }
     public string? ImdbId { get; set; }
     public int? TvMazeId { get; set; }
+    public int? TmdbId { get; set; }
+    public int? TvdbId { get; set; }
+    public string Source { get; set; } = "";
+    public string? PlexWatchlistId { get; set; }
+    public bool WatchlistSeriesEnded { get; set; }
+    public DateTimeOffset? WatchlistMetadataCheckedAtUtc { get; set; }
     public QualityProfile Quality { get; set; } = QualityProfile.Q1080p;
     public string? ProfileId { get; set; }
+    /// <summary>Null uses the global floor or an explicitly configured profile's permission.</summary>
+    public bool? AllowLowQualitySources { get; set; }
+    public MovieReleaseDates? ReleaseDates { get; set; }
     public SeriesMonitorMode MonitorMode { get; set; } = SeriesMonitorMode.Legacy;
     public bool AutoPullCompletedRaces { get; set; }
     public DateTimeOffset? MonitorSinceUtc { get; set; }
@@ -67,6 +76,8 @@ public class DownloadItem
     public DateTime? CompletedAt { get; set; }
     public string? ErrorMessage { get; set; }
     public string? WishlistItemId { get; set; }
+    /// <summary>Automatic correction provenance remains on every terminal queue row.</summary>
+    public string? NukeCorrectionForRelease { get; set; }
     public string Category { get; set; } = "";
     public string ServerId { get; set; } = "";
     public string ServerName { get; set; } = "";
@@ -77,7 +88,26 @@ public class DownloadItem
     public bool BackgroundWantedPull { get; set; }
     public int RelocationAttempts { get; set; }
     public DateTime? LastRelocationLookupAt { get; set; }
+    public string? SfvRepairRoot { get; set; }
+    public string? SfvRepairOwner { get; set; }
+    public List<SfvRepairFile> SfvRepairFiles { get; set; } = [];
+    /// <summary>Positive CRC failure holds watch-folder extraction until verification succeeds.</summary>
+    public bool SfvIntegrityHold { get; set; }
 }
+
+public sealed class SfvRepairFile
+{
+    public string LocalPath { get; set; } = "";
+    public int Attempts { get; set; }
+    public uint? LastBadCrc { get; set; }
+    public bool Pending { get; set; }
+    public string? QuarantinePath { get; set; }
+    public long QuarantineLength { get; set; }
+    public DateTime QuarantineLastWriteUtc { get; set; }
+    public List<SfvQuarantineFile> PriorQuarantines { get; set; } = [];
+}
+
+public sealed record SfvQuarantineFile(string Path, long Length, DateTime LastWriteUtc);
 
 public class SearchResult
 {

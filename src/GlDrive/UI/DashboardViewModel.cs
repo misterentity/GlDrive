@@ -602,6 +602,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             _selectedWishlistItem = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(HasWishlistSelection));
+            OnPropertyChanged(nameof(SelectedWishlistAllowsLowSources));
             OnPropertyChanged(nameof(HasSelectedPoster));
             OnPropertyChanged(nameof(SelectedPosterUrl));
             OnPropertyChanged(nameof(SelectedPlot));
@@ -611,6 +612,17 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     }
 
     public bool HasWishlistSelection => _selectedWishlistItem != null;
+    public bool? SelectedWishlistAllowsLowSources
+    {
+        get => _selectedWishlistItem == null ? null : _wishlistStore.GetById(_selectedWishlistItem.Id)?.AllowLowQualitySources;
+        set
+        {
+            if (_selectedWishlistItem == null || _wishlistStore.GetById(_selectedWishlistItem.Id) is not { } item) return;
+            item.AllowLowQualitySources = value;
+            _wishlistStore.Update(item);
+            OnPropertyChanged();
+        }
+    }
     public bool HasSelectedPoster => !string.IsNullOrEmpty(_selectedWishlistItem?.PosterUrl);
     public string? SelectedPosterUrl => _selectedWishlistItem?.PosterUrl;
     public string SelectedPlot => _selectedWishlistItem?.Plot ?? "";
@@ -941,6 +953,12 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     public ICommand DownloadSearchResultCommand { get; }
     public ICommand CopySearchResultCommand { get; }
     public ICommand RefreshMetadataCommand { get; }
+    public ICommand RefreshWishlistCalendarCommand { get; }
+    public ICommand RefreshUpcomingCalendarCommand { get; }
+    private readonly CancellationTokenSource _calendarStop = new();
+    private int _calendarRunning;
+    private string _calendarStatus = "Release dates are advisory; select a movie to refresh.";
+    public string CalendarStatus { get => _calendarStatus; private set { _calendarStatus = value; OnPropertyChanged(); } }
     public ICommand ClearNotificationsCommand { get; }
     public ICommand DownloadNotificationCommand { get; }
     public ICommand RaceNotificationCommand { get; }
@@ -1050,6 +1068,8 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                 System.Windows.Clipboard.SetText(SelectedSearchResult.ReleaseName);
         });
         RefreshMetadataCommand = new RelayCommand(async () => await RefreshAllMetadata());
+        RefreshWishlistCalendarCommand = new RelayCommand(async () => await RefreshMovieCalendar(false));
+        RefreshUpcomingCalendarCommand = new RelayCommand(async () => await RefreshMovieCalendar(true));
         LoadUpcomingCommand = new RelayCommand(async () => await LoadUpcoming(force: true));
         AddUpcomingToWishlistCommand = new RelayCommand(async () => await AddUpcomingToWishlist());
         MoveUpCommand = new RelayCommand(MoveUpDownload);
@@ -1217,8 +1237,12 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private void RemoveWishlistItem()
     {
         if (SelectedWishlistItem == null) return;
+        var wasWatchlistImport = _wishlistStore.GetById(SelectedWishlistItem.Id)?.Source == GlDrive.Plex.PlexWatchlistSync.Source;
         _wishlistStore.Remove(SelectedWishlistItem.Id);
         RefreshWishlist();
+        if (wasWatchlistImport)
+            MessageBox.Show("This item is inactive in GlDrive and will stay excluded from watchlist sync. Remove it from your Plex Watchlist too if you no longer want it there.",
+                "Watchlist item inactive", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     private void TogglePause()
@@ -1694,7 +1718,6 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                         Title = m.Title,
                         Year = m.YearParsed?.ToString() ?? "",
                         ReleaseDateDisplay = m.ReleaseDate ?? "",
-                        ReleaseType = "", // discover doesn't distinguish 4 vs 5
                         PosterUrl = m.PosterUrl,
                         Plot = m.Overview,
                         Rating = m.VoteAverage > 0 ? m.VoteAverage.ToString("F1") : "",
@@ -1856,6 +1879,8 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                 Title = movie.Title,
                 Year = int.TryParse(movie.Year, out var y) ? y : null,
                 ImdbId = movie.ImdbId,
+                TmdbId = movie.TmdbId,
+                ReleaseDates = movie.ReleaseDates,
                 Quality = quality,
                 PosterUrl = movie.PosterUrl,
                 Plot = movie.Plot,
@@ -1865,6 +1890,38 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             RefreshWishlist();
             UpcomingStatus = $"Added {movie.Title} to wishlist";
         }
+    }
+
+    private async Task RefreshMovieCalendar(bool upcoming)
+    {
+        if (_disposed || Interlocked.Exchange(ref _calendarRunning, 1) != 0) return;
+        try
+        {
+            CalendarStatus = "Refreshing movie release dates…";
+            if (upcoming && _selectedUpcomingMovie is { } movie)
+            {
+                using var client = new TmdbClient(_config.Downloads.ResolveTmdbKey());
+                var dates = await client.GetReleaseDates(movie.TmdbId, _config.Downloads.MovieCalendarRegion, _calendarStop.Token);
+                _calendarStop.Token.ThrowIfCancellationRequested();
+                if (dates.Status != "unavailable") movie.ReleaseDates = dates;
+                CalendarStatus = dates.Status == "unavailable" ? "Release date lookup failed; saved dates are retained." :
+                    $"{movie.Title}: {dates.ReleaseType} ({dates.Region})";
+                UpcomingStatus = CalendarStatus;
+            }
+            else if (!upcoming && SelectedWishlistItem is { } selected && _wishlistStore.GetById(selected.Id)?.Type == MediaType.Movie)
+            {
+                var result = await new MovieCalendar(_config.Downloads, _wishlistStore).RefreshAsync(selected.Id, _calendarStop.Token);
+                if (_disposed) return;
+                RefreshWishlist();
+                CalendarStatus = result.Status == "unavailable" ? "Release date lookup failed; saved dates are retained." :
+                    result.Status == "item-changed" ? "Movie changed during lookup; refresh again." :
+                    $"{selected.Title}: {result.Dates?.ReleaseType ?? "Unknown"} ({result.Dates?.Region})";
+            }
+            else CalendarStatus = "Select a movie to refresh its release dates.";
+        }
+        catch (OperationCanceledException) { }
+        catch { CalendarStatus = "Release dates unavailable; availability is unknown."; }
+        finally { Volatile.Write(ref _calendarRunning, 0); }
     }
 
     private async Task RefreshAllMetadata()
@@ -2125,6 +2182,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     private void RefreshWishlist()
     {
+        var selectedId = SelectedWishlistItem?.Id;
         WishlistItems.Clear();
         foreach (var item in _wishlistStore.Items)
         {
@@ -2135,14 +2193,18 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                 Type = item.Type.ToString(),
                 Year = item.Year?.ToString() ?? "",
                 Quality = item.Quality.ToString(),
-                Status = item.Status.ToString(),
+                Status = item.Dead ? "Inactive" : item.Status.ToString(),
                 GrabbedCount = item.GrabbedReleases.Count.ToString(),
+                TheatricalDate = MovieReleaseDates.Display(item.ReleaseDates?.Theatrical),
+                DigitalDate = MovieReleaseDates.Display(item.ReleaseDates?.Digital),
+                PhysicalDate = MovieReleaseDates.Display(item.ReleaseDates?.Physical),
                 PosterUrl = item.PosterUrl,
                 Plot = item.Plot,
                 Rating = item.Rating,
                 Genres = item.Genres
             });
         }
+        if (selectedId != null) SelectedWishlistItem = WishlistItems.FirstOrDefault(i => i.Id == selectedId);
     }
 
     internal void RefreshDownloadQueue() => RefreshDownloads();
@@ -2419,6 +2481,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             _preDbCts?.Cancel();
             _preDbCts = new CancellationTokenSource();
             var results = await _preDbClient.GetLatestAsync(ct: _preDbCts.Token);
+            _serverManager.NukeWatch.ObservePreDb(results);
             Log.Debug("PreDB: got {Count} items", results.Length);
             MergePreDbItems(results);
             PreDbStatus = $"{PreDbItems.Count} releases (updated {DateTime.Now:HH:mm:ss})";
@@ -2447,6 +2510,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             _preDbCts?.Cancel();
             _preDbCts = new CancellationTokenSource();
             var results = await _preDbClient.SearchAsync(_preDbQuery, ct: _preDbCts.Token);
+            _serverManager.NukeWatch.ObservePreDb(results);
             PopulatePreDbItems(results);
             PreDbStatus = $"{results.Length} results for \"{_preDbQuery}\"";
         }
@@ -2537,6 +2601,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        _calendarStop.Cancel();
         // Cancellation starts immediately; native lease cleanup is awaited asynchronously
         // so closing a window never blocks its dispatcher or tears down a shared FTP pool.
         DiskPollShutdown = _diskPoll.StopAsync();
@@ -2595,6 +2660,9 @@ public class WishlistItemVm
     public string Quality { get; set; } = "";
     public string Status { get; set; } = "";
     public string GrabbedCount { get; set; } = "0";
+    public string TheatricalDate { get; set; } = "Unknown";
+    public string DigitalDate { get; set; } = "Unknown";
+    public string PhysicalDate { get; set; } = "Unknown";
     public string? PosterUrl { get; set; }
     public string? Plot { get; set; }
     public string? Rating { get; set; }
@@ -2786,13 +2854,28 @@ public class UpcomingTvEpisodeVm
     public int TvMazeId { get; set; }
 }
 
-public class UpcomingMovieVm
+public class UpcomingMovieVm : INotifyPropertyChanged
 {
     public int TmdbId { get; set; }
     public string Title { get; set; } = "";
     public string Year { get; set; } = "";
     public string ReleaseDateDisplay { get; set; } = "";
-    public string ReleaseType { get; set; } = "";
+    private MovieReleaseDates? _releaseDates;
+    public MovieReleaseDates? ReleaseDates
+    {
+        get => _releaseDates;
+        set
+        {
+            _releaseDates = value;
+            foreach (var property in new[] { nameof(ReleaseDates), nameof(ReleaseType), nameof(TheatricalDate), nameof(DigitalDate), nameof(PhysicalDate) })
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(property));
+        }
+    }
+    public string ReleaseType => ReleaseDates?.ReleaseType ?? "Unknown";
+    public string TheatricalDate => MovieReleaseDates.Display(ReleaseDates?.Theatrical);
+    public string DigitalDate => MovieReleaseDates.Display(ReleaseDates?.Digital);
+    public string PhysicalDate => MovieReleaseDates.Display(ReleaseDates?.Physical);
+    public event PropertyChangedEventHandler? PropertyChanged;
     public string? PosterUrl { get; set; }
     public string? Plot { get; set; }
     public string? Rating { get; set; }

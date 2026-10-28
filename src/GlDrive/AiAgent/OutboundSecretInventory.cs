@@ -70,7 +70,12 @@ internal static class OutboundSecretInventory
             if (current is JsonObject obj)
             {
                 foreach (var property in obj)
+                {
+                    // Hook definitions are private configuration, not credentials. Mask the
+                    // entire block in config views without making its ordinary values tokens.
+                    if (ReferenceEquals(obj, node) && property.Key.Equals("hooks", StringComparison.OrdinalIgnoreCase)) continue;
                     Visit(property.Value, secret || ConfigSecretPointers.IsSecret(property.Key));
+                }
             }
             else if (current is JsonArray array)
             {
@@ -78,8 +83,8 @@ internal static class OutboundSecretInventory
             }
             else if (secret && current is JsonValue scalar)
             {
-                var value = scalar.TryGetValue<string>(out var text) ? text : scalar.ToJsonString();
-                if (!string.IsNullOrEmpty(value)) secrets.Add(value);
+                // Preserve even short credential strings; numbers and booleans are not secrets.
+                if (scalar.TryGetValue<string>(out var value) && !string.IsNullOrEmpty(value)) secrets.Add(value);
             }
         }
     }

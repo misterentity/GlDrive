@@ -213,6 +213,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
 
     public event Action<SpreadJob>? JobStarted;
     public event Action<SpreadJob>? JobCompleted;
+    public event Action<SpreadJob>? JobEnded;
     public event Action<SpreadJob>? JobProgressChanged;
 
     public SpreadManager(AppConfig config) : this(config, ConfigManager.AppDataPath)
@@ -779,7 +780,12 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
                     PartialCleanupNotice?.Invoke(releaseName, followup.WaitReason ?? "Owned partial needs cleanup");
                 if (wasActive)
                 {
-                    if (!request.CleanupOnly && !deferredForPools && !waiting) RecordHistory(job);
+                    if (!request.CleanupOnly && !deferredForPools && !waiting)
+                    {
+                        RecordHistory(job);
+                        try { JobEnded?.Invoke(job); }
+                        catch { Log.Warning("Race hook admission failed; completed work is unaffected"); }
+                    }
                     if (job.State == SpreadJobState.Stopped)
                         Log.Information("Spread job stopped: {Release} [{Section}]",
                             job.ReleaseName, job.Section);

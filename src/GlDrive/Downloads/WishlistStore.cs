@@ -17,18 +17,20 @@ public partial class WishlistStore
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             SecureFile.WriteAllTextRestricted(path, json);
-        });
+        }, () => { try { File.Copy(path, path + ".corrupt", true); } catch { } });
     });
     private readonly State _state;
 
     public WishlistStore() => _state = Shared.Value;
-    internal WishlistStore(Func<string?> read, Action<string> write) => _state = new State(read, write);
+    internal WishlistStore(Func<string?> read, Action<string> write, Action? quarantine = null) => _state = new State(read, write, quarantine);
 
-    private sealed class State(Func<string?> read, Action<string> write)
+    private sealed class State(Func<string?> read, Action<string> write, Action? quarantine = null)
     {
         internal readonly Lock Sync = new();
         internal readonly Func<string?> Read = read;
         internal readonly Action<string> Write = write;
+        internal readonly Action? Quarantine = quarantine;
+        internal bool PersistenceWarned;
         internal List<WishlistItem> Items = [];
         internal readonly WishlistReleaseDeduplicator ReleaseEvaluations = new();
         internal readonly HashSet<string> AdmissionsInFlight = [];
@@ -73,6 +75,7 @@ public partial class WishlistStore
             }
             catch (Exception ex)
             {
+                try { _state.Quarantine?.Invoke(); } catch { }
                 Log.Warning(ex, "Failed to load wishlist, starting empty");
                 _state.Items = [];
             }
@@ -92,7 +95,11 @@ public partial class WishlistStore
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Failed to save wishlist");
+            if (!_state.PersistenceWarned)
+            {
+                _state.PersistenceWarned = true;
+                Log.Warning(ex, "Wishlist persistence failed; changes remain available in memory");
+            }
         }
     }
 
@@ -113,7 +120,11 @@ public partial class WishlistStore
         lock (_state.Sync)
         {
             EnsureLoaded();
-            _state.Items.RemoveAll(i => i.Id == id);
+            var item = _state.Items.FirstOrDefault(i => i.Id == id);
+            if (item?.Source == GlDrive.Plex.PlexWatchlistSync.Source)
+                item.Dead = true; // Retain the imported identity so a later sync cannot re-add it.
+            else
+                _state.Items.RemoveAll(i => i.Id == id);
             _state.ReleaseEvaluations.ForgetItem(id);
             Save();
         }
@@ -205,8 +216,11 @@ public partial class WishlistStore
                 {
                     Id = Guid.NewGuid().ToString("N"), Type = item.Type, Title = item.Title,
                     Year = item.Year, ImdbId = item.ImdbId, TvMazeId = item.TvMazeId,
+                    TmdbId = item.TmdbId, TvdbId = item.TvdbId, Source = item.Source, PlexWatchlistId = item.PlexWatchlistId,
+                    WatchlistSeriesEnded = item.WatchlistSeriesEnded, WatchlistMetadataCheckedAtUtc = item.WatchlistMetadataCheckedAtUtc,
                     Quality = item.Quality, Status = item.Status, AddedAt = item.AddedAt,
                     ProfileId = item.ProfileId ?? ScoredQualityProfile.Legacy(item.Quality).Id,
+                    AllowLowQualitySources = item.AllowLowQualitySources, ReleaseDates = item.ReleaseDates,
                     MonitorMode = item.MonitorMode, MonitorSinceUtc = item.MonitorSinceUtc,
                     AutoPullCompletedRaces = item.AutoPullCompletedRaces,
                     SeriesInventory = (item.SeriesInventory ?? []).Select(SeriesInventoryRefresher.Clone).ToList(),

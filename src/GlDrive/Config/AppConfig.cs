@@ -14,6 +14,8 @@ public class AppConfig
     public AlertConfig Alerts { get; set; } = new();
     public ConfigHistoryConfig ConfigHistory { get; set; } = new();
     public LibraryConfig Library { get; set; } = new();
+    public HookConfig Hooks { get; set; } = new();
+    public NukeWatchConfig NukeWatch { get; set; } = new();
 
     public string ResolveAgentModel() => string.IsNullOrWhiteSpace(Agent.ModelId)
         ? "anthropic/claude-sonnet-4-6" : Agent.ModelId;
@@ -225,6 +227,10 @@ public class DownloadConfig
     public string QualityDefault { get; set; } = "1080p";
     /// <summary>Opt in to scored wishlist acquisition, pending-copy dedupe and cutoff completion.</summary>
     public bool ScoredQualityEnabled { get; set; }
+    /// <summary>Wishlist-only CAM/TS/TC floor; explicit item/custom-profile choices are preserved.</summary>
+    public bool BlockLowQualityWishlistSources { get; set; } = true;
+    /// <summary>Region for explicit TMDB release-date lookups. Dates never gate acquisition.</summary>
+    public string MovieCalendarRegion { get; set; } = "US";
     public bool WantedDecisionWindowEnabled { get; set; }
     public int WantedDecisionWindowMinutes { get; set; } = 15;
     public int WantedCandidateMaxAgeHours { get; set; } = 24;
@@ -257,6 +263,9 @@ public class DownloadConfig
     public int ScheduleStartHour { get; set; }
     public int ScheduleEndHour { get; set; } = 6;
     public bool VerifySfv { get; set; } = true;
+    /// <summary>Opt in to targeted CRC repairs inside staging created by this download.</summary>
+    public bool SfvRepairEnabled { get; set; }
+    public int SfvRepairMaxAttempts { get; set; } = 2;
     /// <summary>Multi-stream / multi-network download settings (plexo-style). Downloads only — never FXP.</summary>
     public MultiStreamConfig MultiStream { get; set; } = new();
     public bool PlaySoundOnComplete { get; set; }

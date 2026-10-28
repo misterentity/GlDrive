@@ -59,8 +59,11 @@ public static class SeriesMonitorPolicy
 
     /// <summary>Maps SxxEyy, multi-episode and date aliases onto inventory identities.</summary>
     public static IReadOnlyList<string> KeysForRelease(WishlistItem item, string release)
+        => KeysForRelease(item, release, SceneNameParser.Parse(release));
+
+    internal static IReadOnlyList<string> KeysForRelease(WishlistItem item, string release, ParsedRelease parsed)
     {
-        if (!WishlistAcquisition.MatchesTitle(item, release)) return [];
+        if (!WishlistAcquisition.MatchesTitle(item, release, parsed)) return [];
         var inventory = Inventory(item);
         if (SceneNameParser.TryEpisodeDate(release, out var date))
         {
@@ -68,7 +71,7 @@ public static class SeriesMonitorPolicy
             var sameDate = inventory.Where(e => e.AirDate == date).ToArray();
             return sameDate.Length == 1 ? [Key(sameDate[0])] : [];
         }
-        var rawKeys = WishlistAcquisition.Keys(item, release).Select(key => key[(key.LastIndexOf(':') + 1)..]).ToArray();
+        var rawKeys = WishlistAcquisition.Keys(item, release, parsed).Select(key => key[(key.LastIndexOf(':') + 1)..]).ToArray();
         if (rawKeys.Length == 1 && IsSeasonKey(rawKeys[0]))
         {
             var season = int.Parse(rawKeys[0][1..]);

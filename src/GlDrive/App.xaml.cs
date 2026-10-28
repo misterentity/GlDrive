@@ -311,7 +311,7 @@ public partial class App
             new GlDrive.AiAgent.RequestFillerValidator()
         };
         LogDigester = new GlDrive.AiAgent.LogDigester(
-            System.IO.Path.Combine(ConfigManager.AppDataPath, "ai-data"));
+            System.IO.Path.Combine(ConfigManager.AppDataPath, "ai-data"), () => new GlDrive.Downloads.WishlistStore().Items);
         ChangeApplier = new GlDrive.AiAgent.ChangeApplier(validators, FreezeStore!, AuditTrail!,
             cfg => LogDigester.BuildRaceEvidence(cfg.Agent.WindowDays),
             transferLimit: id => _serverManager?.Spread?.ObservedTransferLimit(id),
@@ -432,7 +432,11 @@ public partial class App
             new ConfigHistoryAutomation(ConfigChanges, configuration),
             new DiagnosticAutomation(config),
             new AlertAutomation(() => _trayViewModel!.Alerts),
-            new LibraryAutomation(config),
+            new HookAutomation(() => _serverManager!.Hooks),
+            new LibraryAutomation(config, indexRefreshed: _serverManager.ObserveLibraryIndex,
+                ownedObserved: _serverManager.NukeWatch.ObserveOwned, nukeWatch: _serverManager.NukeWatch.Store.Snapshot),
+            new NukeWatchAutomation(config, () => _serverManager!.NukeWatch),
+            new WatchlistAutomation(config, () => _serverManager!.Watchlist),
             new AgentAutomation(config, () => AgentRunner, () => FreezeStore, () => AuditTrail, () => ChangeApplier,
                 onConfigChanged: QueueRuntimeSettingsRefresh),
             new UiAutomation(() =>

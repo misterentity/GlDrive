@@ -40,6 +40,7 @@ public partial class ServerManager : IDisposable
     private volatile bool _disposed;
 
     public SpreadManager? Spread => _spreadManager;
+    public Hooks.HookRunner Hooks { get; }
 
     public event Action<string, string, MountState>? ServerStateChanged; // serverId, serverName, state
     public event Action<string, string, string, string, string>? NewReleaseDetected; // serverId, serverName, category, release, remotePath
@@ -52,7 +53,10 @@ public partial class ServerManager : IDisposable
         _config = config;
         _certManager = certManager;
         _notificationStore = notificationStore;
+        Hooks = new(config, () => GetDownloadManagers().SelectMany(manager => manager.Store.Items).Select(item => item.LocalPath));
         _spreadManager = new SpreadManager(config);
+        _spreadManager.JobEnded += job => Hooks.Publish(new("race.finished", job.ReleaseName, job.Section,
+            SceneNameParser.Parse(job.ReleaseName).Quality.ToString(), job.State.ToString()));
         _spreadManager._getMainPool = serverId =>
             _servers.TryGetValue(serverId, out var svc) ? svc.Pool : null;
         _spreadManager._getSearchService = serverId =>
@@ -60,6 +64,8 @@ public partial class ServerManager : IDisposable
         InitializeSiteHealth();
         InitializeNukes();
         InitializeWanted();
+        InitializeWatchlist();
+        InitializeNukeWatch();
         InitializeAnnounceFeedHealth();
         GuardedFtpLogin.AuthenticationRejected += OnAuthenticationRejected;
     }
@@ -115,7 +121,8 @@ public partial class ServerManager : IDisposable
         catch (SiteRetryDeferredException) { QueueRemount(serverId); throw; }
         var mountAttemptStarted = DateTime.UtcNow;
 
-        var service = new MountService(serverConfig, _config.Downloads, _certManager, _spreadManager, _wantedCoordinator);
+        var service = new MountService(serverConfig, _config.Downloads, _certManager, _spreadManager, _wantedCoordinator, Hooks,
+            CompletedDownloadObserved);
 
         service.StateChanged += state =>
         {
@@ -155,6 +162,7 @@ public partial class ServerManager : IDisposable
         try
         {
             await service.Mount(ct);
+            CompletedDownloadObserved();
             _runtimeConfigSnapshots[serverId] = CaptureRuntimeConfig(serverConfig);
             if (service.Search is { } search) search.IndexPublished += _ => QueueWantedSweep();
             ReplayWantedCompletions(serverId);
@@ -457,6 +465,7 @@ public partial class ServerManager : IDisposable
     private async Task SyncAfterConfigChangeCore()
     {
         QueueWantedSweep();
+        NukeWatch.QueueDownloadReconcile();
         lock (_torrentDownloadLock)
             if (!_torrentDownloadsStopping) _torrentDownloads?.RefreshOptions();
         RefreshTorrentDownloadRate();
@@ -728,6 +737,7 @@ public partial class ServerManager : IDisposable
                 _spreadManager?.ObserveSitebot(ev);
                 ObserveNukeSitebot(ev);
                 ObserveWantedSitebot(ev);
+                ObserveOwnedReleaseSitebot(ev);
             };
             listener.ReleaseAnnounced += (serverId, section, release, autoRace) =>
             {
@@ -780,6 +790,10 @@ public partial class ServerManager : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        Hooks.Dispose();
+        NukeWatch.Dispose();
+        _wantedWishlist.Changed -= Watchlist.QueueOwnershipReconcile;
+        Watchlist.Dispose();
         StopSiteHealth();
         StopAnnounceFeedHealth();
         StopWanted();

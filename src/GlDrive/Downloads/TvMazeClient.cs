@@ -85,6 +85,21 @@ public class TvMazeClient : IDisposable
         }
     }
 
+    /// <summary>Exact external-ID lookup; never guesses a series from fuzzy title search.</summary>
+    public async Task<TvMazeShow?> LookupExternal(int? tvdbId, string? imdbId, CancellationToken ct = default)
+    {
+        var query = tvdbId is > 0 ? "thetvdb=" + tvdbId.Value :
+            Plex.PlexClient.ValidImdb(imdbId) ? "imdb=" + Uri.EscapeDataString(imdbId!) : null;
+        if (query == null) return null;
+        try
+        {
+            var response = await GetJsonAsync("lookup/shows?" + query, ct).ConfigureAwait(false);
+            return JsonSerializer.Deserialize<TvMazeShow>(response, JsonOptions);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch { Log.Warning("TVMaze external identity lookup unavailable; watchlist item remains open"); return null; }
+    }
+
     public async Task<TvMazeScheduleEpisode[]> GetSchedule(DateOnly date, CancellationToken ct = default)
     {
         try

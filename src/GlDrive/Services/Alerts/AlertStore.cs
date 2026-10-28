@@ -7,10 +7,10 @@ using Serilog;
 namespace GlDrive.Services.Alerts;
 
 public enum AlertSeverity { Information, Warning, Error }
-public enum AlertKind { General, SiteOutage, SiteRecovered, AnnounceSilent, AnnounceRecovered, OwnNuke, RaceComplete, DownloadComplete, DownloadFailed, Digest, Heartbeat }
+public enum AlertKind { General, SiteOutage, SiteRecovered, AnnounceSilent, AnnounceRecovered, OwnNuke, RaceComplete, DownloadComplete, DownloadFailed, Digest, Heartbeat, Hook, OwnedReleaseNuke }
 
 public sealed record AlertEvent(AlertKind Kind, AlertSeverity Severity, string Title, string Message,
-    string ServerId = "", string Release = "", string Incident = "");
+    string ServerId = "", string Release = "", string Incident = "", string HookEvent = "", string HookStatus = "");
 
 public sealed record AlertEntry(string Id, AlertEvent Alert, DateTimeOffset FirstUtc, DateTimeOffset LastUtc,
     int Count = 1, bool Acknowledged = false, DateTimeOffset? SnoozedUntilUtc = null);

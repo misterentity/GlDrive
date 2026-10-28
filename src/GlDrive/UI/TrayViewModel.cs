@@ -43,6 +43,10 @@ public class TrayViewModel : INotifyPropertyChanged
         _updateChecker = new UpdateChecker();
         Alerts = new AlertRouter(config, (title, message, severity) =>
             Application.Current?.Dispatcher.BeginInvoke(() => ShowNotificationRequested?.Invoke(title, message, severity)));
+        _serverManager.Hooks.Alerts = Alerts;
+        _serverManager.NukeWatch.Flagged += entry =>
+            ShowNotification("Owned release nuked", $"{entry.Owned.ReleaseName}: {entry.Reason}",
+                AlertKind.OwnedReleaseNuke, AlertSeverity.Warning, release: entry.Owned.ReleaseName);
 
         _serverManager.ServerStateChanged += (serverId, serverName, state) =>
         {
@@ -524,7 +528,7 @@ public class TrayViewModel : INotifyPropertyChanged
             var aiData = Path.Combine(ConfigManager.AppDataPath, "ai-data");
             Directory.CreateDirectory(aiData);
             var windowDays = _config.Agent.WindowDays;
-            var digester = new GlDrive.AiAgent.LogDigester(aiData);
+            var digester = new GlDrive.AiAgent.LogDigester(aiData, () => new WishlistStore().Items);
             var bundle = await digester.BuildAsync(windowDays);
             var outPath = Path.Combine(aiData, "last-digest.json");
             var approxTokens = await Task.Run(async () =>

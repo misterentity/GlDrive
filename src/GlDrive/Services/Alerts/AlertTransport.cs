@@ -68,7 +68,7 @@ internal sealed class AlertTransport : IDisposable
             { Content = new FormUrlEncodedContent(new Dictionary<string, string> { ["chat_id"] = Required("chatId"), ["text"] = body }) },
             "discord" => new HttpRequestMessage(HttpMethod.Post, Https(Required("url")))
             { Content = new StringContent(JsonSerializer.Serialize(new { content = body, allowed_mentions = new { parse = Array.Empty<string>() } }), Encoding.UTF8, "application/json") },
-            "heartbeat" => new HttpRequestMessage(HttpMethod.Post, Https(Required("url"))) { Content = new StringContent(body, Encoding.UTF8, "application/json") },
+            "heartbeat" or "webhook" => new HttpRequestMessage(HttpMethod.Post, Https(Required("url"))) { Content = new StringContent(body, Encoding.UTF8, "application/json") },
             _ => throw new InvalidOperationException("Unknown alert target")
         };
         if (target.Kind == "ntfy" && Field("token").Length > 0)

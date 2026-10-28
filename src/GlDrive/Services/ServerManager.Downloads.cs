@@ -34,9 +34,12 @@ public partial class ServerManager
             var source = new TorrentDownloadSource(_config);
             var manager = new DownloadManager(store, source, _config.Downloads,
                 MountService.SharedDownloadDiskReservation);
+            manager.DownloadSettled += Hooks.Publish;
+            manager.DownloadSettled += ev => { if (ev.Event == "download.complete") CompletedDownloadObserved(); };
             _torrentDownloadSource = source;
             _torrentDownloads = manager;
             manager.Start();
+            CompletedDownloadObserved();
         }
     }
 

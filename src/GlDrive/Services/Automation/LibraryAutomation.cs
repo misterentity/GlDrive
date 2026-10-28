@@ -15,14 +15,22 @@ public sealed class LibraryAutomation : IAutomationModule
     private readonly SafeLibraryImporter _importer;
     private readonly SemaphoreSlim _imports = new(1, 1);
     private readonly LibraryIndex _libraryIndex = new();
+    private readonly Action<LibraryIndexSnapshot>? _indexRefreshed;
+    private readonly Action<OwnedReleaseObservation>? _ownedObserved;
+    private readonly Func<IReadOnlyList<OwnedNukeEntry>>? _nukeWatch;
     private sealed record Inventory(LibraryIndexSnapshot Snapshot, string PlexStatus);
     private Inventory? _inventory;
 
-    public LibraryAutomation(AppConfig config, Func<PlexConfig, PlexClient?>? plex = null, SafeLibraryImporter? importer = null)
+    public LibraryAutomation(AppConfig config, Func<PlexConfig, PlexClient?>? plex = null, SafeLibraryImporter? importer = null,
+        Action<LibraryIndexSnapshot>? indexRefreshed = null, Action<OwnedReleaseObservation>? ownedObserved = null,
+        Func<IReadOnlyList<OwnedNukeEntry>>? nukeWatch = null)
     {
         _config = config;
         _plex = plex ?? CreatePlex;
         _importer = importer ?? new SafeLibraryImporter();
+        _indexRefreshed = indexRefreshed;
+        _ownedObserved = ownedObserved;
+        _nukeWatch = nukeWatch;
     }
 
     public IReadOnlyList<AutomationToolDefinition> Tools { get; } =
@@ -31,8 +39,8 @@ public sealed class LibraryAutomation : IAutomationModule
             FileArguments, readOnly: true),
         AutomationToolDefinition.Create("library.import", "Import one explicitly selected staged video. Disabled by default; first enable forces dry-run. Live imports never replace destinations and remove the staged source only through verified rename/copy handling. Does not download or change wishlist ownership.",
             FileArguments, destructive: true),
-        AutomationToolDefinition.Create("library.index_refresh", "Explicitly refresh a read-only inventory of configured movie/TV folders and the selected Plex server. No periodic polling, library scans or wishlist edits. Unavailable Plex/disk evidence is marked incomplete.",
-            new { type = "object", properties = new { }, additionalProperties = false }, readOnly: true),
+        AutomationToolDefinition.Create("library.index_refresh", "Explicitly refresh an inventory of configured movie/TV folders and the selected Plex server. No periodic polling or Plex writes. Positive local ownership can complete Plex Watchlist imports only when watchlist sync is explicitly enabled; unavailable evidence leaves items open.",
+            new { type = "object", properties = new { }, additionalProperties = false }),
         AutomationToolDefinition.Create("library.index", "Read a page of the last local library inventory. Call library.index_refresh first; no file or network work.",
             new { type = "object", properties = new { offset = new { type = "integer", minimum = 0 }, limit = new { type = "integer", minimum = 1, maximum = 500 } }, additionalProperties = false }, readOnly: true),
         AutomationToolDefinition.Create("library.lookup", "Compare a movie/year or single episode release against the last read-only inventory. Reports owned quality without suppressing downloads or modifying wishlist items.",
@@ -55,7 +63,8 @@ public sealed class LibraryAutomation : IAutomationModule
             var snapshot = inventory.Snapshot;
             var offset = Math.Max(0, ConfigurationAutomation.Integer(arguments, "offset", 0));
             var limit = Math.Clamp(ConfigurationAutomation.Integer(arguments, "limit", 100), 1, 500);
-            return new { entries = snapshot.Entries.Skip(offset).Take(limit).ToArray(), total = snapshot.Entries.Count, offset, plex = inventory.PlexStatus, snapshot.Complete, snapshot.RefreshedAtUtc };
+            var entries = snapshot.Entries.Skip(offset).Take(limit).ToArray();
+            return new { entries, nukeFlags = Flags(entries), total = snapshot.Entries.Count, offset, plex = inventory.PlexStatus, snapshot.Complete, snapshot.RefreshedAtUtc };
         }
         if (operation == "library.lookup")
         {
@@ -63,7 +72,8 @@ public sealed class LibraryAutomation : IAutomationModule
             var snapshot = inventory.Snapshot;
             var wanted = LibraryPlanner.TryIdentity(AutomationService.Required(arguments, "releaseName", 512))
                 ?? throw new ArgumentException("A movie with year or single episode identity is required.");
-            return new { comparison = LibraryIndex.Lookup(snapshot, wanted), plex = inventory.PlexStatus, snapshot.Complete, snapshot.RefreshedAtUtc };
+            var comparison = LibraryIndex.Lookup(snapshot, wanted);
+            return new { comparison, nukeFlags = Flags(comparison.Matches), plex = inventory.PlexStatus, snapshot.Complete, snapshot.RefreshedAtUtc };
         }
 
         var config = Snapshot();
@@ -80,6 +90,11 @@ public sealed class LibraryAutomation : IAutomationModule
             config = Snapshot();
             var plan = LibraryPlanner.Plan(config.Library, source, release);
             var result = await _importer.ImportAsync(plan, config.Library, cancellationToken, () => Snapshot().Library);
+            if (result.Verified)
+            {
+                try { _ownedObserved?.Invoke(new(release, result.DestinationPath, DateTime.UtcNow)); }
+                catch { Serilog.Log.Warning("Nuke watch ownership observer unavailable; verified import remains complete"); }
+            }
             var scan = "disabled";
             if (result.Verified && config.Library.ScanPlexAfterImport)
             {
@@ -102,6 +117,23 @@ public sealed class LibraryAutomation : IAutomationModule
         SecureFile.WithPathLock(ConfigManager.ConfigPath, () =>
             result = JsonSerializer.Deserialize<AppConfig>(JsonSerializer.Serialize(_config))!);
         return result;
+    }
+
+    private OwnedNukeEntry[] Flags(IEnumerable<LibraryIndexEntry> entries)
+    {
+        if (_nukeWatch == null) return [];
+        var paths = entries.Select(e => e.Path).ToArray();
+        return _nukeWatch().Where(flag => flag.Flagged && paths.Any(path =>
+        {
+            try
+            {
+                var owned = Path.GetFullPath(flag.Owned.LocalPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                var candidate = Path.GetFullPath(path);
+                return candidate.Equals(owned, StringComparison.OrdinalIgnoreCase) ||
+                    candidate.StartsWith(owned + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
+        })).ToArray();
     }
 
     private async Task<object> Refresh(AppConfig config, CancellationToken ct)
@@ -129,6 +161,8 @@ public sealed class LibraryAutomation : IAutomationModule
             new[] { config.Library.MovieRoot, config.Library.TvRoot }.Where(p => !string.IsNullOrWhiteSpace(p)), items, ct), ct);
         var snapshot = diskSnapshot with { Complete = diskSnapshot.Complete && plexStatus == "complete" };
         Volatile.Write(ref _inventory, new(snapshot, plexStatus));
+        try { _indexRefreshed?.Invoke(snapshot); }
+        catch { Serilog.Log.Warning("Library ownership observer unavailable; index refresh remains complete"); }
         return new { total = snapshot.Entries.Count, plex = plexStatus, snapshot.Complete, snapshot.ScanIssues, snapshot.ScannedRoots, snapshot.RefreshedAtUtc };
     }
 

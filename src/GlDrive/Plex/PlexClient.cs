@@ -22,7 +22,7 @@ namespace GlDrive.Plex;
 ///     /api/servers/{machineId}/shared_servers API that PlexAPI's inviteFriend/
 ///     removeFriend wrap — the same operations helpr's plex_service.py performed.
 /// </summary>
-public sealed class PlexClient : IDisposable
+public sealed partial class PlexClient : IDisposable, IPlexWatchlistReader
 {
     private const string TvBase = "https://plex.tv";
     private readonly HttpClient _http;

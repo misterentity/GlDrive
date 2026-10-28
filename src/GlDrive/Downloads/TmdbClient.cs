@@ -36,14 +36,78 @@ public class TmdbClient : IDisposable
         [37] = "Western"
     };
 
-    public TmdbClient(string apiKey)
+    public TmdbClient(string apiKey) : this(apiKey, null) { }
+
+    internal TmdbClient(string apiKey, HttpMessageHandler? handler)
     {
         _apiKey = apiKey;
-        _http = new HttpClient { BaseAddress = new Uri("https://api.themoviedb.org/"), Timeout = TimeSpan.FromSeconds(15) };
+        _http = new HttpClient(handler ?? new HttpClientHandler { AllowAutoRedirect = false });
+        _http.BaseAddress = new Uri("https://api.themoviedb.org/");
+        _http.Timeout = TimeSpan.FromSeconds(15);
         _http.DefaultRequestHeaders.Add("User-Agent", "GlDrive/1.0");
     }
 
     public bool HasApiKey => !string.IsNullOrEmpty(_apiKey);
+    internal TimeSpan CalendarRequestTimeout { get; set; } = TimeSpan.FromSeconds(15);
+
+    public async Task<MovieReleaseDates> GetReleaseDates(int tmdbId, string region = "US", CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        region = NormalizeRegion(region);
+        if (!HasApiKey || tmdbId <= 0) return new(Region: region, Status: "unavailable", CheckedAtUtc: DateTimeOffset.UtcNow);
+        try
+        {
+            var json = await ReadCalendarJson($"3/movie/{tmdbId}/release_dates?api_key={Uri.EscapeDataString(_apiKey)}", ct).ConfigureAwait(false);
+            return MovieReleaseDates.ParseTmdb(json, region, DateTimeOffset.UtcNow);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch { Log.Warning("TMDB release dates lookup failed; saved dates are retained"); return new(Region: region, Status: "unavailable", CheckedAtUtc: DateTimeOffset.UtcNow); }
+    }
+
+    public async Task<int?> FindMovieByImdbId(string? imdbId, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (!HasApiKey || imdbId is not { Length: >= 3 and <= 20 } || !imdbId.StartsWith("tt", StringComparison.Ordinal) ||
+            !imdbId[2..].All(char.IsAsciiDigit)) return null;
+        try
+        {
+            var json = await ReadCalendarJson($"3/find/{imdbId}?external_source=imdb_id&api_key={Uri.EscapeDataString(_apiKey)}", ct).ConfigureAwait(false);
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                !document.RootElement.TryGetProperty("movie_results", out var results) || results.ValueKind != JsonValueKind.Array) return null;
+            var ids = new HashSet<int>();
+            foreach (var result in results.EnumerateArray())
+                if (result.ValueKind == JsonValueKind.Object && result.TryGetProperty("id", out var id) &&
+                    id.ValueKind == JsonValueKind.Number && id.TryGetInt32(out var value) && value > 0) ids.Add(value);
+            return ids.Count == 1 ? ids.Single() : null;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch { Log.Warning("TMDB movie identity unavailable; availability remains unknown"); return null; }
+    }
+
+    internal static string NormalizeRegion(string? region) => region is { Length: 2 } && region.All(char.IsAsciiLetter)
+        ? region.ToUpperInvariant() : "US";
+
+    private async Task<string> ReadCalendarJson(string path, CancellationToken ct)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(CalendarRequestTimeout);
+        ct = deadline.Token;
+        using var response = await _http.GetAsync(path, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        const int maximumBytes = 2 * 1024 * 1024;
+        if (response.Content.Headers.ContentLength is > maximumBytes) throw new System.IO.InvalidDataException("Calendar response too large");
+        await using var input = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        using var output = new System.IO.MemoryStream();
+        var buffer = new byte[8192];
+        int read;
+        while ((read = await input.ReadAsync(buffer, ct).ConfigureAwait(false)) != 0)
+        {
+            if (output.Length + read > maximumBytes) throw new System.IO.InvalidDataException("Calendar response too large");
+            output.Write(buffer, 0, read);
+        }
+        return System.Text.Encoding.UTF8.GetString(output.GetBuffer(), 0, (int)output.Length);
+    }
 
     public async Task<TmdbMovie[]> GetUpcomingReleases(DateOnly from, DateOnly to, CancellationToken ct = default)
     {

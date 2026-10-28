@@ -51,6 +51,7 @@ public sealed class AlertRouter : IDisposable, IAsyncDisposable
         _secrets = secrets ?? (() => OutboundSecretInventory.Collect());
         _now = now ?? (() => DateTimeOffset.Now);
         _delay = delay ?? Task.Delay;
+        using var flow = ExecutionContext.IsFlowSuppressed() ? default : ExecutionContext.SuppressFlow();
         _timer = new(_ => Tick(_now()), null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
         _saveTimer = new(_ => Store.Save(), null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
     }
@@ -89,8 +90,12 @@ public sealed class AlertRouter : IDisposable, IAsyncDisposable
     {
         foreach (var target in _config.Alerts.Targets.ToArray())
         {
+            if (target.Kind == "webhook" || alert.Kind == AlertKind.Hook)
+            {
+                if (target.Kind != "webhook" || alert.Kind != AlertKind.Hook || !target.HookEvents.Contains(alert.HookEvent)) continue;
+            }
             if (!target.Enabled || (alert.Kind == AlertKind.Heartbeat) != (target.Kind == "heartbeat") ||
-                (target.Kind == "smtp" ? alert.Kind != AlertKind.Digest : target.Kind != "heartbeat" && (int)alert.Severity < target.MinimumSeverity)) continue;
+                (target.Kind == "smtp" ? alert.Kind != AlertKind.Digest : target.Kind is not ("heartbeat" or "webhook") && (int)alert.Severity < target.MinimumSeverity)) continue;
             lock (_deliveryGate)
             {
                 if (_disposed != 0) return;
@@ -102,11 +107,20 @@ public sealed class AlertRouter : IDisposable, IAsyncDisposable
                     delivery = new(queue);
                     _deliveries.Add(target.Id, delivery);
                     var id = target.Id;
+                    using var flow = ExecutionContext.IsFlowSuppressed() ? default : ExecutionContext.SuppressFlow();
                     delivery.Worker = Task.Run(() => WorkAsync(id, delivery));
                 }
                 delivery.Queue.Writer.TryWrite(new(alert, target.Kind, entryId));
             }
         }
+    }
+
+    public void PublishHook(string eventName, string release, string status)
+    {
+        if (!_config.Alerts.Enabled || Volatile.Read(ref _disposed) != 0 || !Hooks.HookEvent.Names.Contains(eventName)) return;
+        // Post-event webhooks do not create a second tray notice or carry a server identity.
+        QueueDelivery(new(AlertKind.Hook, AlertSeverity.Information, "", "", Release: release,
+            HookEvent: eventName, HookStatus: status));
     }
 
     internal static bool IsQuiet(AlertConfig config, int localHour) => config.QuietHoursEnabled &&
@@ -168,6 +182,7 @@ public sealed class AlertRouter : IDisposable, IAsyncDisposable
         {
             var current = _config.Alerts.Targets.FirstOrDefault(t => t.Id == id && t.Kind == pending.Kind && t.Enabled);
             if (!_config.Alerts.Enabled || current == null) return;
+            if (pending.Alert.Kind == AlertKind.Hook && !current.HookEvents.Contains(pending.Alert.HookEvent)) return;
             if (pending.EntryId != null && Store.IsSnoozed(pending.EntryId, _now())) return;
             try
             {
@@ -185,6 +200,7 @@ public sealed class AlertRouter : IDisposable, IAsyncDisposable
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
                 deadline.CancelAfter(TimeSpan.FromSeconds(20));
                 await _send(current, body, deadline.Token).ConfigureAwait(false);
+                if (alert.Kind == AlertKind.Hook) Log.Information("Hook webhook {TargetId} {HookEvent}: delivered", id, alert.HookEvent);
                 delivery.Failures = 0;
                 delivery.RetryAt = default;
                 return;

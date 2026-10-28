@@ -27,4 +27,6 @@ public sealed class AlertTargetConfig
     public bool Enabled { get; set; }
     public bool IncludeReleaseNames { get; set; }
     public int MinimumSeverity { get; set; } = 1;
+    /// <summary>Only webhook targets consume these post-event names; empty means no hook delivery.</summary>
+    public List<string> HookEvents { get; set; } = [];
 }

@@ -5,8 +5,9 @@ using Serilog;
 
 namespace GlDrive.AiAgent;
 
-public sealed class WishlistPruneValidator : IChangeValidator
+public sealed class WishlistPruneValidator(Func<WishlistStore>? storeFactory = null) : IChangeValidator
 {
+    private readonly Func<WishlistStore> _storeFactory = storeFactory ?? (() => new WishlistStore());
     public string Category => AgentCategories.WishlistPrune;
 
     public ValidationResult Validate(AgentChange change, AppConfig config)
@@ -38,15 +39,20 @@ public sealed class WishlistPruneValidator : IChangeValidator
 
         if (!hardRemove && !softMark)
             return new(false, "action-unclear", null);
+        var current = _storeFactory();
+        current.Load();
+        if (current.GetById(id)?.Source == Plex.PlexWatchlistSync.Source)
+            return new(false, "plex-watchlist-source-protected", null);
 
         return new(true, null, _ =>
         {
             try
             {
-                var store = new WishlistStore();
+                var store = _storeFactory();
                 store.Load();
                 var item = store.GetById(id);
                 if (item is null) return;
+                if (item.Source == Plex.PlexWatchlistSync.Source) return;
 
                 if (hardRemove)
                 {

@@ -47,6 +47,7 @@ public partial class WishlistStore
         if (item.Status == WishlistStatus.Completed && !profile.UpgradeProperRepackAfterCutoff)
             return Decision(false, "wishlist-cutoff-met");
         if (!WishlistAcquisition.MatchesTitle(item, release)) return Decision(false, "title-or-year-mismatch");
+        if (!WishlistSourceFloor.Allows(item, release, config)) return Decision(false, "wishlist-CAM-TS-TC-floor");
         var series = SeriesMonitorPolicy.Evaluate(item, release, DateTimeOffset.UtcNow);
         if (!series.Accepted) return Decision(false, series.Reason);
         if (keys.Count == 0) return Decision(false, "unknown-episode-identity");
@@ -180,7 +181,7 @@ public partial class WishlistStore
                 item.PendingGrabs.RemoveAll(c => c.DownloadId == download.Id);
                 AddGrab(item, download.ReleaseName);
                 if (item.Type == MediaType.Movie && item.Status == WishlistStatus.Watching && profile != null &&
-                    item.BestOwned.Any(c => ReleaseScorer.Score(c.ReleaseName, profile, c.SizeBytes).MeetsCutoff))
+                    item.BestOwned.Any(c => WishlistOwnership.MeetsReleaseCutoff(item, c.ReleaseName, config, c.SizeBytes)))
                     item.Status = WishlistStatus.Completed;
             }
             else

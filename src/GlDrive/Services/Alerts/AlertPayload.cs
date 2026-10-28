@@ -31,6 +31,12 @@ internal static class AlertPayload
             ["severity"] = alert.Severity.ToString(), ["kind"] = alert.Kind.ToString(),
             ["server"] = Clean(displayName)
         };
+        if (alert.Kind == AlertKind.Hook)
+        {
+            payload.Remove("server");
+            payload["event"] = Clean(alert.HookEvent);
+            payload["status"] = Clean(alert.HookStatus);
+        }
         if (target.IncludeReleaseNames && alert.Release.Length > 0) payload["release"] = Clean(alert.Release);
         return OutboundPayloadRedactor.Prepare(JsonSerializer.Serialize(payload), secretValues);
     }

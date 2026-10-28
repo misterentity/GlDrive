@@ -121,6 +121,7 @@ public sealed class ConfigurationAutomation : IAutomationModule
                 foreach (var operation in operations)
                     ApplyOperation(next, operation as JsonObject ?? throw new ArgumentException("Each operation must be an object"));
                 RestoreRedacted(next, original);
+                RejectHookChanges(original, next);
                 if (SecretValuesChanged(original, next)) throw new ArgumentException("Secret changes are not supported by preview");
                 ConfigManager.NormalizeLibraryEnable(original, next);
                 var candidate = next.Deserialize<AppConfig>(Json)!;
@@ -156,6 +157,7 @@ public sealed class ConfigurationAutomation : IAutomationModule
             foreach (var operation in operations)
                 ApplyOperation(next, operation as JsonObject ?? throw new ArgumentException("Each operation must be an object"));
             RestoreRedacted(next, original);
+            RejectHookChanges(original, next);
             if (!allowSecrets && SecretValuesChanged(original, next))
                 throw new ArgumentException("Changing secrets requires allowSecrets=true");
             ConfigManager.NormalizeLibraryEnable(original, next);
@@ -176,6 +178,12 @@ public sealed class ConfigurationAutomation : IAutomationModule
             return new { saved = changed, revision = Revision(canonical), restartRequired = changed,
                 message = changed ? "Saved. Server/download runtime refresh scheduled when connected; unrelated settings may require restart. WinFsp fileInfoTimeoutMs applies on the next drive mount." : "No settings changed." };
         }
+    }
+
+    private static void RejectHookChanges(JsonNode original, JsonNode next)
+    {
+        if (!JsonNode.DeepEquals(original["hooks"], next["hooks"]))
+            throw new ArgumentException("Executable hooks require a direct appsettings edit and restart; automation cannot change them");
     }
 
     public object Credentials(string action, string kind, string? serverId = null, string? service = null, string? value = null, bool includeValue = false)
@@ -326,7 +334,7 @@ public sealed class ConfigurationAutomation : IAutomationModule
             foreach (var (key, value) in obj.ToList())
             {
                 var childPointer = pointer + "/" + JsonPointer.Escape(key);
-                if (childPointer == "/controlApi/token" || (!includeSecrets && ConfigSecretPointers.IsSecret(childPointer)))
+                if (childPointer is "/controlApi/token" or "/hooks" || (!includeSecrets && ConfigSecretPointers.IsSecret(childPointer)))
                     obj[key] = value?.ToString() is { Length: > 0 } ? Redacted : "";
                 else if (value != null) Redact(value, includeSecrets, childPointer);
             }
@@ -388,7 +396,10 @@ public sealed class ConfigurationAutomation : IAutomationModule
         {
             var value = property.GetValue(source);
             var existing = property.GetValue(destination);
-            if (value is IList sourceList && existing is IList targetList && !property.PropertyType.IsArray)
+            // Hook definitions are restart-only snapshots, including retained raw JSON.
+            // Recursive POCO reconciliation would lose their private parse state.
+            if (property.PropertyType == typeof(HookConfig)) property.SetValue(destination, value);
+            else if (value is IList sourceList && existing is IList targetList && !property.PropertyType.IsArray)
             {
                 var previous = targetList.Cast<object>().ToList();
                 var replacements = new List<object?>();
@@ -430,6 +441,32 @@ public sealed class ConfigurationAutomation : IAutomationModule
         {
             var name = JsonNamingPolicy.CamelCase.ConvertName(property.Name);
             var schema = BuildSchema(property.PropertyType);
+            if (type == typeof(PlexConfig) && property.Name == nameof(PlexConfig.WatchlistSyncEnabled))
+                schema["description"] = "Default false. One-way Plex Watchlist import using the existing token. GET only, IDs and current default quality/profile, preserves manual choices. Verified ownership can mark imported items Completed. No Plex writes or FTP traffic.";
+            if (type == typeof(PlexConfig) && property.Name == nameof(PlexConfig.WatchlistSyncMinutes))
+            {
+                schema["description"] = "Default 30 minutes, only while explicitly enabled. Provider pages contain ten items; each sync has a two-minute HTTP budget. Offline or malformed optional metadata leaves items open.";
+                schema["minimum"] = 5; schema["maximum"] = 1440;
+            }
+            if (type == typeof(AppConfig) && property.Name == nameof(AppConfig.Hooks))
+                schema["description"] = "No commands by default. Direct appsettings edit and restart only; all automation writes, leases and restore substitutions are forbidden. Commands run after completion with static argument lists, bounded output and a kill-tree timeout.";
+            if (type == typeof(NukeWatchConfig))
+            {
+                schema["description"] = property.Name switch
+                {
+                    nameof(NukeWatchConfig.Enabled) => "Default true. Passive flags for recently completed/imported owned releases using existing PreDB responses and trusted sitebot observations. No new polling, FTP, file scans or library changes.",
+                    nameof(NukeWatchConfig.AutoQueueFixes) => "Default false. Queue same-tier exact-identity PROPER/newer same-group REPACK only for quality nukes with current trusted completed source. Uses normal download staging; never replaces original library files. Independent of wanted decision windows.",
+                    nameof(NukeWatchConfig.WatchDays) => "Default 7 days from original completion/import, not last restart. Passive ownership retention only; does not expire or throttle engine work.",
+                    nameof(NukeWatchConfig.HistoryCapacity) => "Default 2048 entries per passive collection. Oldest eviction bounds memory/disk only; storage failure never blocks downloads or correction admission.",
+                    _ => "Default 256 pending observations with oldest eviction. Bounded passive background work only; no transfer limit. Restart applies capacity changes."
+                };
+                if (property.Name == nameof(NukeWatchConfig.WatchDays)) { schema["minimum"] = 1; schema["maximum"] = 90; }
+                if (property.Name == nameof(NukeWatchConfig.HistoryCapacity)) { schema["minimum"] = 1; schema["maximum"] = 10000; }
+                if (property.Name == nameof(NukeWatchConfig.QueueCapacity)) { schema["minimum"] = 1; schema["maximum"] = 4096; }
+            }
+            if (type == typeof(HookConfig) || type == typeof(HookCommandConfig)) schema["readOnly"] = true;
+            if (type == typeof(AlertTargetConfig) && property.Name == nameof(AlertTargetConfig.HookEvents))
+                schema["description"] = "Empty by default. Generic HTTPS webhook targets opt in to download.complete, download.failed, race.finished, wishlist.grab and nuke. Reuses bounded alert delivery and redaction; no local paths or server identity in payloads.";
             if (type == typeof(AgentConfig))
             {
                 schema["description"] = property.Name switch
@@ -468,6 +505,21 @@ public sealed class ConfigurationAutomation : IAutomationModule
             }
             if (type == typeof(DownloadConfig) && property.Name == nameof(DownloadConfig.ScoredQualityEnabled))
                 schema["description"] = "Opt in to scored wishlist acquisition, pending-copy dedupe and successful-download cutoff completion. Default false preserves existing resolution-only decisions.";
+            if (type == typeof(DownloadConfig) && property.Name == nameof(DownloadConfig.BlockLowQualityWishlistSources))
+                schema["description"] = "Default true. Wishlist CAM/TS/TC floor; explicit per-item permission or a selected configured profile allowing low sources is preserved. Permitted low sources never satisfy completion cutoff. Does not affect manual downloads or races.";
+            if (type == typeof(DownloadConfig) && property.Name == nameof(DownloadConfig.MovieCalendarRegion))
+            {
+                schema["description"] = "Two-letter region for explicit TMDB movie release-date refresh, default US to match Upcoming. No background polling; dates are advisory and unknown never blocks a grab.";
+                schema["pattern"] = "^[a-zA-Z]{2}$";
+            }
+            if (type == typeof(DownloadConfig) && property.Name == nameof(DownloadConfig.SfvRepairEnabled))
+                schema["description"] = "Default false. Re-fetch only CRC-failing files in staging created and recorded by this download, using its normal queue/pool. Persisted budgets survive restarts and manual retries; known bad owned staging remains held from extraction until verification succeeds.";
+            if (type == typeof(DownloadConfig) && property.Name == nameof(DownloadConfig.SfvRepairMaxAttempts))
+            {
+                schema["minimum"] = 1;
+                schema["maximum"] = 2;
+                schema["description"] = "Default 2 attempts per file per download, only while sfvRepairEnabled. An identical wrong CRC after a re-fetch stops early. Never resets on restart or Retry.";
+            }
             if (type == typeof(PoolConfig) && property.Name == nameof(PoolConfig.LoginRateLimitEnabled))
                 schema["description"] = "Default true. Persist and enforce an account-wide five-minute budget for new guarded FTP logins, including successful attempts. Existing pooled borrows are unaffected.";
             if (type == typeof(PoolConfig) && property.Name == nameof(PoolConfig.MaxLoginAttemptsPerFiveMinutes))
@@ -549,6 +601,12 @@ public sealed class ConfigurationAutomation : IAutomationModule
     internal static void Validate(AppConfig config)
     {
         ValidateObject(config, "");
+        Range(config.Plex.WatchlistSyncMinutes, 5, 1440, "/plex/watchlistSyncMinutes");
+        Range(config.NukeWatch.WatchDays, 1, 90, "/nukeWatch/watchDays");
+        Range(config.NukeWatch.HistoryCapacity, 1, 10000, "/nukeWatch/historyCapacity");
+        Range(config.NukeWatch.QueueCapacity, 1, 4096, "/nukeWatch/queueCapacity");
+        // Hooks are unchanged by automation and validated independently by their runner.
+        // An optional invalid draft must not prevent settings edits or lease expiry.
         if (config.Library.HashVerifyMaxBytes < 0)
             throw new ArgumentException("/library/hashVerifyMaxBytes must be nonnegative");
         Range(config.ConfigHistory.RetentionCount, 1, 10000, "/configHistory/retentionCount");
@@ -565,15 +623,19 @@ public sealed class ConfigurationAutomation : IAutomationModule
         foreach (var target in config.Alerts.Targets)
         {
             if (!Regex.IsMatch(target.Id, "^[a-zA-Z0-9_-]{1,64}$") ||
-                target.Kind is not ("ntfy" or "pushover" or "telegram" or "discord" or "smtp" or "heartbeat"))
+                target.Kind is not ("ntfy" or "pushover" or "telegram" or "discord" or "smtp" or "heartbeat" or "webhook"))
                 throw new ArgumentException("Invalid alert target identifier or kind");
             Range(target.MinimumSeverity, 0, 2, "/alerts/targets/minimumSeverity");
+            if (target.HookEvents.Any(e => !Hooks.HookEvent.Names.Contains(e))) throw new ArgumentException("Unknown hook event");
         }
         if (config.Servers.Any(s => string.IsNullOrWhiteSpace(s.Id)) || config.Servers.Select(s => s.Id).Distinct(StringComparer.Ordinal).Count() != config.Servers.Count)
             throw new ArgumentException("Every server needs a nonempty, unique id");
         Range(config.ControlApi.Port, 1, 65535, "/controlApi/port");
         if (config.ControlApi.Enabled && config.ControlApi.Token.Length < 32) throw new ArgumentException("An enabled control API requires a token of at least 32 characters");
         Range(config.Downloads.MaxConcurrentDownloads, ConfigurationLimits.MinConcurrentDownloads, ConfigurationLimits.MaxConcurrentDownloads, "/downloads/maxConcurrentDownloads");
+        Range(config.Downloads.SfvRepairMaxAttempts, 1, 2, "/downloads/sfvRepairMaxAttempts");
+        if (config.Downloads.MovieCalendarRegion is not { Length: 2 } || !config.Downloads.MovieCalendarRegion.All(char.IsAsciiLetter))
+            throw new ArgumentException("/downloads/movieCalendarRegion must be a two-letter region code");
         Range(config.Downloads.ScheduleStartHour, 0, 23, "/downloads/scheduleStartHour");
         Range(config.Downloads.ScheduleEndHour, 0, 23, "/downloads/scheduleEndHour");
         Range(config.Downloads.WantedDecisionWindowMinutes, 1, 60, "/downloads/wantedDecisionWindowMinutes");
@@ -637,6 +699,7 @@ public sealed class ConfigurationAutomation : IAutomationModule
 
     private static void ValidateObject(object? value, string path)
     {
+        if (path == "/hooks") return;
         if (value == null) return;
         if (value is string text) { if (text.Length > 32768) throw new ArgumentException($"Settings string is too long at {path}"); return; }
         if (value is int number && number < 0) throw new ArgumentException($"Negative value is invalid at {path}");
@@ -664,6 +727,7 @@ public sealed class ConfigurationAutomation : IAutomationModule
             {
                 var child = property.GetValue(value);
                 var pointer = path + "/" + JsonNamingPolicy.CamelCase.ConvertName(property.Name);
+                if (pointer == "/hooks") continue;
                 if (child == null && new NullabilityInfoContext().Create(property).WriteState == NullabilityState.NotNull)
                     throw new ArgumentException($"Null is invalid at {pointer}");
                 ValidateObject(child, pointer);

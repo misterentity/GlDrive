@@ -48,11 +48,14 @@ public class DownloadManager : IDisposable
 
     public event Action<DownloadItem, DownloadProgress>? DownloadProgressChanged;
     public event Action<DownloadItem>? DownloadStatusChanged;
+    /// <summary>Terminal outcome after network-slot and local-processing ownership are released.</summary>
+    public event Action<Services.Hooks.HookEvent>? DownloadSettled;
     /// <summary>Actual payload bytes and transfer time, excluding queueing and local post-processing.</summary>
     public event Action<long, TimeSpan>? TransferMeasured;
     /// <summary>Existing racing admission state; never creates a connection or changes a login budget.</summary>
     public Func<bool>? BackgroundPullMayRun { get; set; }
     internal int BackgroundPullRecheckSeconds { get; set; } = 15;
+    internal int SfvRepairRecheckSeconds { get; set; } = 1;
 
     public DownloadStore Store => _store;
     private WishlistStore? _wishlist;
@@ -210,6 +213,16 @@ public class DownloadManager : IDisposable
         NotifyDownloadStatus(item);
         Log.Information("Enqueued download: {Release}", item.ReleaseName);
         return true;
+    }
+
+    /// <summary>Background correction callbacks may only admit into the current running manager.</summary>
+    internal bool TryEnqueueCorrection(DownloadItem item, Func<bool> stillEligible)
+    {
+        lock (_activeCts)
+        {
+            if (_disposed != 0 || _cts == null || _cts.IsCancellationRequested || !stillEligible()) return false;
+            return Enqueue(item);
+        }
     }
 
     internal DownloadItem? FindPendingOrActive(string remotePath)
@@ -639,6 +652,22 @@ public class DownloadManager : IDisposable
                 }
                 else
                 {
+                    var hasRepair = (item.SfvRepairFiles ?? []).Any(file => file.Pending);
+                    if (hasRepair)
+                    {
+                        if (!_config.SfvRepairEnabled)
+                        {
+                            FailVerification(item, "SFV repair was disabled; staged files retained", itemCts.Token);
+                            return;
+                        }
+                        try { SfvRepair.ResumePending(item, plan, _store.TrySave); }
+                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
+                        {
+                            Log.Warning(ex, "SFV repair intent could not be resumed safely");
+                            FailVerification(item, "SFV repair could not resume safely; staged files retained", itemCts.Token);
+                            return;
+                        }
+                    }
                     // NFO pre-check
                     if (_config.SkipIncompleteReleases)
                     {
@@ -652,6 +681,14 @@ public class DownloadManager : IDisposable
 
                     // Directory download — calculate total
                     item.TotalBytes = plan.Files.Sum(f => Math.Max(0, f.Size));
+                    if (hasRepair)
+                    {
+                        // Recover correct disk accounting even if the process stopped
+                        // after persisting repair intent but before lowering progress.
+                        var missingRepairBytes = plan.Files.Where(file => !SfvRepair.IsLocallyComplete(file))
+                            .Sum(file => Math.Max(0, file.Size));
+                        item.DownloadedBytes = Math.Min(item.DownloadedBytes, Math.Max(0, item.TotalBytes - missingRepairBytes));
+                    }
 
                     // Disk-space reservation (v3.6 Phase 2b) — accounts for what OTHER
                     // concurrent downloads already reserved, so N downloads can't each
@@ -659,6 +696,8 @@ public class DownloadManager : IDisposable
                     // not-yet-on-disk remainder (TotalBytes minus already-downloaded).
                     if (!ReserveDisk()) return;
 
+                    if (_config.SfvRepairEnabled)
+                        SfvRepair.RecordOwnership(item, plan, _store.TrySave);
                     foreach (var directory in plan.Directories)
                         Directory.CreateDirectory(directory);
 
@@ -680,8 +719,8 @@ public class DownloadManager : IDisposable
                         }
                     });
 
-                    var payload = plan.Files.Where(f => !IsManifest(f)).ToArray();
-                    if (payload.Length > 0)
+                    var payload = SfvRepair.SelectPayload(item, plan.Files.Where(f => !IsManifest(f)).ToArray());
+                    if (payload.Count > 0)
                         await Transfer(payload, progress);
                     lock (_activeCts)
                     {
@@ -725,11 +764,35 @@ public class DownloadManager : IDisposable
             if (_wholeSource == null && plan.IsDirectory)
             {
                 var verification = await SfvVerifier.VerifyDetailedAsync(item.LocalPath,
-                    plan.Files.Where(IsManifest).Select(f => f.LocalPath).ToArray(), _config.VerifySfv, itemCts.Token);
+                    plan.Files.Where(IsManifest).Select(f => f.LocalPath).ToArray(), _config.VerifySfv || item.SfvIntegrityHold, itemCts.Token);
                 var errors = verification.Issues.Where(i => i.Kind != SfvIssueKind.Missing).ToArray();
                 if (errors.Length > 0)
                 {
                     foreach (var issue in errors) Log.Warning("SFV verification failed: {File}", issue);
+                    if (_config.SfvRepairEnabled)
+                    {
+                        item.SfvIntegrityHold |= SfvRepair.HasOwnedMismatch(item, plan, errors);
+                        var repair = SfvRepair.Prepare(item, plan, errors, _config.SfvRepairMaxAttempts, _store.TrySave);
+                        if (repair.Queued)
+                        {
+                            lock (_activeCts)
+                            {
+                                itemCts.Token.ThrowIfCancellationRequested();
+                                if (item.Status == DownloadStatus.Cancelled) throw new OperationCanceledException(itemCts.Token);
+                                item.Status = DownloadStatus.Queued;
+                                item.ErrorMessage = null;
+                                item.StatusDetail = repair.Reason;
+                                _store.Update(item);
+                                _store.Save();
+                            }
+                            Log.Information("{Reason}: {Release}", repair.Reason, item.ReleaseName);
+                            NotifyDownloadStatus(item);
+                            ScheduleRetry(item, Math.Max(1, SfvRepairRecheckSeconds));
+                            return;
+                        }
+                        FailVerification(item, repair.Reason, itemCts.Token);
+                        return;
+                    }
                     FailVerification(item, $"SFV verification failed: {errors.Length} checksum/read/manifest error(s): {errors[0]}", itemCts.Token);
                     return;
                 }
@@ -745,6 +808,14 @@ public class DownloadManager : IDisposable
                     ParkForSource(item, "waiting for an SFV manifest for the archive set", itemCts.Token);
                     return;
                 }
+                if (item.SfvIntegrityHold && (!plan.Files.Any(IsManifest) ||
+                    (item.SfvRepairFiles ?? []).Any(record => record.Attempts > 0 &&
+                        !verification.ReferencedFiles.Any(path => SfvRepair.SamePath(path, record.LocalPath)))))
+                {
+                    FailVerification(item, "SFV repair verification no longer covers every previously bad file; extraction remains held", itemCts.Token);
+                    return;
+                }
+                SfvRepair.Verified(item, _store.TrySave);
                 if (_config.VerifySfv && plan.Files.Any(IsManifest))
                     Log.Information("SFV verification passed for {Release}", item.ReleaseName);
             }
@@ -954,6 +1025,9 @@ public class DownloadManager : IDisposable
                 resume = _restartAfterExit.Remove(item.Id) && !globalCt.IsCancellationRequested;
             }
             itemCts.Dispose();
+            if (item.Status is DownloadStatus.Completed or DownloadStatus.Failed)
+                try { DownloadSettled?.Invoke(Services.Hooks.HookEvent.ForDownload(item)); }
+                catch { Log.Warning("Download hook admission failed; completed work is unaffected"); }
             if (resume)
             {
                 if (item.Status == DownloadStatus.Paused) Resume(item.Id);
@@ -1146,7 +1220,8 @@ public class DownloadManager : IDisposable
 
     public void Dispose()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        lock (_activeCts)
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         Stop();
         // Cancellation is asynchronous. A worker's finally still releases its slot
         // and saves its item, so keep both semaphore and store alive until it exits.

@@ -22,11 +22,17 @@ public class SettingsViewModel : INotifyPropertyChanged
     private string _streamingBufferSize;
     private string _writeBufferLimit;
     private string _qualityDefault;
+    private bool _blockLowQualityWishlistSources;
+    private string _movieCalendarRegion;
     private string _omdbApiKey;
     private string _tmdbApiKey;
     private string _openRouterApiKey;
     private string _openRouterModel;
     private bool _autoDownloadWishlist;
+    private bool _plexWatchlistSyncEnabled;
+    private bool _nukeWatchEnabled;
+    private bool _nukeWatchAutoQueueFixes;
+    private string _nukeWatchDays;
     private bool _autoExtract;
     private bool _deleteArchivesAfterExtract;
     private string _speedLimitKbps;
@@ -68,12 +74,18 @@ public class SettingsViewModel : INotifyPropertyChanged
         _streamingBufferSize = config.Downloads.StreamingBufferSizeKb.ToString();
         _writeBufferLimit = config.Downloads.WriteBufferLimitMb.ToString();
         _qualityDefault = config.Downloads.QualityDefault;
+        _blockLowQualityWishlistSources = config.Downloads.BlockLowQualityWishlistSources;
+        _movieCalendarRegion = config.Downloads.MovieCalendarRegion;
         // Prefer Credential Manager, fall back to config (migration)
         _omdbApiKey = readLocalState ? CredentialStore.GetApiKey("omdb") ?? config.Downloads.OmdbApiKey : "";
         _tmdbApiKey = readLocalState ? CredentialStore.GetApiKey("tmdb") ?? config.Downloads.TmdbApiKey : "";
         _openRouterApiKey = readLocalState ? CredentialStore.GetApiKey("openrouter") ?? "" : "";
         _openRouterModel = config.Downloads.OpenRouterModel;
         _autoDownloadWishlist = config.Downloads.AutoDownloadWishlist;
+        _plexWatchlistSyncEnabled = config.Plex.WatchlistSyncEnabled;
+        _nukeWatchEnabled = config.NukeWatch.Enabled;
+        _nukeWatchAutoQueueFixes = config.NukeWatch.AutoQueueFixes;
+        _nukeWatchDays = config.NukeWatch.WatchDays.ToString();
         _autoExtract = config.Downloads.AutoExtract;
         _deleteArchivesAfterExtract = config.Downloads.DeleteArchivesAfterExtract;
         _speedLimitKbps = config.Downloads.SpeedLimitKbps.ToString();
@@ -116,12 +128,18 @@ public class SettingsViewModel : INotifyPropertyChanged
     public string StreamingBufferSize { get => _streamingBufferSize; set { _streamingBufferSize = value; OnPropertyChanged(); } }
     public string WriteBufferLimit { get => _writeBufferLimit; set { _writeBufferLimit = value; OnPropertyChanged(); } }
     public string QualityDefault { get => _qualityDefault; set { _qualityDefault = value; OnPropertyChanged(); } }
+    public bool BlockLowQualityWishlistSources { get => _blockLowQualityWishlistSources; set { _blockLowQualityWishlistSources = value; OnPropertyChanged(); } }
+    public string MovieCalendarRegion { get => _movieCalendarRegion; set { _movieCalendarRegion = value; OnPropertyChanged(); } }
     public string OmdbApiKey { get => _omdbApiKey; set { _omdbApiKey = value; OnPropertyChanged(); } }
     public string TmdbApiKey { get => _tmdbApiKey; set { _tmdbApiKey = value; OnPropertyChanged(); } }
     public string OpenRouterApiKey { get => _openRouterApiKey; set { _openRouterApiKey = value; OnPropertyChanged(); } }
     public string OpenRouterModel { get => _openRouterModel; set { _openRouterModel = value; OnPropertyChanged(); } }
     public string[] OpenRouterModels { get; } = ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4", "google/gemini-2.5-pro", "deepseek/deepseek-r1", "qwen/qwen3-235b-a22b:free", "deepseek/deepseek-r1:free", "openai/gpt-oss-120b:free"];
     public bool AutoDownloadWishlist { get => _autoDownloadWishlist; set { _autoDownloadWishlist = value; OnPropertyChanged(); } }
+    public bool PlexWatchlistSyncEnabled { get => _plexWatchlistSyncEnabled; set { _plexWatchlistSyncEnabled = value; OnPropertyChanged(); } }
+    public bool NukeWatchEnabled { get => _nukeWatchEnabled; set { _nukeWatchEnabled = value; OnPropertyChanged(); } }
+    public bool NukeWatchAutoQueueFixes { get => _nukeWatchAutoQueueFixes; set { _nukeWatchAutoQueueFixes = value; OnPropertyChanged(); } }
+    public string NukeWatchDays { get => _nukeWatchDays; set { _nukeWatchDays = value; OnPropertyChanged(); } }
     public bool AutoExtract { get => _autoExtract; set { _autoExtract = value; OnPropertyChanged(); } }
     public bool DeleteArchivesAfterExtract { get => _deleteArchivesAfterExtract; set { _deleteArchivesAfterExtract = value; OnPropertyChanged(); } }
     public string SpeedLimitKbps { get => _speedLimitKbps; set { _speedLimitKbps = value; OnPropertyChanged(); } }
@@ -369,6 +387,8 @@ public class SettingsViewModel : INotifyPropertyChanged
         config.Downloads.StreamingBufferSizeKb = int.TryParse(StreamingBufferSize, out var sbs) ? Math.Clamp(sbs, 64, 4096) : 256;
         config.Downloads.WriteBufferLimitMb = int.TryParse(WriteBufferLimit, out var wbl) ? Math.Clamp(wbl, 0, 512) : 0;
         config.Downloads.QualityDefault = QualityDefault;
+        config.Downloads.BlockLowQualityWishlistSources = BlockLowQualityWishlistSources;
+        config.Downloads.MovieCalendarRegion = GlDrive.Downloads.TmdbClient.NormalizeRegion(MovieCalendarRegion);
         // Store API keys in Credential Manager, clear from plaintext config
         SaveApiKey("omdb", OmdbApiKey);
         SaveApiKey("tmdb", TmdbApiKey);
@@ -377,6 +397,8 @@ public class SettingsViewModel : INotifyPropertyChanged
         config.Downloads.TmdbApiKey = "";
         config.Downloads.OpenRouterModel = OpenRouterModel;
         config.Downloads.AutoDownloadWishlist = AutoDownloadWishlist;
+        config.Plex.WatchlistSyncEnabled = PlexWatchlistSyncEnabled;
+        ApplyNukeWatchSettings(config);
         config.Downloads.AutoExtract = AutoExtract;
         config.Downloads.DeleteArchivesAfterExtract = DeleteArchivesAfterExtract;
         config.Downloads.SpeedLimitKbps = int.TryParse(SpeedLimitKbps, out var slk) ? Math.Max(slk, 0) : 0;
@@ -442,6 +464,13 @@ public class SettingsViewModel : INotifyPropertyChanged
     {
         config.Downloads.MaxConcurrentDownloads = ConfigurationLimits.ParseConcurrentDownloads(MaxConcurrentDownloads);
         config.Downloads.MultiStream.HttpLanesPerNetwork = ConfigurationLimits.ParseHttpLanesPerNetwork(HttpLanesPerNetwork);
+    }
+
+    internal void ApplyNukeWatchSettings(AppConfig config)
+    {
+        config.NukeWatch.Enabled = NukeWatchEnabled;
+        config.NukeWatch.AutoQueueFixes = NukeWatchAutoQueueFixes;
+        config.NukeWatch.WatchDays = int.TryParse(NukeWatchDays, out var days) ? Math.Clamp(days, 1, 90) : 7;
     }
 
     internal void ApplyAgentTunableSpreadSettings(AppConfig config)
