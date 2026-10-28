@@ -142,6 +142,7 @@ class ReleaseCheckHandler(TLS_FTPHandler):
 
 authorizer = DummyAuthorizer()
 authorizer.add_user("release-check", "", str(data), perm="elradfmwMT")
+authorizer.add_user("login-budget-check", "", str(data), perm="elradfmwMT")
 ReleaseCheckHandler.authorizer = authorizer
 ReleaseCheckHandler.certfile = str(pem)
 ReleaseCheckHandler.tls_control_required = True

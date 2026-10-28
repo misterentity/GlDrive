@@ -12,6 +12,15 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.15.1 — remount scheduling and timed-setting ownership (2026-10-28)
+
+- Honor account admission holds and deferred probes when scheduling failed mounts;
+  prevent rapid retry loops and negative retry-delay messages.
+- Relinquish timed-setting ownership on successful later edits, including rapid
+  away-and-back changes between timer ticks.
+- Isolate native smoke state and verify the default login budget over real FTPS.
+- See the [release notes](releases/v3.15.1.md) for details.
+
 ## v3.15.0 — alert router, config history, agent accountability, library import (2026-10-28)
 
 - One alert router behind the tray, with opt-in history, coalescing, quiet hours, a local digest and
