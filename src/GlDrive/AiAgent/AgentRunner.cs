@@ -122,8 +122,7 @@ public sealed class AgentRunner : IDisposable
             // scheduled run from losing the whole day; the backoff keeps the retry
             // from hammering a rate-limited API every minute.
             var minutes = Math.Min(64, 1 << Math.Min(6, _consecutiveFailedRuns));
-            _timer = new Timer(_ => _ = RunOnceAsync(), null,
-                TimeSpan.FromMinutes(minutes), Timeout.InfiniteTimeSpan);
+            _timer = CreateScheduledTimer(_ => _ = RunOnceAsync(), TimeSpan.FromMinutes(minutes));
             Log.Information("AgentRunner {Kind} scheduled in {Minutes} min (consecutive failures: {Failures})",
                 plan.CatchUp ? "catch-up" : "retry", minutes, _consecutiveFailedRuns);
             return;
@@ -131,8 +130,18 @@ public sealed class AgentRunner : IDisposable
 
         var delay = plan.NextRunUtc - DateTime.UtcNow;
         if (delay < TimeSpan.Zero) delay = TimeSpan.Zero;
-        _timer = new Timer(_ => _ = RunOnceAsync(), null, delay, Timeout.InfiniteTimeSpan);
+        _timer = CreateScheduledTimer(_ => _ = RunOnceAsync(), delay);
         Log.Information("AgentRunner next run in {Delay}", delay);
+    }
+
+    internal static Timer CreateScheduledTimer(TimerCallback callback, TimeSpan delay)
+    {
+        // A settings refresh may schedule us inside a human/lease attribution scope.
+        // The future callback must not inherit any of that caller's execution context.
+        if (ExecutionContext.IsFlowSuppressed())
+            return new Timer(callback, null, delay, Timeout.InfiniteTimeSpan);
+        using (ExecutionContext.SuppressFlow())
+            return new Timer(callback, null, delay, Timeout.InfiniteTimeSpan);
     }
 
     internal const int MaxRejectionLinesPerRun = 8;
@@ -210,6 +219,7 @@ public sealed class AgentRunner : IDisposable
         if (Volatile.Read(ref _disposed) != 0) _activeRunCts.Cancel();
         var ct = _activeRunCts.Token;
         var runId = Guid.NewGuid().ToString();
+        using var attribution = ConfigWriteScope.Begin("agent:" + runId, runId);
         var started = DateTime.Now;
         var briefPath = Path.Combine(_briefsDir, $"{started:yyyyMMdd-HHmmss}-{runId[..8]}.md");
         string status = "ok";
@@ -242,6 +252,12 @@ public sealed class AgentRunner : IDisposable
             }
 
             var digest = await _digester.BuildAsync(cfg.Agent.WindowDays, ct).ConfigureAwait(false);
+            var reviewedRows = AccountabilityReview.Assess(_audit, new LogDigester(_aiDataRoot), cfg, DateTime.UtcNow);
+            if (cfg.Agent.AccountabilityEnabled)
+            {
+                digest.AgentOutcomes = AccountabilityReview.Feedback(reviewedRows, DateTime.UtcNow);
+                digest.ManualCorrections = AccountabilityReview.Corrections(new LogDigester(_aiDataRoot), cfg, reviewedRows, DateTime.UtcNow);
+            }
             var memoText = _memo.Load();
             var frozenPaths = _freeze.All.Select(e => e.Path).ToList();
 
@@ -312,24 +328,35 @@ public sealed class AgentRunner : IDisposable
             bool dryRun = cfg.Agent.DryRunsRemaining > 0;
 
             ct.ThrowIfCancellationRequested();
-            var auditRows = new List<AuditRow>();
+            var auditRows = dryRun ? new List<AuditRow>()
+                : AccountabilityReview.RevertRegressions(_applier, cfg, reviewedRows, runId);
             var applyReport = _applier.Apply(outcome.Result.Changes, cfg, cfg.Agent, runId, dryRun,
                 auditRows.Add, configOnly: true, winnerEvidence: digest.Races);
             var suggestionReport = _applier.Apply(outcome.Result.Suggestions, cfg, cfg.Agent, runId, dryRun: true,
                 auditRows.Add, configOnly: true, winnerEvidence: digest.Races);
             if (cfg.Agent.DryRunsRemaining > 0) cfg.Agent.DryRunsRemaining--;
             ct.ThrowIfCancellationRequested();
+            _applier.VerifyCommitFreezes(auditRows, cfg);
             if (_commitConfig != null)
                 await _commitConfig(baseline, cfg, auditRows).ConfigureAwait(false);
             else
-                AgentConfigCommit.Commit(_configFilePath, baseline, cfg, auditRows, _aiDataRoot, _saveConfig, _audit);
+                _applier.GuardCommit(_configFilePath, auditRows, cfg, () =>
+                    AgentConfigCommit.Commit(_configFilePath, baseline, cfg, auditRows, _aiDataRoot, _saveConfig, _audit));
+            foreach (var reverted in auditRows.Where(r => r.WasApplied && r.AutomaticRevertOf != null))
+            {
+                var original = reviewedRows.FirstOrDefault(r => r.Id == reverted.AutomaticRevertOf);
+                if (original != null)
+                    try { _audit.MarkUndone(original.RunId, original.Target, "automatic-regression-revert"); }
+                    catch { Log.Warning("Regression revert was saved; audit resolution could not be persisted"); }
+            }
             _memo.Save(outcome.Result.MemoUpdate);
 
             var footer =
                 $"\n\n---\n_Tokens: {outcome.InputTokens} in / {outcome.OutputTokens} out — est. ${outcome.EstimatedCostUsd:F3}_\n" +
                 $"_Applied: {applyReport.Applied} / Rejected: {applyReport.Rejected} ({(dryRun ? "DRY RUN" : "live")})_\n" +
                 $"_Suggestions: {suggestionReport.Applied + suggestionReport.Rejected}_\n";
-            try { File.WriteAllText(briefPath, ComposeBrief(outcome.Result.BriefMarkdown, footer)); } catch { }
+            try { File.WriteAllText(briefPath, ComposeBrief(cfg.Agent.AccountabilityEnabled
+                ? AccountabilityReview.Report(auditRows, reviewedRows) : outcome.Result.BriefMarkdown, footer)); } catch { }
 
             _lastRunUtc = DateTime.UtcNow;
             _consecutiveFailedRuns = 0;

@@ -16,10 +16,11 @@ public sealed class MaintenanceAutomation : IAutomationModule
     private readonly string _snapshots;
     private readonly object _gate = new();
 
-    public MaintenanceAutomation(AppConfig config, CertificateManager certificates, string? appDataRoot = null, Action<AppConfig>? persist = null)
+    public MaintenanceAutomation(AppConfig config, CertificateManager certificates, string? appDataRoot = null, Action<AppConfig>? persist = null,
+        Action? settingsApplied = null)
     {
         _certificates = certificates;
-        _configuration = new ConfigurationAutomation(config, persist);
+        _configuration = new ConfigurationAutomation(config, persist, settingsApplied: settingsApplied);
         _diagnostics = new DiagnosticAutomation(config, appDataRoot);
         _snapshots = Path.Combine(appDataRoot ?? ConfigManager.AppDataPath, "ai-data", "ai-snapshots");
     }
@@ -110,6 +111,7 @@ public sealed class MaintenanceAutomation : IAutomationModule
 
     private object Restore(JsonElement arguments)
     {
+        using var attribution = ConfigWriteScope.Begin("restore:snapshot");
         CheckWritable();
         var name = Required(arguments, "name");
         var snapshot = ReadSnapshot(name).Deserialize<AppConfig>(ConfigurationAutomation.Json) ?? throw new ArgumentException("Snapshot does not contain app settings");

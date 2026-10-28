@@ -51,8 +51,8 @@ public sealed class ConfigurationAutomation : IAutomationModule
             new { type = "object", properties = new { }, additionalProperties = false }, readOnly: true),
         AutomationToolDefinition.Create("config_patch", "Atomically edit application settings with JSON Patch add/replace/remove/test operations and optional revision precondition. Arrays use numeric indexes; /servers/- appends a server. Restart is required to fully apply runtime settings. Use allowSecrets=true for credential changes.",
             new { type = "object", properties = new { operations = new { type = "array", minItems = 1, maxItems = 100, items = new { type = "object", properties = new { op = new { type = "string", @enum = new[] { "add", "replace", "remove", "test" } }, path = new { type = "string" }, value = new { } }, required = new[] { "op", "path" }, additionalProperties = false } }, expectedRevision = new { type = "string" }, allowSecrets = new { type = "boolean" } }, required = new[] { "operations" }, additionalProperties = false }),
-        AutomationToolDefinition.Create("credentials_manage", "Read presence, explicitly reveal, set, or delete app credentials in Windows Credential Manager. FTP/proxy/IRC credentials require serverId; API credentials require service (omdb, tmdb, openrouter, plex). Read returns presence only unless includeValue=true. Values are never returned on writes.",
-            new { type = "object", properties = new { action = new { type = "string", @enum = new[] { "get", "set", "delete" } }, kind = new { type = "string", @enum = new[] { "ftp", "proxy", "irc", "api" } }, serverId = new { type = "string" }, service = new { type = "string", @enum = new[] { "omdb", "tmdb", "openrouter", "plex" } }, value = new { type = "string" }, includeValue = new { type = "boolean" } }, required = new[] { "action", "kind" }, additionalProperties = false }, destructive: true)
+        AutomationToolDefinition.Create("credentials_manage", "Read presence, explicitly reveal, set, or delete app credentials in Windows Credential Manager. FTP/proxy/IRC credentials require serverId; API credentials require service (omdb, tmdb, openrouter, plex, or alerts-TARGET_ID JSON). Read returns presence only unless includeValue=true. Values are never returned on writes.",
+            new { type = "object", properties = new { action = new { type = "string", @enum = new[] { "get", "set", "delete" } }, kind = new { type = "string", @enum = new[] { "ftp", "proxy", "irc", "api" } }, serverId = new { type = "string" }, service = new { type = "string" }, value = new { type = "string" }, includeValue = new { type = "boolean" } }, required = new[] { "action", "kind" }, additionalProperties = false }, destructive: true)
     ];
 
     public async Task<object?> ExecuteAsync(string operation, JsonElement arguments, CancellationToken cancellationToken = default)
@@ -102,8 +102,44 @@ public sealed class ConfigurationAutomation : IAutomationModule
 
     public object Apply(JsonArray operations, string? expectedRevision = null, bool allowSecrets = false)
     {
+        using var attribution = ConfigWriteScope.Fallback("mcp:config_patch");
         object? result = null;
         SecureFile.WithPathLock(ConfigManager.ConfigPath, () => result = ApplyCore(operations, expectedRevision, allowSecrets));
+        return result!;
+    }
+
+    public object Preview(JsonArray operations)
+    {
+        object? result = null;
+        SecureFile.WithPathLock(ConfigManager.ConfigPath, () =>
+        {
+            lock (_gate)
+            {
+                if (operations.Count is < 1 or > 100) throw new ArgumentException("Supply between 1 and 100 patch operations");
+                var original = Snapshot();
+                var next = original.DeepClone();
+                foreach (var operation in operations)
+                    ApplyOperation(next, operation as JsonObject ?? throw new ArgumentException("Each operation must be an object"));
+                RestoreRedacted(next, original);
+                if (SecretValuesChanged(original, next)) throw new ArgumentException("Secret changes are not supported by preview");
+                ConfigManager.NormalizeLibraryEnable(original, next);
+                var candidate = next.Deserialize<AppConfig>(Json)!;
+                Validate(candidate);
+                var baseline = original.Deserialize<AppConfig>(Json)!;
+                var servers = baseline.Servers.Select(s => s.Id).Union(candidate.Servers.Select(s => s.Id)).Select(id =>
+                {
+                    var old = baseline.Servers.SingleOrDefault(s => s.Id == id);
+                    var current = candidate.Servers.SingleOrDefault(s => s.Id == id);
+                    if (old == null || current == null) return new { serverId = id, changes = new[] { "server added or removed" }, remount = true, ircRestart = true };
+                    var prior = RuntimeConfigPolicy.Capture(old, baseline.Downloads, "", baseline.Spread.SpreadPoolSize);
+                    var after = RuntimeConfigPolicy.Capture(current, candidate.Downloads, "", candidate.Spread.SpreadPoolSize);
+                    return new { serverId = id, changes = after.Changed(prior).ToArray(),
+                        remount = after.Changed(prior, RuntimeConfigEffect.Remount).Count > 0,
+                        ircRestart = after.Changed(prior, RuntimeConfigEffect.Irc).Count > 0 };
+                }).ToArray();
+                result = new { servers, message = "Preview only. Other global settings may require restart. Idle-deferred scalar edits are available as leases." };
+            }
+        });
         return result!;
     }
 
@@ -122,6 +158,7 @@ public sealed class ConfigurationAutomation : IAutomationModule
             RestoreRedacted(next, original);
             if (!allowSecrets && SecretValuesChanged(original, next))
                 throw new ArgumentException("Changing secrets requires allowSecrets=true");
+            ConfigManager.NormalizeLibraryEnable(original, next);
             var candidate = next.Deserialize<AppConfig>(Json) ?? throw new ArgumentException("Settings must be an object");
             Validate(candidate);
             var canonical = JsonSerializer.SerializeToNode(candidate, Json)!;
@@ -131,6 +168,7 @@ public sealed class ConfigurationAutomation : IAutomationModule
                 // Save first: a failed disk write must leave the live settings untouched.
                 // ConfigManager uses SecureFile's restricted, flushed, atomic rename.
                 _persist(candidate);
+                canonical = JsonSerializer.SerializeToNode(candidate, Json)!;
                 Reconcile(_config, candidate);
                 try { _settingsApplied?.Invoke(); }
                 catch (Exception ex) { Serilog.Log.Warning(ex, "Settings saved, but scheduling the runtime settings refresh failed"); }
@@ -163,10 +201,12 @@ public sealed class ConfigurationAutomation : IAutomationModule
         Action delete;
         if (kind == "api")
         {
-            if (service is not ("omdb" or "tmdb" or "openrouter" or "plex")) throw new ArgumentException("Unknown API credential service");
-            read = () => CredentialStore.GetApiKey(service);
-            write = secret => CredentialStore.SaveApiKey(service, secret);
-            delete = () => CredentialStore.DeleteApiKey(service);
+            ArgumentNullException.ThrowIfNull(service);
+            if (service is not ("omdb" or "tmdb" or "openrouter" or "plex") && !Regex.IsMatch(service ?? "", "^alerts-[a-zA-Z0-9_-]{1,64}$")) throw new ArgumentException("Unknown API credential service");
+            var apiService = service ?? throw new ArgumentException("API service is required");
+            read = () => CredentialStore.GetApiKey(apiService);
+            write = secret => CredentialStore.SaveApiKey(apiService, secret);
+            delete = () => CredentialStore.DeleteApiKey(apiService);
         }
         else
         {
@@ -390,6 +430,35 @@ public sealed class ConfigurationAutomation : IAutomationModule
         {
             var name = JsonNamingPolicy.CamelCase.ConvertName(property.Name);
             var schema = BuildSchema(property.PropertyType);
+            if (type == typeof(AgentConfig))
+            {
+                schema["description"] = property.Name switch
+                {
+                    nameof(AgentConfig.AccountabilityEnabled) => "Default true: passive expected-effect and outcome reporting from local telemetry, with read-only user correction signals. Missing declarations are unscored.",
+                    nameof(AgentConfig.NoOpRejectionEnabled) => "Default true: reject proposals whose detached validator projection or effective transfer capacity changes nothing. Existing settings and engine work continue unchanged.",
+                    nameof(AgentConfig.CounterfactualReplayEnabled) => "Default true: local replay evidence is required for agent rule, exclusion and mapping proposals; unavailable/unsafe evidence keeps existing settings. Direct user Settings/config.patch edits remain available.",
+                    nameof(AgentConfig.AutoRevertRegressions) => "Default false: automatic scalar regression reverts require opt-in, the same validator, unchanged applied value and fresh frozen.json checks at commit. No append/delete inverse is automatic.",
+                    nameof(AgentConfig.OutcomeMinimumSamples) => "Default 10 measured samples in each comparison window. Fewer samples are unscored; this is an assessment threshold, not a runtime admission limit.",
+                    nameof(AgentConfig.OutcomeTolerancePercent) => "Default 10 percent relative change band for no-effect scores. Outcomes compare the same hours one week earlier and are observational, not causal proof.",
+                    _ => schema["description"]?.GetValue<string>() ?? "Agent setting."
+                };
+                if (property.Name == nameof(AgentConfig.OutcomeMinimumSamples)) { schema["minimum"] = 1; schema["maximum"] = 1000000; }
+                if (property.Name == nameof(AgentConfig.OutcomeTolerancePercent)) { schema["minimum"] = 0; schema["maximum"] = 100; }
+            }
+            if (type == typeof(ConfigHistoryConfig) && property.Name == nameof(ConfigHistoryConfig.RetentionCount))
+            {
+                schema["minimum"] = 1;
+                schema["maximum"] = 10000;
+            }
+            if (type == typeof(LibraryConfig))
+                schema["description"] = property.Name switch
+                {
+                    nameof(LibraryConfig.Enabled) => "Default false. Explicit staged-file library imports only. Every disabled-to-enabled save forces dryRun=true; a separate later save is required to permit moves.",
+                    nameof(LibraryConfig.DryRun) => "Default true. Plan only; never create library folders, move files or request Plex scans. Disabling dry-run requires an already enabled library setting.",
+                    nameof(LibraryConfig.ScanPlexAfterImport) => "Default false. After a verified import, scan only its containing folder when it maps uniquely beneath an advertised Plex library root. Never scan a whole library or delete Plex items.",
+                    nameof(LibraryConfig.HashVerifyMaxBytes) => "Default 67108864 bytes (64 MiB). Verify size for every import and SHA-256 for files up to this size. Source identity stays locked until destination verification finishes.",
+                    _ => "Empty by default. Explicit local absolute directory. Staging and library roots must be separate, with no reparse points; validation repeats before destructive import."
+                };
             if (new NullabilityInfoContext().Create(property).WriteState == NullabilityState.Nullable)
                 schema = new JsonObject { ["anyOf"] = new JsonArray(schema, new JsonObject { ["type"] = "null" }) };
             if (type == typeof(DownloadConfig) && property.Name == nameof(DownloadConfig.MaxConcurrentDownloads))
@@ -480,6 +549,26 @@ public sealed class ConfigurationAutomation : IAutomationModule
     internal static void Validate(AppConfig config)
     {
         ValidateObject(config, "");
+        if (config.Library.HashVerifyMaxBytes < 0)
+            throw new ArgumentException("/library/hashVerifyMaxBytes must be nonnegative");
+        Range(config.ConfigHistory.RetentionCount, 1, 10000, "/configHistory/retentionCount");
+        Range(config.Alerts.HistoryCapacity, 1, 100000, "/alerts/historyCapacity");
+        Range(config.Alerts.QueueCapacity, 1, 100000, "/alerts/queueCapacity");
+        Range(config.Alerts.RetryCount, 0, 5, "/alerts/retryCount");
+        Range(config.Alerts.CoalesceMinutes, 1, 1440, "/alerts/coalesceMinutes");
+        Range(config.Alerts.QuietStartHour, 0, 23, "/alerts/quietStartHour");
+        Range(config.Alerts.QuietEndHour, 0, 23, "/alerts/quietEndHour");
+        Range(config.Alerts.DigestHourLocal, 0, 23, "/alerts/digestHourLocal");
+        Range(config.Alerts.HeartbeatMinutes, 1, 1440, "/alerts/heartbeatMinutes");
+        if (config.Alerts.Targets.Select(t => t.Id).Distinct(StringComparer.Ordinal).Count() != config.Alerts.Targets.Count)
+            throw new ArgumentException("Alert target identifiers must be unique");
+        foreach (var target in config.Alerts.Targets)
+        {
+            if (!Regex.IsMatch(target.Id, "^[a-zA-Z0-9_-]{1,64}$") ||
+                target.Kind is not ("ntfy" or "pushover" or "telegram" or "discord" or "smtp" or "heartbeat"))
+                throw new ArgumentException("Invalid alert target identifier or kind");
+            Range(target.MinimumSeverity, 0, 2, "/alerts/targets/minimumSeverity");
+        }
         if (config.Servers.Any(s => string.IsNullOrWhiteSpace(s.Id)) || config.Servers.Select(s => s.Id).Distinct(StringComparer.Ordinal).Count() != config.Servers.Count)
             throw new ArgumentException("Every server needs a nonempty, unique id");
         Range(config.ControlApi.Port, 1, 65535, "/controlApi/port");
@@ -504,6 +593,8 @@ public sealed class ConfigurationAutomation : IAutomationModule
         }
         Range(config.Downloads.MultiStream.HttpLanesPerNetwork, ConfigurationLimits.MinHttpLanesPerNetwork, ConfigurationLimits.MaxHttpLanesPerNetwork, "/downloads/multiStream/httpLanesPerNetwork");
         Range(config.Agent.RunHourLocal, 0, 23, "/agent/runHourLocal");
+        Range(config.Agent.OutcomeMinimumSamples, 1, 1000000, "/agent/outcomeMinimumSamples");
+        Range(config.Agent.OutcomeTolerancePercent, 0, 100, "/agent/outcomeTolerancePercent");
         Range(config.Agent.ConfidenceThreshold_x100, 0, 100, "/agent/confidenceThreshold_x100");
         Range(config.Spread.MaxConcurrentRaces, 1, 100, "/spread/maxConcurrentRaces");
         Range(config.Spread.SpreadPoolSize, 1, 100, "/spread/spreadPoolSize");

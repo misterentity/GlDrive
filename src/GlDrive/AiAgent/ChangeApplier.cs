@@ -10,14 +10,23 @@ public sealed class ChangeApplier
     private readonly FreezeStore _freeze;
     private readonly AuditTrail _audit;
     private readonly Func<GlDrive.Config.AppConfig, RacesDigest?>? _winnerEvidence;
+    private readonly Func<GlDrive.Config.AppConfig, ReplayEvidence>? _replayEvidence;
+    private readonly Func<GlDrive.Config.AppConfig, CancellationToken, ReplayEvidence>? _cancellableReplayEvidence;
+    private readonly Func<string, int?>? _transferLimit;
 
     public ChangeApplier(IEnumerable<IChangeValidator> validators, FreezeStore freeze, AuditTrail audit,
-        Func<GlDrive.Config.AppConfig, RacesDigest?>? winnerEvidence = null)
+        Func<GlDrive.Config.AppConfig, RacesDigest?>? winnerEvidence = null,
+        Func<GlDrive.Config.AppConfig, ReplayEvidence>? replayEvidence = null,
+        Func<string, int?>? transferLimit = null,
+        Func<GlDrive.Config.AppConfig, CancellationToken, ReplayEvidence>? cancellableReplayEvidence = null)
     {
         _validators = validators.ToDictionary(v => v.Category);
         _freeze = freeze;
         _audit = audit;
         _winnerEvidence = winnerEvidence;
+        _replayEvidence = replayEvidence;
+        _cancellableReplayEvidence = cancellableReplayEvidence;
+        _transferLimit = transferLimit;
     }
 
     public sealed class RunReport
@@ -31,8 +40,11 @@ public sealed class ChangeApplier
     public RunReport Apply(IEnumerable<AgentChange> changes, GlDrive.Config.AppConfig config,
                            GlDrive.Config.AgentConfig agentCfg, string runId, bool dryRun,
                            Action<AuditRow>? record = null, bool configOnly = false,
-                           RacesDigest? winnerEvidence = null, bool explicitUndo = false)
+                           RacesDigest? winnerEvidence = null, bool explicitUndo = false,
+                           bool explicitOperator = false, CancellationToken cancellationToken = default)
     {
+        using var replayBudget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        replayBudget.CancelAfter(TimeSpan.FromSeconds(5));
         record ??= _audit.Append;
         var report = new RunReport();
         var perCategoryCount = new Dictionary<string, int>();
@@ -43,9 +55,11 @@ public sealed class ChangeApplier
         // compare later proposals with the values left by earlier changes in this run.
         JsonNode? configNode = null;
         bool configNodeBuilt = false;
+        ReplayEvidence? replay = null;
 
         foreach (var change in changes)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             // STJ deserializes "target": null as null even though the property has = "" default.
             // Validators dereference Target via StartsWith etc. without null-checks; normalize once
             // here so a sloppy AI response can't NRE the whole run.
@@ -56,6 +70,7 @@ public sealed class ChangeApplier
             change.Target = CanonicalizeTarget(change.Target, config);
 
             string? reject = null;
+            ImpactSummary? impact = null;
 
             // Before the freeze check: an empty Target is the JSON Pointer root, an ancestor of
             // every freeze, so malformed model output was audited as "frozen" (2026-10-05).
@@ -156,6 +171,46 @@ public sealed class ChangeApplier
                 }
                 else
                 {
+                    // Only config-owned validators may be projected. Wishlist/error validators
+                    // write external stores regardless of their AppConfig argument.
+                    if (MutatesConfig(change.Category) && (agentCfg.NoOpRejectionEnabled
+                        || (!explicitUndo && agentCfg.CounterfactualReplayEnabled && ImpactSimulator.RequiresReplay(change.Category))))
+                    {
+                        try
+                        {
+                            var beforeProjection = SerializeConfig(config) ?? throw new InvalidOperationException();
+                            var projection = System.Text.Json.JsonSerializer.Deserialize<GlDrive.Config.AppConfig>(beforeProjection,
+                                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })!;
+                            var projected = _validators[change.Category].Validate(change, projection,
+                                validationContext ?? new ChangeValidationContext(explicitUndo: explicitUndo));
+                            if (!projected.Ok) reject = projected.RejectionReason ?? "invariant-failed";
+                            else
+                            {
+                                projected.Mutate?.Invoke(projection);
+                                if (agentCfg.NoOpRejectionEnabled && beforeProjection == SerializeConfig(projection)) reject = "no-effect";
+                                else if (agentCfg.NoOpRejectionEnabled && !explicitUndo && CapacityUnchanged(change, config, projection))
+                                    reject = "capacity-no-effect";
+                                if (reject == null && !explicitUndo && agentCfg.CounterfactualReplayEnabled
+                                    && ImpactSimulator.RequiresReplay(change.Category))
+                                {
+                                    try
+                                    {
+                                        replayBudget.Token.ThrowIfCancellationRequested();
+                                        replay ??= _cancellableReplayEvidence?.Invoke(config, replayBudget.Token)
+                                            ?? _replayEvidence?.Invoke(config) ?? new ReplayEvidence([], [], false);
+                                        impact = ImpactSimulator.Evaluate(change, config, projection, replay, replayBudget.Token);
+                                    }
+                                    catch (OperationCanceledException)
+                                    { impact = new(0, 0, 0, 0, false, "impact-time-budget-exceeded"); }
+                                    catch { impact = new(0, 0, 0, 0, false, "impact-preview-unavailable"); }
+                                    if (!explicitOperator) reject = impact.RejectionReason;
+                                }
+                            }
+                        }
+                        catch { reject = "impact-preview-unavailable"; }
+                    }
+                    if (reject != null) goto Rejected;
+                    cancellationToken.ThrowIfCancellationRequested();
                     bool mutationOk = true;
                     object? appliedBefore = change.Before;
                     object? appliedAfter = change.After;
@@ -196,6 +251,7 @@ public sealed class ChangeApplier
                         record(new AuditRow
                         {
                             RunId = runId,
+                            Origin = explicitOperator ? "operator" : explicitUndo ? "undo" : "agent",
                             Category = change.Category,
                             Target = change.Target,
                             Before = appliedBefore,
@@ -203,6 +259,10 @@ public sealed class ChangeApplier
                             Reasoning = change.Reasoning,
                             EvidenceRef = change.EvidenceRef,
                             Confidence = change.Confidence,
+                            ExpectedEffect = change.ExpectedEffect,
+                            Impact = impact,
+                            Outcome = !dryRun && !explicitOperator && !explicitUndo && agentCfg.AccountabilityEnabled && !OutcomeEvaluator.Valid(change.ExpectedEffect)
+                                ? OutcomeEvaluator.Score(change.ExpectedEffect, [], [], true, DateTime.UtcNow) : null,
                             Applied = true,
                             DryRun = dryRun
                         });
@@ -214,6 +274,7 @@ public sealed class ChangeApplier
                 }
             }
 
+        Rejected:
             record(new AuditRow
             {
                 RunId = runId,
@@ -224,6 +285,8 @@ public sealed class ChangeApplier
                 Reasoning = change.Reasoning,
                 EvidenceRef = change.EvidenceRef,
                 Confidence = change.Confidence,
+                ExpectedEffect = change.ExpectedEffect,
+                Impact = impact,
                 Applied = false,
                 DryRun = dryRun,
                 RejectionReason = reject
@@ -232,6 +295,52 @@ public sealed class ChangeApplier
             report.RejectionByReason[reject!] = report.RejectionByReason.GetValueOrDefault(reject!) + 1;
         }
         return report;
+    }
+
+    private bool CapacityUnchanged(AgentChange change, GlDrive.Config.AppConfig before, GlDrive.Config.AppConfig after)
+    {
+        if (change.Category != AgentCategories.PoolSizing) return false;
+        // The runtime caps spread pools at three; changing a larger nominal value cannot add capacity.
+        if (change.Target == "/spread/spreadPoolSize")
+            return Math.Min(3, before.Spread.SpreadPoolSize) == Math.Min(3, after.Spread.SpreadPoolSize);
+        var id = change.Target.Split('/').ElementAtOrDefault(2);
+        var oldSite = before.Servers.FirstOrDefault(s => s.Id == id);
+        var newSite = after.Servers.FirstOrDefault(s => s.Id == id);
+        if (oldSite == null || newSite == null) return false;
+        var upload = change.Target.EndsWith("/maxUploadSlots", StringComparison.Ordinal);
+        var download = change.Target.EndsWith("/maxDownloadSlots", StringComparison.Ordinal);
+        if (!upload && !download) return false;
+        if (upload && oldSite.SpreadSite.DownloadOnly) return true;
+        // Prefer the observed transfer gate; fall back to the same configured reservation model.
+        var reserved = Math.Min(2, Math.Max(1, oldSite.Pool.LoginCap - Math.Max(0, oldSite.Pool.LoginHeadroom)) - 1);
+        var cap = Math.Max(1, Math.Min(3, _transferLimit?.Invoke(oldSite.Id) ?? reserved));
+        cap = Math.Min(cap, Math.Max(1, before.Spread.SpreadPoolSize));
+        return Math.Min(cap, upload ? oldSite.SpreadSite.MaxUploadSlots : oldSite.SpreadSite.MaxDownloadSlots)
+            == Math.Min(cap, upload ? newSite.SpreadSite.MaxUploadSlots : newSite.SpreadSite.MaxDownloadSlots);
+    }
+
+    internal void VerifyCommitFreezes(IEnumerable<AuditRow> rows, GlDrive.Config.AppConfig config)
+    {
+        _freeze.Reload();
+        foreach (var row in rows.Where(r => r.WasApplied))
+        {
+            var target = CanonicalizeTarget(row.Target, config);
+            if (_freeze.IsFrozen(target) || _freeze.All.Any(f =>
+                JsonPointer.IsAncestorOrSelf(target, CanonicalizeTarget(f.Path, config))
+                || JsonPointer.IsAncestorOrSelf(CanonicalizeTarget(f.Path, config), target)))
+                throw new InvalidOperationException("An applied proposal became frozen before commit; settings were preserved.");
+        }
+    }
+
+    internal void GuardCommit(string configPath, IEnumerable<AuditRow> rows, GlDrive.Config.AppConfig config, Action commit)
+    {
+        // Match the settings transaction's lock order, and keep Freeze()/Unfreeze()
+        // serialized with the actual persistence boundary, not only background scoring.
+        GlDrive.Util.SecureFile.WithPathLock(configPath, () => _freeze.WithLock(() =>
+        {
+            VerifyCommitFreezes(rows, config);
+            commit();
+        }));
     }
 
     // wishlistPrune writes the wishlist store and errorReport writes a Markdown file; neither
@@ -309,7 +418,7 @@ public sealed class ChangeApplier
 
     // Validator/freeze aliases are not actual JSON pointers into AppConfig: servers serialize
     // as an array and their spread settings live under spreadSite. Translate only for reading.
-    private static string ConfigTarget(string target, GlDrive.Config.AppConfig config)
+    internal static string ConfigTarget(string target, GlDrive.Config.AppConfig config)
     {
         if (!target.StartsWith("/servers/", StringComparison.Ordinal)) return target;
         var parts = target[1..].Split('/');

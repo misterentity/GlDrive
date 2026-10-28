@@ -43,7 +43,16 @@ public sealed class PlexLibrary
     public string Key { get; set; } = "";
     public string Title { get; set; } = "";
     public string Type { get; set; } = "";
+    /// <summary>Paths advertised by Plex, in the server's own filesystem namespace.</summary>
+    public List<string> Roots { get; set; } = new();
 }
+
+public sealed record PlexMediaFile(string Path, string VideoResolution);
+
+/// <summary>A detached catalog observation. A Plex path does not prove a local file exists.</summary>
+public sealed record PlexLibraryItem(string RatingKey, string Title, string Type, int? Year,
+    string? SeriesTitle, int? Season, int? Episode, IReadOnlyList<string> Guids,
+    IReadOnlyList<PlexMediaFile> Files);
 
 // ---- shared_servers (who currently has access) ----
 

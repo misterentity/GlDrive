@@ -12,6 +12,18 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.15.0 — alert router, config history, agent accountability, library import (2026-10-28)
+
+- One alert router behind the tray, with opt-in history, coalescing, quiet hours, a local digest and
+  private push targets (all off; only severity, kind and server name leave the PC).
+- Config saves carry attribution, and timed changes revert across restarts. Version history and labelled
+  experiments are opt-in.
+- The nightly agent declares expected effects and its outcomes are scored. No-op proposals and rule
+  changes that fail a local replay are rejected; auto-revert is opt-in.
+- Opt-in, dry-run-first library import into Plex-style paths with verified, never-overwriting moves.
+- Review: 27 of 28 findings fixed before release, including the agent's replay gate, which over-rejected
+  proposals, and run-voiding typed fields. See the [release notes](releases/v3.15.0.md).
+
 ## v3.14.0 — site health, login budget, race controls, series monitor (2026-10-28)
 
 - Site health (on): a retry ladder that persists across restarts, one outage/recovery notice, a per-account

@@ -18,6 +18,9 @@ public sealed class AgentMutationIntegrityTests : IDisposable
     private static AppConfig Config()
     {
         var cfg = new AppConfig();
+        // This fixture isolates target/audit integrity; replay and effective capacity have their own tests.
+        cfg.Agent.CounterfactualReplayEnabled = false;
+        cfg.Agent.NoOpRejectionEnabled = false;
         cfg.Servers.Add(new ServerConfig { Id = "site-a", Pool = new PoolConfig { LoginCap = 4, LoginHeadroom = 1 } });
         return cfg;
     }

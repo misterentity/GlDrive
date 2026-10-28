@@ -8,9 +8,14 @@ namespace GlDrive.AiAgent;
 
 public class AuditRow
 {
+    public ExpectedEffect? ExpectedEffect { get; set; }
+    public AgentOutcome? Outcome { get; set; }
+    public ImpactSummary? Impact { get; set; }
+    public string? AutomaticRevertOf { get; set; }
     public string? Id { get; set; }
     public string Ts { get; set; } = DateTime.UtcNow.ToString("O");
     public string RunId { get; set; } = "";
+    public string? Origin { get; set; }
     public string Category { get; set; } = "";
     public string Target { get; set; } = "";
     public object? Before { get; set; }
@@ -30,6 +35,10 @@ public class AuditRow
     [System.Text.Json.Serialization.JsonIgnore]
     public bool WasApplied => Applied && !DryRun;
     [System.Text.Json.Serialization.JsonIgnore]
+    public bool IsAgentRun => Origin == "agent" || Origin == null && !string.IsNullOrWhiteSpace(RunId)
+        && !RunId.StartsWith("manual-", StringComparison.Ordinal) && !RunId.StartsWith("mcp-", StringComparison.Ordinal)
+        && !RunId.StartsWith("undo-", StringComparison.Ordinal) && RunId != "simulation";
+    [System.Text.Json.Serialization.JsonIgnore]
     public bool IsSuggestion => !WasApplied && !Undone && RejectionReason is not ("frozen" or "malformed" or "secret-target");
     [System.Text.Json.Serialization.JsonIgnore]
     public string Status => Undone ? "Resolved" : WasApplied ? "Applied" : Applied ? "Preview" : "Rejected";
@@ -39,6 +48,8 @@ public class AuditTrail
 {
     private readonly string _path;
     private readonly object _lock = new();
+    private readonly Dictionary<string, AgentOutcome> _outcomes = new();
+    private bool _outcomeWarning;
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
@@ -113,7 +124,12 @@ public class AuditTrail
                 Log.Warning(ex, "AuditTrail parse skip in {Path}", _path);
                 continue;
             }
-            if (row != null) yield return row;
+            if (row != null)
+            {
+                lock (_lock)
+                    if (row.Id != null && _outcomes.TryGetValue(row.Id, out var outcome)) row.Outcome = outcome;
+                yield return row;
+            }
         }
         ParseSkips = skips;
         if (skips > 0)
@@ -136,6 +152,37 @@ public class AuditTrail
             ? row.Id == id
             : row.Id == null && row.RunId == suggestion.RunId && row.Target == suggestion.Target
                 && row.Category == suggestion.Category && row.Ts == suggestion.Ts), reason);
+
+    public void RecordOutcome(string id, AgentOutcome outcome)
+        => RecordOutcomes(new Dictionary<string, AgentOutcome> { [id] = outcome });
+
+    public virtual void RecordOutcomes(IReadOnlyDictionary<string, AgentOutcome> outcomes)
+    {
+        if (outcomes.Count == 0) return;
+        lock (_lock)
+        {
+            foreach (var (id, outcome) in outcomes) _outcomes[id] = outcome;
+            try
+            {
+                var lines = File.ReadAllLines(_path);
+                for (var i = 0; i < lines.Length; i++)
+                {
+                    AuditRow? row = null;
+                    try { row = JsonSerializer.Deserialize<AuditRow>(lines[i], JsonOpts); } catch { }
+                    if (row?.Id == null || !outcomes.TryGetValue(row.Id, out var outcome)) continue;
+                    row.Outcome = outcome;
+                    lines[i] = JsonSerializer.Serialize(row, JsonOpts);
+                }
+                // Preserve unparseable and untouched evidence byte-for-byte at line level.
+                SecureFile.WriteAllTextRestricted(_path, string.Join("\n", lines) + "\n");
+            }
+            catch
+            {
+                if (!_outcomeWarning) Log.Warning("Agent outcome write failed; assessments remain in memory");
+                _outcomeWarning = true;
+            }
+        }
+    }
 
     private void MarkResolved(Func<AuditRow, bool> matches, string reason)
     {

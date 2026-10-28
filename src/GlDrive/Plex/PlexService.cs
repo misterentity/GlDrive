@@ -47,9 +47,9 @@ public sealed class PlexService : IDisposable
             _config.Plex.ClientIdentifier = Guid.NewGuid().ToString("N");
     }
 
-    private void SaveConfig()
+    private void SaveConfig(string actor)
     {
-        try { ConfigManager.Save(_config); }
+        try { ConfigManager.Save(_config, actor); }
         catch (Exception ex) { Log.Warning(ex, "Plex: failed to persist config"); }
     }
 
@@ -75,7 +75,7 @@ public sealed class PlexService : IDisposable
             {
                 _client.Token = polled!.AuthToken;
                 CredentialStore.SaveApiKey(TokenService, polled.AuthToken!);
-                SaveConfig(); // persist the now-meaningful client identifier
+                SaveConfig("plex:login"); // persist the now-meaningful client identifier
                 Log.Information("Plex: OAuth login succeeded");
                 return true;
             }
@@ -91,7 +91,7 @@ public sealed class PlexService : IDisposable
         _config.Plex.ServerMachineId = "";
         _config.Plex.ServerName = "";
         _config.Plex.ServerUri = "";
-        SaveConfig();
+        SaveConfig("plex:logout");
     }
 
     // ---- servers / libraries ----
@@ -113,7 +113,7 @@ public sealed class PlexService : IDisposable
         _config.Plex.ServerMachineId = server.ClientIdentifier;
         _config.Plex.ServerName = server.Name;
         _config.Plex.ServerUri = uri;
-        SaveConfig();
+        SaveConfig("plex:select-server");
         Log.Information("Plex: selected server {Name} ({Id}) via {Uri}", server.Name, server.ClientIdentifier, uri);
     }
 
@@ -138,7 +138,7 @@ public sealed class PlexService : IDisposable
                       $"'{server.Name}' is unreachable on every connection. " +
                       "Enable Remote Access/Relay on the server, or check it's online.");
         _config.Plex.ServerUri = uri;
-        SaveConfig();
+        SaveConfig("system:plex-connection-refresh");
         Log.Information("Plex: re-resolved connection to {Uri}", uri);
     }
 

@@ -8,6 +8,9 @@ namespace GlDrive.Config;
 
 public class ConfigManager
 {
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, ConfigHistoryStore> Histories = new(StringComparer.OrdinalIgnoreCase);
+    private static int _historyWarning;
+    public static ConfigHistoryStore History => Histories.GetOrAdd(ConfigPath, _ => new ConfigHistoryStore(AppDataPath));
     private static string AppDataFolder => AppDataPath;
     private static string ConfigFilePath => Path.Combine(AppDataPath, "appsettings.json");
 
@@ -39,6 +42,7 @@ public class ConfigManager
 
     public static AppConfig Load()
     {
+        using var attribution = ConfigWriteScope.Begin("migration");
         if (!File.Exists(ConfigFilePath))
             return new AppConfig();
 
@@ -94,17 +98,58 @@ public class ConfigManager
     public static void Save(AppConfig config)
         => SecureFile.WithPathLock(ConfigFilePath, () => SaveCore(config));
 
+    public static void Save(AppConfig config, string actor)
+    {
+        using var attribution = ConfigWriteScope.Fallback(actor);
+        Save(config);
+    }
+
+    internal static void SaveRawSettings(JsonObject config, string actor)
+    {
+        using var attribution = ConfigWriteScope.Fallback(actor);
+        SecureFile.WithPathLock(ConfigFilePath, () =>
+        {
+            var saved = JsonNode.Parse(SaveSerialized(config.ToJsonString(JsonOptions)));
+            if (saved?["library"] is { } library) config["library"] = library.DeepClone();
+        });
+    }
+
     private static void SaveCore(AppConfig config)
+    {
+        var saved = SaveSerialized(JsonSerializer.Serialize(config, JsonOptions));
+        // Reflect the first-enable safety normalization only after persistence succeeds.
+        if (JsonNode.Parse(saved)?["library"]?["dryRun"] is JsonValue dryRun)
+            config.Library.DryRun = dryRun.GetValue<bool>();
+    }
+
+    private static string SaveSerialized(string json)
     {
         if (ReadOnly)
         {
             Log.Debug("ConfigManager.Save suppressed (ReadOnly mode)");
-            return;
+            return json;
         }
         Directory.CreateDirectory(AppDataFolder);
         string? beforeJson = File.Exists(ConfigFilePath) ? File.ReadAllText(ConfigFilePath) : null;
-        var json = JsonSerializer.Serialize(config, JsonOptions);
+        var next = JsonNode.Parse(json)!;
+        JsonNode? before = null;
+        try { if (beforeJson != null) before = JsonNode.Parse(beforeJson); }
+        catch (JsonException) { /* Unknown prior enablement cannot authorize destructive imports. */ }
+        NormalizeLibraryEnable(before, next);
+        json = next.ToJsonString(JsonOptions);
         SecureFile.WriteAllTextRestricted(ConfigFilePath, json);
+
+        // Journal failure must not turn a successful settings write into an error.
+        try
+        {
+            var options = JsonNode.Parse(json)?["configHistory"]?.Deserialize<ConfigHistoryConfig>(JsonOptions);
+            if (options?.Enabled == true) History.Record(beforeJson, json, ConfigWriteScope.Current, options.RetentionCount);
+        }
+        catch
+        {
+            if (Interlocked.Exchange(ref _historyWarning, 1) == 0)
+                Log.Warning("Configuration history was unavailable; settings were saved");
+        }
 
         if (beforeJson != null)
         {
@@ -123,6 +168,9 @@ public class ConfigManager
                             new AiAgent.ConfigOverrideEvent
                             {
                                 JsonPointer = ptr,
+                                CanonicalPointer = AiAgent.CorrectionDetector.CanonicalOverridePointer(ptr, beforeNode, afterNode),
+                                Actor = ConfigWriteScope.Current.Actor,
+                                AiAuditRef = ConfigWriteScope.Current.AuditRef,
                                 BeforeValue = AiAgent.ConfigSecretPointers.MaskValue(ptr, b),
                                 AfterValue  = AiAgent.ConfigSecretPointers.MaskValue(ptr, a)
                             });
@@ -131,6 +179,16 @@ public class ConfigManager
             }
             catch (Exception ex) { Log.Debug(ex, "ConfigOverride emit failed"); }
         }
+        return json;
+    }
+
+    internal static void NormalizeLibraryEnable(JsonNode? before, JsonNode after)
+    {
+        static bool Enabled(JsonNode? root) => root is JsonObject obj &&
+            obj["library"] is JsonObject library && library["enabled"] is JsonValue value &&
+            value.TryGetValue<bool>(out var enabled) && enabled;
+        if (Enabled(after) && !Enabled(before))
+            after["library"]!["dryRun"] = true;
     }
 
     private static bool NeedsMigration(string json)

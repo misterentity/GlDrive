@@ -10,6 +10,7 @@ using GlDrive.Downloads;
 using GlDrive.Ftp;
 using GlDrive.Irc;
 using GlDrive.Services;
+using GlDrive.Services.Alerts;
 using Serilog;
 
 namespace GlDrive.UI;
@@ -20,6 +21,8 @@ public class TrayViewModel : INotifyPropertyChanged
     private readonly AppConfig _config;
     private readonly NotificationStore _notificationStore;
     private readonly UpdateChecker _updateChecker;
+    public AlertRouter Alerts { get; }
+    private readonly Dictionary<string, (WishlistMatcher Matcher, Action<WishlistItem, string, string> Handler)> _matchHandlers = new();
     internal UpdateChecker AutomationUpdater => _updateChecker;
     private string _statusText = "No servers";
     private DashboardWindow? _dashboardWindow;
@@ -38,6 +41,8 @@ public class TrayViewModel : INotifyPropertyChanged
         _config = config;
         _notificationStore = notificationStore;
         _updateChecker = new UpdateChecker();
+        Alerts = new AlertRouter(config, (title, message, severity) =>
+            Application.Current?.Dispatcher.BeginInvoke(() => ShowNotificationRequested?.Invoke(title, message, severity)));
 
         _serverManager.ServerStateChanged += (serverId, serverName, state) =>
         {
@@ -53,9 +58,12 @@ public class TrayViewModel : INotifyPropertyChanged
                     var server = _serverManager.GetServer(serverId);
                     if (server?.Matcher != null)
                     {
-                        server.Matcher.MatchFound += (item, cat, rel) =>
+                        if (_matchHandlers.Remove(serverId, out var previous)) previous.Matcher.MatchFound -= previous.Handler;
+                        Action<WishlistItem, string, string> handler = (item, cat, rel) =>
                             Application.Current?.Dispatcher.BeginInvoke(() =>
                                 ShowNotification("Grabbed", $"{item.Title} [{cat}] ({serverName})"));
+                        server.Matcher.MatchFound += handler;
+                        _matchHandlers[serverId] = (server.Matcher, handler);
                     }
                     if (server?.Downloads != null)
                     {
@@ -86,14 +94,16 @@ public class TrayViewModel : INotifyPropertyChanged
                             if (downloadItem.Status == DownloadStatus.Completed)
                             {
                                 Application.Current?.Dispatcher.BeginInvoke(() =>
-                                    ShowNotification("Download Complete", downloadItem.ReleaseName));
+                                    ShowNotification("Download Complete", downloadItem.ReleaseName,
+                                        AlertKind.DownloadComplete, AlertSeverity.Information, capturedServerId, downloadItem.ReleaseName));
                                 if (_config.Downloads.PlaySoundOnComplete)
                                     System.Media.SystemSounds.Asterisk.Play();
                             }
                             else if (downloadItem.Status == DownloadStatus.Failed)
                                 Application.Current?.Dispatcher.BeginInvoke(() =>
                                     ShowNotification("Download Failed",
-                                        $"{downloadItem.ReleaseName}: {downloadItem.ErrorMessage ?? "Unknown error"}"));
+                                        $"{downloadItem.ReleaseName}: {downloadItem.ErrorMessage ?? "Unknown error"}",
+                                        AlertKind.DownloadFailed, AlertSeverity.Error, capturedServerId, downloadItem.ReleaseName));
                         };
                         server.Downloads.DownloadProgressChanged += progressHandler;
                         server.Downloads.DownloadStatusChanged += statusHandler;
@@ -228,21 +238,26 @@ public class TrayViewModel : INotifyPropertyChanged
             Application.Current?.Dispatcher.BeginInvoke(() =>
             {
                 var server = _config.Servers.FirstOrDefault(s => s.Id == notice.ServerId);
-                ShowNotification("Own-account nuke", $"{server?.Name ?? notice.ServerId}: {notice.Release} ({notice.Multiplier}x) — {notice.Reason}");
+                ShowNotification("Own-account nuke", $"{server?.Name ?? notice.ServerId}: {notice.Release} ({notice.Multiplier}x) — {notice.Reason}",
+                    AlertKind.OwnNuke, AlertSeverity.Error, notice.ServerId, notice.Release);
             });
 
         _serverManager.SiteHealthNotice += notice =>
             Application.Current?.Dispatcher.BeginInvoke(() =>
             {
                 var name = _config.Servers.FirstOrDefault(s => s.Id == notice.ServerId)?.Name ?? notice.ServerId;
-                ShowNotification(notice.Recovered ? "FTP recovered" : "FTP outage", $"{name}: {notice.Message}");
+                ShowNotification(notice.Recovered ? "FTP recovered" : "FTP outage", $"{name}: {notice.Message}",
+                    notice.Recovered ? AlertKind.SiteRecovered : AlertKind.SiteOutage,
+                    notice.Recovered ? AlertSeverity.Information : AlertSeverity.Error, notice.ServerId);
             });
         _serverManager.AnnounceFeedNotice += notice =>
             Application.Current?.Dispatcher.BeginInvoke(() =>
             {
                 var name = _config.Servers.FirstOrDefault(s => s.Id == notice.ServerId)?.Name ?? notice.ServerId;
                 ShowNotification(notice.Recovered ? "Announce feed recovered" : "Announce feed silent",
-                    $"{name} {notice.Channel}: {notice.Diagnosis}");
+                    $"{name} {notice.Channel}: {notice.Diagnosis}",
+                    notice.Recovered ? AlertKind.AnnounceRecovered : AlertKind.AnnounceSilent,
+                    notice.Recovered ? AlertSeverity.Information : AlertSeverity.Warning, notice.ServerId, incident: notice.Channel);
             });
 
         // Race completion notifications
@@ -255,16 +270,17 @@ public class TrayViewModel : INotifyPropertyChanged
             {
                 if (_config.Spread.NotifyOnRaceComplete)
                 {
-                    Application.Current?.Dispatcher.Invoke(() =>
+                    Application.Current?.Dispatcher.BeginInvoke(() =>
                         ShowNotification("Race Complete",
-                            $"{job.ReleaseName} [{job.Section}] — {job.Sites.Count} sites"));
+                            $"{job.ReleaseName} [{job.Section}] — {job.Sites.Count} sites",
+                            AlertKind.RaceComplete, AlertSeverity.Information, release: job.ReleaseName));
                 }
             };
         }
 
         _updateChecker.UpdateAvailable += release =>
         {
-            Application.Current?.Dispatcher.Invoke(() =>
+            Application.Current?.Dispatcher.BeginInvoke(() =>
             {
                 AvailableUpdate = release;
                 ShowNotification("Update Available", $"GlDrive {release.TagName} is available");
@@ -287,7 +303,7 @@ public class TrayViewModel : INotifyPropertyChanged
             }
             catch { }
 
-            Application.Current?.Dispatcher.Invoke(() =>
+            Application.Current?.Dispatcher.BeginInvoke(() =>
             {
                 try { _serverManager.UnmountAll(); } catch { }
                 // Use Process.Kill instead of Environment.Exit to ensure immediate
@@ -298,7 +314,7 @@ public class TrayViewModel : INotifyPropertyChanged
 
         _serverManager.BncRateLimitDetected += (serverName, message) =>
         {
-            Application.Current?.Dispatcher.Invoke(() =>
+            Application.Current?.Dispatcher.BeginInvoke(() =>
                 ShowNotification("BNC Rate Limit", $"{serverName}: {message}"));
         };
 
@@ -328,7 +344,7 @@ public class TrayViewModel : INotifyPropertyChanged
         // visible so the user can pause racing and apply the update, rather than it silently
         // waiting for the 12h forced install to interrupt a transfer.
         _updateChecker.UpdateInstallStalled += (release, heldFor) =>
-            Application.Current?.Dispatcher.Invoke(() => ShowNotification(
+            Application.Current?.Dispatcher.BeginInvoke(() => ShowNotification(
                 "Update pending",
                 $"{release.TagName} has been held back {heldFor.TotalHours:F0}h by active transfers. " +
                 $"It auto-installs after {UpdateChecker.MaxInstallDeferral.TotalHours:F0}h total, " +
@@ -376,7 +392,7 @@ public class TrayViewModel : INotifyPropertyChanged
                 _config.Agent.HasAcceptedConsent = true;
             }
             _config.Agent.Enabled = value;
-            GlDrive.Config.ConfigManager.Save(_config);
+            GlDrive.Config.ConfigManager.Save(_config, "tray");
             if (value) App.AgentRunner?.Start();
             else       App.AgentRunner?.Stop();
             OnPropertyChanged();
@@ -393,7 +409,7 @@ public class TrayViewModel : INotifyPropertyChanged
         set
         {
             _config.Downloads.MultiStream.SlowMode = value;
-            GlDrive.Config.ConfigManager.Save(_config);
+            GlDrive.Config.ConfigManager.Save(_config, "tray");
             Log.Information("Downloads slow mode {State}", value ? "on" : "off");
             _serverManager.RefreshTorrentDownloadRate();
             OnPropertyChanged();
@@ -417,24 +433,25 @@ public class TrayViewModel : INotifyPropertyChanged
         DashboardCommand.Execute(null);
     });
 
-    private System.Threading.Timer? _pauseTimer;
     public ICommand PauseAgent24hCommand => new RelayCommand(() =>
     {
-        _config.Agent.Enabled = false;
-        GlDrive.Config.ConfigManager.Save(_config);
-        App.AgentRunner?.Stop();
-        _pauseTimer?.Dispose();
-        _pauseTimer = new System.Threading.Timer(_ =>
+        try
         {
-            _ = Application.Current?.Dispatcher.InvokeAsync(() =>
-            {
-                _config.Agent.Enabled = true;
-                GlDrive.Config.ConfigManager.Save(_config);
-                App.AgentRunner?.Start();
-                OnPropertyChanged(nameof(AgentEnabled));
-            });
-        }, null, TimeSpan.FromHours(24), System.Threading.Timeout.InfiniteTimeSpan);
-        System.Windows.MessageBox.Show("AI agent paused. Will re-enable in 24 hours.");
+            using var attribution = ConfigWriteScope.Begin("tray");
+            var changes = App.ConfigChanges ?? throw new InvalidOperationException("Configuration leases are unavailable");
+            changes.CreateLease("/agent/enabled", System.Text.Json.Nodes.JsonValue.Create(false),
+                DateTime.UtcNow.AddHours(24), "Pause agent for 24 hours");
+            App.AgentRunner?.Stop();
+            OnPropertyChanged(nameof(AgentEnabled));
+            MessageBox.Show(changes.PersistenceHealthy
+                ? "AI agent paused for 24 hours. A later edit takes precedence; the lease survives restarts."
+                : "AI agent paused for this session. The lease could not be persisted and may not survive a restart.");
+        }
+        catch (Exception ex)
+        {
+            Log.Warning("Agent pause lease failed ({ErrorType})", ex.GetType().Name);
+            MessageBox.Show("The pause was not applied. Check the existing leases and local diagnostics.");
+        }
     });
 
     public ICommand PanicRevertLastRunCommand => new RelayCommand(() =>
@@ -485,7 +502,7 @@ public class TrayViewModel : INotifyPropertyChanged
                     () => App.ChangeApplier.Apply(new[] { inverse }, _config, _config.Agent,
                         "panic-" + Guid.NewGuid().ToString()[..8], dryRun: false));
                 if (AgentUndoCompletion.TryComplete(report,
-                    () => GlDrive.Config.ConfigManager.Save(_config),
+                    () => GlDrive.Config.ConfigManager.Save(_config, "tray"),
                     () => App.AuditTrail.MarkUndone(r.RunId, r.Target, "panic-revert"),
                     null, out var failure))
                     reverted++;
@@ -538,7 +555,7 @@ public class TrayViewModel : INotifyPropertyChanged
         private set { _availableUpdate = value; OnPropertyChanged(); }
     }
 
-    public Action<string, string>? ShowNotificationRequested { get; set; }
+    public Action<string, string, AlertSeverity>? ShowNotificationRequested { get; set; }
 
     public void UpdateStatusText()
     {
@@ -597,10 +614,11 @@ public class TrayViewModel : INotifyPropertyChanged
         return $"{bytesPerSecond:F0} B/s";
     }
 
-    public void ShowNotification(string title, string message)
+    public void ShowNotification(string title, string message, AlertKind kind = AlertKind.General,
+        AlertSeverity severity = AlertSeverity.Information, string serverId = "", string release = "", string incident = "")
     {
         Log.Information("{Title}: {Message}", title, message);
-        ShowNotificationRequested?.Invoke(title, message);
+        Alerts.Publish(new(kind, severity, title, message, serverId, release, incident));
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

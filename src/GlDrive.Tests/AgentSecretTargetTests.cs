@@ -62,7 +62,7 @@ public sealed class AgentSecretTargetTests : IDisposable
             Category = validator.Category, Target = "/downloads/theme", Confidence = 1,
             After = "changed"
         }], new AppConfig(), new AgentConfig(), "test-run", true, _ => { });
-        Assert.Equal(1, validator.Calls);
+        Assert.Equal(2, validator.Calls); // validate original plus detached no-op projection
         Assert.Equal(1, report.Applied);
     }
 

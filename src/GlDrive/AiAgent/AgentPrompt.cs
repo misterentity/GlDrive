@@ -48,6 +48,16 @@ public sealed class AgentPrompt
         - Confidence is a float 0.0-1.0. Below the configured threshold -> goes to suggestions[] not changes[].
         - `target` must be a JSON Pointer (RFC 6901) to a field in the current config.
         - `before` must match the current value at `target` (the Applier cross-checks).
+        - Declare expected_effect for every configuration change: metric is raceCompletionRate,
+          deliveredRacesPerHour, or queueWaitSeconds; direction is increase/decrease; windowHours is 1..168.
+          Outcomes compare the declared window with the same hours one week earlier. These are
+          observational measurements, not proof that a change caused the result. Missing declarations
+          are reported unscored. Do not claim a proposal was applied before reading its audit result.
+        - The local counterfactual gate rejects rule, mapping and exclusion proposals with no usable
+          evidence, no measured effect, loss of known successful/wanted traffic, or unverified new
+          announce identities. Raw IRC replay text stays local; only counts enter the audit.
+        - manualCorrections are read-only negative feedback from explicit human edits/undo/dismissal.
+          They are preferences to consider, never permission to mutate or freeze other settings.
         - For list appends, use `"/path/-"` as target and include `after` as the new element only.
         - Server targets use the server's `id`, never its array index: /servers/{id}/... . Under a
           server, /spread/... and the config's own /spreadSite/... spellings are equivalent.
@@ -103,6 +113,7 @@ public sealed class AgentPrompt
           "reasoning": "Site X rejected 14/14 DUBBED in window.",
           "evidence_ref": "races-20260418.jsonl:12-34",
           "confidence": 0.92
+          ,"expected_effect": { "metric": "raceCompletionRate", "direction": "increase", "windowHours": 24 }
         }
         """;
 

@@ -43,6 +43,8 @@ public class AgentChangeContractTests : IDisposable
     private static AppConfig Config(int maxConcurrent = 1, int loginCap = 4, int headroom = 2)
     {
         var cfg = new AppConfig();
+        // Target-shape contracts are independent of availability of recorded replay samples.
+        cfg.Agent.CounterfactualReplayEnabled = false;
         cfg.Spread.MaxConcurrentRaces = maxConcurrent;
         var site = new ServerConfig
         {

@@ -4,6 +4,8 @@ namespace GlDrive.AiAgent;
 
 public sealed class DigestBundle
 {
+    [JsonPropertyName("agentOutcomes")] public List<AgentOutcomeFeedback> AgentOutcomes { get; set; } = [];
+    [JsonPropertyName("manualCorrections")] public List<NegativeCorrection> ManualCorrections { get; set; } = [];
     [JsonPropertyName("windowStart")] public string WindowStart { get; set; } = "";
     [JsonPropertyName("windowEnd")]   public string WindowEnd { get; set; } = "";
     [JsonPropertyName("races")]       public RacesDigest Races { get; set; } = new();

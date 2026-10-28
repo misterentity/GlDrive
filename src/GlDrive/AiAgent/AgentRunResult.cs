@@ -12,6 +12,7 @@ public sealed class AgentRunResult
 
 public sealed class AgentChange
 {
+    [JsonPropertyName("expected_effect")] public ExpectedEffect? ExpectedEffect { get; set; }
     [JsonPropertyName("category")]     public string Category { get; set; } = "";
     [JsonPropertyName("target")]       public string Target { get; set; } = "";
     [JsonPropertyName("before")]       public object? Before { get; set; }
