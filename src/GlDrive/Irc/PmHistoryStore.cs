@@ -37,6 +37,7 @@ public class PmHistoryStore : IDisposable
     private Dictionary<string, List<PmHistoryEntry>> _history = new(StringComparer.OrdinalIgnoreCase);
     private readonly Timer _debounceTimer;
     private bool _disposed;
+    private bool _saveWarned;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -51,6 +52,7 @@ public class PmHistoryStore : IDisposable
     public PmHistoryStore(string filePath, bool loadNow)
     {
         _filePath = filePath;
+        using var flow = ExecutionContext.IsFlowSuppressed() ? default : ExecutionContext.SuppressFlow();
         _debounceTimer = new Timer(_ => FlushSave(), null, Timeout.Infinite, Timeout.Infinite);
         if (loadNow) Load();
     }
@@ -143,12 +145,17 @@ public class PmHistoryStore : IDisposable
                     Encoding.UTF8.GetBytes(json), null, DataProtectionScope.CurrentUser);
                 var tempPath = _filePath + ".tmp";
                 File.WriteAllBytes(tempPath, encrypted);
+                SecureFile.RestrictFilePermissions(tempPath);
                 File.Move(tempPath, _filePath, overwrite: true);
                 SecureFile.RestrictFilePermissions(_filePath);
             }
-            catch (Exception ex)
+            catch
             {
-                Log.Error(ex, "Failed to save PM history to {Path}", _filePath);
+                if (!_saveWarned)
+                {
+                    _saveWarned = true;
+                    Log.Warning("PM history persistence unavailable; history remains in memory");
+                }
             }
         }
     }
@@ -158,15 +165,20 @@ public class PmHistoryStore : IDisposable
         if (!File.Exists(_filePath)) return;
         try
         {
-            var fileBytes = File.ReadAllBytes(_filePath);
+            using var stream = new FileStream(_filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var memory = new MemoryStream();
+            stream.CopyTo(memory);
+            var fileBytes = memory.ToArray();
             var decrypted = ProtectedData.Unprotect(fileBytes, null, DataProtectionScope.CurrentUser);
             var json = Encoding.UTF8.GetString(decrypted);
             var loaded = JsonSerializer.Deserialize<Dictionary<string, List<PmHistoryEntry>>>(json, JsonOptions);
+            if (loaded == null || loaded.Any(pair => pair.Value == null || pair.Value.Any(entry => entry == null || entry.Text == null || entry.Nick == null)))
+                throw new InvalidDataException();
             lock (_lock)
             {
-                _history = loaded != null
-                    ? new Dictionary<string, List<PmHistoryEntry>>(loaded, StringComparer.OrdinalIgnoreCase)
-                    : new(StringComparer.OrdinalIgnoreCase);
+                _history = new(StringComparer.OrdinalIgnoreCase);
+                foreach (var pair in loaded.OrderBy(pair => pair.Value.Count == 0 ? DateTime.MinValue : pair.Value.Max(entry => entry.Timestamp)).TakeLast(MaxTargets))
+                    _history[pair.Key] = pair.Value.OrderBy(entry => entry.Timestamp).TakeLast(MaxMessagesPerTarget).ToList();
             }
         }
         catch (Exception ex)

@@ -119,6 +119,7 @@ public sealed partial class AutomationService
         ServerId = queueId ?? item.ServerId, ServerName = queueName ?? item.ServerName,
         item.RetryCount, item.SourceCompletionPending, item.SourceKind, item.StatusDetail,
         item.SkipBlockedTorrentFiles, item.RequiresContentApproval, item.SfvIntegrityHold,
+        waiting = DownloadWaiting.Describe(item),
         SfvRepairs = (item.SfvRepairFiles ?? []).Where(file => file.Attempts > 0)
             .Select(file => new { file.LocalPath, file.Attempts, file.Pending }).ToArray()
     };

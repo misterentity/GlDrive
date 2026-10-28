@@ -58,6 +58,9 @@ public sealed class WishlistCopy
 
 public class DownloadItem
 {
+    // Diagnostic only: stale persisted deadlines must never delay work after a restart.
+    [System.Text.Json.Serialization.JsonIgnore]
+    public GlDrive.Services.WaitingState? RuntimeWait { get; set; }
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
     public DownloadSourceKind SourceKind { get; set; }
     // Keep tracker-bearing magnet URIs out of RemotePath, which is used in telemetry.

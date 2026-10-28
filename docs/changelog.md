@@ -12,6 +12,17 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.17.0 — waiting reasons, IRC mentions and search, feed views, bulk Undo, collection gaps (2026-10-28)
+
+- Read-only reasons, constraints and ETAs for queued races, parked downloads and offline sites
+  (no "check now" bypass of login or health gates).
+- Throttled, local-only IRC mention/PM notices and badges (sitebot and announce lines excluded);
+  bounded background regex search over channel logs and DPAPI PM history.
+- Saved feed views with unread counts; mute-in-feed only hides rows.
+- Bulk actions with a 10-second Undo; explicit TMDB collection gaps with normal wishlist adds.
+- Review: 13 findings fixed before release, including bulk queue removal acting on deselected rows.
+  See the [release notes](releases/v3.17.0.md).
+
 ## v3.16.0 — CAM floor, nuke watch, hooks, SFV repair, Plex Watchlist (2026-10-28)
 
 - Wishlist movies no longer grab CAM/TS/TC copies by default (items stay open); on-demand TMDB

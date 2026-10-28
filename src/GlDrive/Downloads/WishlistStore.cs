@@ -108,9 +108,7 @@ public partial class WishlistStore
         lock (_state.Sync)
         {
             EnsureLoaded();
-            NormalizeQualityState(item);
-            _state.Items.Add(item);
-            Save();
+            AddCore(item);
         }
         _state.NotifyChanged();
     }

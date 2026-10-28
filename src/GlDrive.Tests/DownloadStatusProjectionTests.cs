@@ -13,13 +13,12 @@ public sealed class DownloadStatusProjectionTests
     public void Queued_rows_show_the_persisted_wait_or_retry_reason(string reason)
     {
         var item = new DownloadItem { Status = DownloadStatus.Queued, ErrorMessage = reason };
-        Assert.Equal(reason, DownloadItemVm.DescribeProgress(item));
+        Assert.Contains(reason, DownloadItemVm.DescribeProgress(item));
+        Assert.Contains("ETA unknown", DownloadItemVm.DescribeProgress(item));
         Assert.Equal(DownloadStatus.Queued, item.Status);
     }
 
     [Theory]
-    [InlineData(DownloadStatus.Queued, null, "")]
-    [InlineData(DownloadStatus.Queued, "  ", "")]
     [InlineData(DownloadStatus.Failed, "Access denied", "Access denied")]
     [InlineData(DownloadStatus.Downloading, "Waiting for release completion", "25%")]
     [InlineData(DownloadStatus.Extracting, "Waiting for release completion", "Extracting...")]

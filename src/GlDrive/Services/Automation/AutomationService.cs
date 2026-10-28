@@ -113,6 +113,7 @@ public sealed partial class AutomationService : IAutomationModule
             authenticationHeld = _servers.IsAuthenticationHeld(server.Id),
             authenticationRetryAtUtc = _servers.AuthenticationRetryAtUtc(server.Id),
             health = _servers.GetSiteHealth(server.Id),
+            waiting = _servers.GetWaitingState(server.Id),
             loginBudget = GuardedFtpLogin.GetLoginBudget(FtpLoginAccount.From(server.Connection)),
             loginUsage = _servers.GetLoginUsage(server.Id),
             announceHealth = _servers.AnnounceHealth(server.Id),

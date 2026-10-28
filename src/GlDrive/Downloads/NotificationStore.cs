@@ -34,6 +34,9 @@ public class NotificationStore
     private List<NotificationItem> _items = [];
     private int _saveQueued;
     private readonly bool _persistToDisk;
+    private readonly Lazy<FeedViewStore> _feedViews;
+    public FeedViewStore FeedViews => _feedViews.Value;
+    public event Action<NotificationItem?>? Changed;
 
     /// <summary>
     /// Construct a notification store. <paramref name="persistToDisk"/> defaults
@@ -44,6 +47,9 @@ public class NotificationStore
     public NotificationStore(bool persistToDisk = true)
     {
         _persistToDisk = persistToDisk;
+        _feedViews = new(() => persistToDisk
+            ? FeedViewStore.ForFile(Path.Combine(ConfigManager.AppDataPath, "feed-views.json"))
+            : new FeedViewStore(() => null, _ => { }));
     }
 
     public IReadOnlyList<NotificationItem> Items
@@ -105,12 +111,30 @@ public class NotificationStore
                 _items.RemoveRange(MaxItems, _items.Count - MaxItems);
         }
         ScheduleSave();
+        Notify(item);
     }
 
     public void Clear()
     {
         lock (_lock) _items.Clear();
         Save();
+        Notify(null);
+    }
+
+    public int RemoveMany(IEnumerable<string> ids)
+    {
+        var selected = ids.ToHashSet(StringComparer.Ordinal);
+        int removed;
+        lock (_lock) removed = _items.RemoveAll(item => selected.Contains(item.Id));
+        if (removed > 0) { Save(); Notify(null); }
+        return removed;
+    }
+
+    private void Notify(NotificationItem? item)
+    {
+        if (Changed == null) return;
+        foreach (Action<NotificationItem?> handler in Changed.GetInvocationList())
+            try { handler(item); } catch (Exception ex) { Log.Warning(ex, "Notification view observer failed"); }
     }
 
     private void ScheduleSave()

@@ -267,7 +267,7 @@ public sealed class DownloadSourceCompletionTests
         var source = new CancellationTokenSource(); // Manager owns/disposes the replacement.
         ctsField.SetValue(h.Manager, source);
         typeof(DownloadManager).GetMethod("ScheduleRetry", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(h.Manager, [h.Item, 0]);
+            .Invoke(h.Manager, [h.Item, 0, "download-retry", null]);
         var tasks = (List<Task>)typeof(DownloadManager).GetField("_retryTasks", BindingFlags.Instance | BindingFlags.NonPublic)!
             .GetValue(h.Manager)!;
         var retryLock = typeof(DownloadManager).GetField("_retryLock", BindingFlags.Instance | BindingFlags.NonPublic)!

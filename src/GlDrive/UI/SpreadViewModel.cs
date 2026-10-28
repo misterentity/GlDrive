@@ -11,7 +11,7 @@ using Serilog;
 
 namespace GlDrive.UI;
 
-public class SpreadViewModel : INotifyPropertyChanged, IDisposable
+public partial class SpreadViewModel : INotifyPropertyChanged, IDisposable
 {
     private readonly ServerManager _serverManager;
     private readonly AppConfig _config;
@@ -138,6 +138,7 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         CleanupOwnedCommand = new RelayCommand<object>(CleanupOwned);
         AddQueuedSiteCommand = new RelayCommand<QueuedRaceVm>(race => EditQueuedSite(race, true));
         RemoveQueuedSiteCommand = new RelayCommand<QueuedRaceVm>(race => EditQueuedSite(race, false));
+        InitializeBulkQueueActions();
 
         RefreshSections();
         LoadHistory();
@@ -355,9 +356,11 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         }
 
         var jobs = spread.ActiveJobs;
-        var queued = spread.QueuedRaces.Select(r => QueuedRaceVm.From(r, DateTime.UtcNow) with
-        { Sites = string.Join(", ", r.ServerIds.Select(id => _config.Servers.FirstOrDefault(s => s.Id == id)?.Name ?? id)) }).ToList();
-        if (!QueuedRaces.SequenceEqual(queued)) SyncList(QueuedRaces, queued);
+        var waiting = spread.GetQueuedWaitingStates();
+        var queued = spread.QueuedRaces.Select(r => QueuedRaceVm.From(r, DateTime.UtcNow,
+            string.Join(", ", r.ServerIds.Select(id => _config.Servers.FirstOrDefault(s => s.Id == id)?.Name ?? id)),
+            waiting.TryGetValue(r.RequestId, out var state) ? state.Description : "Waiting for queue refresh")).ToList();
+        RefreshQueuedRows(queued);
         var currentIds = jobs.Select(j => j.Id).ToHashSet();
 
         // Remove gone jobs — but KEEP finished cards: they intentionally outlive their job in
@@ -664,17 +667,20 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
 
     private void ClearFinished()
     {
-        for (int i = SpreadJobs.Count - 1; i >= 0; i--)
+        var ids = SpreadJobs.Where(job => job.IsFinished).Select(job => job.Id).ToHashSet(StringComparer.Ordinal);
+        if (ids.Count == 0) return;
+        if (_scheduleBulk == null) { SpreadStatus = "Open the dashboard to use removal with Undo."; return; }
+        _scheduleBulk($"Clear {ids.Count} finished race cards", () =>
         {
-            if (SpreadJobs[i].IsFinished)
+            if (_disposed) return;
+            for (var i = SpreadJobs.Count - 1; i >= 0; i--)
             {
-                _jobMaxSpeed.Remove(SpreadJobs[i].Id);
-                SpreadJobs.RemoveAt(i);
+                if (!SpreadJobs[i].IsFinished || !ids.Contains(SpreadJobs[i].Id)) continue;
+                _jobMaxSpeed.Remove(SpreadJobs[i].Id); SpreadJobs.RemoveAt(i);
             }
-        }
-        OnPropertyChanged(nameof(QueueDepth));
-        OnPropertyChanged(nameof(LeaderScore));
-        OnPropertyChanged(nameof(ActiveRaceCount));
+            SpreadStatus = "Selected finished cards cleared. Persistent race history is unchanged.";
+            OnPropertyChanged(nameof(QueueDepth)); OnPropertyChanged(nameof(LeaderScore)); OnPropertyChanged(nameof(ActiveRaceCount));
+        });
     }
 
     public void SetOpenSettingsAction(Action action) => _openSettingsAction = action;
@@ -901,25 +907,48 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
     }
 }
 
-public sealed record QueuedRaceVm(string Section, string ReleaseName, string StatusText, string RetryText)
+public sealed class QueuedRaceVm : INotifyPropertyChanged
 {
-    public string Sites { get; init; } = "";
-    public int ResumeCount { get; init; }
-    public string StopReason { get; init; } = "";
-    public DateTime? FirstUploadAtUtc { get; init; }
-    public bool CleanupOnly { get; init; }
-    internal static QueuedRaceVm From(PersistedRace race, DateTime nowUtc) => new(
+    private sealed record Content(string Section, string ReleaseName, string StatusText, string RetryText,
+        string Sites, int ResumeCount, string StopReason, DateTime? FirstUploadAtUtc, bool CleanupOnly);
+    private Content _content;
+    public QueuedRaceVm(string section, string releaseName, string statusText, string retryText)
+        => _content = new(section, releaseName, statusText, retryText, "", 0, "", null, false);
+    public string Section => _content.Section;
+    public string ReleaseName => _content.ReleaseName;
+    public string StatusText => _content.StatusText;
+    public string RetryText => _content.RetryText;
+    public string RequestId { get; init; } = "";
+    public string Sites => _content.Sites;
+    public int ResumeCount => _content.ResumeCount;
+    public string StopReason => _content.StopReason;
+    public DateTime? FirstUploadAtUtc => _content.FirstUploadAtUtc;
+    public bool CleanupOnly => _content.CleanupOnly;
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    internal bool UpdateFrom(QueuedRaceVm other)
+    {
+        if (RequestId != other.RequestId) throw new ArgumentException("Cannot replace a queued request identity");
+        if (_content == other._content) return false;
+        _content = other._content;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null));
+        return true;
+    }
+
+    internal static QueuedRaceVm From(PersistedRace race, DateTime nowUtc, string? sites = null, string? retryText = null)
+    {
+        var row = new QueuedRaceVm(
         race.Section, race.ReleaseName,
         (race.ResumeCount > 0 ? $"Resume {race.ResumeCount}/3: " : "") +
             (string.IsNullOrWhiteSpace(race.WaitReason) ? "Queued for an available race slot" : race.WaitReason),
-        race.NextProbeAtUtc is { } next
+        retryText ?? (race.NextProbeAtUtc is { } next
             ? next > nowUtc ? $"Next check {next.ToLocalTime():HH:mm:ss}" : "Ready to check"
-            : "")
-        {
-            ResumeCount = race.ResumeCount, StopReason = race.StopReason,
-            Sites = string.Join(", ", race.ServerIds),
-            FirstUploadAtUtc = race.FirstUploadAtUtc, CleanupOnly = race.CleanupOnly
-        };
+            : "")) { RequestId = race.RequestId };
+        row._content = row._content with { ResumeCount = race.ResumeCount, StopReason = race.StopReason,
+            Sites = sites ?? string.Join(", ", race.ServerIds), FirstUploadAtUtc = race.FirstUploadAtUtc,
+            CleanupOnly = race.CleanupOnly };
+        return row;
+    }
 }
 
 public class AutoRaceLogVm

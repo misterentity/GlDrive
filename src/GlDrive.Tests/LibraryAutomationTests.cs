@@ -125,4 +125,21 @@ public sealed class LibraryAutomationTests : IDisposable
         Assert.Equal(new byte[] { 5, 6, 7 }, File.ReadAllBytes(owned));
         Assert.False(_config.Library.Enabled);
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Disk_inventory_is_complete_when_Plex_is_unconfigured_but_not_when_credentials_are_missing(bool configured)
+    {
+        Directory.CreateDirectory(_config.Library.MovieRoot);
+        Directory.CreateDirectory(_config.Library.TvRoot);
+        if (configured) _config.Plex.ServerUri = "https://plex.example.test";
+        LibraryIndexSnapshot? observed = null;
+        var module = new LibraryAutomation(_config, _ => null, indexRefreshed: snapshot => observed = snapshot);
+        var result = JsonSerializer.SerializeToNode(await module.ExecuteAsync("library.index_refresh", JsonSerializer.SerializeToElement(new { }), default))!;
+        Assert.Equal(!configured, result["Complete"]!.GetValue<bool>());
+        Assert.Equal(configured ? "incomplete" : "unconfigured", result["plex"]!.GetValue<string>());
+        Assert.NotNull(observed);
+        Assert.Equal(!configured, observed.Complete);
+    }
 }

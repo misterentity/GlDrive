@@ -232,3 +232,18 @@ The wishlist movie CAM/TS/TC floor defaults on through `downloads.blockLowQualit
 `library.nuke_watch(offset?, limit?)` reads recent completed/imported ownership, exact nuke flags, reasons/sources and corrective download attempts. The default page is 100, maximum 500. It reports `enabled`, `autoQueueFixes`, `watchDays`, `dropped`, and `persistenceHealthy`; it performs no network or disk scan. `library.index` and `library.lookup` also include `nukeFlags` for matching local paths. `downloads.list` exposes `nukeCorrectionForRelease` provenance on automatic fixes.
 
 `nukeWatch.enabled=true` flags passively from existing PreDB responses and trusted sitebot observations. `nukeWatch.autoQueueFixes=false` is independently opt-in through Settings or `config.patch`; enabling it can queue a completed exact-identity, same-tier PROPER/newer same-group REPACK after a recognized quality nuke. The original library file stays intact. Failed/cancelled exact candidates do not regenerate on repeated observations; use normal explicit Retry or wait for a distinct correction. See the configuration guide for window, identity and retention behavior.
+## Saved feed views
+
+`feed.views`, `feed.save`, `feed.remove`, `feed.mark_read` and `feed.mute` manage local presentation preferences and unread counts. They never change wishlist, racing, polling exclusions or alerts. See [saved feed views](feed-views.md).
+
+## Desktop bulk selection and Undo
+
+`ui.select_many` sets the visible selection using exact IDs from `ui.state`, with at most 200 distinct IDs. Use screen `dashboard` with `SelectedWishlistItems`/`WishlistItems`, `SelectedNotificationItems`/`NotificationItems`, or `SelectedDownloadItems`/`DownloadItems`; use screen `spread` with `SelectedQueuedRaces`/`QueuedRaces`. Race IDs are `requestId`; other rows use `id`. An empty `ids` array clears selection. Missing, ambiguous or filtered-out rows reject the selection. Selections do not use changing row indices.
+
+`ui.invoke` exposes the available bulk wishlist quality/status commands, feed removal and queued-race removal/site edits, and advertises `destructiveHint=true` for these persistent mutations. Set `BulkWishlistQuality` with a numeric value from `WishlistQualities`; status parameters are `Watching`, `Paused` or `Completed`. Destructive bulk list edits wait ten seconds; invoke `UndoBulkCommand` on `dashboard` to cancel. Closing the dashboard also cancels pending removal. Queue eligibility is checked again at execution. These commands never authorize deletion of local files or remote content. See [bulk actions](bulk-actions.md).
+
+## Collection gaps
+
+`collections.status` reads the last comparison without network or disk work. `collections.refresh(movieTmdbId)` explicitly fetches a movie's collection with at most two bounded TMDB requests, then compares known members against the current library index, downloads and wishlist. No polling or implicit index refresh occurs. Offline results are unknown; partial responses retain valid members with an explicit partial status.
+
+`collections.add(movieTmdbId, filmTmdbId)` adds one known member with a known release year and confirmed missing ownership through the normal wishlist path using current default quality and source permissions. It rechecks current ownership, downloads and duplicate wishlist identities. Unknown ownership requires a library refresh before adding; undated films return `year-required`. Refresh with the library tools or **Refresh library index** in the Collection gaps window, which shows index age and completeness. See [collection gaps](collection-gaps.md).

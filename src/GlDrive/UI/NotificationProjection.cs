@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using GlDrive.Downloads;
 
 namespace GlDrive.UI;
 
@@ -9,6 +10,7 @@ internal sealed class NotificationProjection(int capacity = 5000)
     private readonly Dictionary<string, int> _categories = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _servers = new(StringComparer.Ordinal);
     private string _text = "", _category = "All", _server = "All";
+    private IReadOnlyList<FeedCategoryMute> _mutes = [];
 
     internal ObservableCollection<NotificationItemVm> Items { get; } = new();
     internal ObservableCollection<string> Categories { get; } = new() { "All" };
@@ -16,6 +18,7 @@ internal sealed class NotificationProjection(int capacity = 5000)
 
     internal NotificationItemVm? Add(NotificationItemVm item)
     {
+        if (item.Id.Length > 0 && _all.Any(existing => existing.Id == item.Id)) return null;
         _all.AddFirst(item);
         ChangeOption(_categories, Categories, item.Category, 1, _category);
         ChangeOption(_servers, Servers, item.ServerName, 1, _server);
@@ -48,6 +51,32 @@ internal sealed class NotificationProjection(int capacity = 5000)
         RebuildItems();
     }
 
+    /// <summary>Reconcile an authoritative store snapshot while retaining row instances and selection.</summary>
+    internal void Synchronize(IEnumerable<NotificationItemVm> newestFirst)
+    {
+        var existing = _all.Where(i => i.Id.Length > 0).DistinctBy(i => i.Id).ToDictionary(i => i.Id, StringComparer.Ordinal);
+        var desired = newestFirst.Take(capacity).Select(i => existing.GetValueOrDefault(i.Id) ?? i).ToArray();
+        _all.Clear(); _categories.Clear(); _servers.Clear();
+        foreach (var item in desired)
+        {
+            _all.AddLast(item);
+            ChangeOption(_categories, Categories, item.Category, 1, _category);
+            ChangeOption(_servers, Servers, item.ServerName, 1, _server);
+        }
+        RemoveUnusedOptions(Categories, _categories, _category);
+        RemoveUnusedOptions(Servers, _servers, _server);
+        var visible = desired.Where(Matches).ToArray();
+        var retained = visible.ToHashSet();
+        for (var i = Items.Count - 1; i >= 0; i--)
+            if (!retained.Contains(Items[i])) Items.RemoveAt(i);
+        for (var i = 0; i < visible.Length; i++)
+        {
+            if (i < Items.Count && ReferenceEquals(Items[i], visible[i])) continue;
+            var old = Items.IndexOf(visible[i]);
+            if (old >= 0) Items.Move(old, i); else Items.Insert(i, visible[i]);
+        }
+    }
+
     internal void SetFilter(string? text, string? category, string? server)
     {
         text ??= ""; category ??= "All"; server ??= "All";
@@ -64,10 +93,16 @@ internal sealed class NotificationProjection(int capacity = 5000)
         RebuildItems();
     }
 
+    internal void SetMutedCategories(IReadOnlyList<FeedCategoryMute> mutes)
+    {
+        if (_mutes.SequenceEqual(mutes)) return;
+        _mutes = mutes.ToArray();
+        RebuildItems();
+    }
+
     private bool Matches(NotificationItemVm item) =>
-        (string.IsNullOrEmpty(_text) || item.ReleaseName.Contains(_text, StringComparison.OrdinalIgnoreCase)) &&
-        (string.IsNullOrEmpty(_category) || _category == "All" || item.Category == _category) &&
-        (string.IsNullOrEmpty(_server) || _server == "All" || item.ServerName == _server);
+        FeedViewStore.Matches(_text, _category, _server, item.ReleaseName, item.Category, item.ServerName) &&
+        !FeedViewStore.IsMuted(_mutes, item.ServerId, item.Category);
 
     private void RebuildItems()
     {

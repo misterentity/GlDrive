@@ -17,7 +17,8 @@ internal static class ConfigReconciler
         {
             var value = property.GetValue(source);
             var existing = property.GetValue(destination);
-            if (value is IList sourceList && existing is IList targetList && !property.PropertyType.IsArray)
+            if (property.PropertyType == typeof(IrcAttentionConfig)) property.SetValue(destination, value);
+            else if (value is IList sourceList && existing is IList targetList && !property.PropertyType.IsArray)
             {
                 if (SameContents(sourceList, targetList)) continue;
                 var servers = targetList.OfType<ServerConfig>().ToDictionary(s => s.Id);

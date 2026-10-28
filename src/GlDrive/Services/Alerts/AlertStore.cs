@@ -7,10 +7,10 @@ using Serilog;
 namespace GlDrive.Services.Alerts;
 
 public enum AlertSeverity { Information, Warning, Error }
-public enum AlertKind { General, SiteOutage, SiteRecovered, AnnounceSilent, AnnounceRecovered, OwnNuke, RaceComplete, DownloadComplete, DownloadFailed, Digest, Heartbeat, Hook, OwnedReleaseNuke }
+public enum AlertKind { General, SiteOutage, SiteRecovered, AnnounceSilent, AnnounceRecovered, OwnNuke, RaceComplete, DownloadComplete, DownloadFailed, Digest, Heartbeat, Hook, OwnedReleaseNuke, IrcMention, IrcPrivateMessage }
 
 public sealed record AlertEvent(AlertKind Kind, AlertSeverity Severity, string Title, string Message,
-    string ServerId = "", string Release = "", string Incident = "", string HookEvent = "", string HookStatus = "");
+    string ServerId = "", string Release = "", string Incident = "", string HookEvent = "", string HookStatus = "", bool LocalOnly = false);
 
 public sealed record AlertEntry(string Id, AlertEvent Alert, DateTimeOffset FirstUtc, DateTimeOffset LastUtc,
     int Count = 1, bool Acknowledged = false, DateTimeOffset? SnoozedUntilUtc = null);
@@ -60,6 +60,7 @@ public sealed class AlertStore
         lock (_gate)
         {
             var index = config.Coalesce ? _entries.FindLastIndex(e => e.Alert.Kind == alert.Kind &&
+                e.Alert.LocalOnly == alert.LocalOnly &&
                 e.Alert.ServerId == alert.ServerId && e.Alert.Incident == alert.Incident &&
                 e.Alert.Release == alert.Release && e.Alert.Title == alert.Title && e.Alert.Message == alert.Message &&
                 now - e.LastUtc <= TimeSpan.FromMinutes(config.CoalesceMinutes)) : -1;

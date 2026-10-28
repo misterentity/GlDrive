@@ -65,7 +65,7 @@ public class ControlApiInputBoundsTests
 
         var sectionCheck = src.IndexOf("section!.Length > MaxSectionLength", StringComparison.Ordinal);
         var releaseCheck = src.IndexOf("release!.Length > MaxReleaseLength", StringComparison.Ordinal);
-        var startRace = src.IndexOf("spread.StartRace(", StringComparison.Ordinal);
+        var startRace = src.IndexOf("spread.StartRaceDetailed(section!, release!, serverIds, SpreadMode.Race)", StringComparison.Ordinal);
         var logLine = src.IndexOf("Control API started race", StringComparison.Ordinal);
 
         Assert.True(sectionCheck > 0, "section length must be validated");
