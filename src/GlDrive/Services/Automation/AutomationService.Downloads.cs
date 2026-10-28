@@ -226,6 +226,14 @@ public sealed partial class AutomationService
                     }).ToArray(),
                     configured = _config.Downloads.Profiles
                 };
+            case "wishlist.wanted":
+                return _servers.WantedStatus();
+            case "wishlist.series":
+                return _servers.SeriesStatus(Required(a, "itemId", 128));
+            case "wishlist.season_plan":
+                return _servers.PlanSeriesSeason(Required(a, "itemId", 128), Integer(a, "season", 1, 1, 999));
+            case "wishlist.season_pull":
+                return _servers.PullSeriesSeason(Required(a, "itemId", 128), Integer(a, "season", 1, 1, 999));
             case "wishlist.score":
             {
                 var itemId = Required(a, "itemId", 128);
@@ -259,7 +267,7 @@ public sealed partial class AutomationService
                 foreach (var property in input.EnumerateObject())
                 {
                     if (!node.ContainsKey(property.Name)) throw new ArgumentException($"Unknown wishlist field: {property.Name}");
-                    if (property.Name is "bestOwned" or "pendingGrabs") throw new ArgumentException($"{property.Name} is maintained by download outcomes and is read-only.");
+                    if (property.Name is "bestOwned" or "pendingGrabs" or "seriesInventory" or "seriesInventoryUpdatedAtUtc" or "seriesInventoryLastAttemptAtUtc") throw new ArgumentException($"{property.Name} is maintained by outcomes or metadata refresh and is read-only.");
                     node[property.Name] = JsonNode.Parse(property.Value.GetRawText());
                 }
                 // Editing the legacy resolution also updates its migrated profile unless
@@ -272,6 +280,19 @@ public sealed partial class AutomationService
                     throw new ArgumentException("Wishlist items require a nonempty id and a title of at most 512 characters.");
                 if (!Enum.IsDefined(item.Type) || !Enum.IsDefined(item.Quality) || !Enum.IsDefined(item.Status))
                     throw new ArgumentException("Invalid wishlist type, quality or status.");
+                if (!Enum.IsDefined(item.MonitorMode) || item.MonitorMode != SeriesMonitorMode.Legacy && (item.Type != MediaType.TvShow || item.TvMazeId is not > 0))
+                    throw new ArgumentException("Series monitoring requires a TV item, a TVMaze id and a valid monitorMode.");
+                if (item.AutoPullCompletedRaces && item.MonitorMode == SeriesMonitorMode.Legacy)
+                    throw new ArgumentException("Automatic race pulls require a series monitor mode.");
+                if (item.MonitorMode == SeriesMonitorMode.Future && existing?.MonitorMode != SeriesMonitorMode.Future &&
+                    !input.TryGetProperty("monitorSinceUtc", out _))
+                    item.MonitorSinceUtc = DateTimeOffset.UtcNow;
+                if (existing != null && (item.TvMazeId != existing.TvMazeId || item.Title != existing.Title))
+                {
+                    item.SeriesInventory = [];
+                    item.SeriesInventoryUpdatedAtUtc = null;
+                    item.SeriesInventoryLastAttemptAtUtc = null;
+                }
                 if (item.GrabbedReleases == null) throw new ArgumentException("grabbedReleases cannot be null.");
                 if (WishlistAcquisition.ResolveProfile(item, _config.Downloads) == null)
                     throw new ArgumentException("Unknown profileId; use wishlist.profiles to list available quality profiles.");

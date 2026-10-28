@@ -25,6 +25,14 @@ public class InviteRecoveryPolicyTests
     }
 
     [Fact]
+    public void UnavailableFtpInviteRouteNeverEscalatesIrcRegardlessOfAttempts()
+    {
+        Assert.False(InviteRecoveryPolicy.ShouldForceReconnect(100, T0, null, siteInviteAvailable: false));
+        Assert.False(InviteRecoveryPolicy.ShouldForceReconnect(100, T0.AddDays(2), T0, siteInviteAvailable: false));
+        Assert.True(InviteRecoveryPolicy.ShouldForceReconnect(100, T0.AddDays(2), T0, siteInviteAvailable: true));
+    }
+
+    [Fact]
     public void EscalatesOnceTheRetryHasClearlyStoppedWorking()
     {
         Assert.True(InviteRecoveryPolicy.ShouldForceReconnect(

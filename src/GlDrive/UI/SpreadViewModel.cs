@@ -21,6 +21,7 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
     private string _spreadReleaseName = "";
     private string _spreadStatus = "";
     private SpreadJobVm? _selectedSpreadJob;
+    private RaceSiteOption? _selectedQueuedSite;
     private bool _isRefreshing;
     private bool _disposed;
 
@@ -37,6 +38,13 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
     public ObservableCollection<AutoRaceLogVm> AutoRaceLog { get; } = new();
     public ObservableCollection<RaceHistoryVm> RaceHistory { get; } = new();
     public ObservableCollection<AutoRaceFeedItem> AutoRaceFeed { get; } = new();
+    public ObservableCollection<RaceSiteOption> RaceSiteOptions { get; } = new();
+
+    public RaceSiteOption? SelectedQueuedSite
+    {
+        get => _selectedQueuedSite;
+        set { _selectedQueuedSite = value; OnPropertyChanged(); }
+    }
 
     // Leader/queue stats reflect LIVE races only — retained finished cards (always 65,535 on a
     // clean race) would otherwise pin LeaderScore and inflate the queue depth.
@@ -88,6 +96,8 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         {
             _selectedSpreadJob = value;
             OnPropertyChanged();
+            CommandManager.InvalidateRequerySuggested();
+            if (_refreshTimer != null) SafeRefresh();
         }
     }
 
@@ -100,6 +110,11 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
     public ICommand DismissJobCommand { get; }
     public ICommand ClearFinishedCommand { get; }
     public ICommand CancelQueuedRaceCommand { get; }
+    public ICommand ResetJobCommand { get; }
+    public ICommand ReRaceCommand { get; }
+    public ICommand CleanupOwnedCommand { get; }
+    public ICommand AddQueuedSiteCommand { get; }
+    public ICommand RemoveQueuedSiteCommand { get; }
 
     public bool HasSections => SpreadSections.Count > 0;
     public bool NeedSetup => SpreadSections.Count == 0;
@@ -110,7 +125,8 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         _config = config;
 
         StartRaceCommand = new RelayCommand(StartRace);
-        StopJobCommand = new RelayCommand(StopJob);
+        StopJobCommand = new SpreadRaceCommand(() => SelectedSpreadJob, StopJob);
+        ResetJobCommand = new SpreadRaceCommand(() => SelectedSpreadJob, ResetJob);
         PauseJobCommand = new RelayCommand<SpreadJobVm>(PauseJob);
         ResumeJobCommand = new RelayCommand<SpreadJobVm>(ResumeJob);
         OpenSettingsCommand = new RelayCommand(() => _openSettingsAction?.Invoke());
@@ -118,6 +134,10 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         DismissJobCommand = new RelayCommand<SpreadJobVm>(DismissJob);
         ClearFinishedCommand = new RelayCommand(ClearFinished);
         CancelQueuedRaceCommand = new RelayCommand<QueuedRaceVm>(CancelQueuedRace);
+        ReRaceCommand = new RelayCommand<object>(ReRace);
+        CleanupOwnedCommand = new RelayCommand<object>(CleanupOwned);
+        AddQueuedSiteCommand = new RelayCommand<QueuedRaceVm>(race => EditQueuedSite(race, true));
+        RemoveQueuedSiteCommand = new RelayCommand<QueuedRaceVm>(race => EditQueuedSite(race, false));
 
         RefreshSections();
         LoadHistory();
@@ -142,6 +162,11 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
 
     public void RefreshSections()
     {
+        var selectedSiteId = SelectedQueuedSite?.Id;
+        RaceSiteOptions.Clear();
+        foreach (var server in _config.Servers.Where(s => s.Enabled && s.SpreadSite.Sections.Count > 0).OrderBy(s => s.Name))
+            RaceSiteOptions.Add(new(server.Id, server.Name));
+        SelectedQueuedSite = RaceSiteOptions.FirstOrDefault(s => s.Id == selectedSiteId) ?? RaceSiteOptions.FirstOrDefault();
         SpreadSections.Clear();
         var sections = new HashSet<string>();
         foreach (var server in _config.Servers)
@@ -207,10 +232,61 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
-    private void StopJob()
+    private void StopJob(SpreadJobVm target)
     {
-        if (SelectedSpreadJob == null) return;
-        _serverManager.Spread?.StopJob(SelectedSpreadJob.Id);
+        SelectedSpreadJob = target;
+        var spread = _serverManager.Spread;
+        if (spread == null) { SpreadStatus = "Spread engine not available"; return; }
+        if (!spread.ActiveJobs.Any(job => job.Id == target.Id))
+        { SpreadStatus = "Race is no longer active"; return; }
+        spread.StopJob(target.Id);
+        SpreadStatus = $"Stop requested: {target.Release}";
+        SafeRefresh();
+    }
+
+    private void ResetJob(SpreadJobVm target)
+    {
+        SelectedSpreadJob = target;
+        SpreadStatus = _serverManager.Spread?.ResetRace(target.Id).Message ?? "Spread engine not available";
+        SafeRefresh();
+    }
+
+    private void ReRace(object target)
+    {
+        var id = target switch { RaceHistoryVm history => history.Id, SpreadJobVm card => card.Id, _ => null };
+        var spread = _serverManager.Spread;
+        if (id == null || spread == null) { SpreadStatus = "Select a recorded race"; return; }
+        try
+        {
+            var connected = spread.GetConnectedServerIds();
+            var sites = _config.Servers.Where(server => server.Enabled && server.SpreadSite.Sections.Count > 0 &&
+                connected.Contains(server.Id)).Select(server => server.Id).ToArray();
+            var result = spread.ReRace(id, sites);
+            SpreadStatus = SpreadStartStatus.Format(result, sites.Length);
+            SafeRefresh();
+        }
+        catch (Exception ex) { SpreadStatus = $"Re-race failed: {ex.Message}"; Log.Warning(ex, "Re-race failed"); }
+    }
+
+    private void CleanupOwned(object target)
+    {
+        var release = target switch { QueuedRaceVm queue => queue.ReleaseName, SpreadJobVm card => card.Release,
+            RaceHistoryVm history => history.Release, _ => null };
+        var section = target switch { QueuedRaceVm queue => queue.Section, SpreadJobVm card => card.Section,
+            RaceHistoryVm history => history.Section, _ => null };
+        if (release == null || section == null || _serverManager.Spread is not { } spread) return;
+        if (MessageBox.Show($"Queue a cleanup attempt for {release}?\n\nOnly incomplete directories created by GlDrive with verified account ownership can be removed. Complete or shared content is kept.",
+            "Clean up own partial", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+        SpreadStatus = spread.RequestOwnedCleanupNow(section, release, confirmed: true).Message;
+        SafeRefresh();
+    }
+
+    private void EditQueuedSite(QueuedRaceVm? race, bool add)
+    {
+        if (race == null || SelectedQueuedSite == null) { SpreadStatus = "Select a site for the queued race"; return; }
+        SpreadStatus = _serverManager.Spread?.EditQueuedRaceSite(race.Section, race.ReleaseName,
+            SelectedQueuedSite.Id, add).Message ?? "Spread engine not available";
+        SafeRefresh();
     }
 
     private void CancelQueuedRace(QueuedRaceVm? race)
@@ -279,7 +355,8 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         }
 
         var jobs = spread.ActiveJobs;
-        var queued = spread.QueuedRaces.Select(r => QueuedRaceVm.From(r, DateTime.UtcNow)).ToList();
+        var queued = spread.QueuedRaces.Select(r => QueuedRaceVm.From(r, DateTime.UtcNow) with
+        { Sites = string.Join(", ", r.ServerIds.Select(id => _config.Servers.FirstOrDefault(s => s.Id == id)?.Name ?? id)) }).ToList();
         if (!QueuedRaces.SequenceEqual(queued)) SyncList(QueuedRaces, queued);
         var currentIds = jobs.Select(j => j.Id).ToHashSet();
 
@@ -313,6 +390,7 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(LeaderScore));
         OnPropertyChanged(nameof(ActiveRaceCount));
         OnPropertyChanged(nameof(QueueDepth));
+        if (SelectedSpreadJob != null && !SpreadJobs.Contains(SelectedSpreadJob)) SelectedSpreadJob = null;
 
         // Update scoreboard and transfers only if a job is selected
         var selectedId = SelectedSpreadJob?.Id;
@@ -722,6 +800,8 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
                 Release = item.ReleaseName,
                 Section = item.Section,
                 Result = item.Result.ToString(),
+                StopReason = item.StopReason,
+                FailureCategory = item.FailureCategory,
                 Sites = item.SiteNames,
                 Files = item.FilesTransferred,
                 Size = FormatSize(item.BytesTransferred),
@@ -770,6 +850,8 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
         sb.AppendLine($"Release: {item.Release}");
         sb.AppendLine($"Section: {item.Section}");
         sb.AppendLine($"Result: {item.Result}");
+        if (!string.IsNullOrEmpty(item.StopReason)) sb.AppendLine($"Stop reason: {item.StopReason}");
+        if (!string.IsNullOrEmpty(item.FailureCategory)) sb.AppendLine($"Failure: {item.FailureCategory}");
         sb.AppendLine($"Skiplist: {item.SkiplistResult}");
         sb.AppendLine($"Sites: {item.Sites}");
         sb.AppendLine($"Files: {item.Files}  Size: {item.Size}  Duration: {item.Duration}");
@@ -821,6 +903,7 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
 
 public sealed record QueuedRaceVm(string Section, string ReleaseName, string StatusText, string RetryText)
 {
+    public string Sites { get; init; } = "";
     public int ResumeCount { get; init; }
     public string StopReason { get; init; } = "";
     public DateTime? FirstUploadAtUtc { get; init; }
@@ -834,6 +917,7 @@ public sealed record QueuedRaceVm(string Section, string ReleaseName, string Sta
             : "")
         {
             ResumeCount = race.ResumeCount, StopReason = race.StopReason,
+            Sites = string.Join(", ", race.ServerIds),
             FirstUploadAtUtc = race.FirstUploadAtUtc, CleanupOnly = race.CleanupOnly
         };
 }
@@ -863,6 +947,8 @@ public class RaceHistoryVm
     public string Release { get; set; } = "";
     public string Section { get; set; } = "";
     public string Result { get; set; } = "";
+    public string StopReason { get; set; } = "";
+    public string FailureCategory { get; set; } = "";
     public string Sites { get; set; } = "";
     public int Files { get; set; }
     public string Size { get; set; } = "";
@@ -870,3 +956,5 @@ public class RaceHistoryVm
     public string SkiplistResult { get; set; } = "";
     public List<SkiplistTraceEntry>? SkiplistTrace { get; set; }
 }
+
+public sealed record RaceSiteOption(string Id, string Name);

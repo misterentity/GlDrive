@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using GlDrive.Config;
 using GlDrive.Downloads;
+using GlDrive.Ftp;
 using GlDrive.Irc;
 using GlDrive.Spread;
 
@@ -109,6 +110,11 @@ public sealed partial class AutomationService : IAutomationModule
             state = live?.CurrentState.ToString() ?? MountState.Unmounted.ToString(),
             authenticationHeld = _servers.IsAuthenticationHeld(server.Id),
             authenticationRetryAtUtc = _servers.AuthenticationRetryAtUtc(server.Id),
+            health = _servers.GetSiteHealth(server.Id),
+            loginBudget = GuardedFtpLogin.GetLoginBudget(FtpLoginAccount.From(server.Connection)),
+            loginUsage = _servers.GetLoginUsage(server.Id),
+            announceHealth = _servers.AnnounceHealth(server.Id),
+            announceHealthPersistenceHealthy = _servers.AnnounceHealthPersistenceHealthy,
             stats = live?.Stats,
             ircState = _servers.GetIrcService(server.Id)?.State.ToString() ?? "Disconnected",
             downloads = live?.Downloads?.Store.Items.Count ?? 0,

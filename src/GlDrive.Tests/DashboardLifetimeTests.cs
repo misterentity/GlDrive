@@ -186,9 +186,13 @@ public sealed class DashboardLifetimeTests
         var vm = Raw<DashboardViewModel>();
         Set(vm, "_diskPoll", new DashboardDiskPoll());
         var servers = Raw<ServerManager>();
+        var config = new AppConfig();
+        Set(servers, "_config", config);
+        Set(servers, "_siteHealth", new SiteHealthTracker(Path.Combine(TestProcessIsolation.AppDataRoot,
+            "dashboard-lifetime-health-" + Guid.NewGuid().ToString("N") + ".json")));
         Set(servers, "_servers", new ConcurrentDictionary<string, MountService>());
         Set(vm, "_serverManager", servers);
-        Set(vm, "_config", new AppConfig());
+        Set(vm, "_config", config);
         Set(vm, "<MountedServerStatus>k__BackingField", new ObservableCollection<OverviewServerVm>());
         Set(vm, "_throughputPoints", new PointCollection());
         Set(vm, "_cpuCores", 1);

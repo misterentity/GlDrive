@@ -2203,6 +2203,7 @@
                         <Grid.RowDefinitions>
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <!-- AUTO RACES panel -->
                         <Border Grid.Row="0" Style="{DynamicResource HudPanelStyle}" Margin="0,0,0,10">
@@ -2220,6 +2221,12 @@
                                 <Grid>
                                     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="8">
                                         <StackPanel>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                            <TextBlock Text="Queued race site:" VerticalAlignment="Center" Margin="0,0,8,0"
+                                                       Foreground="{DynamicResource ForegroundDimBrush}"/>
+                                            <ComboBox ItemsSource="{Binding RaceSiteOptions}" SelectedItem="{Binding SelectedQueuedSite}"
+                                                      DisplayMemberPath="Name" MinWidth="150" AutomationProperties.Name="Site for queued race controls"/>
+                                        </StackPanel>
                                         <ItemsControl ItemsSource="{Binding QueuedRaces}">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate>
@@ -2238,6 +2245,19 @@
                                                                 <TextBlock Text="{Binding StatusText}" FontSize="12"
                                                                            Foreground="{DynamicResource AccentBrush}"
                                                                            TextTrimming="CharacterEllipsis" ToolTip="{Binding StatusText}"/>
+                                                                <TextBlock Text="{Binding Sites}" FontSize="12" TextWrapping="Wrap"
+                                                                           Foreground="{DynamicResource ForegroundDimBrush}"/>
+                                                                <WrapPanel Margin="0,6,0,4">
+                                                                    <Button Content="Add selected site" Padding="8,4" Margin="0,0,6,0"
+                                                                            Command="{Binding DataContext.AddQueuedSiteCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                            CommandParameter="{Binding}"/>
+                                                                    <Button Content="Remove selected site" Padding="8,4" Margin="0,0,6,0"
+                                                                            Command="{Binding DataContext.RemoveQueuedSiteCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                            CommandParameter="{Binding}"/>
+                                                                    <Button Content="Clean up own partial" Padding="8,4"
+                                                                            Command="{Binding DataContext.CleanupOwnedCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                            CommandParameter="{Binding}"/>
+                                                                </WrapPanel>
                                                                 <StackPanel Orientation="Horizontal">
                                                                     <TextBlock Text="{Binding Section}" FontSize="12"
                                                                                Foreground="{DynamicResource TextFaintBrush}" Margin="0,0,12,0"/>
@@ -2250,17 +2270,31 @@
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
                                         </ItemsControl>
-                                        <ItemsControl ItemsSource="{Binding SpreadJobs}">
-                                            <ItemsControl.ItemTemplate>
+                                        <ListBox ItemsSource="{Binding SpreadJobs}" SelectedItem="{Binding SelectedSpreadJob, Mode=TwoWay}"
+                                                 AutomationProperties.Name="Race cards" Background="{DynamicResource SurfaceBrush}"
+                                                 BorderThickness="0" ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                            <ListBox.ItemContainerStyle>
+                                                <Style TargetType="ListBoxItem">
+                                                    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                                    <Setter Property="Padding" Value="0"/>
+                                                    <Setter Property="Margin" Value="0"/>
+                                                </Style>
+                                            </ListBox.ItemContainerStyle>
+                                            <ListBox.ItemTemplate>
                                                 <DataTemplate>
                                                     <Border Margin="0,0,0,10" Background="{DynamicResource SurfaceBrush}"
-                                                            BorderBrush="{DynamicResource LineBrush}" BorderThickness="1"
+                                                            BorderThickness="1"
                                                             Padding="12,10">
                                                         <!-- Finished cards stay in the list, dimmed, showing their final score -->
                                                         <Border.Style>
                                                             <Style TargetType="Border">
                                                                 <Setter Property="Opacity" Value="1"/>
+                                                                <Setter Property="BorderBrush" Value="{DynamicResource LineBrush}"/>
                                                                 <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                                                                        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+                                                                    </DataTrigger>
                                                                     <DataTrigger Binding="{Binding IsFinished}" Value="True">
                                                                         <Setter Property="Opacity" Value="0.72"/>
                                                                     </DataTrigger>
@@ -2333,7 +2367,7 @@
                                                             </Border>
                                                             <!-- Actions — gated by card state: live races get PAUSE/RESUME/STOP,
                                                                  finished (retained) cards get DISMISS -->
-                                                            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
+                                                            <WrapPanel Grid.Column="3" MaxWidth="300" VerticalAlignment="Center" Margin="14,0,0,0">
                                                                 <!-- PAUSE: live + running only -->
                                                                 <Button Content="PAUSE" Margin="0,0,6,0" Padding="10,5"
                                                                         Visibility="{Binding CanPause, Converter={StaticResource BoolToVisibility}}"
@@ -2350,12 +2384,25 @@
                                                                         Command="{Binding DataContext.StopJobCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                                         CommandParameter="{Binding}"
                                                                         Style="{DynamicResource DangerButtonStyle}" Padding="12,5"/>
+                                                                <Button Content="RESET" Padding="10,5" Margin="6,0,0,0"
+                                                                        Visibility="{Binding CanStop, Converter={StaticResource BoolToVisibility}}"
+                                                                        ToolTip="Clear retry failures at the next scan boundary; current transfers finish safely"
+                                                                        Command="{Binding DataContext.ResetJobCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                        CommandParameter="{Binding}"/>
+                                                                <Button Content="RE-RACE" Padding="10,5" Margin="0,0,6,0"
+                                                                        Visibility="{Binding CanDismiss, Converter={StaticResource BoolToVisibility}}"
+                                                                        Command="{Binding DataContext.ReRaceCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                        CommandParameter="{Binding}"/>
+                                                                <Button Content="CLEAN UP OWN PARTIAL" Padding="10,5" Margin="0,4,6,0"
+                                                                        Visibility="{Binding CanDismiss, Converter={StaticResource BoolToVisibility}}"
+                                                                        Command="{Binding DataContext.CleanupOwnedCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                        CommandParameter="{Binding}"/>
                                                                 <!-- DISMISS: finished cards only — removes just this card -->
                                                                 <Button Content="DISMISS" Padding="10,5"
                                                                         Visibility="{Binding CanDismiss, Converter={StaticResource BoolToVisibility}}"
                                                                         Command="{Binding DataContext.DismissJobCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                                         CommandParameter="{Binding}"/>
-                                                            </StackPanel>
+                                                            </WrapPanel>
                                                         </Grid>
                                                         <!-- Per-race detail: every file, every dest, and why each is or
                                                              isn't moving. Snapshotted only while expanded. -->
@@ -2394,8 +2441,8 @@
                                                         </StackPanel>
                                                     </Border>
                                                 </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
+                                            </ListBox.ItemTemplate>
+                                        </ListBox>
                                         </StackPanel>
                                     </ScrollViewer>
                                 </Grid>
@@ -2469,6 +2516,38 @@
                                 </DockPanel>
                             </Border>
                         </Grid>
+                        </Expander>
+                        <Expander Grid.Row="2" Header="Race history" IsExpanded="False" Margin="0,6,0,0">
+                            <DataGrid ItemsSource="{Binding RaceHistory}" AutoGenerateColumns="False" IsReadOnly="True"
+                                      CanUserAddRows="False" MaxHeight="260" HeadersVisibility="Column"
+                                      Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource ForegroundBrush}"
+                                      BorderBrush="{DynamicResource LineBrush}" SelectionMode="Single"
+                                      AutomationProperties.Name="Race history">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Time" Binding="{Binding Time}" Width="95"/>
+                                    <DataGridTextColumn Header="Release" Binding="{Binding Release}" Width="*"/>
+                                    <DataGridTextColumn Header="Result" Binding="{Binding Result}" Width="80"/>
+                                    <DataGridTextColumn Header="Stop reason" Binding="{Binding StopReason}" Width="95"/>
+                                    <DataGridTextColumn Header="Failure" Binding="{Binding FailureCategory}" Width="95"/>
+                                    <DataGridTemplateColumn Header="Actions" Width="Auto">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <Button Content="Details" Padding="6,3" Margin="0,0,4,0"
+                                                            Command="{Binding DataContext.ShowRaceDetailCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                            CommandParameter="{Binding}"/>
+                                                    <Button Content="Re-race" Padding="6,3" Margin="0,0,4,0"
+                                                            Command="{Binding DataContext.ReRaceCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                            CommandParameter="{Binding}"/>
+                                                    <Button Content="Clean up own partial" Padding="6,3"
+                                                            Command="{Binding DataContext.CleanupOwnedCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                            CommandParameter="{Binding}"/>
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                </DataGrid.Columns>
+                            </DataGrid>
                         </Expander>
                     </Grid>
                                 </DockPanel>
@@ -2660,7 +2739,7 @@
                                         </ItemsControl.ItemsPanel>
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
-                                                <Border Width="280" Height="280" Margin="0,0,12,0"
+                                                <Border Width="280" Height="320" Margin="0,0,12,0"
                                                         Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1">
                                                     <Grid>
                                                         <DockPanel Margin="16">
@@ -2668,6 +2747,7 @@
                                                             <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
                                                                 <TextBlock Text="{Binding Name}" Style="{DynamicResource DisplayTextStyle}" FontSize="15"/>
                                                                 <TextBlock Text="{Binding Host}" Style="{DynamicResource MicroTextStyle}" Margin="0,2,0,0"/>
+                                                                <TextBlock Text="{Binding HealthLine}" Style="{DynamicResource MicroTextStyle}" Margin="0,4,0,0" TextWrapping="Wrap"/>
                                                             </StackPanel>
                                                             <!-- Action buttons -->
                                                             <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,8,0,0">
@@ -2743,7 +2823,7 @@
                                                                         <TextBlock Text="%" Style="{DynamicResource DisplayTextStyle}" FontSize="18" VerticalAlignment="Bottom" Margin="3,0,0,4"/>
                                                                     </StackPanel>
                                                                     <TextBlock Text="{Binding CapacityUsedDisplay}" Style="{DynamicResource MicroTextStyle}" HorizontalAlignment="Center"/>
-                                                                    <TextBlock Text="POOL SLOTS" Style="{DynamicResource MicroTextStyle}" HorizontalAlignment="Center" FontSize="12"/>
+                                                                    <TextBlock Text="POOL SLOTS" Style="{DynamicResource MicroTextStyle}" HorizontalAlignment="Center" FontSize="12" ToolTip="{Binding LoginUsageLine}"/>
                                                                 </StackPanel>
                                                             </Grid>
                                                         </DockPanel>

@@ -42,6 +42,7 @@ public class SpreadConfig
     public int SpreadKeepaliveSeconds { get; set; } = 30;
     public bool AutoRaceOnNotification { get; set; }
     public bool NotifyOnRaceComplete { get; set; } = true;
+    public bool OwnNukeAlertsEnabled { get; set; } = true;
     /// <summary>Use trusted bot hints only alongside already scheduled listing verification.</summary>
     public bool UseSitebotCompletionHints { get; set; }
     /// <summary>Use complete, release-scoped trusted bot metadata before HTTP lookup.</summary>

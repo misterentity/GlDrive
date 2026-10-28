@@ -163,6 +163,7 @@ public partial class SpreadJob
         var snapshot = CapturePartialState();
         foreach (var directory in snapshot.Directories)
         {
+            if (KnownNuked(directory.ServerId)) continue;
             if (directory.CompletionConfirmed)
             {
                 ForgetOwnedRoot(directory);
@@ -186,7 +187,7 @@ public partial class SpreadJob
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(45));
             try
             {
-                connection = await pool.Borrow(deadline.Token);
+                connection = await pool.BorrowFor(FtpBorrowPurpose.Cleanup, deadline.Token);
                 // Bind to the connection actually borrowed, too: the live pool may
                 // have changed between configuration resolution and acquisition.
                 if (directory.AccountIdentity != RaceLifetimePolicy.AccountIdentity(connection.Client.Host,
@@ -267,6 +268,9 @@ public partial class SpreadJob
                     continue;
                 }
                 if (verdict != PartialCleanupVerdict.Wipe) continue;
+                // Nuke state may have changed during the borrowed connection's
+                // listing. Preserve the exact ownership ledger for manual review.
+                if (KnownNuked(directory.ServerId)) continue;
                 var reply = await Read(() => connection.Client.Execute($"SITE WIPE -r {directory.RemotePath}", CancellationToken.None));
                 if (!reply.Success)
                 {

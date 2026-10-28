@@ -37,8 +37,9 @@ public partial class SpreadManager
 
     private bool CancelQueuedNoLock(string section, string release)
     {
-        var matches = _raceQueue.Where(r => IsSameRace(r.Section, r.ReleaseName, section, release)).ToList();
-        _raceQueue.RemoveAll(r => IsSameRace(r.Section, r.ReleaseName, section, release));
+        var matches = _raceQueue.Where(r => IsSameRace(r.Section, r.ReleaseName, section, release) &&
+            !_controlRequestsInFlight.Contains(r.RequestId)).ToList();
+        _raceQueue.RemoveAll(r => matches.Any(match => match.RequestId == r.RequestId));
         foreach (var request in matches.Where(r => r.HasOwnedPartial))
             _raceQueue.Add(RaceLifetimePolicy.CleanupRequest(request, DateTime.UtcNow,
                 "Stopped by user; owned partial retained until cleanup deadline",

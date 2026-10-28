@@ -209,6 +209,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
         return list;
     }
     public SectionBlacklistStore Blacklist => _blacklist;
+    public SpeedTracker TransferSpeeds => _speedTracker;
 
     public event Action<SpreadJob>? JobStarted;
     public event Action<SpreadJob>? JobCompleted;
@@ -484,6 +485,8 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             var maxRaces = Math.Max(_config.Spread.MaxConcurrentRaces, 1);
             request = new PersistedRace(section, releaseName, serverIds.ToList(), mode,
                 knownSourceServerId, knownSourcePath, now);
+            if (IsRaceNuked(request))
+                return new(RaceStartOutcome.Unavailable, section, releaseName, Reason: NukeHoldMessage);
             queued = MergeDuplicateNoLock(request, now);
             if (queued == null)
             {
@@ -539,7 +542,8 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
 
     private IEnumerable<int> EligibleQueueIndicesNoLock(DateTime now) => RaceQueuePolicy.Order(_raceQueue
         .Select((request, index) => (Request: QueueRequestAt(request, now), Index: index))
-        .Where(p => !p.Request.IsExpired(now) && p.Request.IsDue(now)
+        .Where(p => !p.Request.IsExpired(now) && p.Request.IsDue(now) && !IsRaceNuked(p.Request)
+            && !_controlRequestsInFlight.Contains(p.Request.RequestId)
             && (p.Request.CleanupOnly || p.Request.ServerIds.Count(id => _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed) >= 2))
         .Select(p => (PredictRaceNoLock(p.Request), p.Index)), now, _config.Spread.SizeAwareRaceQueue, _config.Spread.RaceQueueMaxAgeMinutes);
 
@@ -591,6 +595,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             if (startingIndex < 0) throw new OperationCanceledException("Race request cancelled during admission");
             request = _startingRequests[startingIndex];
             (section, releaseName, serverIds, mode, knownSourceServerId, knownSourcePath, _, _, _) = request;
+            if (IsRaceNuked(request)) throw new InvalidOperationException(NukeHoldMessage);
             pools = serverIds
                 .Where(id => _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed)
                 .ToDictionary(id => id, id => _spreadPools[id]);
@@ -633,11 +638,13 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
                 .ToDictionary(id => id, id => _config.Servers.First(s => s.Id == id));
             if (!request.CleanupOnly && pools.Count < 2)
                 throw new InvalidOperationException("Spread pools changed during race admission");
+            if (IsRaceNuked(request)) throw new InvalidOperationException(NukeHoldMessage);
             job = new SpreadJob(section, releaseName, mode, _config.Spread,
                 pools, mainPools, configs, _speedTracker, _skiplist, _blacklist,
                 knownSourceServerId, knownSourcePath);
             job.RestorePartial(request);
             job.SitebotFacts = SitebotFacts;
+            job.IsReleaseNuked = IsNuked;
             // Resume timestamps include previous active work, not just queue wait.
             job.QueuedAtUtc = request.ResumeCount == 0 && request.Resumes == 0 ? request.QueuedAtUtc : null;
             if (_config.Spread.MergeRaceAnnounces) job.QueueSourceHints(request.SourceHints);
@@ -1012,7 +1019,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
     {
         if (_disposed) return;
         var now = DateTime.UtcNow;
-        var next = _raceQueue.Where(r => !r.CleanupOnly || r.CleanupAttempts < RaceLifetimePolicy.MaxCleanupAttempts)
+        var next = _raceQueue.Where(r => !IsRaceNuked(r) && (!r.CleanupOnly || r.CleanupAttempts < RaceLifetimePolicy.MaxCleanupAttempts))
             .SelectMany(r => new[]
             {
                 r.CleanupOnly && r.NextProbeAtUtc <= now ? now.AddSeconds(30) : r.NextProbeAtUtc,
@@ -1433,7 +1440,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
         }
 
         var mode = FxpModeDetector.Detect(srcPool, dstPool);
-        var pair = await BorrowDirectFxpPair(srcServerId, srcPool.Borrow, dstServerId, dstPool.Borrow, ct);
+        var pair = await BorrowDirectFxpPair(srcServerId, t => srcPool.BorrowFor(FtpBorrowPurpose.Race, t), dstServerId, t => dstPool.BorrowFor(FtpBorrowPurpose.Race, t), ct);
         await using var srcConn = pair.Source;
         await using var dstConn = pair.Destination;
 
@@ -1484,7 +1491,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
         {
             var destFile = dstPath.TrimEnd('/') + "/" + relativePath;
 
-            var pair = await BorrowDirectFxpPair(srcServerId, srcPool.Borrow, dstServerId, dstPool.Borrow, ct);
+            var pair = await BorrowDirectFxpPair(srcServerId, t => srcPool.BorrowFor(FtpBorrowPurpose.Race, t), dstServerId, t => dstPool.BorrowFor(FtpBorrowPurpose.Race, t), ct);
             await using var srcConn = pair.Source;
             await using var dstConn = pair.Destination;
 
@@ -1657,6 +1664,8 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
         }
     }
 
+    private static readonly TimeSpan LendLoginBudget = TimeSpan.FromSeconds(30);
+
     public async Task<PooledConnection?> TryBorrowAsync(string serverId, TimeSpan wait, CancellationToken ct)
     {
         FtpConnectionPool? pool;
@@ -1666,11 +1675,14 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
         }
         if (!IsRaceIdle(serverId) || pool.IsThrottled || !pool.UseCpsv) return null;
 
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(wait);
         try
         {
-            var conn = await pool.Borrow(cts.Token);
+            // A login still dialling when the wait ends finishes into the pool instead of
+            // being discarded, so the lane's next poll borrows it rather than dialling again.
+            var conn = await GlDrive.Downloads.Segmented.BoundedLend.WaitOrReleaseAsync(
+                token => pool.BorrowFor(FtpBorrowPurpose.Race, token),
+                lease => lease.DisposeAsync(), wait, LendLoginBudget, ct);
+            if (conn == null) return null; // nothing came free within the wait
             // A race may have been queued while we waited — give it straight back.
             if (IsRaceIdle(serverId)) return conn;
             await conn.DisposeAsync();

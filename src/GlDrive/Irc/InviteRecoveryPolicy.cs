@@ -65,8 +65,9 @@ internal static class InviteRecoveryPolicy
     /// When this server last forced a reconnect for this reason, or null if never.
     /// </param>
     internal static bool ShouldForceReconnect(
-        int attempts, DateTime nowUtc, DateTime? lastForcedReconnectUtc)
+        int attempts, DateTime nowUtc, DateTime? lastForcedReconnectUtc, bool siteInviteAvailable = true)
     {
+        if (!siteInviteAvailable) return false;
         if (attempts < EscalateAfterAttempts) return false;
         if (lastForcedReconnectUtc is not { } last) return true;
         return nowUtc - last >= MinReconnectInterval;

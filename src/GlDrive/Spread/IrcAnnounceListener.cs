@@ -17,14 +17,20 @@ namespace GlDrive.Spread;
 public class IrcAnnounceListener : IDisposable
 {
     private readonly string _serverId;
-    private readonly IrcService _ircService;
+    private readonly IrcService? _ircService;
     private readonly List<IrcAnnounceRule> _rules;
     private readonly Dictionary<string, Regex> _compiledRules = new();
     private readonly LinkedList<string> _recentAnnounceOrder = new();
     private readonly HashSet<string> _recentAnnounces = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _recentChannelAnnounces = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Queue<string> _recentChannelOrder = new();
     private readonly Lock _lock = new();
     private readonly bool _defaultAutoRace;
     private readonly IReadOnlyList<IrcChannelConfig> _channels;
+    private readonly Action<GlDrive.AiAgent.MatchedAnnounceEvent> _recordMatchedAnnounce;
+
+    /// <summary>Passive source-health annotation; does not change announce matching or admission.</summary>
+    public Func<bool>? SourceDown { get; set; }
 
     // Built-in pattern for common glftpd verbose announces:
     //   [ NEW ] in [ section ] Release.Name OK pred 2s ago.
@@ -79,15 +85,28 @@ public class IrcAnnounceListener : IDisposable
 
     public event Action<string, string, string, bool>? ReleaseAnnounced; // serverId, section, releaseName, autoRace
     public event Action<SitebotEvent>? SitebotEventReceived;
+    /// <summary>Plausible matched traffic, retaining channel identity independently of race deduplication.</summary>
+    public event Action<string, string, DateTime>? ChannelAnnounceObserved;
 
     public IrcAnnounceListener(string serverId, IrcService ircService,
         List<IrcAnnounceRule> rules, bool defaultAutoRace, IReadOnlyList<IrcChannelConfig>? channels = null)
+        : this(serverId, rules, defaultAutoRace, channels)
+    {
+        _ircService = ircService;
+        _ircService.MessageReceived += OnMessage;
+    }
+
+    // A pure receive seam avoids constructing IRC stores or sockets in parser tests.
+    internal IrcAnnounceListener(string serverId, List<IrcAnnounceRule> rules, bool defaultAutoRace,
+        IReadOnlyList<IrcChannelConfig>? channels = null,
+        Action<GlDrive.AiAgent.MatchedAnnounceEvent>? recordMatchedAnnounce = null)
     {
         _serverId = serverId;
-        _ircService = ircService;
         _rules = rules;
         _defaultAutoRace = defaultAutoRace;
         _channels = channels ?? [];
+        _recordMatchedAnnounce = recordMatchedAnnounce ?? (row =>
+            App.TelemetryRecorder?.Record(GlDrive.AiAgent.TelemetryStream.MatchedAnnounces, row));
 
         // Pre-compile regex patterns
         foreach (var rule in rules.Where(r => r.Enabled && !string.IsNullOrEmpty(r.Pattern)))
@@ -107,14 +126,13 @@ public class IrcAnnounceListener : IDisposable
         // Always subscribe — the built-in verbose pattern works without any custom rules.
         // Without this, users must configure announce rules before the announce pipeline
         // becomes live, which defeats the purpose of shipping a built-in pattern.
-        _ircService.MessageReceived += OnMessage;
         Log.Information("IRC announce listener active for {Server} ({Count} custom rules, builtin={Builtin})",
             _serverId, _compiledRules.Count, _defaultAutoRace ? "autoRace" : "logOnly");
     }
 
     private int _traceCount;
 
-    private void OnMessage(string target, IrcMessageItem message)
+    internal void OnMessage(string target, IrcMessageItem message)
     {
         if (message.Type != IrcMessageType.Normal && message.Type != IrcMessageType.Notice)
             return;
@@ -135,6 +153,8 @@ public class IrcAnnounceListener : IDisposable
                 message.Text, sitebot, message.Timestamp.ToUniversalTime());
             if (observation != null)
             {
+                if (IsPlausibleReleaseName(observation.Release))
+                    ObserveChannelActivity(target, observation.Kind.ToString(), observation.Section, observation.Release, observation.ObservedAtUtc);
                 try { SitebotEventReceived?.Invoke(observation); }
                 catch (Exception ex) { Log.Warning(ex, "Sitebot event consumer failed for {Server}", _serverId); }
             }
@@ -178,7 +198,7 @@ public class IrcAnnounceListener : IDisposable
             if (!string.IsNullOrEmpty(release) && release.Length >= 5)
             {
                 // ruleSource "builtin" — matched the shipped verbose [ NEW ] pattern.
-                if (TryFireAnnounce(section, release, target, message.Text, autoRace, "builtin"))
+                if (TryFireAnnounce(section, release, target, message.Text, autoRace, "builtin", message.Timestamp.ToUniversalTime()))
                     return;
             }
         }
@@ -213,7 +233,7 @@ public class IrcAnnounceListener : IDisposable
                 }
 
                 // ruleSource "custom" — matched a user-configured announce rule.
-                if (TryFireAnnounce(section, release, target, message.Text, rule.AutoRace, "custom"))
+                if (TryFireAnnounce(section, release, target, message.Text, rule.AutoRace, "custom", message.Timestamp.ToUniversalTime()))
                     return;
             }
             catch (RegexMatchTimeoutException) { }
@@ -294,7 +314,7 @@ public class IrcAnnounceListener : IDisposable
         return dp[b.Length];
     }
 
-    private bool TryFireAnnounce(string section, string release, string channel, string msgText, bool autoRace, string ruleSource)
+    private bool TryFireAnnounce(string section, string release, string channel, string msgText, bool autoRace, string ruleSource, DateTime observedAtUtc)
     {
         // Final validation gate — covers both the built-in verbose pattern and custom rules.
         // Rejects junk like "brings", "leads", "racing" that loose regexes capture out of
@@ -307,6 +327,7 @@ public class IrcAnnounceListener : IDisposable
         }
 
         var dedupeKey = $"{section}|{release}";
+        ObserveChannelActivity(channel, nameof(SitebotEventKind.New), section, release, observedAtUtc);
         lock (_lock)
         {
             if (!_recentAnnounces.Add(dedupeKey)) return false;
@@ -333,7 +354,7 @@ public class IrcAnnounceListener : IDisposable
             var parsedType = parsed.Season != null || parsed.Episode != null || parsed.IsSeasonPack
                 ? "tv"
                 : parsed.Year != null ? "movie" : "other";
-            App.TelemetryRecorder?.Record(GlDrive.AiAgent.TelemetryStream.MatchedAnnounces,
+            _recordMatchedAnnounce(
                 new GlDrive.AiAgent.MatchedAnnounceEvent
                 {
                     ServerId = _serverId,
@@ -345,7 +366,8 @@ public class IrcAnnounceListener : IDisposable
                     Source = parsed.Source ?? "",
                     Group = parsed.Group ?? "",
                     RuleSource = ruleSource,
-                    AutoRace = autoRace
+                    AutoRace = autoRace,
+                    SourceDown = IsSourceDown()
                 });
         }
         catch (Exception ex) { Log.Debug(ex, "MatchedAnnounce emit failed"); }
@@ -354,9 +376,37 @@ public class IrcAnnounceListener : IDisposable
         return true;
     }
 
+    private bool IsSourceDown()
+    {
+        try { return SourceDown?.Invoke() == true; }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Announce source health annotation unavailable");
+            return false;
+        }
+    }
+
+    private void ObserveChannelActivity(string channel, string kind, string? section, string release, DateTime observedAtUtc)
+    {
+        lock (_lock)
+        {
+            // One received message can match both typed and legacy NEW parsers.
+            // Later progress/completion traffic still proves the channel is alive.
+            var key = $"{channel}|{kind}|{section}|{release}|{observedAtUtc.Ticks}";
+            if (!_recentChannelAnnounces.Add(key)) return;
+            _recentChannelOrder.Enqueue(key);
+            while (_recentChannelOrder.Count > 2000) _recentChannelAnnounces.Remove(_recentChannelOrder.Dequeue());
+        }
+        var observers = ChannelAnnounceObserved;
+        if (observers == null) return;
+        foreach (Action<string, string, DateTime> observer in observers.GetInvocationList())
+            try { observer(_serverId, channel, observedAtUtc); }
+            catch (Exception ex) { Log.Warning(ex, "Announce health observer failed for {Server}", _serverId); }
+    }
+
     public void Dispose()
     {
-        _ircService.MessageReceived -= OnMessage;
+        if (_ircService != null) _ircService.MessageReceived -= OnMessage;
         GC.SuppressFinalize(this);
     }
 }

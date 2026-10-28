@@ -401,3 +401,11 @@ Use **Add or Remove Programs**. The uninstaller intentionally leaves `%AppData%\
 ## License
 
 Provided as-is for personal use.
+
+Wanted acquisition is opt-in: `downloads.wantedDecisionWindowEnabled` collects variants for 15 minutes and selects the best eligible candidate with a fresh trusted sitebot completion hint; `downloads.wantedIndexSweepsEnabled` searches existing indexes on wanted-list edits and rebuilds without FTP traffic. B1 scoring is reused when enabled. See the configuration guide; `wishlist.wanted` reports pending windows and cache suggestions. Actual downloads retain completion checks and the existing pools.
+
+Series monitoring is opt-in per TV wishlist item (`monitorMode`, default `Legacy`). `wishlist.series`, `wishlist.season_plan`, and `wishlist.season_pull` expose persisted episode state and cached missing-episode plans. Optional race-completed pulls require an explicitly selected server and show; background pulls yield to racing. Fastest-source selection uses measured local-download SpeedTracker history. See the configuration guide for defaults and native PASV yield limits.
+
+Race controls now expose safe Reset, queued site membership edits, confirmed owned-partial cleanup and history Re-race, alongside working card Stop/selection. Exact own-account nukes from trusted IRC and the existing poll raise one persisted-deduplicated alert (`spread.ownNukeAlertsEnabled`, default true). Known nuked content is protected from new race writes and cleanup.
+
+Site health persists outage retry backoff and account-wide new-login budgets across restarts, with one outage/recovery notification pair. Channel silence uses learned hour-of-week rates and conservative training floors. Mount cards and MCP expose health, retry times and active pool borrow purposes. Passive supervision defaults on; optional TCP probes and channel recovery default off. See the configuration guide for bounds and recovery behavior.

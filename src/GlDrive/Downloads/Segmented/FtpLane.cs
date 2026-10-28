@@ -182,7 +182,7 @@ internal sealed class FtpLane : ISegmentLane
         if (_conn != null) return _conn.Client;
         if (_reborrowPool == null)
             throw new IOException($"{Label}: connection was lost and this lane cannot reconnect");
-        _conn = await BorrowWithin(_reborrowPool.Borrow, ReborrowWait, Label, ct);
+        _conn = await BorrowWithin(t => _reborrowPool.BorrowFor(FtpBorrowPurpose.Download, t), ReborrowWait, Label, ct);
         return _conn.Client;
     }
 

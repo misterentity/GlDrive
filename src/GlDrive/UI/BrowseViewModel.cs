@@ -304,7 +304,7 @@ public class BrowseViewModel : INotifyPropertyChanged, IDisposable
                     // Single file FXP
                     if (dstServer.Pool != null)
                     {
-                        await using var conn = await dstServer.Pool.Borrow(ct);
+                        await using var conn = await dstServer.Pool.BorrowFor(GlDrive.Ftp.FtpBorrowPurpose.Browse, ct);
                         await conn.Client.Execute($"MKD {dstPath}", ct);
                     }
 

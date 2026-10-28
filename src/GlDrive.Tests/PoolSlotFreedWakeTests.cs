@@ -67,12 +67,14 @@ public class PoolSlotFreedWakeTests
     [Fact]
     public void Borrow_NeverWaitsOnTheChannelAlone()
     {
-        var borrow = Section(ReadPoolSource(), "public async Task<PooledConnection> Borrow(", "internal void Return(");
+        var source = ReadPoolSource();
+        Assert.Contains("public Task<PooledConnection> Borrow(CancellationToken ct = default) => BorrowFor(FtpBorrowPurpose.Unspecified, ct);", source);
+        var borrow = Section(source, "public async Task<PooledConnection> BorrowFor(", "internal void Return(");
         Assert.DoesNotContain("_pool.Reader.ReadAsync(", borrow);
         Assert.Contains("WaitForReturnedConnectionAsync(parked: true, freedGeneration, ct)", borrow);
         Assert.Contains("WaitForReturnedConnectionAsync(parked: false, freedGeneration, ct)", borrow);
         // A null wait result re-runs Borrow so a fresh connect goes through the normal gated,
         // failure-classified path rather than a side door.
-        Assert.Contains("if (client == null) return await Borrow(ct);", borrow);
+        Assert.Contains("if (client == null) return await BorrowFor(purpose, ct);", borrow);
     }
 }

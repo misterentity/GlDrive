@@ -23,6 +23,8 @@ public class ConnectionMonitor
     public event Action? ConnectionLost;
     public event Action? ConnectionRestored;
     public event Action<string>? BncRateLimitDetected;
+    public event Action<Exception, bool, DateTime>? FailureObserved;
+    public Func<DateTime?>? RetryNotBeforeUtc { get; set; }
     public Action? PeriodicMetricsCallback { get; set; }
 
     public ConnectionMonitor(FtpConnectionPool pool, FtpClientFactory factory, PoolConfig config)
@@ -73,7 +75,8 @@ public class ConnectionMonitor
                 await Task.Delay(TimeSpan.FromSeconds(_config.KeepaliveIntervalSeconds), ct);
 
                 // Health check via NOOP
-                string? failure = null;
+                Exception? failure = null;
+                var checkStarted = DateTime.UtcNow;
                 try
                 {
                     await CheckHealthAsync(ct);
@@ -84,7 +87,7 @@ public class ConnectionMonitor
                 }
                 catch (Exception ex)
                 {
-                    failure = ex.Message;
+                    failure = ex;
                 }
                 ct.ThrowIfCancellationRequested();
 
@@ -101,8 +104,9 @@ public class ConnectionMonitor
                 else if (failure != null && _wasConnected)
                 {
                     _wasConnected = false;
+                    FailureObserved?.Invoke(failure, false, checkStarted);
                     Log.Warning("ConnectionMonitor[{Server}]: connection lost ({Reason}), attempting reconnect...",
-                        _factory.Host, failure);
+                        _factory.Host, failure.Message);
                     ConnectionLost?.Invoke();
                     await AttemptReconnect(ct);
                 }
@@ -120,7 +124,7 @@ public class ConnectionMonitor
 
     private async Task CheckHealthAsync(CancellationToken ct)
     {
-        await using var conn = await _pool.Borrow(ct);
+        await using var conn = await _pool.BorrowFor(FtpBorrowPurpose.ConnectionMonitor, ct);
         await ProbeConnectionAsync(conn, token => conn.Client.Execute("NOOP", token), ct);
     }
 
@@ -159,11 +163,17 @@ public class ConnectionMonitor
 
         while (!ct.IsCancellationRequested)
         {
+            var attemptStarted = DateTime.UtcNow;
             try
             {
                 Log.Information("ConnectionMonitor[{Server}]: reconnecting in {Delay}s...", _factory.Host, delay);
                 await Task.Delay(TimeSpan.FromSeconds(delay), ct);
+                // Re-read on every bounded wait so live disable/manual recovery and
+                // shared account failures are observed without creating a new login.
+                while (RetryNotBeforeUtc?.Invoke() is { } retryAt && retryAt > DateTime.UtcNow)
+                    await Task.Delay(TimeSpan.FromSeconds(Math.Clamp((retryAt - DateTime.UtcNow).TotalSeconds, 0.1, 30)), ct);
 
+                attemptStarted = DateTime.UtcNow;
                 await _pool.Initialize(ct);
                 // Initialize is a no-op when another connection already exists. Verify
                 // a real reply before announcing recovery, even in a nonempty pool.
@@ -180,6 +190,7 @@ public class ConnectionMonitor
             }
             catch (Exception ex)
             {
+                FailureObserved?.Invoke(ex, true, attemptStarted);
                 // Detect BNC rate limiting (421 = service not available, 450 = too many connections)
                 if (ex is FtpCommandException ftpEx &&
                     (ftpEx.CompletionCode is "421" or "450"))

@@ -10,6 +10,8 @@ namespace GlDrive.Ftp;
 
 public class FtpConnectionPool : IAsyncDisposable
 {
+    internal FtpBorrowLedger BorrowLedger { get; } = new();
+    public IReadOnlyList<FtpBorrowSnapshot> ActiveBorrows => BorrowLedger.Snapshot();
     private readonly FtpClientFactory _factory;
     private readonly Channel<AsyncFtpClient> _pool;
     private int _maxSize;
@@ -635,7 +637,12 @@ public class FtpConnectionPool : IAsyncDisposable
         }
     }
 
-    public async Task<PooledConnection> Borrow(CancellationToken ct = default)
+    public Task<PooledConnection> Borrow(CancellationToken ct = default) => BorrowFor(FtpBorrowPurpose.Unspecified, ct);
+
+    private PooledConnection CreateLease(AsyncFtpClient client, FtpBorrowPurpose purpose) =>
+        new(client, this, BorrowLedger.Begin(purpose));
+
+    public async Task<PooledConnection> BorrowFor(FtpBorrowPurpose purpose, CancellationToken ct = default)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(FtpConnectionPool));
         // Do not remove and probe an idle connection for work that already ended.
@@ -655,7 +662,7 @@ public class FtpConnectionPool : IAsyncDisposable
             if (await CheckPooledForBorrow(client, ct) == BorrowCheck.Usable)
             {
                 Interlocked.Increment(ref _active);
-                return new PooledConnection(client, this);
+                return CreateLease(client, purpose);
             }
             IncrementDisconnect();
         }
@@ -690,11 +697,11 @@ public class FtpConnectionPool : IAsyncDisposable
                     $"{reason} — not attempting new connection");
             }
             client = await WaitForReturnedConnectionAsync(parked: true, freedGeneration, ct);
-            if (client == null) return await Borrow(ct); // parked state ended, or the last connection went
+            if (client == null) return await BorrowFor(purpose, ct); // parked state ended, or the last connection went
             if (await CheckPooledForBorrow(client, ct) == BorrowCheck.Usable)
             {
                 Interlocked.Increment(ref _active);
-                return new PooledConnection(client, this);
+                return CreateLease(client, purpose);
             }
             IncrementDisconnect();
             throw new InvalidOperationException(
@@ -715,7 +722,7 @@ public class FtpConnectionPool : IAsyncDisposable
                 client = await AcquireAndConnect(ct);
                 RecordConnect(sw.ElapsedMilliseconds);
                 Interlocked.Increment(ref _active);
-                return new PooledConnection(client, this);
+                return CreateLease(client, purpose);
             }
             catch (FtpLoginHeldException)
             {
@@ -895,7 +902,7 @@ public class FtpConnectionPool : IAsyncDisposable
                                 client = await AcquireAndConnect(ct);
                                 RecordConnect(sw2.ElapsedMilliseconds);
                                 Interlocked.Increment(ref _active);
-                                return new PooledConnection(client, this);
+                                return CreateLease(client, purpose);
                             }
                             catch (Exception retryEx)
                             {
@@ -950,11 +957,11 @@ public class FtpConnectionPool : IAsyncDisposable
         // back through the channel, so the wait also ends when one frees; Borrow then runs again
         // and connects through the normal path (gate, failure classification, cooldowns).
         client = await WaitForReturnedConnectionAsync(parked: false, freedGeneration, ct);
-        if (client == null) return await Borrow(ct);
+        if (client == null) return await BorrowFor(purpose, ct);
         if (await CheckPooledForBorrow(client, ct) == BorrowCheck.Usable)
         {
             Interlocked.Increment(ref _active);
-            return new PooledConnection(client, this);
+            return CreateLease(client, purpose);
         }
 
         // Stale or NOOP-dead — already quarantined inside CheckPooledForBorrow
@@ -968,7 +975,7 @@ public class FtpConnectionPool : IAsyncDisposable
                 client = await AcquireAndConnect(ct);
                 RecordConnect(sw.ElapsedMilliseconds);
                 Interlocked.Increment(ref _active);
-                return new PooledConnection(client, this);
+                return CreateLease(client, purpose);
             }
             catch
             {
@@ -1371,12 +1378,14 @@ public class FtpConnectionPool : IAsyncDisposable
 public class PooledConnection : IAsyncDisposable
 {
     private readonly FtpConnectionPool _pool;
+    private readonly long _leaseId;
     private AsyncFtpClient? _client;
 
-    internal PooledConnection(AsyncFtpClient client, FtpConnectionPool pool)
+    internal PooledConnection(AsyncFtpClient client, FtpConnectionPool pool, long leaseId = 0)
     {
         _client = client;
         _pool = pool;
+        _leaseId = leaseId;
     }
 
     public AsyncFtpClient Client => _client ?? throw new ObjectDisposedException(nameof(PooledConnection));
@@ -1423,6 +1432,7 @@ public class PooledConnection : IAsyncDisposable
         var client = Interlocked.Exchange(ref _client, null);
         if (client != null)
         {
+            if (_leaseId != 0) _pool.BorrowLedger.End(_leaseId);
             // A CPSV data sequence that did not reach its completion reply leaves
             // an unread reply on the control channel; the next command on this
             // connection would read that stale reply instead of its own. Discard

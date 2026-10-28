@@ -44,22 +44,25 @@ public class StreamingDownloader
     public bool IsPoolInCooldown => _pool.IsThrottled;
 
     public async Task DownloadFiles(IReadOnlyList<FtpDownloadFile> files,
-        IProgress<DownloadProgress>? progress, CancellationToken ct)
+        IProgress<DownloadProgress>? progress, CancellationToken ct, Func<bool>? yieldWhen = null,
+        Action<long>? onBytes = null)
     {
+        if (yieldWhen?.Invoke() == true) throw new BackgroundPullYieldedException();
         var multi = _config.MultiStream;
         var networks = DownloadNetworkServices.ResolveNetworks();
         var usable = networks.Where(n => !DownloadNetworkServices.IsOverAllowance(n)).ToList();
         if (usable.Count == 0)
             throw new NetworkAllowanceExhaustedException(string.Join(", ", networks.Select(n => n.DisplayName)));
 
-        var conn = await _pool.Borrow(ct);
+        var conn = await _pool.BorrowFor(FtpBorrowPurpose.Download, ct);
         var mainLane = new FtpLane(conn, _pool, _pool.UseCpsv, usable[0], usable[0].DisplayName,
-            overAllowance: DownloadNetworkServices.IsOverAllowance);
+            yieldWhen: yieldWhen, overAllowance: DownloadNetworkServices.IsOverAllowance);
         try
         {
             var transferFiles = new List<TransferFile>(files.Count);
             foreach (var f in files)
             {
+                if (yieldWhen?.Invoke() == true) throw new BackgroundPullYieldedException();
                 var size = f.Size >= 0 ? f.Size : await mainLane.GetSizeAsync(f.RemotePath, ct);
                 if (size > 0 && File.Exists(f.LocalPath) && new FileInfo(f.LocalPath).Length >= size)
                 {
@@ -89,7 +92,7 @@ public class StreamingDownloader
                 MinSplitBytes = Math.Clamp(multi.FtpMinSplitMb, 4, 1024) * 1024L * 1024,
                 MaxLanes = extra != null ? 2 : 1,
                 Pacer = new CompositePacer(DownloadNetworkServices.Pacer, _serverPacer),
-                OnBytes = DownloadNetworkServices.RecordBytes,
+                OnBytes = (network, bytes) => { DownloadNetworkServices.RecordBytes(network, bytes); onBytes?.Invoke(bytes); },
             };
 
             Log.Information("Streaming download: {Count} file(s), {Bytes:N0} bytes via {Network}{Extra}",
@@ -108,6 +111,11 @@ public class StreamingDownloader
                 await transfer.RunAsync(lanes, extra, reporter, ct);
             }
         }
+        catch (DownloadLanesYieldedException) when (yieldWhen != null)
+        {
+            throw new BackgroundPullYieldedException();
+        }
+        catch (BackgroundPullYieldedException) { throw; }
         catch (Exception ex) when (mainLane != null)
         {
             // Failed before the engine took the lane (SIZE, cancel): the control channel may

@@ -8,23 +8,73 @@ namespace GlDrive.Downloads;
 public class TvMazeClient : IDisposable
 {
     private readonly HttpClient _http;
+    private readonly Func<CancellationToken, Task> _waitForRequest;
+    private static readonly SemaphoreSlim RequestGate = new(1, 1);
+    private static DateTimeOffset? _lastRequestStart;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
     };
 
-    public TvMazeClient()
+    public TvMazeClient() : this(new HttpClient { BaseAddress = new Uri("https://api.tvmaze.com/") }) { }
+
+    internal TvMazeClient(HttpClient http, Func<CancellationToken, Task>? waitForRequest = null)
     {
-        _http = new HttpClient { BaseAddress = new Uri("https://api.tvmaze.com/") };
+        _http = http;
         _http.DefaultRequestHeaders.Add("User-Agent", "GlDrive/1.0");
+        _waitForRequest = waitForRequest ?? WaitForRequest;
+    }
+
+    private static async Task WaitForRequest(CancellationToken ct)
+    {
+        await RequestGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var delay = RequestDelay(_lastRequestStart, DateTimeOffset.UtcNow);
+            if (delay > TimeSpan.Zero) await Task.Delay(delay, ct).ConfigureAwait(false);
+            _lastRequestStart = DateTimeOffset.UtcNow;
+        }
+        finally { RequestGate.Release(); }
+    }
+
+    internal static TimeSpan RequestDelay(DateTimeOffset? previous, DateTimeOffset now) =>
+        !previous.HasValue ? TimeSpan.Zero : TimeSpan.FromMilliseconds(
+            Math.Clamp(600 - (now - previous.Value).TotalMilliseconds, 0, 600));
+
+    private async Task<string> GetJsonAsync(string path, CancellationToken ct)
+    {
+        await _waitForRequest(ct).ConfigureAwait(false);
+        return await _http.GetStringAsync(path, ct).ConfigureAwait(false);
+    }
+
+    public Task<TvMazeScheduleEpisode[]?> GetEpisodes(int showId, CancellationToken ct = default) =>
+        GetEpisodeList(showId, $"shows/{showId}/episodes", ct);
+
+    public Task<TvMazeScheduleEpisode[]?> GetEpisodesByDate(int showId, DateOnly date, CancellationToken ct = default) =>
+        GetEpisodeList(showId, $"shows/{showId}/episodesbydate?date={date:yyyy-MM-dd}", ct);
+
+    private async Task<TvMazeScheduleEpisode[]?> GetEpisodeList(int showId, string path, CancellationToken ct)
+    {
+        if (showId <= 0) return null;
+        try
+        {
+            var response = await GetJsonAsync(path, ct).ConfigureAwait(false);
+            return JsonSerializer.Deserialize<TvMazeScheduleEpisode[]>(response, JsonOptions);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "TVMaze episode inventory request failed for show id: {Id}", showId);
+            return null;
+        }
     }
 
     public async Task<TvMazeShow[]> Search(string query, CancellationToken ct = default)
     {
         try
         {
-            var response = await _http.GetStringAsync($"search/shows?q={Uri.EscapeDataString(query)}", ct);
+            var response = await GetJsonAsync($"search/shows?q={Uri.EscapeDataString(query)}", ct);
             var results = JsonSerializer.Deserialize<TvMazeSearchResult[]>(response, JsonOptions) ?? [];
             return results.Select(r => r.Show).Where(s => s != null).ToArray()!;
         }
@@ -39,7 +89,7 @@ public class TvMazeClient : IDisposable
     {
         try
         {
-            var response = await _http.GetStringAsync($"schedule?country=US&date={date:yyyy-MM-dd}", ct);
+            var response = await GetJsonAsync($"schedule?country=US&date={date:yyyy-MM-dd}", ct);
             return JsonSerializer.Deserialize<TvMazeScheduleEpisode[]>(response, JsonOptions) ?? [];
         }
         catch (Exception ex)
@@ -65,7 +115,7 @@ public class TvMazeClient : IDisposable
     {
         try
         {
-            var response = await _http.GetStringAsync($"schedule/web?date={date:yyyy-MM-dd}", ct);
+            var response = await GetJsonAsync($"schedule/web?date={date:yyyy-MM-dd}", ct);
             var episodes = JsonSerializer.Deserialize<TvMazeWebScheduleEpisode[]>(response, JsonOptions) ?? [];
 
             // Convert to standard episodes, filtering to major English streaming services
@@ -101,7 +151,7 @@ public class TvMazeClient : IDisposable
     {
         try
         {
-            var response = await _http.GetStringAsync($"shows/{id}", ct);
+            var response = await GetJsonAsync($"shows/{id}", ct);
             return JsonSerializer.Deserialize<TvMazeShow>(response, JsonOptions);
         }
         catch (Exception ex)
@@ -115,7 +165,7 @@ public class TvMazeClient : IDisposable
     {
         try
         {
-            var response = await _http.GetStringAsync($"shows/{id}?embed=nextepisode", ct);
+            var response = await GetJsonAsync($"shows/{id}?embed=nextepisode", ct);
             var doc = JsonDocument.Parse(response);
             var root = doc.RootElement;
 
@@ -183,6 +233,7 @@ public class TvMazeScheduleEpisode
     public int Season { get; set; }
     public int? Number { get; set; }
     public string? Airdate { get; set; }
+    public string? Airstamp { get; set; }
     public string? Airtime { get; set; }
     public int? Runtime { get; set; }
     public TvMazeShow? Show { get; set; }

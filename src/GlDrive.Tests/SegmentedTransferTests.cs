@@ -202,6 +202,40 @@ public sealed class SegmentedTransferTests : IDisposable
     }
 
     [Fact]
+    public async Task LastManagedLaneYieldsCleanlyAndLeavesResumableBytes()
+    {
+        var file = AddFile("managed.r00", 200_000);
+        var lane = new FakeLane(_source, "main");
+        lane.YieldWhen = () => Interlocked.Read(ref lane.BytesRead) >= 32_000;
+        await Assert.ThrowsAsync<DownloadLanesYieldedException>(() => new SegmentedTransfer([file], Opts())
+            .RunAsync([lane], null, null, default));
+        Assert.Contains(false, lane.Finishes);
+        Assert.Empty(lane.Faults);
+        Assert.Equal(1, lane.DisposeCount);
+        Assert.False(File.Exists(file.LocalPath));
+        Assert.True(File.Exists(file.LocalPath + StagedFile.SidecarSuffix));
+        await new SegmentedTransfer([file], Opts()).RunAsync([new FakeLane(_source, "resumed")], null, null, default);
+        AssertOnDisk(file);
+    }
+
+    [Fact]
+    public async Task NativeLaneFinishesCurrentFileBeforeYieldingAndNeverAbortsItsReader()
+    {
+        var first = AddFile("native.r00", 200_000);
+        var second = AddFile("native.r01", 200_000);
+        var lane = new FakeLane(_source, "native", canStopEarly: false);
+        lane.YieldWhen = () => Interlocked.Read(ref lane.BytesRead) > 0;
+        await Assert.ThrowsAsync<DownloadLanesYieldedException>(() => new SegmentedTransfer([first, second], Opts())
+            .RunAsync([lane], null, null, default));
+        Assert.Equal(200_000, lane.BytesRead);
+        Assert.Single(lane.Opens);
+        Assert.True(Assert.Single(lane.Finishes));
+        Assert.Empty(lane.Faults);
+        Assert.Equal(1, lane.DisposeCount);
+        Assert.Equal(1, new[] { first, second }.Count(file => File.Exists(file.LocalPath)));
+    }
+
+    [Fact]
     public async Task ExtraLane_JoinsViaLaneSource()
     {
         var f = AddFile("a.r00", 600_000);

@@ -33,6 +33,13 @@ public partial class WishlistStore
         internal readonly WishlistReleaseDeduplicator ReleaseEvaluations = new();
         internal readonly HashSet<string> AdmissionsInFlight = [];
         internal bool Loaded;
+        internal event Action? Changed;
+        internal void NotifyChanged()
+        {
+            if (Changed == null) return;
+            foreach (Action handler in Changed.GetInvocationList())
+                try { handler(); } catch (Exception ex) { Log.Warning(ex, "Wanted list observer failed"); }
+        }
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -44,6 +51,12 @@ public partial class WishlistStore
     public IReadOnlyList<WishlistItem> Items
     {
         get { lock (_state.Sync) { EnsureLoaded(); return _state.Items.ToList(); } }
+    }
+
+    public event Action Changed
+    {
+        add { lock (_state.Sync) _state.Changed += value; }
+        remove { lock (_state.Sync) _state.Changed -= value; }
     }
 
     public void Load()
@@ -92,6 +105,7 @@ public partial class WishlistStore
             _state.Items.Add(item);
             Save();
         }
+        _state.NotifyChanged();
     }
 
     public void Remove(string id)
@@ -103,6 +117,7 @@ public partial class WishlistStore
             _state.ReleaseEvaluations.ForgetItem(id);
             Save();
         }
+        _state.NotifyChanged();
     }
 
     public void Update(WishlistItem item)
@@ -119,6 +134,7 @@ public partial class WishlistStore
             _state.ReleaseEvaluations.ForgetItem(item.Id);
             Save();
         }
+        _state.NotifyChanged();
     }
 
     public WishlistItem? GetById(string id)
@@ -169,6 +185,7 @@ public partial class WishlistStore
     public int AddImported(IEnumerable<WishlistItem> items)
     {
         ArgumentNullException.ThrowIfNull(items);
+        int added;
         lock (_state.Sync)
         {
             EnsureLoaded();
@@ -190,6 +207,11 @@ public partial class WishlistStore
                     Year = item.Year, ImdbId = item.ImdbId, TvMazeId = item.TvMazeId,
                     Quality = item.Quality, Status = item.Status, AddedAt = item.AddedAt,
                     ProfileId = item.ProfileId ?? ScoredQualityProfile.Legacy(item.Quality).Id,
+                    MonitorMode = item.MonitorMode, MonitorSinceUtc = item.MonitorSinceUtc,
+                    AutoPullCompletedRaces = item.AutoPullCompletedRaces,
+                    SeriesInventory = (item.SeriesInventory ?? []).Select(SeriesInventoryRefresher.Clone).ToList(),
+                    SeriesInventoryUpdatedAtUtc = item.SeriesInventoryUpdatedAtUtc,
+                    SeriesInventoryLastAttemptAtUtc = item.SeriesInventoryLastAttemptAtUtc,
                     BestOwned = item.BestOwned.Select(CloneCopy).ToList(),
                     GrabbedReleases = item.GrabbedReleases == null ? null! : new List<string>(item.GrabbedReleases),
                     PosterUrl = item.PosterUrl, Plot = item.Plot, Rating = item.Rating,
@@ -199,12 +221,13 @@ public partial class WishlistStore
                 if (item.TvMazeId.HasValue) tvMaze.Add(item.TvMazeId.Value);
                 titles.Add((item.Title, item.Type));
             }
-            var added = next.Count - _state.Items.Count;
+            added = next.Count - _state.Items.Count;
             if (added == 0) return 0;
             _state.Write(JsonSerializer.Serialize(next, JsonOptions));
             _state.Items = next;
-            return added;
         }
+        _state.NotifyChanged();
+        return added;
     }
 
     private void EnsureLoaded()

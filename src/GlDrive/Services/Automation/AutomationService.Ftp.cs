@@ -20,7 +20,7 @@ public sealed partial class AutomationService
             var verb = command.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0].ToUpperInvariant();
             if (verb is "RETR" or "STOR" or "STOU" or "APPE" or "LIST" or "NLST" or "MLSD" or "PASV" or "EPSV" or "CPSV" or "PORT" or "EPRT")
                 throw new ArgumentException("Use the ftp file/list tools for data commands; raw commands cannot open a data channel.");
-            await using var conn = await (service.Pool ?? throw new InvalidOperationException("FTP pool unavailable.")).Borrow(ct);
+            await using var conn = await (service.Pool ?? throw new InvalidOperationException("FTP pool unavailable.")).BorrowFor(FtpBorrowPurpose.Automation, ct);
             // Arbitrary control commands may change CWD, authentication, TLS mode or transfer state.
             // Never return this connection to the pool, including on cancellation/command failure.
             conn.Poison("automation raw FTP command");
@@ -151,7 +151,7 @@ public sealed partial class AutomationService
             if (item.Type == FtpObjectType.Directory) await DeleteRemoteDirectory(service, child, true, depth + 1, ct);
             else await ftp.DeleteFile(child, ct); // Delete symlinks themselves; do not follow them.
         }
-        await using var conn = await service.Pool!.Borrow(ct);
+        await using var conn = await service.Pool!.BorrowFor(FtpBorrowPurpose.Automation, ct);
         try
         {
             var reply = await conn.Client.Execute($"RMD {path}", ct);

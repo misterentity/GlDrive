@@ -38,7 +38,7 @@ public sealed partial class AutomationService
                 readOnly, destructive));
         }
         Add("servers.list", "List configured servers, mount/IRC state, credits, live FTP pool health, and authentication hold/retry time. Passwords are omitted.", true, false);
-        Add("servers.get", "Read a server's live mount state, FTP pool health, site statistics, and authentication hold/retry time.", true, false, "serverId");
+        Add("servers.get", "Read live mount/site health, persistent retry time, account login budget, active pool borrow purposes, announce feed health and site statistics.", true, false, "serverId");
         Add("servers.mount", "Mount a configured server and start its download/search/IRC services. This explicit action permits one authentication retry.", false, false, "serverId");
         Add("servers.unmount", "Unmount a server and stop its running FTP, download, spread and IRC services.", false, true, "serverId");
         Add("servers.remount", "Stop and recreate a server's live services from the current settings, permitting one authentication retry.", false, true, "serverId");
@@ -74,13 +74,17 @@ public sealed partial class AutomationService
         Add("wishlist.list", "Read the persisted wishlist, including media metadata, quality, watching/paused/completed state and grabbed releases.", true, false, "offset?:integer", "limit?:integer");
         Add("wishlist.upsert", "Add a wishlist item or patch by item.id. Fields: id, title, type (Movie/TvShow), year, imdbId, tvMazeId, quality (Any/SD/Q720p/Q1080p/Q2160p), profileId, status (Watching/Completed/Paused), grabbedReleases, posterUrl, plot, rating, genres, dead. New items with omitted quality use downloads.qualityDefault. profileId selects a built-in or downloads.profiles entry; scored acquisition requires downloads.scoredQualityEnabled. BestOwned and pendingGrabs are read-only download state. Unspecified existing fields are preserved.", false, false, "item:object");
         Add("wishlist.profiles", "List built-in and configured scored quality profiles and whether scored acquisition is enabled. No network access.", true, false);
+        Add("wishlist.wanted", "Read pending best-of-burst windows and bounded cache-only wanted suggestions. Cached directories have unknown completeness. No network access.", true, false);
+        Add("wishlist.series", "Read a followed show's persisted episode inventory and derived not-aired/on-site/downloading/owned/missing states. No FTP traffic.", true, false, "itemId");
+        Add("wishlist.season_plan", "Plan exactly the missing monitored episodes or one safe season pack from cached indexes. Ready describes aired gaps, not a proven season finale. No FTP traffic.", true, false, "itemId", "season:integer");
+        Add("wishlist.season_pull", "Explicitly enqueue the current ready season plan using existing pools; durable per-episode claims prevent duplicate work and pulls yield to racing. Recomputes the plan before admission.", false, false, "itemId", "season:integer");
         Add("wishlist.score", "Explain a scored wishlist candidate against its profile, pending and owned copies without enqueueing or network access. Optional sizeBytes is supplied evidence, never probed.", true, false, "itemId", "releaseName", "sizeBytes?:integer");
         Add("wishlist.remove", "Delete a wishlist item by ID.", false, true, "id");
         Add("wishlist.match", "Evaluate a known FTP release against the wishlist and allow the normal configured auto-download behavior.", false, false, "serverId", "category", "releaseName", "path");
         Add("notifications.list", "Read stored release notifications, optionally filtered by server.", true, false, "serverId?", "offset?:integer", "limit?:integer");
         Add("notifications.clear", "Clear the persisted release notification history.", false, true);
 
-        Add("irc.status", "Read the server's IRC state, nickname, channels, topics, members and known conversation targets.", true, false, "serverId");
+        Add("irc.status", "Read IRC state, channels, members, targets and per-channel learned silence health with local diagnosis.", true, false, "serverId");
         Add("irc.history", "Read chronological scrollback for a channel, private-message nickname, or '*' for system messages. Returns the latest limit messages.", true, false, "serverId", "target", "limit?:integer");
         Add("irc.start", "Start IRC for an enabled configured IRC server, independently of FTP mounting.", false, false, "serverId");
         Add("irc.stop", "Disconnect and stop a server's IRC service.", false, true, "serverId");
@@ -104,6 +108,11 @@ public sealed partial class AutomationService
         Add("spread.detail", "Read the full file/site/transfer detail of an active race.", true, false, "id");
         Add("spread.start", "Request a race between at least two connected sites. Returns started, queued with queuePosition, already_active, duplicate, suppressed with retryAfterSeconds/reason, or unavailable. hintsMerged reports duplicate source/participant enrichment when enabled. Queue position follows the configured size-aware or FIFO policy among eligible work. Omit serverIds to select connected enabled sites with sections.", false, false, "section", "releaseName", "serverIds?:strings", "sourceServerId?", "sourcePath?");
         Add("spread.stop", "Stop an active race.", false, true, "id");
+        Add("spread.reset", "Reset an active race's retry bookkeeping at a safe scan boundary. Existing transfers and ownership remain intact.", false, false, "id");
+        Add("spread.rerace", "Submit a history release through normal race admission and report the real started/queued/suppressed result.", false, false, "historyId", "serverIds?:array");
+        Add("spread.cleanup_own", "Queue cleanup of positively incomplete, account-bound GlDrive-created directories using the existing cleanup checks. Requires confirmed:true; complete/shared/nuked content is protected.", false, true, "section", "releaseName", "confirmed:boolean");
+        Add("spread.queue_site", "Add or remove a site from a queued race. Active/starting edits and removal of source or owned-partial sites are rejected.", false, false, "section", "releaseName", "serverId", "add:boolean");
+        Add("spread.nukes", "Read persisted active nuke observations, including exactness and whether an own-account alert was emitted. No FTP command.", true, false, "offset?:integer", "limit?:integer");
         Add("spread.pause", "Pause an active race.", false, false, "id");
         Add("spread.resume", "Resume a paused race.", false, false, "id");
         Add("spread.queue_remove", "Remove a queued race by exact section and release name. An already started race must be stopped by ID.", false, true, "section", "releaseName");

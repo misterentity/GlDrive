@@ -26,6 +26,7 @@ public sealed class NukePoller : IDisposable
     private bool _disposed;
     private const int BreakerThreshold = 3;
     private static readonly TimeSpan MainPoolBudget = TimeSpan.FromSeconds(10);
+    public event Action<string, ParsedNuke>? NukeObserved;
 
     // No SITE NUKES command was sent. Local contention is not evidence that the
     // server's command is failing and must not open its circuit breaker.
@@ -102,14 +103,21 @@ public sealed class NukePoller : IDisposable
 
                     // Parse. glftpd returns multi-line output in InfoMessages.
                     var raw = reply.InfoMessages ?? reply.Message ?? "";
-                    var nukes = NukeParser.Parse(raw).ToList();
+                    var nukes = NukeParser.Parse(raw, observedAtUtc: _utcNow()).ToList();
 
                     var cursor = _cursors.Get(serverId);
                     var newCursor = cursor;
 
                     foreach (var n in nukes)
                     {
-                        if (n.NukedAt <= cursor) continue;
+                        var observers = NukeObserved;
+                        if (observers != null)
+                            foreach (Action<string, ParsedNuke> observer in observers.GetInvocationList())
+                            {
+                                try { observer(serverId, n); }
+                                catch (Exception ex) { Log.Warning(ex, "Nuke observation handler failed for {Server}", serverId); }
+                            }
+                        if (n.HasExactTimestamp ? n.NukedAt <= cursor : !_cursors.TryRecordRelative(serverId, n)) continue;
                         var ourRef = TryCorrelateRace(n.Release);
                         _recorder.Record(TelemetryStream.Nukes, new NukeDetectedEvent
                         {
@@ -118,11 +126,14 @@ public sealed class NukePoller : IDisposable
                             Release = n.Release,
                             NukedAt = n.NukedAt.ToString("O"),
                             Nuker = n.Nuker,
+                            Nukee = n.Nukee,
+                            HasExactTimestamp = n.HasExactTimestamp,
+                            ReleaseTruncated = n.ReleaseTruncated,
                             Reason = n.Reason,
                             Multiplier = n.Multiplier,
                             OurRaceRef = ourRef
                         });
-                        if (n.NukedAt > newCursor) newCursor = n.NukedAt;
+                        if (n.HasExactTimestamp && n.NukedAt > newCursor) newCursor = n.NukedAt;
                     }
                     if (newCursor > cursor) _cursors.Set(serverId, newCursor);
                     _failCount[serverId] = 0;  // reset breaker on success
@@ -164,8 +175,8 @@ public sealed class NukePoller : IDisposable
     private static async Task<FtpReply> ReadNukesAsync(FtpConnectionPool pool,
         FtpConnectionPool? fallbackPool, CancellationToken ct)
     {
-        await using var lease = await BorrowForPollAsync(pool.Borrow,
-            fallbackPool == null || ReferenceEquals(pool, fallbackPool) ? null : fallbackPool.Borrow, ct);
+        await using var lease = await BorrowForPollAsync(t => pool.BorrowFor(FtpBorrowPurpose.NukePoll, t),
+            fallbackPool == null || ReferenceEquals(pool, fallbackPool) ? null : t => fallbackPool.BorrowFor(FtpBorrowPurpose.NukePoll, t), ct);
         return await ExecuteNukesAsync(lease, token => lease.Client.Execute("SITE NUKES", token), ct);
     }
 

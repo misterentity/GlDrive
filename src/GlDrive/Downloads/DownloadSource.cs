@@ -8,6 +8,8 @@ internal interface IDownloadSource
     bool IsInCooldown { get; }
     Task<DownloadTreePlan> PlanAsync(string remotePath, string localPath, CancellationToken ct);
     Task DownloadAsync(IReadOnlyList<FtpDownloadFile> files, IProgress<DownloadProgress>? progress, CancellationToken ct);
+    Task DownloadAsync(IReadOnlyList<FtpDownloadFile> files, IProgress<DownloadProgress>? progress,
+        CancellationToken ct, DownloadExecutionPolicy policy) => DownloadAsync(files, progress, ct);
     Task RefreshManifestAsync(FtpDownloadFile file, CancellationToken ct);
 }
 
@@ -18,6 +20,9 @@ internal sealed class DownloadSource(FtpOperations ftp, StreamingDownloader down
         DownloadTree.BuildAsync(remotePath, localPath, ftp.DirectoryExists, ftp.FileExists, ftp.ListDirectory, ct);
     public Task DownloadAsync(IReadOnlyList<FtpDownloadFile> files, IProgress<DownloadProgress>? progress, CancellationToken ct) =>
         downloader.DownloadFiles(files, progress, ct);
+    public Task DownloadAsync(IReadOnlyList<FtpDownloadFile> files, IProgress<DownloadProgress>? progress,
+        CancellationToken ct, DownloadExecutionPolicy policy) =>
+        downloader.DownloadFiles(files, progress, ct, policy.YieldWhen, policy.OnBytes);
 
     public async Task RefreshManifestAsync(FtpDownloadFile file, CancellationToken ct)
     {

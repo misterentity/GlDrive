@@ -11,6 +11,7 @@ public partial class WishlistStore
         item.GrabbedReleases ??= [];
         item.BestOwned ??= [];
         item.PendingGrabs ??= [];
+        item.SeriesInventory ??= [];
     }
 
     private static WishlistCopy CloneCopy(WishlistCopy copy) => new()
@@ -35,7 +36,8 @@ public partial class WishlistStore
     {
         var item = _state.Items.FirstOrDefault(i => i.Id == itemId);
         if (item == null) return new(false, 0, false, "wishlist-item-not-found", null, []);
-        var profile = WishlistAcquisition.ResolveProfile(item, config);
+        var profile = !config.ScoredQualityEnabled && item.MonitorMode != SeriesMonitorMode.Legacy
+            ? ScoredQualityProfile.Legacy(item.Quality) : WishlistAcquisition.ResolveProfile(item, config);
         if (profile == null) return new(false, 0, false, "quality-profile-not-found", item.ProfileId, []);
         var candidate = ReleaseScorer.Score(release, profile, sizeBytes);
         var keys = WishlistAcquisition.Keys(item, release);
@@ -45,12 +47,22 @@ public partial class WishlistStore
         if (item.Status == WishlistStatus.Completed && !profile.UpgradeProperRepackAfterCutoff)
             return Decision(false, "wishlist-cutoff-met");
         if (!WishlistAcquisition.MatchesTitle(item, release)) return Decision(false, "title-or-year-mismatch");
+        var series = SeriesMonitorPolicy.Evaluate(item, release, DateTimeOffset.UtcNow);
+        if (!series.Accepted) return Decision(false, series.Reason);
         if (keys.Count == 0) return Decision(false, "unknown-episode-identity");
         if (!candidate.Accepted) return Decision(false, candidate.Reason);
 
         foreach (var other in _state.Items.Where(other => WishlistAcquisition.SameTitle(item, other)))
         {
             var copies = other.BestOwned.Concat(other.PendingGrabs).ToArray();
+            if (item.MonitorMode != SeriesMonitorMode.Legacy)
+            {
+                var covered = series.EpisodeKeys.ToHashSet(StringComparer.Ordinal);
+                if (copies.Any(copy => SeriesMonitorPolicy.KeysForRelease(item, copy.ReleaseName).Any(covered.Contains)))
+                    return Decision(false, "series-episode-already-owned-or-pending");
+                if (other.GrabbedReleases.Any(previous => SeriesMonitorPolicy.KeysForRelease(item, previous).Any(covered.Contains)))
+                    return Decision(false, "series-previous-episode-grab-unverified");
+            }
             // Derive keys under the current identity: adding an IMDb/TVMaze id
             // later must not strand evidence persisted under a title identity.
             foreach (var copy in copies.Where(c => keys.Any(k =>
@@ -143,7 +155,7 @@ public partial class WishlistStore
             if (item == null) return;
             _state.AdmissionsInFlight.Remove(download.Id);
             if (!WishlistAcquisition.MatchesTitle(item, download.ReleaseName)) return;
-            if (!config.ScoredQualityEnabled && !item.PendingGrabs.Any(c => c.DownloadId == download.Id)) return;
+            if (!config.ScoredQualityEnabled && item.MonitorMode == SeriesMonitorMode.Legacy && !item.PendingGrabs.Any(c => c.DownloadId == download.Id)) return;
             var keys = WishlistAcquisition.Keys(item, download.ReleaseName);
             if (download.Status is DownloadStatus.Failed or DownloadStatus.Cancelled)
             {

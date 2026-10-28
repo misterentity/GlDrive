@@ -15,6 +15,12 @@ public class WishlistItem
     public int? TvMazeId { get; set; }
     public QualityProfile Quality { get; set; } = QualityProfile.Q1080p;
     public string? ProfileId { get; set; }
+    public SeriesMonitorMode MonitorMode { get; set; } = SeriesMonitorMode.Legacy;
+    public bool AutoPullCompletedRaces { get; set; }
+    public DateTimeOffset? MonitorSinceUtc { get; set; }
+    public List<SeriesEpisode> SeriesInventory { get; set; } = [];
+    public DateTimeOffset? SeriesInventoryUpdatedAtUtc { get; set; }
+    public DateTimeOffset? SeriesInventoryLastAttemptAtUtc { get; set; }
     /// <summary>Verified successful downloads, separately for each movie or episode.</summary>
     public List<WishlistCopy> BestOwned { get; set; } = [];
     /// <summary>Durable reservations shared by every source server.</summary>
@@ -67,6 +73,8 @@ public class DownloadItem
     public int RetryCount { get; set; }
     /// <summary>Positive incomplete-source evidence survives restarts until verified.</summary>
     public bool SourceCompletionPending { get; set; }
+    /// <summary>Managed pulls yield their existing pool connection to racing.</summary>
+    public bool BackgroundWantedPull { get; set; }
     public int RelocationAttempts { get; set; }
     public DateTime? LastRelocationLookupAt { get; set; }
 }

@@ -101,7 +101,7 @@ public class TrayViewModel : INotifyPropertyChanged
                     }
                 }
 
-                if (ShouldNotifyConnectionState(state, _serverManager.IsAuthenticationHeld(serverId)))
+                if (!_config.Health.Enabled && ShouldNotifyConnectionState(state, _serverManager.IsAuthenticationHeld(serverId)))
                 switch (state)
                 {
                     case MountState.Connected:
@@ -224,6 +224,27 @@ public class TrayViewModel : INotifyPropertyChanged
             }
         });
 
+        _serverManager.OwnNukeAlerted += notice =>
+            Application.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                var server = _config.Servers.FirstOrDefault(s => s.Id == notice.ServerId);
+                ShowNotification("Own-account nuke", $"{server?.Name ?? notice.ServerId}: {notice.Release} ({notice.Multiplier}x) — {notice.Reason}");
+            });
+
+        _serverManager.SiteHealthNotice += notice =>
+            Application.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                var name = _config.Servers.FirstOrDefault(s => s.Id == notice.ServerId)?.Name ?? notice.ServerId;
+                ShowNotification(notice.Recovered ? "FTP recovered" : "FTP outage", $"{name}: {notice.Message}");
+            });
+        _serverManager.AnnounceFeedNotice += notice =>
+            Application.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                var name = _config.Servers.FirstOrDefault(s => s.Id == notice.ServerId)?.Name ?? notice.ServerId;
+                ShowNotification(notice.Recovered ? "Announce feed recovered" : "Announce feed silent",
+                    $"{name} {notice.Channel}: {notice.Diagnosis}");
+            });
+
         // Race completion notifications
         if (_serverManager.Spread != null)
         {
@@ -283,6 +304,7 @@ public class TrayViewModel : INotifyPropertyChanged
 
         _serverManager.AuthenticationRejected += notice =>
         {
+            if (_config.Health.Enabled) return; // The supervisor owns the outage/recovery pair.
             Application.Current?.Dispatcher.BeginInvoke(() =>
             {
                 var accountKey = ServerLoginGateRegistry.KeyFor(notice.Account.Host, notice.Account.Port, notice.Account.Username);

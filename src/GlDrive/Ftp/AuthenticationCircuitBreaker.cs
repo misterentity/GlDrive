@@ -6,7 +6,7 @@ using Failure = GlDrive.Ftp.ConnectFailureClassifier.ConnectFailure;
 namespace GlDrive.Ftp;
 
 internal sealed record FtpLoginAttempt(string Key, long Generation, long Id, bool RecoveryProbe,
-    bool Ghost, byte[] CredentialDigest, FtpLoginAccount Account);
+    bool Ghost, byte[] CredentialDigest, FtpLoginAccount Account, bool CredentialChanged = false);
 
 /// <summary>Account-wide login admission; existing connected leases remain usable.</summary>
 internal sealed class AuthenticationCircuitBreaker
@@ -79,6 +79,15 @@ internal sealed class AuthenticationCircuitBreaker
         lock (_lock) return _states.TryGetValue(account.Key, out var state) && state.Held;
     }
 
+    internal bool HasChangedHeldCredentials(FtpLoginAccount account, string password)
+    {
+        var digest = SHA256.HashData(Encoding.UTF8.GetBytes(password));
+        lock (_lock)
+            return _states.TryGetValue(account.Key, out var state) && state.Held &&
+                state.CredentialDigest is { } previous &&
+                !CryptographicOperations.FixedTimeEquals(previous, digest);
+    }
+
     internal DateTime? RetryAt(FtpLoginAccount account)
     {
         lock (_lock)
@@ -111,6 +120,7 @@ internal sealed class AuthenticationCircuitBreaker
         var digest = SHA256.HashData(Encoding.UTF8.GetBytes(password));
         FtpLoginAttempt? attempt = null;
         FtpLoginHeldException? blocked = null;
+        var credentialChanged = false;
         lock (_lock)
         {
             var state = Get(account.Key);
@@ -125,6 +135,7 @@ internal sealed class AuthenticationCircuitBreaker
                     && !CryptographicOperations.FixedTimeEquals(previous, digest))
                 {
                     ReadyRetry(state);
+                    credentialChanged = true;
                     state.CredentialDigest = digest;
                     state.ProtectedDigest = _store?.Protect(digest);
                 }
@@ -146,7 +157,7 @@ internal sealed class AuthenticationCircuitBreaker
                             state.ProbeId = null;
                             blocked = new("Authentication recovery probe blocked: hold state could not be saved", true, state.NextProbeUtc);
                         }
-                        else attempt = new(account.Key, state.Generation, state.ProbeId.Value, true, false, digest, account);
+                        else attempt = new(account.Key, state.Generation, state.ProbeId.Value, true, false, digest, account, credentialChanged);
                     }
                 }
                 else if (!manualRetry && _clock.GetTimestamp() < state.FaultUntilStamp)
