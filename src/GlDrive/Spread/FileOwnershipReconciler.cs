@@ -124,6 +124,30 @@ internal static class FileOwnershipReconciler
         return dropped;
     }
 
+    /// <summary>
+    /// Removes a file from the race set for every site at once — the file is not part
+    /// of this release at all, so no owner's copy counts. Returns false if it was unknown.
+    /// </summary>
+    internal static bool Forget(
+        string name,
+        Dictionary<string, HashSet<string>> ownership,
+        Dictionary<string, SpreadFileInfo> fileInfos,
+        Dictionary<(string fileName, string serverId), long> observedSizes,
+        Dictionary<string, int> serverFileCount)
+    {
+        var known = fileInfos.Remove(name);
+        if (ownership.Remove(name, out var owners))
+        {
+            foreach (var owner in owners.ToList())
+            {
+                RemoveOwner(owner, owners, serverFileCount);
+                observedSizes.Remove((name, owner));
+            }
+            known = true;
+        }
+        return known;
+    }
+
     private static void RemoveOwner(
         string serverId,
         HashSet<string> owners,
