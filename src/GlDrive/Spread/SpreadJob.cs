@@ -61,6 +61,8 @@ public class SpreadJob : IDisposable
     private readonly HashSet<string> _parsedSfvs = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _expectedFiles = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, HashSet<string>> _sfvInventory = new(StringComparer.OrdinalIgnoreCase);
+    // Foreign files already reported, so a site that keeps listing one logs it once.
+    private readonly HashSet<string> _foreignFilesLogged = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DateTime> _sfvParsedAt = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, long> _sfvSizes = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _parsingSfvs = new(StringComparer.OrdinalIgnoreCase);
@@ -2142,10 +2144,18 @@ public class SpreadJob : IDisposable
         var serverConfig = _serverConfigs[serverId];
         var siteRules = serverConfig.SpreadSite.Skiplist;
         var globalRules = _spreadConfig.GlobalSkiplist;
+        var currentInventories = CurrentSfvInventoriesNoLock();
 
         foreach (var file in files)
         {
             var fileName = Path.GetFileName(file.Name);
+            if (IsUndeclaredBySfv(file.Name, currentInventories))
+            {
+                if (_foreignFilesLogged.Add(file.Name))
+                    Log.Information("Spread: {Server} lists {File} in {Release}, but the release's SFV does not declare it — " +
+                        "not racing a foreign file", serverConfig.Name, file.Name, ReleaseName);
+                continue;
+            }
             var action = _skiplist.Evaluate(fileName, false, true,
                 serverId, Section, siteRules, globalRules);
             if (action == SkiplistAction.Deny) continue;
@@ -2312,8 +2322,69 @@ public class SpreadJob : IDisposable
             _parsedSfvs.Add(relName);
             _sfvParsedAt[relName] = DateTime.UtcNow;
             _expectedFileCount = _expectedFiles.Count;
+
+            // Files listed before the manifest arrived were admitted unchecked.
+            var inventories = CurrentSfvInventoriesNoLock();
+            var foreign = _fileInfos.Keys.Where(name => IsUndeclaredBySfv(name, inventories)).ToList();
+            foreach (var name in foreign)
+            {
+                FileOwnershipReconciler.Forget(name, _fileOwnership, _fileInfos, _observedFileSizes, _serverFileCount);
+                _fileActions.Remove(name);
+                _dupeHeld.RemoveWhere(k => string.Equals(k.fileName, name, StringComparison.OrdinalIgnoreCase));
+                _foreignFilesLogged.Add(name);
+            }
+            if (foreign.Count > 0)
+                Log.Information("Spread: {Sfv} does not declare {Count} listed file(s) — dropped from the race set as foreign ({Release}): {Files}",
+                    relName, foreign.Count, ReleaseName, string.Join(", ", foreign));
             return true;
         }
+    }
+
+    // A manifest whose size changed is pending a re-read, and the old inventory may be
+    // the truncated one; it gates nothing until re-read. Called under _ownershipLock.
+    private Dictionary<string, HashSet<string>> CurrentSfvInventoriesNoLock() =>
+        _sfvInventory.Where(kv => _parsedSfvs.Contains(kv.Key))
+            .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// True when a parsed SFV in the file's own directory does not declare it and the
+    /// file is the kind of payload that SFV does declare — another release's volumes
+    /// listed inside this one's dir (superbnc, 2026-10-26/27, three releases). The SFV,
+    /// not the file name, is the authority: groups ship short names unrelated to the
+    /// dir name. An nfo, a Sample/ dir or any extra the SFV never lists still races.
+    /// </summary>
+    internal static bool IsUndeclaredBySfv(string relName, IReadOnlyDictionary<string, HashSet<string>> inventories)
+    {
+        if (inventories.Count == 0) return false;
+        var dir = DirectoryPrefix(relName);
+        var kind = PayloadKind(relName);
+        var covered = false;
+        var sameKind = false;
+        foreach (var (sfv, entries) in inventories)
+        {
+            if (!string.Equals(DirectoryPrefix(sfv), dir, StringComparison.OrdinalIgnoreCase)) continue;
+            if (entries.Contains(relName)) return false;
+            covered = true;
+            sameKind = sameKind || entries.Any(entry => PayloadKind(entry) == kind);
+        }
+        return covered && sameKind;
+    }
+
+    private static string DirectoryPrefix(string relName)
+    {
+        var slash = relName.LastIndexOf('/');
+        return slash < 0 ? "" : relName[..(slash + 1)];
+    }
+
+    // .rar, .r00-.r99, .s00-.s99 and .001-style splits are one archive set.
+    private static string PayloadKind(string name)
+    {
+        var ext = Path.GetExtension(name).ToLowerInvariant();
+        if (ext == ".rar") return ".rar";
+        if (ext.Length == 4 && char.IsAsciiDigit(ext[2]) && char.IsAsciiDigit(ext[3])
+            && (ext[1] is 'r' or 's' || char.IsAsciiDigit(ext[1])))
+            return ".rar";
+        return ext;
     }
 
     private bool HasExpectedFilesNoLock(string serverId) => _expectedFiles.All(name =>

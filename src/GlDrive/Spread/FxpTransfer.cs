@@ -594,6 +594,12 @@ public class FxpTransfer
                 // best-effort — if it fails the caller will dispose the conn
                 // and we'll get a fresh one from the pool.
                 WasDupe = true;
+                // The accepted RETR has the source mid data-TLS handshake, waiting on us as
+                // the TLS server. Until it fails, glftpd sends neither the RETR's final reply
+                // nor (sometimes) ABOR's: closing our end fails it now. Left open, every relay
+                // dupe-skip held the source login ~15s for "435 Failed TLS negotiation on data
+                // channel (timeout)" (28 on 2026-10-26/27, against a 1-login source cap).
+                srcTcp.Close();
                 try
                 {
                     await src.Execute("ABOR", ct);
