@@ -26,6 +26,9 @@ public partial class ServerManager : IDisposable
     private readonly ConcurrentDictionary<string, RequestFiller> _requestFillers = new();
     // Servers whose mount failed, awaiting retry. Value is the attempt count so far.
     private readonly ConcurrentDictionary<string, int> _pendingRemounts = new();
+    // Background scheduling only: manual mounts bypass this deadline. Local
+    // admission holds must not be recorded as new remote outage observations.
+    private readonly ConcurrentDictionary<string, (string Identity, DateTimeOffset Due)> _remountRetryAfter = new();
     // Last remount error message per server, so a CHANGED error always logs in full
     // even deep into a failure streak — that transition is the diagnostic moment.
     private readonly ConcurrentDictionary<string, string> _lastRemountError = new();
@@ -288,6 +291,25 @@ public partial class ServerManager : IDisposable
         }
     }
 
+    internal DateTimeOffset? RemountRetryNotBefore(string serverId)
+    {
+        DateTimeOffset? due = _config.Health.Enabled ? GetSiteHealth(serverId).NextRetryUtc : null;
+        var server = _config.Servers.FirstOrDefault(s => s.Id == serverId);
+        if (server != null && _remountRetryAfter.TryGetValue(serverId, out var retry) &&
+            retry.Identity == EndpointIdentity(server) && (due == null || retry.Due > due))
+            due = retry.Due;
+        return due;
+    }
+
+    internal DateTimeOffset DeferRemount(ServerConfig server, Exception error, int attempt)
+    {
+        var due = MountRetryPolicy.RetryAt(error, DateTimeOffset.UtcNow,
+            attempt < int.MaxValue ? attempt + 1 : int.MaxValue,
+            _config.Health.Enabled ? GetSiteHealth(server.Id).NextRetryUtc : null);
+        _remountRetryAfter[server.Id] = (EndpointIdentity(server), due);
+        return due;
+    }
+
     /// <summary>
     /// Retries failed mounts on a capped exponential backoff until they succeed or
     /// stop being eligible. Never gives up permanently — the conditions that cause a
@@ -302,10 +324,10 @@ public partial class ServerManager : IDisposable
             {
                 // Wait for the shortest delay any pending server is due.
                 var nextDelay = _config.Health.Enabled
-                    ? _pendingRemounts.Keys.Select(id => GetSiteHealth(id).NextRetryUtc is { } due
+                    ? _pendingRemounts.Keys.Select(id => RemountRetryNotBefore(id) is { } due
                         ? TimeSpan.FromSeconds(Math.Clamp((due - DateTimeOffset.UtcNow).TotalSeconds, 1, 30))
                         : TimeSpan.FromSeconds(30)).DefaultIfEmpty(TimeSpan.FromSeconds(30)).Min()
-                    : _pendingRemounts.Values.Select(attempts => MountRetryPolicy.DelayFor(attempts + 1))
+                    : _pendingRemounts.Values.Select(attempts => MountRetryPolicy.DelayFor(attempts < int.MaxValue ? attempts + 1 : int.MaxValue))
                         .DefaultIfEmpty(MountRetryPolicy.InitialDelay).Min();
 
                 await Task.Delay(nextDelay, ct);
@@ -322,6 +344,7 @@ public partial class ServerManager : IDisposable
                             autoMountOnStart: cfg?.Mount.AutoMountOnStart ?? false))
                     {
                         _pendingRemounts.TryRemove(serverId, out _);
+                        _remountRetryAfter.TryRemove(serverId, out _);
                         _lastRemountError.TryRemove(serverId, out _);
                         Log.Information(
                             "Remount for {ServerId} no longer needed (mounted={Mounted}, inConfig={InConfig}) — dropped from retry queue",
@@ -329,9 +352,9 @@ public partial class ServerManager : IDisposable
                         continue;
                     }
 
-                    if (_config.Health.Enabled && !_siteHealth.CanAttempt(serverId, EndpointIdentity(cfg!), DateTimeOffset.UtcNow)) continue;
+                    if (RemountRetryNotBefore(serverId) > DateTimeOffset.UtcNow) continue;
 
-                    var attempt = _pendingRemounts.TryGetValue(serverId, out var a) ? a + 1 : 1;
+                    var attempt = _pendingRemounts.TryGetValue(serverId, out var a) ? (a < int.MaxValue ? a + 1 : int.MaxValue) : 1;
                     _pendingRemounts[serverId] = attempt;
 
                     try
@@ -339,6 +362,7 @@ public partial class ServerManager : IDisposable
                         Log.Information("Remount attempt {Attempt} for {Name}...", attempt, cfg!.Name);
                         await MountServer(serverId, ct);
                         _pendingRemounts.TryRemove(serverId, out _);
+                        _remountRetryAfter.TryRemove(serverId, out _);
                         _lastRemountError.TryRemove(serverId, out _);
                         Log.Information("Remount succeeded for {Name} on attempt {Attempt}", cfg.Name, attempt);
                     }
@@ -346,11 +370,11 @@ public partial class ServerManager : IDisposable
                     {
                         return;
                     }
-                    catch (SiteRetryDeferredException) { /* persisted deadline or TCP probe budget still applies */ }
+                    catch (SiteRetryDeferredException ex) { DeferRemount(cfg!, ex, attempt); }
                     catch (Exception ex)
                     {
-                        var delay = _config.Health.Enabled && GetSiteHealth(serverId).NextRetryUtc is { } due
-                            ? due - DateTimeOffset.UtcNow : MountRetryPolicy.DelayFor(attempt + 1);
+                        var due = DeferRemount(cfg!, ex, attempt);
+                        var delay = due - DateTimeOffset.UtcNow;
                         _lastRemountError.TryGetValue(serverId, out var previous);
                         if (MountFailureLogPolicy.ShouldLogFullDetail(attempt, previous, ex.Message))
                             Log.Warning(ex, "Remount attempt {Attempt} for {Name} failed — next try in {Delay}",
@@ -749,6 +773,7 @@ public partial class ServerManager : IDisposable
         try { _remountLoop?.Wait(TimeSpan.FromSeconds(5)); } catch { }
         _remountCts.Dispose();
         _pendingRemounts.Clear();
+        _remountRetryAfter.Clear();
         _lastRemountError.Clear();
 
         _spreadManager?.Dispose();

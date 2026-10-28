@@ -692,6 +692,7 @@ public partial class App
     protected override void OnExit(ExitEventArgs e)
     {
         _configLeaseTimer?.Stop();
+        ConfigChanges?.Dispose();
         ConfigChanges = null;
         MarkExiting("application exit");
         Log.Information("GlDrive shutting down...");

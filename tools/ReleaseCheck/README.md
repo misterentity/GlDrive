@@ -1,5 +1,17 @@
 # Local release verification
 
+Every harness mode redirects the shared application-data root to a unique `app-state-*`
+directory under its evidence directory before initializing any application store. This
+also isolates the persistent authentication and login-admission guards; a synthetic
+account must never rewrite the running application's guard state.
+
+The full fixture uses an explicitly configured, still-enabled budget of 100 login
+attempts per five minutes because its independent scenarios reuse one loopback account
+in rapid succession. A separate synthetic account keeps the production default of eight:
+seven real native logins succeed, the reserved eighth slot is denied before authentication,
+and an already connected session remains reusable. The suite verifies that its budget
+remains enabled and persists under the isolated root. No production policy is changed.
+
 The separate native sharing check runs with `dotnet run --project tools/ReleaseCheck -c Release -- --sharing-only <evidence-directory>`.
 It creates its own fixture and needs no state JSON or Python server. It exercises actual GnuTLS control sessions, CPSV data TLS,
 separate main/spread pools and their shared login gate, idle lending, blocked-read and blocked-TLS-setup yield,

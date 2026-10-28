@@ -39,6 +39,30 @@ public static class MountRetryPolicy
     }
 
     /// <summary>
+    /// A local admission rejection is not another remote outage, but it still needs
+    /// a background retry deadline. Otherwise an expired health deadline produces
+    /// one mount/dispose attempt per second against the account governor's hold.
+    /// Missing or stale admission timestamps retain the ordinary bounded backoff.
+    /// </summary>
+    internal static DateTimeOffset RetryAt(Exception error, DateTimeOffset now, int nextAttempt,
+        DateTimeOffset? healthDeadline)
+    {
+        var due = now.Add(DelayFor(nextAttempt));
+        if (healthDeadline > due) due = healthDeadline.Value;
+        for (Exception? cause = error; cause != null; cause = cause.InnerException)
+        {
+            DateTimeOffset? admission = cause switch
+            {
+                Ftp.FtpLoginHeldException held => held.RetryAtUtc,
+                SiteRetryDeferredException deferred => deferred.RetryAtUtc,
+                _ => null
+            };
+            if (admission > due) due = admission.Value;
+        }
+        return due;
+    }
+
+    /// <summary>
     /// Whether a server that previously failed to mount should be retried now.
     /// A server that has since been mounted (manually, or by a config sync) or that
     /// has been disabled/removed from config is no longer our problem.

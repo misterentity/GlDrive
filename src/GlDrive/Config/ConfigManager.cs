@@ -8,6 +8,9 @@ namespace GlDrive.Config;
 
 public class ConfigManager
 {
+    // Runs under the settings path lock, only after a successful durable save.
+    // Consumers must use these snapshots: the caller's live graph may be reconciled later.
+    internal static event Action<string, JsonNode?, JsonNode, ConfigWriteContext>? SettingsSaved;
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, ConfigHistoryStore> Histories = new(StringComparer.OrdinalIgnoreCase);
     private static int _historyWarning;
     public static ConfigHistoryStore History => Histories.GetOrAdd(ConfigPath, _ => new ConfigHistoryStore(AppDataPath));
@@ -138,6 +141,13 @@ public class ConfigManager
         NormalizeLibraryEnable(before, next);
         json = next.ToJsonString(JsonOptions);
         SecureFile.WriteAllTextRestricted(ConfigFilePath, json);
+
+        if (SettingsSaved is { } saved)
+            foreach (Action<string, JsonNode?, JsonNode, ConfigWriteContext> observer in saved.GetInvocationList())
+            {
+                try { observer(ConfigFilePath, before, next, ConfigWriteScope.Current); }
+                catch { Log.Warning("A configuration save observer failed; settings were saved"); }
+            }
 
         // Journal failure must not turn a successful settings write into an error.
         try

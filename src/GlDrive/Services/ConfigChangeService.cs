@@ -16,7 +16,7 @@ public sealed record ConfigExperiment(string Id, string Label, string Hypothesis
 public sealed record ConfigExperimentMetrics(int Races, int Completed, int RacesWithFiles, bool CompleteEvidence);
 
 /// <summary>Explicit user experiments and leases share the validated settings transaction.</summary>
-public sealed class ConfigChangeService
+public sealed class ConfigChangeService : IDisposable
 {
     private sealed record State(List<ConfigLease> Leases, List<ConfigExperiment> Experiments);
     private readonly AppConfig _config;
@@ -31,12 +31,17 @@ public sealed class ConfigChangeService
     private readonly List<ConfigLease> _leases = [];
     private readonly List<ConfigExperiment> _experiments = [];
     private bool _warned;
+    private bool _observingSaves;
     public bool PersistenceHealthy { get; private set; } = true;
 
     public ConfigChangeService(AppConfig config, ConfigurationAutomation configuration, Func<string?, bool> idle,
         string? root = null) : this(config, configuration, idle, root ?? ConfigManager.AppDataPath,
             ConfigManager.ConfigPath, ConfigHistoryStore.Protect, ConfigHistoryStore.Unprotect,
-            SecureFile.WriteAllTextRestricted, null) { }
+            SecureFile.WriteAllTextRestricted, null)
+    {
+        ConfigManager.SettingsSaved += ObserveSettingsSave;
+        _observingSaves = true;
+    }
 
     internal ConfigChangeService(AppConfig config, ConfigurationAutomation configuration, Func<string?, bool> idle,
         string root, string configPath, Func<string, string> protect, Func<string, string> unprotect,
@@ -78,6 +83,42 @@ public sealed class ConfigChangeService
             Leased = ConfigSecretPointers.MaskValue(l.Pointer, l.Leased) ?? "null"
         }).ToArray());
         return rows;
+    }
+
+    private void ObserveSettingsSave(string path, JsonNode? before, JsonNode after, ConfigWriteContext actor)
+    {
+        if (!string.Equals(Path.GetFullPath(path), Path.GetFullPath(_configPath), StringComparison.OrdinalIgnoreCase)) return;
+        SecureFile.WithPathLock(_configPath, () =>
+        {
+            var changed = false;
+            for (var i = 0; i < _leases.Count; i++)
+            {
+                var lease = _leases[i];
+                if (lease.Status is not ("pending" or "active") ||
+                    actor.Actor == "lease:" + lease.Id || actor.Actor == "lease-revert:" + lease.Id) continue;
+                var previousPointer = before == null ? null : ResolveLeasePointer(lease, before);
+                var nextPointer = ResolveLeasePointer(lease, after);
+                var same = false;
+                try
+                {
+                    same = previousPointer != null && nextPointer != null && JsonNode.DeepEquals(
+                        ValidateLeasePointer(before!, previousPointer, out _),
+                        ValidateLeasePointer(after, nextPointer, out _));
+                }
+                catch (ArgumentException) { /* Removed or invalid settings cannot retain lease ownership. */ }
+                if (same) continue;
+                _leases[i] = lease with { Status = "superseded" };
+                changed = true;
+            }
+            if (changed) Persist();
+        });
+    }
+
+    public void Dispose()
+    {
+        if (!_observingSaves) return;
+        ConfigManager.SettingsSaved -= ObserveSettingsSave;
+        _observingSaves = false;
     }
 
     public IReadOnlyList<ConfigExperiment> Experiments()

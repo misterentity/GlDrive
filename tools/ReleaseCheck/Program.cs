@@ -16,9 +16,23 @@ using GlDrive.Spread;
 using Serilog;
 using Microsoft.Win32.SafeHandles;
 
+// Set the shared root before any lazy application store is initialized. Native
+// login guards persist account state even without loading AppConfig or mounting.
+if (args.Length == 0) throw new ArgumentException("Supply a fixture state file or verification mode");
+var evidenceDirectory = args[0].StartsWith("--", StringComparison.Ordinal)
+    ? args.Length > 1 ? Path.GetFullPath(args[1]) : throw new ArgumentException("Supply an evidence directory")
+    : Path.GetDirectoryName(Path.GetFullPath(args[0]))!;
+var isolatedAppData = Path.Combine(evidenceDirectory, "app-state-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(isolatedAppData);
+typeof(ConfigManager).GetProperty("AppDataPathOverride", BindingFlags.Static | BindingFlags.NonPublic)!
+    .SetValue(null, isolatedAppData);
+Check(ConfigManager.AppDataPath == isolatedAppData, "native harness isolates all application state before login");
+
 if (args.Length > 0 && args[0] == "--sharing-only")
 {
     await CpsvSharingCheck.Run(args.Length > 1 ? args[1] : throw new ArgumentException("Supply an evidence directory"));
+    Check(File.Exists(Path.Combine(isolatedAppData, "ftp-login-governor.json")),
+        "native sharing persists login admission only in its isolated application root");
     return;
 }
 if (args.Length > 0 && args[0] == "--network-only")
@@ -36,7 +50,15 @@ Log.Logger = new LoggerConfiguration().MinimumLevel.Debug()
 var port = state.GetProperty("port").GetInt32();
 var root = state.GetProperty("root").GetString()!;
 var fingerprint = state.GetProperty("fingerprint").GetString()!;
-var config = new ServerConfig { Name = "Release verification", Connection = new() { Host = "127.0.0.1", Port = port, Username = "release-check" } };
+var config = new ServerConfig
+{
+    Name = "Release verification",
+    Connection = new() { Host = "127.0.0.1", Port = port, Username = "release-check" },
+    // The full suite creates independent pools in rapid succession on one local
+    // account. Keep admission enabled with an explicit bounded fixture budget;
+    // NativeLoginBudgetCheck separately verifies the unchanged production default.
+    Pool = new() { MaxLoginAttemptsPerFiveMinutes = 100 }
+};
 var certs = new CertificateManager(Path.Combine(root, "trusted.json"));
 certs.TrustCertificate($"127.0.0.1:{port}", fingerprint);
 certs.CertificatePrompt += (_, _) => Task.FromResult(false);
@@ -70,6 +92,7 @@ finally
     finally { detached?.Dispose(); }
 }
 using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(240));
+await NativeLoginBudgetCheck.Run(config.Connection, certs, root, deadline.Token);
 await NativeInitializationCheck.Run(factory, root, deadline.Token);
 if (args.Contains("--initialization-only", StringComparer.Ordinal))
 {
@@ -379,6 +402,11 @@ try
 }
 finally { await monitor.StopAsync(); }
 Check(lossCount == 1, "monitor shutdown does not report a false connection loss");
+var loginBudget = GuardedFtpLogin.GetLoginBudget(FtpLoginAccount.From(config.Connection));
+Check(loginBudget.Enabled && loginBudget.Limit == 100 && loginBudget.AttemptsInWindow > 7 &&
+      loginBudget.AttemptsInWindow < 100 && loginBudget.PersistenceHealthy &&
+      File.Exists(Path.Combine(isolatedAppData, "ftp-login-governor.json")),
+    "full native suite keeps bounded login admission and persists it in the isolated application root");
 Console.WriteLine("PASS: local native FTPS and WinFsp verification complete");
 
 static void Check(bool success, string step)
