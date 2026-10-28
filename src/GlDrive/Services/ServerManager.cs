@@ -54,6 +54,10 @@ public partial class ServerManager : IDisposable
             _servers.TryGetValue(serverId, out var svc) ? svc.Pool : null;
         _spreadManager._getSearchService = serverId =>
             _servers.TryGetValue(serverId, out var svc) ? svc.Search : null;
+        InitializeSiteHealth();
+        InitializeNukes();
+        InitializeWanted();
+        InitializeAnnounceFeedHealth();
         GuardedFtpLogin.AuthenticationRejected += OnAuthenticationRejected;
     }
 
@@ -104,10 +108,20 @@ public partial class ServerManager : IDisposable
             return;
         }
 
-        var service = new MountService(serverConfig, _config.Downloads, _certManager, _spreadManager);
+        try { await CheckAutomaticSiteRetry(serverConfig, ct, manualRetry); }
+        catch (SiteRetryDeferredException) { QueueRemount(serverId); throw; }
+        var mountAttemptStarted = DateTime.UtcNow;
+
+        var service = new MountService(serverConfig, _config.Downloads, _certManager, _spreadManager, _wantedCoordinator);
 
         service.StateChanged += state =>
+        {
+            if (state == MountState.Connected) RecordSiteRecovery(serverConfig);
             ServerStateChanged?.Invoke(serverId, serverConfig.Name, state);
+        };
+        service.RetryNotBeforeUtc = () => SiteRetryNotBefore(serverConfig);
+        service.ConnectionFailureObserved += (failure, connectAttempt, started) =>
+            RecordSiteFailure(serverConfig, failure, started, connectAttempt);
 
         service.BncRateLimitDetected += msg =>
             BncRateLimitDetected?.Invoke(serverConfig.Name, msg);
@@ -139,9 +153,19 @@ public partial class ServerManager : IDisposable
         {
             await service.Mount(ct);
             _runtimeConfigSnapshots[serverId] = CaptureRuntimeConfig(serverConfig);
+            if (service.Search is { } search) search.IndexPublished += _ => QueueWantedSweep();
+            ReplayWantedCompletions(serverId);
+            ReplayRacePulls(serverId);
+            QueueWantedSweep();
         }
-        catch
+        catch (Exception exception)
         {
+            if (!ct.IsCancellationRequested)
+            {
+                RecordSiteFailure(serverConfig, exception, mountAttemptStarted, connectAttempt: true);
+                QueueRemount(serverId);
+            }
+            _wantedCoordinator.RemoveServer(serverId);
             _servers.TryRemove(serverId, out _);
             _runtimeConfigSnapshots.TryRemove(serverId, out _);
             service.Dispose();
@@ -177,6 +201,7 @@ public partial class ServerManager : IDisposable
 
     public async Task UnmountServerAsync(string serverId)
     {
+        _wantedCoordinator.RemoveServer(serverId);
         await StopIrcService(serverId);
 
         if (_spreadManager != null)
@@ -193,6 +218,7 @@ public partial class ServerManager : IDisposable
 
     public void UnmountServer(string serverId)
     {
+        _wantedCoordinator.RemoveServer(serverId);
         // Run awaits on the threadpool so we don't deadlock if this is called
         // from the UI dispatcher (e.g. tray shutdown). Capturing the dispatcher
         // SynchronizationContext in .GetResult() was the original bug risk.
@@ -221,6 +247,12 @@ public partial class ServerManager : IDisposable
                 await MountServer(server.Id, ct, manualRetry);
                 Log.Information("Server {Name} mounted in {Elapsed}ms", server.Name, sw.ElapsedMilliseconds);
             }
+            catch (SiteRetryDeferredException deferred)
+            {
+                Log.Information("FTP retry for {Name} remains deferred until {RetryAt}", server.Name, deferred.RetryAtUtc);
+                QueueRemount(server.Id);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
                 // A queued, forever-retried mount is degraded availability, not an
@@ -269,10 +301,12 @@ public partial class ServerManager : IDisposable
             while (!ct.IsCancellationRequested && !_pendingRemounts.IsEmpty)
             {
                 // Wait for the shortest delay any pending server is due.
-                var nextDelay = _pendingRemounts.Values
-                    .Select(attempts => MountRetryPolicy.DelayFor(attempts + 1))
-                    .DefaultIfEmpty(MountRetryPolicy.InitialDelay)
-                    .Min();
+                var nextDelay = _config.Health.Enabled
+                    ? _pendingRemounts.Keys.Select(id => GetSiteHealth(id).NextRetryUtc is { } due
+                        ? TimeSpan.FromSeconds(Math.Clamp((due - DateTimeOffset.UtcNow).TotalSeconds, 1, 30))
+                        : TimeSpan.FromSeconds(30)).DefaultIfEmpty(TimeSpan.FromSeconds(30)).Min()
+                    : _pendingRemounts.Values.Select(attempts => MountRetryPolicy.DelayFor(attempts + 1))
+                        .DefaultIfEmpty(MountRetryPolicy.InitialDelay).Min();
 
                 await Task.Delay(nextDelay, ct);
 
@@ -295,6 +329,8 @@ public partial class ServerManager : IDisposable
                         continue;
                     }
 
+                    if (_config.Health.Enabled && !_siteHealth.CanAttempt(serverId, EndpointIdentity(cfg!), DateTimeOffset.UtcNow)) continue;
+
                     var attempt = _pendingRemounts.TryGetValue(serverId, out var a) ? a + 1 : 1;
                     _pendingRemounts[serverId] = attempt;
 
@@ -310,9 +346,11 @@ public partial class ServerManager : IDisposable
                     {
                         return;
                     }
+                    catch (SiteRetryDeferredException) { /* persisted deadline or TCP probe budget still applies */ }
                     catch (Exception ex)
                     {
-                        var delay = MountRetryPolicy.DelayFor(attempt + 1);
+                        var delay = _config.Health.Enabled && GetSiteHealth(serverId).NextRetryUtc is { } due
+                            ? due - DateTimeOffset.UtcNow : MountRetryPolicy.DelayFor(attempt + 1);
                         _lastRemountError.TryGetValue(serverId, out var previous);
                         if (MountFailureLogPolicy.ShouldLogFullDetail(attempt, previous, ex.Message))
                             Log.Warning(ex, "Remount attempt {Attempt} for {Name} failed — next try in {Delay}",
@@ -378,6 +416,7 @@ public partial class ServerManager : IDisposable
 
     private async Task SyncAfterConfigChangeCore()
     {
+        QueueWantedSweep();
         lock (_torrentDownloadLock)
             if (!_torrentDownloadsStopping) _torrentDownloads?.RefreshOptions();
         RefreshTorrentDownloadRate();
@@ -590,6 +629,13 @@ public partial class ServerManager : IDisposable
         if (_ircServices.ContainsKey(serverConfig.Id)) return;
 
         var ircService = new IrcService(serverConfig, _certManager);
+        // A connected mount is the whole precondition: SITE INVITE reuses an idle pooled login,
+        // and any new login it needs is already deferred at GuardedFtpLogin. Gating on the
+        // recorded health state kept invite-only announce channels unjoined after one transient
+        // login failure until some later login happened to succeed.
+        ircService.SiteInviteAvailable = () => !_disposed && (!_config.Health.Enabled ||
+            (_config.Servers.Any(s => s.Id == serverConfig.Id && s.Enabled && s.Irc.Enabled) &&
+             GetServer(serverConfig.Id) is { CurrentState: MountState.Connected, Pool: not null }));
         ircService.StateChanged += state =>
             IrcStateChanged?.Invoke(serverConfig.Id, serverConfig.Name, state);
 
@@ -604,12 +650,12 @@ public partial class ServerManager : IDisposable
             var mainPool = mountService.Pool;
             var spreadPool = _spreadManager?.GetLivePool(serverConfig.Id);
             await using var conn = await PoolFallback.BorrowAsync(
-                mainPool.Borrow,
+                t => mainPool.BorrowFor(FtpBorrowPurpose.IrcInvite, t),
                 spreadPool == null ? null : t =>
                 {
                     Log.Information("IRC {Server}: main FTP pool busy — sending SITE INVITE on the spread pool",
                         serverConfig.Name);
-                    return spreadPool.Borrow(t);
+                    return spreadPool.BorrowFor(FtpBorrowPurpose.IrcInvite, t);
                 },
                 SiteInviteMainPoolBudget, ct);
             var sanitized = nick.Replace("\r", "").Replace("\n", "").Replace("\0", "");
@@ -633,11 +679,25 @@ public partial class ServerManager : IDisposable
             var defaultAutoRace = _config.Spread.AutoRaceOnNotification;
             var listener = new IrcAnnounceListener(serverConfig.Id, ircService,
                 serverConfig.Irc.AnnounceRules, defaultAutoRace, serverConfig.Irc.Channels);
-            listener.SitebotEventReceived += ev => _spreadManager?.ObserveSitebot(ev);
+            listener.SourceDown = () => _config.Health.Enabled && GetSiteHealth(serverConfig.Id) is
+                { FirstFailureUtc: not null, State: SiteHealthState.Down or SiteHealthState.Quarantined or SiteHealthState.AuthRejected };
+            listener.ChannelAnnounceObserved += (serverId, channel, observedAt) =>
+                ObserveAnnounceFeed(serverId, channel, observedAt);
+            listener.SitebotEventReceived += ev =>
+            {
+                _spreadManager?.ObserveSitebot(ev);
+                ObserveNukeSitebot(ev);
+                ObserveWantedSitebot(ev);
+            };
             listener.ReleaseAnnounced += (serverId, section, release, autoRace) =>
             {
                 Log.Information("IRC announce: [{Section}] {Release} (autoRace={AutoRace})",
                     section, release, autoRace);
+                if (listener.SourceDown?.Invoke() == true)
+                {
+                    Log.Information("IRC announce recorded while source {Server} is down: {Release}", serverId, release);
+                    return;
+                }
                 if (_servers.TryGetValue(serverId, out var mount))
                     mount.OnIrcRelease(section, release);
                 if (autoRace)
@@ -680,6 +740,9 @@ public partial class ServerManager : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        StopSiteHealth();
+        StopAnnounceFeedHealth();
+        StopWanted();
         GuardedFtpLogin.AuthenticationRejected -= OnAuthenticationRejected;
         StopTorrentDownloads();
         try { _remountCts.Cancel(); } catch { }

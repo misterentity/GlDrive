@@ -38,6 +38,8 @@ public class MountService : IDisposable
     public event Action<string, string, string>? NewReleaseDetected; // category, release, remotePath
     public event Action<string>? BncRateLimitDetected;
     public event Action? StatsChanged;
+    public event Action<Exception, bool, DateTime>? ConnectionFailureObserved;
+    public Func<DateTime?>? RetryNotBeforeUtc { get; set; }
 
     /// <summary>Latest SITE STATS scrape (credits + ratio). Null until first refresh.</summary>
     public SiteStats? Stats { get; private set; }
@@ -74,14 +76,17 @@ public class MountService : IDisposable
     public WishlistMatcher? Matcher => _wishlistMatcher;
 
     private readonly GlDrive.Downloads.Segmented.IRaceLoginLender? _raceLoginLender;
+    private readonly WantedAcquisitionCoordinator? _wantedCoordinator;
 
     public MountService(ServerConfig serverConfig, DownloadConfig downloadConfig, CertificateManager certManager,
-        GlDrive.Downloads.Segmented.IRaceLoginLender? raceLoginLender = null)
+        GlDrive.Downloads.Segmented.IRaceLoginLender? raceLoginLender = null,
+        WantedAcquisitionCoordinator? wantedCoordinator = null)
     {
         _serverConfig = serverConfig;
         _downloadConfig = downloadConfig;
         _certManager = certManager;
         _raceLoginLender = raceLoginLender;
+        _wantedCoordinator = wantedCoordinator;
     }
 
     public async Task Mount(CancellationToken ct = default)
@@ -188,6 +193,9 @@ public class MountService : IDisposable
 
             // Start connection monitor
             _monitor = new ConnectionMonitor(_pool, _factory, _serverConfig.Pool);
+            _monitor.RetryNotBeforeUtc = () => RetryNotBeforeUtc?.Invoke();
+            _monitor.FailureObserved += (failure, connectAttempt, started) =>
+                ConnectionFailureObserved?.Invoke(failure, connectAttempt, started);
             _monitor.ConnectionLost += () => SetState(MountState.Reconnecting);
             _monitor.ConnectionRestored += () => SetState(MountState.Connected);
             _monitor.BncRateLimitDetected += msg => BncRateLimitDetected?.Invoke(msg);
@@ -220,11 +228,17 @@ public class MountService : IDisposable
                 _pool, _serverConfig.Id, _downloadConfig, _serverConfig.SpeedLimitKbps, _raceLoginLender);
             _downloadManager = new DownloadManager(downloadStore, _ftp, _streamingDownloader,
                 _downloadConfig, _diskReservation);
+            _downloadManager.BackgroundPullMayRun = () => !_stopping &&
+                (_raceLoginLender?.IsRaceIdle(_serverConfig.Id) ?? true);
+            if (_raceLoginLender is GlDrive.Spread.SpreadManager spread)
+                _downloadManager.TransferMeasured += (bytes, elapsed) => spread.TransferSpeeds.RecordTransfer(
+                    _serverConfig.Id, DownloadSourceRanker.LocalDestination, bytes, elapsed);
             _downloadManager.Relocation = new DownloadRelocation(() => _serverConfig, _ftp.DirectoryExists);
             _searchService = new FtpSearchService(_pool, _serverConfig.Search);
             _searchService.StartIndexer();
             _wishlistMatcher = new WishlistMatcher(wishlistStore, _downloadManager, _ftp, _downloadConfig,
                 _serverConfig.Id, _serverConfig.Name);
+            if (_wantedCoordinator != null) _wishlistMatcher.AttachWantedCoordinator(_wantedCoordinator);
 
             _releaseMonitor.NewReleaseDetected += (category, release, remotePath) =>
             {
@@ -265,6 +279,7 @@ public class MountService : IDisposable
     public async Task UnmountAsync()
     {
         _stopping = true;
+        _wishlistMatcher?.DetachWantedCoordinator();
         if (!_mounted) return;
 
         Log.Information("Unmounting drive for server {ServerName}...", _serverConfig.Name);
@@ -315,6 +330,7 @@ public class MountService : IDisposable
     public void Unmount()
     {
         _stopping = true;
+        _wishlistMatcher?.DetachWantedCoordinator();
         if (!_mounted) return;
         // Sync fallback for Dispose() — just signal cancellation and tear down fast
         Log.Information("Unmounting drive (sync) for server {ServerName}...", _serverConfig.Name);
@@ -387,6 +403,7 @@ public class MountService : IDisposable
 
     private async Task CleanupAsync()
     {
+        _wishlistMatcher?.DetachWantedCoordinator();
         _downloadManager?.Dispose();
         _downloadManager = null;
         _wishlistMatcher = null;
@@ -421,6 +438,7 @@ public class MountService : IDisposable
 
     private void Cleanup()
     {
+        _wishlistMatcher?.DetachWantedCoordinator();
         _downloadManager?.Dispose();
         _downloadManager = null;
         _wishlistMatcher = null;
@@ -514,7 +532,7 @@ public class MountService : IDisposable
             PooledConnection borrowed;
             try
             {
-                borrowed = await _pool.Borrow(statsCts.Token);
+                borrowed = await _pool.BorrowFor(FtpBorrowPurpose.SiteStats, statsCts.Token);
             }
             catch (OperationCanceledException) when (statsCts.IsCancellationRequested)
             {

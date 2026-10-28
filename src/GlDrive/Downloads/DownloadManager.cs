@@ -1,4 +1,5 @@
 using System.IO;
+using System.Diagnostics;
 using System.Threading.Channels;
 using GlDrive.Config;
 using GlDrive.Ftp;
@@ -47,6 +48,11 @@ public class DownloadManager : IDisposable
 
     public event Action<DownloadItem, DownloadProgress>? DownloadProgressChanged;
     public event Action<DownloadItem>? DownloadStatusChanged;
+    /// <summary>Actual payload bytes and transfer time, excluding queueing and local post-processing.</summary>
+    public event Action<long, TimeSpan>? TransferMeasured;
+    /// <summary>Existing racing admission state; never creates a connection or changes a login budget.</summary>
+    public Func<bool>? BackgroundPullMayRun { get; set; }
+    internal int BackgroundPullRecheckSeconds { get; set; } = 15;
 
     public DownloadStore Store => _store;
     private WishlistStore? _wishlist;
@@ -384,6 +390,12 @@ public class DownloadManager : IDisposable
                 var fresh = _store.GetById(item.Id);
                 if (fresh == null || fresh.Status != DownloadStatus.Queued) continue;
 
+                if (!MayRunBackgroundPull(fresh))
+                {
+                    ParkForRacing(fresh, ct);
+                    continue;
+                }
+
                 // Cooldown-defer: if the download pool is in a BNC cooldown, a Borrow
                 // would just throw and burn a retry. Re-queue and wait for the window
                 // to clear — no RetryCount cost (like the race engine's cooldown skip).
@@ -530,6 +542,7 @@ public class DownloadManager : IDisposable
             NotifyDownloadStatus(item);
 
             itemCts.Token.ThrowIfCancellationRequested();
+            CheckBackgroundPull(item);
             // Check the destination before listing remotely. Otherwise a network outage
             // burns retries on a download that should remain parked for an absent drive.
             if (DownloadTargetVolume.MissingVolumeRoot(item.LocalPath) is { } missingRoot)
@@ -580,10 +593,22 @@ public class DownloadManager : IDisposable
             else
             {
                 var source = _source ?? throw new InvalidOperationException("Download source is unavailable");
+                long transferredBytes = 0;
+                var transferTime = TimeSpan.Zero;
+                var execution = new DownloadExecutionPolicy(item.BackgroundWantedPull ? () => !MayRunBackgroundPull(item) : null,
+                    bytes => { if (bytes > 0) Interlocked.Add(ref transferredBytes, bytes); });
+                async Task Transfer(IReadOnlyList<FtpDownloadFile> files, IProgress<DownloadProgress>? progress)
+                {
+                    CheckBackgroundPull(item);
+                    var started = Stopwatch.GetTimestamp();
+                    try { await source.DownloadAsync(files, progress, itemCts.Token, execution); }
+                    finally { transferTime += Stopwatch.GetElapsedTime(started); }
+                }
                 // Plan the complete tree before starting lanes. Directory-only releases
                 // and empty directories are directories too, not candidates for RETR.
                 plan = await source.PlanAsync(item.RemotePath, item.LocalPath, itemCts.Token);
                 itemCts.Token.ThrowIfCancellationRequested();
+                CheckBackgroundPull(item);
                 if (plan.IncompleteReasons.Count > 0)
                 {
                     ParkForSource(item, $"source reports incomplete ({plan.IncompleteReasons[0]})", itemCts.Token);
@@ -610,8 +635,7 @@ public class DownloadManager : IDisposable
                         }
                     });
 
-                    await source.DownloadAsync(plan.Files,
-                        progress, itemCts.Token);
+                    await Transfer(plan.Files, progress);
                 }
                 else
                 {
@@ -658,7 +682,7 @@ public class DownloadManager : IDisposable
 
                     var payload = plan.Files.Where(f => !IsManifest(f)).ToArray();
                     if (payload.Length > 0)
-                        await source.DownloadAsync(payload, progress, itemCts.Token);
+                        await Transfer(payload, progress);
                     lock (_activeCts)
                     {
                         itemCts.Token.ThrowIfCancellationRequested();
@@ -669,6 +693,7 @@ public class DownloadManager : IDisposable
                     // A completed transfer only covers the inventory observed before
                     // it started. Do not extract a snapshot while the upstream release
                     // is still gaining files or a listed volume is still growing.
+                    CheckBackgroundPull(item);
                     var latest = await source.PlanAsync(item.RemotePath, item.LocalPath, itemCts.Token);
                     itemCts.Token.ThrowIfCancellationRequested();
                     if (latest.IncompleteReasons.Count > 0 || !SameInventory(plan, latest))
@@ -682,9 +707,13 @@ public class DownloadManager : IDisposable
                     // Read after the payload and final listing, including same-size
                     // replacements. A stale local manifest is never authoritative.
                     foreach (var manifest in latest.Files.Where(IsManifest))
+                    {
+                        CheckBackgroundPull(item);
                         await source.RefreshManifestAsync(manifest, itemCts.Token);
+                    }
                     plan = latest;
                 }
+                EmitTransferMeasured(Interlocked.Read(ref transferredBytes), transferTime);
             }
 
             // Network phase done — hand the concurrency slot back so other downloads
@@ -785,6 +814,11 @@ public class DownloadManager : IDisposable
             _store.Update(item);
             NotifyDownloadStatus(item);
             EmitDownloadOutcome(item, "failed");
+        }
+        catch (BackgroundPullYieldedException)
+        {
+            try { ParkForRacing(item, itemCts.Token); }
+            catch (OperationCanceledException) { RecordCancellation(item, globalCt.IsCancellationRequested); }
         }
         catch (Exception ex) when (DownloadTargetVolume.IsVolumeAbsent(ex, item.LocalPath))
         {
@@ -930,6 +964,41 @@ public class DownloadManager : IDisposable
 
     private static bool IsManifest(FtpDownloadFile file) =>
         file.RemotePath.EndsWith(".sfv", StringComparison.OrdinalIgnoreCase);
+
+    private bool MayRunBackgroundPull(DownloadItem item) =>
+        BackgroundPullPolicy.MayRun(item.BackgroundWantedPull, BackgroundPullMayRun);
+
+    private void CheckBackgroundPull(DownloadItem item)
+    {
+        if (!MayRunBackgroundPull(item)) throw new BackgroundPullYieldedException();
+    }
+
+    private void ParkForRacing(DownloadItem item, CancellationToken ct)
+    {
+        lock (_activeCts)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!ReferenceEquals(_store.GetById(item.Id), item) ||
+                item.Status is DownloadStatus.Cancelled or DownloadStatus.Paused) return;
+            item.Status = DownloadStatus.Queued;
+            item.ErrorMessage = null;
+            item.StatusDetail = "Waiting for this site's racing work";
+            _store.Update(item);
+        }
+        NotifyDownloadStatus(item);
+        ScheduleRetry(item, Math.Max(1, BackgroundPullRecheckSeconds));
+    }
+
+    private void EmitTransferMeasured(long bytes, TimeSpan elapsed)
+    {
+        var subscribers = TransferMeasured;
+        if (bytes <= 0 || elapsed <= TimeSpan.Zero || subscribers == null) return;
+        foreach (Action<long, TimeSpan> subscriber in subscribers.GetInvocationList())
+        {
+            try { subscriber(bytes, elapsed); }
+            catch (Exception ex) { Log.Debug(ex, "Download throughput observer failed"); }
+        }
+    }
 
     private void RecordCancellation(DownloadItem item, bool stopping)
     {

@@ -49,7 +49,8 @@ public sealed class TransferCeilingClockTests
         var src = Source();
         var exec = src.IndexOf("private async Task ExecuteTransfer(", StringComparison.Ordinal);
         Assert.True(exec >= 0);
-        var borrow = src.IndexOf("dstPool.Borrow(", exec, StringComparison.Ordinal);
+        var borrow = src.IndexOf("dstPool.BorrowFor(FtpBorrowPurpose.Race,", exec, StringComparison.Ordinal);
+        Assert.True(borrow > exec, "fixture drift: destination race borrow anchor moved");
         var clock = src.IndexOf("startTime = DateTime.UtcNow;", borrow, StringComparison.Ordinal);
         var arm = src.IndexOf("armTransferCeiling?.Invoke();", exec, StringComparison.Ordinal);
         var protocol = src.IndexOf("transferProtocolStarted = true", exec, StringComparison.Ordinal);

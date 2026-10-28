@@ -220,7 +220,7 @@ public class FtpClientFactory
         var client = Create(out var account);
         try
         {
-            await GuardedFtpLogin.ConnectAsync(client, account, ct);
+            await GuardedFtpLogin.ConnectAsync(client, account, ct, policy: _serverConfig.Pool);
             Log.Information("FTP connection established");
             return client;
         }
@@ -283,7 +283,7 @@ public class FtpClientFactory
 
         try
         {
-            await GuardedFtpLogin.ConnectAsync(client, account, ct, allowRecoveryProbe: false);
+            await GuardedFtpLogin.ConnectAsync(client, account, ct, allowRecoveryProbe: false, policy: _serverConfig.Pool);
             Log.Information("Ghost kill: connected as {User} to clear stale sessions", ghostUser);
         }
         catch (FtpLoginHeldException)

@@ -10,6 +10,11 @@ namespace GlDrive.Downloads;
 
 public sealed record SearchListingFailure(string Path, string Message);
 
+/// <summary>A cached directory observation, not evidence of release completeness or total bytes.</summary>
+public sealed record SearchIndexEntry(string ReleaseName, string RemotePath, string Category, long Size, DateTime Modified);
+
+public sealed record SearchIndexSnapshot(IReadOnlyList<SearchIndexEntry> Entries, DateTime? BuiltAtUtc, bool IsPartial);
+
 public sealed record SearchOutcome(
     IReadOnlyList<SearchResult> Results, string Method, DateTime? IndexBuiltAtUtc,
     bool IsPartial, bool TimedOut, bool Truncated, IReadOnlyList<SearchListingFailure> Failures)
@@ -78,7 +83,9 @@ public class FtpSearchService : IDisposable
     private List<IndexEntry> _index = [];
     private DateTime? _indexBuiltAtUtc;
     private List<SearchListingFailure> _indexFailures = [];
+    private SearchIndexSnapshot _publishedIndex = new(Array.AsReadOnly(Array.Empty<SearchIndexEntry>()), null, true);
     private readonly Lock _indexLock = new();
+    public event Action<SearchIndexSnapshot>? IndexPublished;
     private CancellationTokenSource? _indexerCts;
     private Task? _indexerTask;
     private readonly SemaphoreSlim _indexerRefreshGate = new(1, 1);
@@ -325,7 +332,7 @@ public class FtpSearchService : IDisposable
         if (_siteSearchOverride != null) return await _siteSearchOverride(query, operationToken);
         using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         borrowCts.CancelAfter(BorrowTimeout);
-        await using var conn = await _pool.Borrow(borrowCts.Token);
+        await using var conn = await _pool.BorrowFor(FtpBorrowPurpose.Search, borrowCts.Token);
         ct.ThrowIfCancellationRequested();
         try
         {
@@ -396,6 +403,23 @@ public class FtpSearchService : IDisposable
     #endregion
 
     #region Cached Index
+
+    /// <summary>Read the existing cache only. This never starts a crawl, borrows a connection or probes FTP.</summary>
+    public SearchIndexSnapshot GetCachedIndexSnapshot()
+    {
+        lock (_indexLock) return _publishedIndex;
+    }
+
+    private void PublishIndex(SearchIndexSnapshot snapshot)
+    {
+        var subscribers = IndexPublished;
+        if (subscribers == null) return;
+        foreach (Action<SearchIndexSnapshot> subscriber in subscribers.GetInvocationList())
+        {
+            try { subscriber(snapshot); }
+            catch (Exception ex) { Log.Warning(ex, "Search index observer failed"); }
+        }
+    }
 
     private int RunIndexSearch(string keyword, IProgress<string>? progress, SearchRun run)
     {
@@ -470,11 +494,15 @@ public class FtpSearchService : IDisposable
         lock (_indexLock)
             previous = _index;
         var merged = MergeAfterCrawl(entries, previous, report);
+        SearchIndexSnapshot published;
         lock (_indexLock)
         {
             _index = merged;
             if (!report.Aborted || previous.Count == 0) _indexBuiltAtUtc = DateTime.UtcNow;
             _indexFailures = report.Failures.ToList();
+            published = _publishedIndex = new(Array.AsReadOnly(_index.Select(entry => new SearchIndexEntry(entry.Name,
+                entry.Path, entry.Category, entry.Size, entry.Modified)).ToArray()), _indexBuiltAtUtc,
+                _indexBuiltAtUtc == null || _indexFailures.Count > 0);
         }
 
         progress?.Report($"Index built: {merged.Count} entries");
@@ -487,6 +515,7 @@ public class FtpSearchService : IDisposable
                 merged.Count, report.Failed, report.FirstFailedPath, report.FirstError);
         else
             Log.Information("Search index built with {Count} entries", merged.Count);
+        PublishIndex(published);
     }
 
     /// <summary>
@@ -571,7 +600,7 @@ public class FtpSearchService : IDisposable
     {
         if (_listOverride != null) return await _listOverride(path, ct);
         // Borrow per-listing so we don't hold a connection for the entire crawl
-        await using var conn = await _pool.Borrow(ct);
+        await using var conn = await _pool.BorrowFor(FtpBorrowPurpose.Search, ct);
         return await ListBorrowed(conn, path, ct);
     }
 
@@ -781,7 +810,7 @@ public class FtpSearchService : IDisposable
         using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         borrowCts.CancelAfter(BorrowTimeout);
         PooledConnection conn;
-        try { conn = await _pool.Borrow(borrowCts.Token); }
+        try { conn = await _pool.BorrowFor(FtpBorrowPurpose.Search, borrowCts.Token); }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             throw new TimeoutException("FTP connection busy; timed out waiting for a free connection");
@@ -913,7 +942,7 @@ public class FtpSearchService : IDisposable
 
     public async Task<List<FtpListItem>> GetReleaseFiles(string remotePath, CancellationToken ct = default)
     {
-        await using var conn = await _pool.Borrow(ct);
+        await using var conn = await _pool.BorrowFor(FtpBorrowPurpose.Search, ct);
         var items = await ListDirect(conn.Client, remotePath, ct);
         return items.Where(i => i.Type == FtpObjectType.File).ToList();
     }

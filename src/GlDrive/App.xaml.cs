@@ -386,6 +386,7 @@ public partial class App
             TelemetryRecorder, _serverManager, nukeCursors,
             Path.Combine(ConfigManager.AppDataPath, "ai-data"),
             config.Agent.NukePollIntervalHours);
+        NukePoller.NukeObserved += _serverManager.ObservePolledNuke;
 
         // Loopback control API — lets scripts start/inspect races without driving the WPF
         // UI (tray automation is unreliable). Off unless explicitly enabled in config.

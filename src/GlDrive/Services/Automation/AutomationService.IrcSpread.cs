@@ -27,6 +27,8 @@ public sealed partial class AutomationService
             {
                 irc.ServerId, irc.ServerName, state = irc.State.ToString(), irc.CurrentNick,
                 channels = irc.GetChannelSnapshot(),
+                announceHealth = _servers.AnnounceHealth(id),
+                announceHealthPersistenceHealthy = _servers.AnnounceHealthPersistenceHealthy,
                 targets = irc.GetScrollbackTargets()
             };
         if (op == "irc.history")
@@ -102,6 +104,28 @@ public sealed partial class AutomationService
         var spread = Spread;
         switch (op)
         {
+            case "spread.reset": return spread.ResetRace(Required(a, "id", 128));
+            case "spread.rerace":
+            {
+                string[]? ids = null;
+                if (a.TryGetProperty("serverIds", out var supplied))
+                {
+                    if (supplied.ValueKind != JsonValueKind.Array || supplied.GetArrayLength() > 100)
+                        throw new ArgumentException("serverIds must be an array of at most 100 ids.");
+                    ids = supplied.EnumerateArray().Select(value => value.ValueKind == JsonValueKind.String
+                        ? value.GetString()! : throw new ArgumentException("serverIds entries must be strings.")).Distinct().ToArray();
+                    foreach (var participantId in ids) Server(participantId);
+                }
+                return RaceStartResponse(spread.ReRace(Required(a, "historyId", 128), ids));
+            }
+            case "spread.cleanup_own": return spread.RequestOwnedCleanupNow(
+                Line(Required(a, "section", 128), "section"), Line(Required(a, "releaseName", 512), "releaseName"), Flag(a, "confirmed"));
+            case "spread.queue_site":
+                Server(Required(a, "serverId", 128));
+                return spread.EditQueuedRaceSite(Line(Required(a, "section", 128), "section"),
+                    Line(Required(a, "releaseName", 512), "releaseName"), Required(a, "serverId", 128), Flag(a, "add"));
+            case "spread.nukes": return new { stateAvailable = _servers.NukeStateAvailable,
+                persistenceHealthy = _servers.NukePersistenceHealthy, observations = Page(_servers.NukeStatus(), a) };
             case "spread.status": return new
             {
                 jobs = spread.ActiveJobs.Select(j => new { j.Id, j.ReleaseName, j.Section, state = j.State.ToString(), j.StartedAt, j.Score, j.LastError,

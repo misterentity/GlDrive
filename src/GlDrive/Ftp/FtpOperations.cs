@@ -20,7 +20,7 @@ public class FtpOperations
 
     public async Task<FtpListItem[]> ListDirectory(string remotePath, CancellationToken ct = default)
     {
-        await using var conn = await _pool.Borrow(ct);
+        await using var conn = await _pool.BorrowFor(FtpBorrowPurpose.Filesystem, ct);
         return await ListDirectory(conn, remotePath, ct);
     }
 
@@ -55,20 +55,20 @@ public class FtpOperations
     public async Task<bool> FileExists(string remotePath, CancellationToken ct = default)
     {
         // FileExists uses SIZE command (control-only, no data connection)
-        await using var conn = await _pool.Borrow(ct);
+        await using var conn = await _pool.BorrowFor(FtpBorrowPurpose.Filesystem, ct);
         return await conn.Client.FileExists(remotePath, ct);
     }
 
     public async Task<bool> DirectoryExists(string remotePath, CancellationToken ct = default)
     {
         // DirectoryExists uses CWD command (control-only)
-        await using var conn = await _pool.Borrow(ct);
+        await using var conn = await _pool.BorrowFor(FtpBorrowPurpose.Filesystem, ct);
         return await conn.Client.DirectoryExists(remotePath, ct);
     }
 
     public async Task<byte[]> DownloadFile(string remotePath, CancellationToken ct = default)
     {
-        var conn = await _pool.Borrow(ct);
+        var conn = await _pool.BorrowFor(FtpBorrowPurpose.Filesystem, ct);
         try
         {
             Log.Debug("RETR {Path}", remotePath);
@@ -101,7 +101,7 @@ public class FtpOperations
 
     public async Task DownloadToStream(string remotePath, Stream destination, CancellationToken ct = default)
     {
-        await using var conn = await _pool.Borrow(ct);
+        await using var conn = await _pool.BorrowFor(FtpBorrowPurpose.Filesystem, ct);
         conn.Poison("RETR-to-stream abandoned before completion");
         try
         {
@@ -120,7 +120,7 @@ public class FtpOperations
 
     public async Task UploadFile(string remotePath, byte[] data, CancellationToken ct = default)
     {
-        var conn = await _pool.Borrow(ct);
+        var conn = await _pool.BorrowFor(FtpBorrowPurpose.Filesystem, ct);
         try
         {
             Log.Debug("STOR {Path} ({Bytes} bytes)", remotePath, data.Length);
@@ -149,7 +149,7 @@ public class FtpOperations
 
     public async Task UploadFile(string remotePath, Stream stream, CancellationToken ct = default)
     {
-        var conn = await _pool.Borrow(ct);
+        var conn = await _pool.BorrowFor(FtpBorrowPurpose.Filesystem, ct);
         try
         {
             Log.Debug("STOR {Path} (stream)", remotePath);
@@ -191,21 +191,21 @@ public class FtpOperations
 
     public async Task DeleteFile(string remotePath, CancellationToken ct = default)
     {
-        await using var conn = await _pool.Borrow(ct);
+        await using var conn = await _pool.BorrowFor(FtpBorrowPurpose.Filesystem, ct);
         Log.Debug("DELE {Path}", remotePath);
         await conn.Client.DeleteFile(remotePath, ct);
     }
 
     public async Task CreateDirectory(string remotePath, CancellationToken ct = default)
     {
-        await using var conn = await _pool.Borrow(ct);
+        await using var conn = await _pool.BorrowFor(FtpBorrowPurpose.Filesystem, ct);
         Log.Debug("MKD {Path}", remotePath);
         await conn.Client.CreateDirectory(remotePath, ct);
     }
 
     public async Task DeleteDirectory(string remotePath, CancellationToken ct = default)
     {
-        await using var conn = await _pool.Borrow(ct);
+        await using var conn = await _pool.BorrowFor(FtpBorrowPurpose.Filesystem, ct);
         Log.Debug("RMD {Path}", remotePath);
         // A filesystem directory deletion is nonrecursive. FluentFTP's
         // DeleteDirectory deletes its contents too, including files created after
@@ -216,20 +216,20 @@ public class FtpOperations
 
     public async Task Rename(string fromPath, string toPath, CancellationToken ct = default)
     {
-        await using var conn = await _pool.Borrow(ct);
+        await using var conn = await _pool.BorrowFor(FtpBorrowPurpose.Filesystem, ct);
         Log.Debug("RNFR {From} RNTO {To}", fromPath, toPath);
         await conn.Client.Rename(fromPath, toPath, ct);
     }
 
     public async Task<long> GetFileSize(string remotePath, CancellationToken ct = default)
     {
-        await using var conn = await _pool.Borrow(ct);
+        await using var conn = await _pool.BorrowFor(FtpBorrowPurpose.Filesystem, ct);
         return await conn.Client.GetFileSize(remotePath, -1, ct);
     }
 
     public async Task<DateTime> GetModifiedTime(string remotePath, CancellationToken ct = default)
     {
-        await using var conn = await _pool.Borrow(ct);
+        await using var conn = await _pool.BorrowFor(FtpBorrowPurpose.Filesystem, ct);
         return await conn.Client.GetModifiedTime(remotePath, ct);
     }
 
@@ -237,7 +237,7 @@ public class FtpOperations
     {
         try
         {
-            await using var conn = await _pool.Borrow(ct);
+            await using var conn = await _pool.BorrowFor(FtpBorrowPurpose.Filesystem, ct);
             await conn.Client.Execute("NOOP", ct);
             return true;
         }
@@ -265,7 +265,7 @@ public class FtpOperations
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(token);
             cts.CancelAfter(TimeSpan.FromSeconds(5));
-            await using var conn = await _pool.Borrow(cts.Token);
+            await using var conn = await _pool.BorrowFor(FtpBorrowPurpose.Filesystem, cts.Token);
             var reply = await conn.Client.Execute("SITE DISKFREE", cts.Token);
             return (reply.Code ?? "", reply.Message ?? "");
         }, ct);

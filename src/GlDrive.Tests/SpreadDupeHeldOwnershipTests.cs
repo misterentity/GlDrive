@@ -179,9 +179,9 @@ public sealed class SpreadDupeHeldOwnershipTests
         // The spread pool is the fallback, never the first choice: its logins carry FXP/relay
         // transfers that outlast the 15s read budget (204 of ~640 reads failed on 2026-10-20).
         Assert.Contains("var pool = mainPool ?? spreadPool!;", sfv);
-        Assert.Contains("PoolFallback.BorrowAsync(pool.Borrow, fallback,", sfv);
+        Assert.Contains("PoolFallback.BorrowAsync(t => pool.BorrowFor(FtpBorrowPurpose.Race, t), fallback,", sfv);
         // The lender's CPSV settings drive the read, so the fallback must re-point `pool`.
-        Assert.Contains("t => { pool = spreadPool; return spreadPool.Borrow(t); }", sfv);
+        Assert.Contains("t => { pool = spreadPool; return spreadPool.BorrowFor(FtpBorrowPurpose.Race, t); }", sfv);
         Assert.DoesNotContain("var pool = ResolveSpreadPool(serverId);", sfv);
     }
 

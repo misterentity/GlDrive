@@ -399,10 +399,43 @@ public sealed class ConfigurationAutomation : IAutomationModule
             }
             if (type == typeof(DownloadConfig) && property.Name == nameof(DownloadConfig.ScoredQualityEnabled))
                 schema["description"] = "Opt in to scored wishlist acquisition, pending-copy dedupe and successful-download cutoff completion. Default false preserves existing resolution-only decisions.";
+            if (type == typeof(PoolConfig) && property.Name == nameof(PoolConfig.LoginRateLimitEnabled))
+                schema["description"] = "Default true. Persist and enforce an account-wide five-minute budget for new guarded FTP logins, including successful attempts. Existing pooled borrows are unaffected.";
+            if (type == typeof(PoolConfig) && property.Name == nameof(PoolConfig.MaxLoginAttemptsPerFiveMinutes))
+            {
+                schema["minimum"] = 2;
+                schema["maximum"] = 100;
+                schema["description"] = "Default 8 attempts per account per five minutes; one slot is reserved for the existing bounded ghost recovery. This is separate from the simultaneous login cap.";
+            }
+            if (type == typeof(HealthConfig))
+                schema["description"] = property.Name switch
+                {
+                    nameof(HealthConfig.Enabled) => "Default true. Persist site outage retry state: existing 30-second to 5-minute ladder for 30 minutes, then 15 minutes, 1 hour and 4 hours. One outage and one recovery notice.",
+                    nameof(HealthConfig.TcpProbesEnabled) => "Default false. Optional TCP-only reachability checks for configured unreachable/timed-out sites, no more than once per 15 minutes, using the configured SOCKS5 proxy. Never logs in or scans the LAN.",
+                    nameof(HealthConfig.AnnounceSilenceAlertsEnabled) => "Default true. Passive channel-specific hour-of-week silence learning with conservative training and silence floors; no extra FTP activity.",
+                    _ => "Default false. Bounded recovery for missing configured announce channels through the existing IRC join/invite path; never tears down a joined but silent session."
+                };
+            if (type == typeof(DownloadConfig) && property.Name == nameof(DownloadConfig.WantedDecisionWindowEnabled))
+                schema["description"] = "Default false. Collect wanted variants across sites; after the fixed window select the best with a trusted sitebot completion hint. The download still verifies completeness. NEW and cached directories alone do not establish completion.";
+            if (type == typeof(DownloadConfig) && property.Name == nameof(DownloadConfig.WantedIndexSweepsEnabled))
+                schema["description"] = "Default false. Sweep existing search snapshots on wanted-list edits and index publication, without FTP work. Expose bounded suggestions; auto acquisition additionally requires the decision window and a trusted completion hint.";
+            if (type == typeof(DownloadConfig) && property.Name == nameof(DownloadConfig.PreferFastestWantedSource))
+                schema["description"] = "Default false. Break equal quality choices using measured source-to-local SpeedTracker throughput, never guessed LAN speeds. Applies to wanted windows and season plans.";
+            if (type == typeof(DownloadConfig) && property.Name == nameof(DownloadConfig.RaceCompletedPullsEnabled))
+                schema["description"] = "Default false. Offer verified complete receiving race destinations to monitored series opted into autoPullCompletedRaces. Requires wantedDecisionWindowEnabled and explicit racePullServerIds. Pulls use existing pools and yield to races.";
+            if (type == typeof(DownloadConfig) && property.Name == nameof(DownloadConfig.RacePullServerIds))
+                schema["description"] = "Explicit eligible pull-source server ids; empty by default. No automatic LAN discovery or address assumptions.";
+            if (type == typeof(DownloadConfig) && property.Name is nameof(DownloadConfig.WantedDecisionWindowMinutes) or nameof(DownloadConfig.WantedCandidateMaxAgeHours) or nameof(DownloadConfig.WantedIndexSweepLimit))
+            {
+                schema["minimum"] = 1;
+                schema["maximum"] = property.Name == nameof(DownloadConfig.WantedDecisionWindowMinutes) ? 60 : property.Name == nameof(DownloadConfig.WantedCandidateMaxAgeHours) ? 168 : 1000;
+            }
             if (type == typeof(DownloadConfig) && property.Name == nameof(DownloadConfig.Profiles))
                 schema["description"] = "User-defined scored quality profiles selected by wishlist profileId. Empty uses built-in legacy/recommended profiles. Does not delete or replace local files.";
             if (type == typeof(SpreadConfig) && property.Name == nameof(SpreadConfig.UseSitebotCompletionHints))
                 schema["description"] = "Opt in to trusted announced-count cross-checks during already scheduled destination listing verification. Default false; no extra FTP traffic and a bot line never establishes ownership.";
+            if (type == typeof(SpreadConfig) && property.Name == nameof(SpreadConfig.OwnNukeAlertsEnabled))
+                schema["description"] = "Default true: notify once when trusted NUKE or the existing SITE NUKES poll explicitly names this site's configured account as nukee. Passive, exact attribution; disabling alerts does not disable protection of known nuked releases.";
             if (type == typeof(SpreadConfig) && property.Name == nameof(SpreadConfig.UseSitebotMetadata))
                 schema["description"] = "Opt in to exact-source/release bot metadata before HTTP lookup only when every active filter has evidence. Default false.";
             if (type == typeof(SpreadConfig) && property.Name == nameof(SpreadConfig.SizeAwareRaceQueue))
@@ -454,6 +487,14 @@ public sealed class ConfigurationAutomation : IAutomationModule
         Range(config.Downloads.MaxConcurrentDownloads, ConfigurationLimits.MinConcurrentDownloads, ConfigurationLimits.MaxConcurrentDownloads, "/downloads/maxConcurrentDownloads");
         Range(config.Downloads.ScheduleStartHour, 0, 23, "/downloads/scheduleStartHour");
         Range(config.Downloads.ScheduleEndHour, 0, 23, "/downloads/scheduleEndHour");
+        Range(config.Downloads.WantedDecisionWindowMinutes, 1, 60, "/downloads/wantedDecisionWindowMinutes");
+        Range(config.Downloads.WantedCandidateMaxAgeHours, 1, 168, "/downloads/wantedCandidateMaxAgeHours");
+        Range(config.Downloads.WantedIndexSweepLimit, 1, 1000, "/downloads/wantedIndexSweepLimit");
+        if (config.Downloads.RaceCompletedPullsEnabled && !config.Downloads.WantedDecisionWindowEnabled)
+            throw new ArgumentException("Race-completed pulls require the wanted decision window.");
+        if (config.Downloads.RacePullServerIds.Count > 100 || config.Downloads.RacePullServerIds.Any(id =>
+                string.IsNullOrWhiteSpace(id) || id.Length > 128 || id.Any(char.IsControl)))
+            throw new ArgumentException("Race pull server ids must be nonempty bounded identifiers (at most 100).");
         if (config.Downloads.Profiles.Count > 100 || config.Downloads.Profiles.Select(p => p.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count() != config.Downloads.Profiles.Count)
             throw new ArgumentException("Quality profiles require unique ids and at most 100 entries.");
         foreach (var profile in config.Downloads.Profiles)
@@ -480,6 +521,7 @@ public sealed class ConfigurationAutomation : IAutomationModule
             foreach (var port in server.Connection.PassivePorts) Range(port, 1, 65535, prefix + " passive port");
             if (server.Mount.DriveLetter.Length != 1 || !char.IsAsciiLetter(server.Mount.DriveLetter[0])) throw new ArgumentException(prefix + " driveLetter must be one letter");
             Range(server.Pool.PoolSize, 1, 100, prefix + " poolSize");
+            Range(server.Pool.MaxLoginAttemptsPerFiveMinutes, 2, 100, prefix + " maxLoginAttemptsPerFiveMinutes");
             Range(server.Pool.LoginCap, 1, 100, prefix + " loginCap");
             if (server.Pool.LoginHeadroom >= server.Pool.LoginCap) throw new ArgumentException(prefix + " loginHeadroom must be smaller than loginCap");
             foreach (var rule in server.Irc.AnnounceRules) ValidateRegex(rule.Pattern);

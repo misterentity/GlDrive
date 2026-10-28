@@ -12,6 +12,16 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.14.0 — site health, login budget, race controls, series monitor (2026-10-28)
+
+- Site health (on): a retry ladder that persists across restarts, one outage/recovery notice, a per-account
+  login budget (8 per 5 min, ghost slot reserved) and learned announce-silence alerts.
+- Race Reset, queued site edits, confirmed owned cleanup, Re-race, and own-account nuke alerts.
+- Opt-in wanted decision windows, index sweeps and per-show series monitoring with season plans.
+- Review fixes: the idle race-login lane no longer storms the source site with logins; no local state
+  file can hold logins, races or IRC joins; a bare 421/450 is not a two-hour BNC hold; truncated nuke
+  names never hold races. See the [release notes](releases/v3.14.0.md).
+
 ## v3.13.0 — size-aware race queue, scored quality, sitebot events (2026-10-28)
 
 - Race queue uses highest-response-ratio ordering with ageing and merges duplicate announces'

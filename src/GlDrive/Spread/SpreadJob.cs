@@ -485,6 +485,11 @@ public partial class SpreadJob : IDisposable
 
         try
         {
+            if (_pools.Keys.Any(KnownNuked))
+            {
+                Stop();
+                return;
+            }
             if (_cleanupOnly)
             {
                 await CleanupOwnedPartialAsync();
@@ -572,7 +577,7 @@ public partial class SpreadJob : IDisposable
                     try
                     {
                         var probePath = basePath.TrimEnd('/') + "/" + ReleaseName;
-                        await using var conn = await pool.Borrow(ct);
+                        await using var conn = await pool.BorrowFor(FtpBorrowPurpose.Race, ct);
                         var exists = await conn.Client.DirectoryExists(probePath, ct);
                         pathsAnsweredCleanly++;
                         probedBases.Add($"{config.Name}:{basePath}");
@@ -953,6 +958,7 @@ public partial class SpreadJob : IDisposable
             while (!token.IsCancellationRequested
                 && (State == SpreadJobState.Running || State == SpreadJobState.Paused))
             {
+                if (_pools.Keys.Any(KnownNuked)) { Stop(); break; }
                 // Cooperative pause check — block dispatch (but not in-flight
                 // transfers) until Resume() sets the signal or Stop() cancels.
                 if (_pausedFlag)
@@ -965,6 +971,7 @@ public partial class SpreadJob : IDisposable
                 // 1. Background scan with adaptive debounce — faster during active racing
                 if (_backgroundScan == null || _backgroundScan.IsCompleted)
                 {
+                    ApplyPendingReset();
                     ApplyPendingSourceHints();
                     // Adaptive interval: 2s during active transfers, 5s idle, and the
                     // (slower) completion-refresh cadence while only awaiting zipscript.
@@ -1951,7 +1958,7 @@ public partial class SpreadJob : IDisposable
             readStop.ThrowIfCancellationRequested();
             using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct, readStop);
             borrowCts.CancelAfter(TimeSpan.FromSeconds(20));
-            await using var conn = await pool.Borrow(borrowCts.Token);
+            await using var conn = await pool.BorrowFor(FtpBorrowPurpose.Race, borrowCts.Token);
 
             try
             {
@@ -2201,9 +2208,9 @@ public partial class SpreadJob : IDisposable
             using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(token, readStop);
             var pool = mainPool ?? spreadPool!;
             Func<CancellationToken, Task<PooledConnection>>? fallback = mainPool != null && spreadPool != null
-                ? t => { pool = spreadPool; return spreadPool.Borrow(t); }
+                ? t => { pool = spreadPool; return spreadPool.BorrowFor(FtpBorrowPurpose.Race, t); }
                 : null;
-            await using var conn = await PoolFallback.BorrowAsync(pool.Borrow, fallback,
+            await using var conn = await PoolFallback.BorrowAsync(t => pool.BorrowFor(FtpBorrowPurpose.Race, t), fallback,
                 SfvMainPoolBudget, borrowCts.Token);
 
             byte[] data;
@@ -2706,6 +2713,7 @@ public partial class SpreadJob : IDisposable
         try
         {
             if (srcPool == null || dstPool == null) return;
+            if (KnownNuked(srcId) || KnownNuked(dstId)) return;
             // Acquire global per-server gates BEFORE borrowing the connection pool.
             // The gate cap is enforced across ALL concurrent jobs and auto-tightens
             // when a BNC's 530 reveals its login cap. Doing this before Borrow means
@@ -2736,8 +2744,8 @@ public partial class SpreadJob : IDisposable
             // all slots appear permanently exhausted.
             using var borrowTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             borrowTimeout.CancelAfter(TimeSpan.FromSeconds(30));
-            var srcTask = srcPool.Borrow(borrowTimeout.Token);
-            var dstTask = dstPool.Borrow(borrowTimeout.Token);
+            var srcTask = srcPool.BorrowFor(FtpBorrowPurpose.Race, borrowTimeout.Token);
+            var dstTask = dstPool.BorrowFor(FtpBorrowPurpose.Race, borrowTimeout.Token);
 
             // Wait for both — if either throws we still want to extract the one that
             // succeeded so the finally block can dispose it and return it to the pool.
@@ -2754,6 +2762,7 @@ public partial class SpreadJob : IDisposable
             // on srcConn/dstConn and will be disposed by the finally block.
             if (!srcTask.IsCompletedSuccessfully) await srcTask;
             if (!dstTask.IsCompletedSuccessfully) await dstTask;
+            if (KnownNuked(srcId) || KnownNuked(dstId)) return;
 
             var dstPath = dstBasePath.TrimEnd('/') + "/" + file.Name;
             // Derive the RETR path from the SOURCE's current release dir, never from the
@@ -2779,7 +2788,11 @@ public partial class SpreadJob : IDisposable
             var fileName = file.Name;
             transfer.BeforeStore = async storeCt =>
             {
+                if (KnownNuked(srcId) || KnownNuked(dstId))
+                    throw new InvalidOperationException(SpreadManager.NukeHoldMessage);
                 await EnsureDirectoryExists(dstClient, dstId, dstBasePath, fileName, storeCt);
+                if (KnownNuked(srcId) || KnownNuked(dstId))
+                    throw new InvalidOperationException(SpreadManager.NukeHoldMessage);
                 RecordUploadStart(dstId, dstBasePath, fileName, file.Size);
             };
             // The ceiling clock and the elapsed clock start together. Gates (45s each) and the
@@ -3367,7 +3380,7 @@ public partial class SpreadJob : IDisposable
         {
             using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct, readStop);
             borrowCts.CancelAfter(TimeSpan.FromSeconds(15));
-            try { return await pool.Borrow(borrowCts.Token); }
+            try { return await pool.BorrowFor(FtpBorrowPurpose.Race, borrowCts.Token); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested || readStop.IsCancellationRequested) { throw; }
             catch (Exception ex) { lastError = ex; }
         }

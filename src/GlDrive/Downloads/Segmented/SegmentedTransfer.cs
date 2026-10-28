@@ -209,6 +209,10 @@ public sealed class SegmentedTransfer
                 if (run.Fatal != null) break;
                 if (run.Scheduler.AllComplete) break;
                 if (progress != null) Report();
+                lock (run.Gate)
+                    if (run.Lanes.Any(lane => lane.State == LaneState.Yielded) &&
+                        run.Lanes.All(lane => lane.State is LaneState.Yielded or LaneState.Done))
+                        throw new DownloadLanesYieldedException();
                 run.LastLaneError?.Throw();
                 throw new InvalidOperationException("No download lanes available");
             }
@@ -393,7 +397,7 @@ public sealed class SegmentedTransfer
             // yields first — and a resume refetches just the tail.
             while (true)
             {
-                if (Volatile.Read(ref interrupt) == 1 || lane.ShouldYield)
+                if (lane.CanStopEarly && (Volatile.Read(ref interrupt) == 1 || lane.ShouldYield))
                     return await YieldAsync();
 
                 long remaining = a.End - a.Position;

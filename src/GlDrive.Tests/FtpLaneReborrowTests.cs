@@ -67,8 +67,9 @@ public class FtpLaneReborrowTests
         Assert.True(start >= 0);
         var body = src[start..src.IndexOf("\n    }", start, StringComparison.Ordinal)];
 
-        Assert.Contains("BorrowWithin(_reborrowPool.Borrow, ReborrowWait", body);
+        Assert.Contains("BorrowWithin(t => _reborrowPool.BorrowFor(FtpBorrowPurpose.Download, t), ReborrowWait", body);
         Assert.DoesNotContain("await _reborrowPool.Borrow(ct)", body);
+        Assert.DoesNotContain("await _reborrowPool.BorrowFor(", body);
     }
 
     private static string FindSource(params string[] parts)

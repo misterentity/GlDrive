@@ -14,6 +14,31 @@ public class WishlistMatcher
     private readonly DownloadConfig _config;
     private readonly string _serverId;
     private string _serverName;
+    private readonly Lock _wantedLifecycle = new();
+    private WantedAcquisitionCoordinator? _wantedCoordinator;
+    private bool _wantedAttached;
+
+    internal string ServerId => _serverId;
+
+    public void AttachWantedCoordinator(WantedAcquisitionCoordinator coordinator)
+    {
+        lock (_wantedLifecycle) { _wantedCoordinator = coordinator; _wantedAttached = true; }
+        coordinator.RegisterMatcher(this);
+    }
+
+    internal void DetachWantedCoordinator()
+    {
+        lock (_wantedLifecycle) _wantedAttached = false;
+    }
+
+    public void Deactivate() => DetachWantedCoordinator();
+
+    public bool TryAcquireSeries(string itemId, string category, string release, string path)
+    {
+        lock (_wantedLifecycle)
+            return _wantedAttached && _wishlist.GetById(itemId) is { MonitorMode: not SeriesMonitorMode.Legacy } &&
+                ProcessRelease(category, release, path, false, null, itemId);
+    }
 
     internal void UpdateServerName(string name) => _serverName = name;
 
@@ -51,20 +76,54 @@ public class WishlistMatcher
 
     public void OnNewRelease(string category, string releaseName, string remotePath, bool fromIrc = false, long? sizeBytes = null)
     {
+        if (_wantedCoordinator != null && _config.WantedDecisionWindowEnabled)
+        {
+            if (_wantedAttached) _wantedCoordinator.Offer(this, category, releaseName, remotePath,
+                WantedReadiness.Unknown, fromIrc, sizeBytes);
+            return;
+        }
+        ProcessRelease(category, releaseName, remotePath, fromIrc, sizeBytes);
+    }
+
+    public void OnIrcCompletion(ServerConfig server, string section, string releaseName,
+        long? sizeBytes = null, DateTimeOffset? completedAtUtc = null)
+    {
+        if (!_config.WantedDecisionWindowEnabled || !_config.AutoDownloadWishlist || !_wantedAttached || _wantedCoordinator == null) return;
+        var path = WishlistIrcRelease.ResolvePath(server, section, releaseName);
+        if (path != null) _wantedCoordinator.Offer(this, section, releaseName, path,
+            WantedReadiness.TrustedComplete, fromIrc: true, sizeBytes: sizeBytes, completeAtUtc: completedAtUtc);
+    }
+
+    internal bool DispatchWanted(string itemId, string category, string release, string path,
+        bool fromIrc, long? sizeBytes, Func<bool> stillEligible)
+    {
+        // Detaching waits for an admission already in progress, so a remount
+        // cannot enqueue onto a DownloadManager after RemoveServer returns.
+        lock (_wantedLifecycle)
+            return _wantedAttached && _config.WantedDecisionWindowEnabled && _config.AutoDownloadWishlist && stillEligible() &&
+                ProcessRelease(category, release, path, fromIrc, sizeBytes, itemId);
+    }
+
+    private bool ProcessRelease(string category, string releaseName, string remotePath,
+        bool fromIrc, long? sizeBytes, string? wantedItemId = null)
+    {
+        var admitted = false;
         try
         {
             foreach (var item in _wishlist.Items)
             {
+                if (wantedItemId != null && item.Id != wantedItemId) continue;
                 // Shared across matchers/sites, and claimed before evaluation. No store
                 // lock is held while calling DownloadManager or raising UI events.
                 var scored = _config.ScoredQualityEnabled;
+                var tracked = scored || item.MonitorMode != SeriesMonitorMode.Legacy;
                 var allowCompleted = scored && WishlistAcquisition.ResolveProfile(item, _config)?.UpgradeProperRepackAfterCutoff == true;
                 if (!_wishlist.TryBeginReleaseEvaluation(item.Id, releaseName, allowCompleted)) continue;
                 DownloadItem? downloadItem = null;
                 bool reservation = false, enqueueAttempted = false;
                 try
                 {
-                    bool matches = scored ? WishlistAcquisition.MatchesTitle(item, releaseName) : item.Type switch
+                    bool matches = tracked ? WishlistAcquisition.MatchesTitle(item, releaseName) : item.Type switch
                     {
                         MediaType.Movie => SceneNameParser.MatchesMovie(releaseName, item.Title, item.Year, item.Quality),
                         MediaType.TvShow => SceneNameParser.MatchesTvEpisode(releaseName, item.Title, item.Quality),
@@ -81,9 +140,10 @@ public class WishlistMatcher
                             LocalPath = BuildLocalPath(item, category!, releaseName),
                             WishlistItemId = item.Id, Category = category!,
                             ServerId = _serverId ?? "", ServerName = _serverName,
+                            BackgroundWantedPull = item.MonitorMode != SeriesMonitorMode.Legacy,
                             TotalBytes = sizeBytes is > 0 ? sizeBytes.Value : 0
                         };
-                        if (scored)
+                        if (tracked)
                         {
                             var decision = _wishlist.TryReserveScoredGrab(item.Id, downloadItem, _config, sizeBytes);
                             matches = reservation = decision.Accepted;
@@ -123,8 +183,9 @@ public class WishlistMatcher
                         Log.Information("Wishlist match skipped (duplicate): {Release}", releaseName);
                         continue;
                     }
-                    if (scored) _wishlist.ConfirmScoredGrab(item.Id, downloadItem!.Id, releaseName);
+                    if (tracked) _wishlist.ConfirmScoredGrab(item.Id, downloadItem!.Id, releaseName);
                     else _wishlist.RecordGrab(item.Id, releaseName);
+                    admitted = true;
                     if (fromIrc)
                         Log.Information("Wishlist grab from IRC: [{Category}] {Release} -> {Title} (server: {Server})",
                             category, releaseName, item.Title, _serverName);
@@ -146,6 +207,7 @@ public class WishlistMatcher
         {
             Log.Error(ex, "Error in wishlist matcher for [{Category}] {Release}", category, releaseName);
         }
+        return admitted;
     }
 
     private static string ClassifyMissReason(string releaseName, WishlistItem item)

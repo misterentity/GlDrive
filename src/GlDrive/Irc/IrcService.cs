@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using GlDrive.Config;
+using GlDrive.Services;
 using GlDrive.Tls;
 using Serilog;
 
@@ -61,6 +62,12 @@ public class IrcService : IDisposable
     // Pending channel joins waiting for INVITE (channel → retry count)
     private readonly Dictionary<string, int> _pendingInviteJoins = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _invitedChannels = new(StringComparer.OrdinalIgnoreCase);
+    // Channels whose SITE INVITE was skipped while the FTP invite route was unavailable;
+    // the next retry re-sends it before joining.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _parkedInvites =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static readonly TimeSpan ParkedInviteRecheck = TimeSpan.FromMinutes(1);
+    private int _siteInviteSkipped;
     private readonly SiteInviteRequestGate _siteInviteRequests = new();
     // Counts INVITEs actually received from the network. ExecuteSiteInviteAsync samples
     // this around its grace delay so an accepted-but-ineffective SITE INVITE — the
@@ -70,6 +77,7 @@ public class IrcService : IDisposable
     // Last time this server's session was torn down by InviteRecoveryPolicy, so the
     // escalation cannot turn into a reconnect loop.
     private DateTime? _lastForcedInviteReconnectUtc;
+    private DateTime? _lastAnnounceRecoveryUtc;
     private readonly HashSet<string> _decryptFailHintSent = new(StringComparer.OrdinalIgnoreCase);
     // Auto-recovery for stale/corrupt DH1080 keys: a private-message key derived by an older
     // build (e.g. pre-v3.10.16, whose public-key decoder could drop bits and derive the wrong
@@ -114,6 +122,41 @@ public class IrcService : IDisposable
                 Name = c.Name, Topic = c.Topic, HasFishKey = c.HasFishKey, Nicks = c.Nicks.ToList()
             }).ToArray();
     }
+
+    public int GetDecryptFailureStreak(string channel)
+    {
+        lock (_decryptPromoteLock) return _decryptFailStreak.GetValueOrDefault(channel);
+    }
+
+    /// <summary>Starts only a missing configured channel's existing invite/join path; never forces a reconnect.</summary>
+    public async Task<bool> TryRecoverAnnounceChannelAsync(string channel, CancellationToken cancellationToken = default,
+        Func<bool>? stillAllowed = null)
+    {
+        bool Allowed() => !cancellationToken.IsCancellationRequested && CanRequestSiteInvite() && (stillAllowed?.Invoke() ?? true);
+        if (!Allowed()) return false;
+        IrcChannelConfig? configured;
+        IrcClient? client;
+        lock (_channelStateLock)
+        {
+            configured = _serverConfig.Irc.Channels.FirstOrDefault(c => c.Name.Equals(channel, StringComparison.OrdinalIgnoreCase));
+            client = _client;
+            var now = DateTime.UtcNow;
+            if (!AnnounceFeedHealthPolicy.RecoveryAllowed(!_disposed && State == IrcServiceState.Connected && client?.IsConnected == true,
+                    configured?.AutoJoin == true, _channels.ContainsKey(channel), _pendingInviteJoins.ContainsKey(channel), now,
+                    _lastAnnounceRecoveryUtc)) return false;
+            _lastAnnounceRecoveryUtc = now;
+        }
+        // SITE INVITE already coalesces concurrent requests and borrows the existing
+        // main/spread pool fallback. Subsequent 473 replies retain their standing retry.
+        if (!Allowed()) return false;
+        await RequestSiteInviteAsync();
+        if (!Allowed()) return false;
+        lock (_channelStateLock)
+            if (cancellationToken.IsCancellationRequested || _disposed || !ReferenceEquals(client, _client) || client?.IsConnected != true ||
+                _channels.ContainsKey(channel) || !_serverConfig.Irc.Channels.Any(c => c.AutoJoin && c.Name.Equals(channel, StringComparison.OrdinalIgnoreCase))) return false;
+        await JoinConfiguredChannelAsync(configured!);
+        return true;
+    }
     /// <summary>Targets (channels, PM nicks, "*") that have scrollback history.</summary>
     public IReadOnlyList<string> GetScrollbackTargets() => _scrollback.Targets;
     /// <summary>Chronological snapshot of one target's scrollback.</summary>
@@ -121,6 +164,14 @@ public class IrcService : IDisposable
     public string CurrentNick => _currentNick;
     public FishKeyStore KeyStore => _fishKeyStore;
     public Func<string, CancellationToken, Task<string?>>? SiteInviteFunc { get; set; }
+    /// <summary>Optional local availability only; false parks the standing retry without probing or escalating.</summary>
+    public Func<bool>? SiteInviteAvailable { get; set; }
+
+    private bool CanRequestSiteInvite()
+    {
+        try { return SiteInviteAvailable?.Invoke() ?? true; }
+        catch { return false; }
+    }
 
     public event Action<IrcServiceState>? StateChanged;
     public event Action<string, IrcMessageItem>? MessageReceived; // target, message
@@ -290,9 +341,12 @@ public class IrcService : IDisposable
         SetState(IrcServiceState.Connecting);
         AddSystemMessage("*", $"Connecting to {irc.Host}:{irc.Port}...");
 
-        lock (_channelStateLock) _channels.Clear();
-        _pendingInviteJoins.Clear();
-        _invitedChannels.Clear();
+        lock (_channelStateLock)
+        {
+            _channels.Clear();
+            _pendingInviteJoins.Clear();
+            _invitedChannels.Clear();
+        }
 
         _client?.Dispose();
         _client = new IrcClient();
@@ -490,6 +544,12 @@ public class IrcService : IDisposable
 
         if (reason == "invite-only")
         {
+            if (!CanRequestSiteInvite())
+            {
+                _pendingInviteJoins.TryAdd(channel, 0);
+                ParkInviteRetry(channel);
+                return;
+            }
             // Track retry count and schedule retry (SITE INVITE may still be processing)
             var retries = _pendingInviteJoins.GetValueOrDefault(channel, 0);
             if (retries < 3)
@@ -540,8 +600,11 @@ public class IrcService : IDisposable
         try
         {
             await Task.Delay(TimeSpan.FromSeconds(delaySec));
-            if (_client == null || !_client.IsConnected) return;
+            var inviteSkipped = _parkedInvites.TryRemove(channel, out _) |
+                Interlocked.Exchange(ref _siteInviteSkipped, 0) == 1;
+            if (_disposed || _client == null || !_client.IsConnected) return;
             if (_channels.ContainsKey(channel)) return; // Already joined
+            if (!CanRequestSiteInvite()) { ParkInviteRetry(channel); return; }
 
             // Re-run SITE INVITE before re-joining. The fast burst only re-sent JOIN, which
             // can never succeed on a +i channel by itself — the invite is the thing that was
@@ -553,7 +616,7 @@ public class IrcService : IDisposable
             // bounds; the short version is that 25 identical retries across 9h50m
             // achieved nothing and a fresh session fixed it in 746 ms.
             if (InviteRecoveryPolicy.ShouldForceReconnect(
-                    attempts, DateTime.UtcNow, _lastForcedInviteReconnectUtc))
+                    attempts, DateTime.UtcNow, _lastForcedInviteReconnectUtc, CanRequestSiteInvite()))
             {
                 _lastForcedInviteReconnectUtc = DateTime.UtcNow;
                 Log.Warning("IRC {Server}: {Channel} still invite-only after {Attempts} attempts with " +
@@ -567,8 +630,10 @@ public class IrcService : IDisposable
                 return;
             }
 
-            if (attempts > 3)
+            if (attempts > 3 || inviteSkipped)
                 await RequestSiteInviteAsync();
+
+            if (!CanRequestSiteInvite()) { ParkInviteRetry(channel); return; }
 
             var configured = _serverConfig.Irc.Channels
                 .FirstOrDefault(c => c.Name.Equals(channel, StringComparison.OrdinalIgnoreCase));
@@ -581,6 +646,18 @@ public class IrcService : IDisposable
     }
 
     /// <summary>
+    /// Waiting for the FTP invite route costs nothing on the network, so re-check it every
+    /// minute; a 30-minute park left invite-only announce channels unjoined for up to half an
+    /// hour after FTP reconnected. One parked retry per channel.
+    /// </summary>
+    private void ParkInviteRetry(string channel)
+    {
+        if (!_parkedInvites.TryAdd(channel, 0)) return;
+        Log.Debug("IRC invite retry parked for {Channel}: FTP invite route is unavailable", channel);
+        _ = RetryJoinAfterDelay(channel, (int)ParkedInviteRecheck.TotalSeconds);
+    }
+
+    /// <summary>
     /// Asks the FTP server to invite us to its IRC channels (glftpd `SITE INVITE`). Extracted
     /// from AutoJoinChannelsAsync so the standing retry can re-issue it — the invite, not the
     /// JOIN, is what an invite-only channel is actually waiting for.
@@ -590,6 +667,11 @@ public class IrcService : IDisposable
 
     private async Task ExecuteSiteInviteAsync()
     {
+        if (!CanRequestSiteInvite())
+        {
+            Interlocked.Exchange(ref _siteInviteSkipped, 1); // the next join retry re-sends it
+            return;
+        }
         var inviteNick = ResolveSiteInviteNick(_serverConfig.Irc, _currentNick);
         if (string.IsNullOrEmpty(inviteNick) || SiteInviteFunc == null) return;
 

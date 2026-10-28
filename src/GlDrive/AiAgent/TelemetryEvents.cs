@@ -59,6 +59,7 @@ public record MatchedAnnounceEvent : TelemetryEnvelope
     [JsonPropertyName("group")]      public string Group { get; init; } = "";
     [JsonPropertyName("ruleSource")] public string RuleSource { get; init; } = ""; // "builtin" | "custom"
     [JsonPropertyName("autoRace")]   public bool AutoRace { get; init; }
+    [JsonPropertyName("sourceDown")] public bool SourceDown { get; init; }
 }
 
 public record NukeDetectedEvent : TelemetryEnvelope
@@ -68,6 +69,9 @@ public record NukeDetectedEvent : TelemetryEnvelope
     [JsonPropertyName("release")]  public string Release { get; init; } = "";
     [JsonPropertyName("nukedAt")]  public string NukedAt { get; init; } = "";
     [JsonPropertyName("nuker")]    public string Nuker { get; init; } = "";
+    [JsonPropertyName("nukee")]    public string? Nukee { get; init; }
+    [JsonPropertyName("hasExactTimestamp")] public bool HasExactTimestamp { get; init; } = true;
+    [JsonPropertyName("releaseTruncated")] public bool ReleaseTruncated { get; init; }
     [JsonPropertyName("reason")]   public string Reason { get; init; } = "";
     [JsonPropertyName("multiplier")] public int Multiplier { get; init; }
     [JsonPropertyName("ourRaceRef")] public string? OurRaceRef { get; init; }

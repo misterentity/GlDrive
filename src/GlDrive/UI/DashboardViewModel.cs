@@ -246,6 +246,9 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                 Host = $"{server.Connection?.Host}:{server.Connection?.Port}",
                 IsMounted = isMounted,
                 StatusLine = status,
+                HealthLine = FormatSiteHealth(server.Id),
+                LoginUsageLine = string.Join("\n", _serverManager.GetLoginUsage(server.Id).Select(b =>
+                    $"{b.Pool}: {b.Purpose} ({Math.Max(0, (DateTimeOffset.UtcNow - b.BorrowedAtUtc).TotalSeconds):N0}s)")),
                 CapacityPercent = capacityPct,
                 CapacityUsedDisplay = usedDisplay,
                 CapacityTotalDisplay = totalDisplay,
@@ -304,6 +307,13 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         RefreshTelemetry();
         EnsureThroughputSeed();
         StartOverviewLive();
+    }
+
+    private string FormatSiteHealth(string serverId)
+    {
+        if (!_config.Health.Enabled) return "Health supervision disabled";
+        var health = _serverManager.GetSiteHealth(serverId);
+        return health.State + (health.NextRetryUtc is { } retry ? $" · retry {retry.ToLocalTime():ddd HH:mm}" : "");
     }
 
     private static string[] ReadRecentLogLines(string path, int maxBytes)
@@ -2598,6 +2608,8 @@ public class OverviewServerVm
     public string Host { get; set; } = "";
     public bool IsMounted { get; set; }
     public string StatusLine { get; set; } = "";
+    public string HealthLine { get; set; } = "";
+    public string LoginUsageLine { get; set; } = "";
     public double CapacityPercent { get; set; } = 0;
     public string CapacityUsedDisplay { get; set; } = "—";
     public string CapacityTotalDisplay { get; set; } = "—";

@@ -194,7 +194,7 @@ public class MediaStreamServer : IDisposable
         sizeCts.CancelAfter(TimeSpan.FromSeconds(10));
         try
         {
-            await using var sizeConn = await server.Pool.Borrow(sizeCts.Token);
+            await using var sizeConn = await server.Pool.BorrowFor(FtpBorrowPurpose.Player, sizeCts.Token);
             fileSize = await sizeConn.Client.GetFileSize(remotePath, -1, sizeCts.Token);
         }
         catch (OperationCanceledException)
@@ -249,7 +249,7 @@ public class MediaStreamServer : IDisposable
         {
             using var streamCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
             streamCts.CancelAfter(TimeSpan.FromSeconds(15)); // Timeout for connection borrow
-            await using var conn = await server.Pool.Borrow(streamCts.Token);
+            await using var conn = await server.Pool.BorrowFor(FtpBorrowPurpose.Player, streamCts.Token);
             // Reset timeout — streaming can take as long as needed
             streamCts.CancelAfter(Timeout.InfiniteTimeSpan);
             conn.Poison("media stream RETR abandoned before completion");
@@ -362,7 +362,7 @@ public class MediaStreamServer : IDisposable
                         volNum, volumes.Count, vol.Name, vol.Size);
 
                     // Stream to disk — use CPSV for BNC servers, standard PASV otherwise
-                    await using var conn = await server.Pool!.Borrow(_cts.Token);
+                    await using var conn = await server.Pool!.BorrowFor(FtpBorrowPurpose.Player, _cts.Token);
                     conn.Poison("RAR volume RETR abandoned before completion");
                     var tempPath = localPath + $".{Guid.NewGuid():N}.partial";
                     try
@@ -768,7 +768,7 @@ public class MediaStreamServer : IDisposable
                     {
                         using var borrowCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                         borrowCts.CancelAfter(TimeSpan.FromSeconds(2));
-                        conn = await server.Pool!.Borrow(borrowCts.Token);
+                        conn = await server.Pool!.BorrowFor(FtpBorrowPurpose.Player, borrowCts.Token);
                     }
                     catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                     {

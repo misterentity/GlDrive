@@ -10,9 +10,19 @@ public class AppConfig
     public PlexConfig Plex { get; set; } = new();
     public ControlApiConfig ControlApi { get; set; } = new();
     public TorrentConfig Torrent { get; set; } = new();
+    public HealthConfig Health { get; set; } = new();
 
     public string ResolveAgentModel() => string.IsNullOrWhiteSpace(Agent.ModelId)
         ? "anthropic/claude-sonnet-4-6" : Agent.ModelId;
+}
+
+/// <summary>Persistent, account-budget-aware site and passive announce supervision.</summary>
+public class HealthConfig
+{
+    public bool Enabled { get; set; } = true;
+    public bool TcpProbesEnabled { get; set; }
+    public bool AnnounceSilenceAlertsEnabled { get; set; } = true;
+    public bool AnnounceRecoveryEnabled { get; set; }
 }
 
 /// <summary>Player torrent search and download settings.</summary>
@@ -135,6 +145,8 @@ public class CacheConfig
 
 public class PoolConfig
 {
+    public bool LoginRateLimitEnabled { get; set; } = true;
+    public int MaxLoginAttemptsPerFiveMinutes { get; set; } = 8;
     public int PoolSize { get; set; } = 3;
     public int KeepaliveIntervalSeconds { get; set; } = 15;
     public int ReconnectInitialDelaySeconds { get; set; } = 5;
@@ -210,6 +222,14 @@ public class DownloadConfig
     public string QualityDefault { get; set; } = "1080p";
     /// <summary>Opt in to scored wishlist acquisition, pending-copy dedupe and cutoff completion.</summary>
     public bool ScoredQualityEnabled { get; set; }
+    public bool WantedDecisionWindowEnabled { get; set; }
+    public int WantedDecisionWindowMinutes { get; set; } = 15;
+    public int WantedCandidateMaxAgeHours { get; set; } = 24;
+    public bool WantedIndexSweepsEnabled { get; set; }
+    public int WantedIndexSweepLimit { get; set; } = 100;
+    public bool PreferFastestWantedSource { get; set; }
+    public bool RaceCompletedPullsEnabled { get; set; }
+    public List<string> RacePullServerIds { get; set; } = [];
     public List<GlDrive.Downloads.ScoredQualityProfile> Profiles { get; set; } = [];
     [System.Text.Json.Serialization.JsonIgnore]
     public string OmdbApiKey { get; set; } = "";

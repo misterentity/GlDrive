@@ -178,7 +178,8 @@ public interface IRaceLoginLender
     /// <summary>
     /// Borrow the site's idle race connection, or null when the site is racing, has no spread
     /// pool, or nothing comes free within <paramref name="wait"/>. Never creates a login beyond
-    /// what the spread pool itself would.
+    /// what the spread pool itself would; a login still being created when the wait ends
+    /// finishes into the spread pool instead of being discarded.
     /// </summary>
     Task<GlDrive.Ftp.PooledConnection?> TryBorrowAsync(string serverId, TimeSpan wait, CancellationToken ct);
 }
@@ -200,3 +201,6 @@ public sealed class LaneBackoffException(string message, TimeSpan delay, Excepti
 /// partial bytes and fetches it whole, from the start, on one lane.
 /// </summary>
 public sealed class RangeNotSupportedException(string message) : IOException(message);
+
+/// <summary>All remaining lanes returned their connections cooperatively; staged bytes remain resumable.</summary>
+public sealed class DownloadLanesYieldedException() : IOException("All download lanes yielded");
