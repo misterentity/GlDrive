@@ -14,6 +14,9 @@ public static class TrayIconSetup
 {
     private const string SlowModeTag = "SlowMode";
 
+    internal static bool ShouldOfferConnectionRetry(bool isActive, bool authenticationHeld) =>
+        !isActive || authenticationHeld;
+
     public static void Configure(TaskbarIcon taskbarIcon, TrayViewModel vm)
     {
         var version = UpdateChecker.CurrentVersion;
@@ -25,16 +28,8 @@ public static class TrayIconSetup
         BuildMenu(menu, vm);
         taskbarIcon.ContextMenu = menu;
 
-        // Settings can change slow mode or its cap without rebuilding the menu.
-        menu.Opened += (_, _) =>
-        {
-            foreach (var item in menu.Items.OfType<MenuItem>())
-            {
-                if (!Equals(item.Tag, SlowModeTag)) continue;
-                item.Header = vm.SlowModeHeader;
-                item.IsChecked = vm.SlowMode;
-            }
-        };
+        // Settings and authentication holds can change without a mount-state event.
+        menu.Opened += (_, _) => BuildMenu(menu, vm);
 
         // Left-click opens dashboard
         taskbarIcon.TrayLeftMouseDown += (_, _) => vm.DashboardCommand.Execute(null);
@@ -156,6 +151,7 @@ public static class TrayIconSetup
                 var mounted = vm.ServerManager.GetServer(serverConfig.Id);
                 var isConnected = mounted?.CurrentState == MountState.Connected;
                 var isActive = mounted != null && mounted.CurrentState != MountState.Unmounted;
+                var authenticationHeld = vm.ServerManager.IsAuthenticationHeld(serverConfig.Id);
 
                 var hasDrive = serverConfig.Mount.MountDrive;
                 var stateLabel = mounted?.CurrentState switch
@@ -167,6 +163,7 @@ public static class TrayIconSetup
                     _ => "disconnected"
                 };
 
+                if (authenticationHeld) stateLabel = "authentication held";
                 var serverMenu = new MenuItem
                 {
                     Header = $"{serverConfig.Name} ({stateLabel})"
@@ -193,19 +190,20 @@ public static class TrayIconSetup
                     };
                     serverMenu.Items.Add(disconnectItem);
                 }
-                else
+                if (ShouldOfferConnectionRetry(isActive, authenticationHeld))
                 {
-                    var connectItem = new MenuItem { Header = "Connect" };
+                    var connectItem = new MenuItem { Header = authenticationHeld ? "Retry authentication" : "Connect" };
                     connectItem.Click += async (_, _) =>
                     {
                         try
                         {
-                            await vm.ServerManager.MountServer(serverId);
+                            await vm.ServerManager.MountServer(serverId, manualRetry: true);
                         }
                         catch (Exception ex)
                         {
                             Log.Error(ex, "Connect failed for {Server}", serverName);
-                            vm.ShowNotification("GlDrive", $"Connect failed for {serverName}: {ex.Message}");
+                            if (!vm.ServerManager.IsAuthenticationHeld(serverId))
+                                vm.ShowNotification("GlDrive", $"Connect failed for {serverName}: {ex.Message}");
                         }
                     };
                     serverMenu.Items.Add(connectItem);

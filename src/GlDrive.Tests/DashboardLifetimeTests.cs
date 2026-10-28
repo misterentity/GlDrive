@@ -1,8 +1,12 @@
 using System.IO;
+using System.Collections.Concurrent;
+using System.Collections.ObjectModel;
 using System.Net.Http;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Windows.Threading;
+using System.Windows.Media;
+using GlDrive.Config;
 using GlDrive.Downloads;
 using GlDrive.Services;
 using GlDrive.UI;
@@ -68,6 +72,7 @@ public sealed class DashboardLifetimeTests
                 vm.PropertyChanged += (_, _) => callbacks++;
                 vm.StartOverviewLive();
                 var initialTimer = (DispatcherTimer)Field(vm, "_overviewTimer").GetValue(vm)!;
+                var refreshTimer = (DispatcherTimer)Field(vm, "_overviewRefreshTimer").GetValue(vm)!;
                 var dashboard = vm;
                 var lateCallbackFinished = false;
                 CancellationToken token = default;
@@ -79,6 +84,7 @@ public sealed class DashboardLifetimeTests
                     dashboard.StartOverviewLive();
                     Invoke(dashboard, "SubscribeToDownloads", "fixture", manager);
                     Invoke(dashboard, "TickOverview");
+                    Invoke(dashboard, "TickOverviewRefresh");
                     lateCallbackFinished = true;
                 }));
                 vm.Dispose();
@@ -86,10 +92,12 @@ public sealed class DashboardLifetimeTests
                 Assert.True(token.IsCancellationRequested);
                 Assert.False(vm.DiskPollShutdown.IsCompleted);
                 Assert.False(initialTimer.IsEnabled);
+                Assert.False(refreshTimer.IsEnabled);
                 release.SetResult();
                 vm.DiskPollShutdown.WaitAsync(Limit).GetAwaiter().GetResult();
                 Assert.True(lateCallbackFinished);
                 Assert.Null(Field(vm, "_overviewTimer").GetValue(vm));
+                Assert.Null(Field(vm, "_overviewRefreshTimer").GetValue(vm));
                 Assert.Empty(subscribers);
                 Assert.Equal(0, callbacks);
                 Assert.Null(Field(manager, "DownloadProgressChanged").GetValue(manager));
@@ -110,11 +118,80 @@ public sealed class DashboardLifetimeTests
         if (failure != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
     }
 
+    [Fact]
+    public void Cards_and_log_refresh_without_disk_results_and_only_while_started()
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            DashboardViewModel? vm = null;
+            var logs = Path.Combine(TestProcessIsolation.AppDataRoot, "logs");
+            var log = Path.Combine(logs, "gldrive-overview-" + Guid.NewGuid().ToString("N") + ".log");
+            try
+            {
+                Directory.CreateDirectory(logs);
+                File.WriteAllText(log, "first overview line");
+                File.SetLastWriteTimeUtc(log, DateTime.UtcNow.AddDays(1));
+                vm = EmptyDashboard();
+                var config = (AppConfig)Field(vm, "_config").GetValue(vm)!;
+                config.Servers.Add(new ServerConfig { Id = "fixture", Name = "Before" });
+                vm.StartOverviewLive();
+                var timer = (DispatcherTimer)Field(vm, "_overviewRefreshTimer").GetValue(vm)!;
+                Assert.Equal(TimeSpan.FromSeconds(30), timer.Interval);
+                vm.StartOverviewLive();
+                Assert.Same(timer, Field(vm, "_overviewRefreshTimer").GetValue(vm));
+                Invoke(vm, "TickOverviewRefresh");
+                Assert.Equal("Before", Assert.Single(vm.MountedServerStatus).Name);
+                Assert.Contains("first overview line", vm.OperationsLogPreview);
+
+                // No mounted servers means no disk result. The independent tick must
+                // still rebuild cards and read the new log tail without any FTP work.
+                config.Servers[0].Name = "After";
+                File.AppendAllText(log, "\nsecond overview line");
+                File.SetLastWriteTimeUtc(log, DateTime.UtcNow.AddDays(1));
+                var poll = (Task)typeof(DashboardViewModel).GetMethod("PollServerDiskUsage",
+                    BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(vm, [CancellationToken.None])!;
+                poll.GetAwaiter().GetResult();
+                Assert.Equal("Before", Assert.Single(vm.MountedServerStatus).Name);
+                Invoke(vm, "TickOverviewRefresh");
+                Assert.Equal("After", Assert.Single(vm.MountedServerStatus).Name);
+                Assert.Contains("second overview line", vm.OperationsLogPreview);
+
+                vm.StopOverviewLive();
+                Assert.False(timer.IsEnabled);
+                config.Servers[0].Name = "Stopped";
+                Invoke(vm, "TickOverviewRefresh");
+                Assert.Equal("After", Assert.Single(vm.MountedServerStatus).Name);
+                vm.StartOverviewLive();
+                Invoke(vm, "TickOverviewRefresh");
+                Assert.Equal("Stopped", Assert.Single(vm.MountedServerStatus).Name);
+            }
+            catch (Exception ex) { failure = ex; }
+            finally
+            {
+                vm?.Dispose();
+                if (File.Exists(log)) File.Delete(log);
+                Dispatcher.CurrentDispatcher.InvokeShutdown();
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(20)), "Overview refresh fixture did not drain");
+        if (failure != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+    }
+
     private static DashboardViewModel EmptyDashboard()
     {
         var vm = Raw<DashboardViewModel>();
         Set(vm, "_diskPoll", new DashboardDiskPoll());
-        Set(vm, "_serverManager", Raw<ServerManager>());
+        var servers = Raw<ServerManager>();
+        Set(servers, "_servers", new ConcurrentDictionary<string, MountService>());
+        Set(vm, "_serverManager", servers);
+        Set(vm, "_config", new AppConfig());
+        Set(vm, "<MountedServerStatus>k__BackingField", new ObservableCollection<OverviewServerVm>());
+        Set(vm, "_throughputPoints", new PointCollection());
+        Set(vm, "_cpuCores", 1);
         Set(vm, "_searchRequests", new SearchRequestCoordinator());
         Set(vm, "_preDbClient", new PreDbClient());
         Set(vm, "_subscribedDownloads", new Dictionary<string, DownloadManager>());

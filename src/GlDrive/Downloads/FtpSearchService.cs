@@ -81,6 +81,10 @@ public class FtpSearchService : IDisposable
     private readonly Lock _indexLock = new();
     private CancellationTokenSource? _indexerCts;
     private Task? _indexerTask;
+    private readonly SemaphoreSlim _indexerRefreshGate = new(1, 1);
+    private readonly object _indexerLifetimeLock = new();
+    private bool _disposed;
+    private bool _indexerStopped;
 
     public FtpSearchService(FtpConnectionPool pool, SearchConfig searchConfig)
     {
@@ -629,21 +633,61 @@ public class FtpSearchService : IDisposable
 
     public void StartIndexer()
     {
-        if (_searchConfig.Method == SearchMethod.LiveCrawl)
-            return; // No indexer needed for pure live crawl
+        lock (_indexerLifetimeLock)
+        {
+            if (_disposed) return;
+            _indexerStopped = false;
+            if (_searchConfig.Method == SearchMethod.LiveCrawl)
+                return; // No indexer needed for pure live crawl
 
-        _indexerCts = new CancellationTokenSource();
-        _indexerTask = IndexerLoop(_indexerCts.Token);
+            _indexerCts = new CancellationTokenSource();
+            _indexerTask = IndexerLoop(_indexerCts.Token);
+        }
     }
 
     public void StopIndexer()
     {
-        _indexerCts?.Cancel();
+        lock (_indexerLifetimeLock)
+        {
+            _indexerStopped = true;
+            _indexerCts?.Cancel();
+        }
+    }
+
+    /// <summary>Change only the crawler schedule, retaining the current index and FTP pool.</summary>
+    internal async Task RescheduleIndexerAsync()
+    {
+        await _indexerRefreshGate.WaitAsync();
+        try
+        {
+            Task? previous;
+            lock (_indexerLifetimeLock)
+            {
+                if (_disposed || _indexerStopped) return;
+                _indexerCts?.Cancel();
+                previous = _indexerTask;
+            }
+            // Do not start a second crawler while the previous LIST is still unwinding.
+            if (previous != null)
+            {
+                try { await previous; }
+                catch (OperationCanceledException) { }
+            }
+            lock (_indexerLifetimeLock)
+            {
+                if (_disposed || _indexerStopped) return;
+                _indexerCts?.Dispose();
+                _indexerCts = null;
+                _indexerTask = null;
+                StartIndexer();
+            }
+        }
+        finally { _indexerRefreshGate.Release(); }
     }
 
     public async Task StopIndexerAsync(TimeSpan timeout)
     {
-        _indexerCts?.Cancel();
+        StopIndexer();
         if (_indexerTask != null)
         {
             try { await _indexerTask.WaitAsync(timeout); }
@@ -664,13 +708,11 @@ public class FtpSearchService : IDisposable
             Log.Warning(ex, "Initial search index build failed");
         }
 
-        var interval = TimeSpan.FromMinutes(Math.Max(1, _searchConfig.IndexCacheMinutes));
-
         while (!ct.IsCancellationRequested)
         {
             try
             {
-                await Task.Delay(interval, ct);
+                await Task.Delay(TimeSpan.FromMinutes(Math.Max(1, _searchConfig.IndexCacheMinutes)), ct);
                 await RefreshIndex(progress: null, ct);
             }
             catch (OperationCanceledException) { return; }
@@ -878,8 +920,13 @@ public class FtpSearchService : IDisposable
 
     public void Dispose()
     {
-        StopIndexer();
-        _indexerCts?.Dispose();
+        lock (_indexerLifetimeLock)
+        {
+            _disposed = true;
+            StopIndexer();
+            _indexerCts?.Dispose();
+            _indexerCts = null;
+        }
         GC.SuppressFinalize(this);
     }
 

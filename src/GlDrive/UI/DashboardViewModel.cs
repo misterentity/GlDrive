@@ -48,7 +48,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private GlDrive.UI.StreamMatrix.StreamMatrixViewModel? _streamMatrix;
     private UpcomingTvEpisodeVm? _selectedTvEpisode;
     private UpcomingMovieVm? _selectedUpcomingMovie;
-    private string _upcomingQualityText = "1080p";
+    private string? _upcomingQualityText;
     private string _upcomingStatus = "";
     private DateTime _tvCacheTime;
     private DateTime _movieCacheTime;
@@ -95,6 +95,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     // Overview live telemetry (v1.85)
     private DispatcherTimer? _overviewTimer;
+    private DispatcherTimer? _overviewRefreshTimer;
     private PointCollection _throughputPoints = new();
     private string _rxRateDisplay = "-- MB/s";
     private string _txRateDisplay = "-- MB/s";
@@ -388,12 +389,28 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         };
         _overviewTimer.Tick += (_, _) => TickOverview();
         _overviewTimer.Start();
+        _overviewRefreshTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromSeconds(30)
+        };
+        _overviewRefreshTimer.Tick += (_, _) => TickOverviewRefresh();
+        _overviewRefreshTimer.Start();
     }
 
     public void StopOverviewLive()
     {
         _overviewTimer?.Stop();
         _overviewTimer = null;
+        _overviewRefreshTimer?.Stop();
+        _overviewRefreshTimer = null;
+    }
+
+    private void TickOverviewRefresh()
+    {
+        // Cards and the local log tail must refresh even when every server lacks
+        // disk statistics. A queued tick must not restart a stopped dashboard.
+        if (_disposed || _overviewRefreshTimer?.IsEnabled != true) return;
+        RefreshOverview();
     }
 
     // CPU sampling: track previous TotalProcessorTime + wall-clock snapshot so
@@ -663,7 +680,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     public string UpcomingQualityText
     {
-        get => _upcomingQualityText;
+        get => _upcomingQualityText ?? WishlistQuality.Display(_config.Downloads.QualityDefault);
         set { _upcomingQualityText = value; OnPropertyChanged(); }
     }
 
@@ -984,7 +1001,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             if (string.IsNullOrEmpty(serverId)) return;
             _ = Task.Run(async () =>
             {
-                try { await _serverManager.MountServer(serverId); }
+                try { await _serverManager.MountServer(serverId, manualRetry: true); }
                 catch (Exception ex) { Serilog.Log.Warning(ex, "MountServer failed for {Id}", serverId); }
                 Application.Current?.Dispatcher.Invoke(RefreshOverview);
             });
@@ -1175,7 +1192,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     private void AddMedia(MediaType type)
     {
-        var dialog = new MetadataSearchDialog(type, _config.Downloads.ResolveOmdbKey())
+        var dialog = new MetadataSearchDialog(type, _config.Downloads.ResolveOmdbKey(), _config.Downloads.QualityDefault)
         {
             Owner = Application.Current.Windows.OfType<DashboardWindow>().FirstOrDefault()
         };
@@ -1410,25 +1427,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             var server = _serverManager.GetServer(result.ServerId);
             if (server?.Downloads == null) continue;
 
-            var parsed = SceneNameParser.Parse(result.ReleaseName);
-            var localBase = _config.Downloads.GetPathForCategory(result.Category);
-            var safeRelease = PathSanitizer.Sanitize(result.ReleaseName);
-            var safeTitle = PathSanitizer.Sanitize(parsed.Title);
-
-            string localPath;
-            if (parsed.Season != null)
-            {
-                var seasonFolder = $"Season {parsed.Season:D2}";
-                localPath = Path.Combine(localBase, "TV", safeTitle, seasonFolder, safeRelease);
-            }
-            else if (parsed.Year != null)
-            {
-                localPath = Path.Combine(localBase, "Movies", $"{safeTitle} ({parsed.Year})", safeRelease);
-            }
-            else
-            {
-                localPath = Path.Combine(localBase, PathSanitizer.Sanitize(result.Category), safeRelease);
-            }
+            var localPath = DownloadPathResolver.ForScene(_config.Downloads, result.Category, result.ReleaseName);
 
             var item = new DownloadItem
             {
@@ -1484,25 +1483,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
                 if (server.Downloads == null) continue;
 
-                var parsed = SceneNameParser.Parse(match.ReleaseName);
-                var localBase = _config.Downloads.GetPathForCategory(match.Category);
-                var safeRelease = PathSanitizer.Sanitize(match.ReleaseName);
-                var safeTitle = PathSanitizer.Sanitize(parsed.Title);
-
-                string localPath;
-                if (parsed.Season != null)
-                {
-                    var seasonFolder = $"Season {parsed.Season:D2}";
-                    localPath = Path.Combine(localBase, "TV", safeTitle, seasonFolder, safeRelease);
-                }
-                else if (parsed.Year != null)
-                {
-                    localPath = Path.Combine(localBase, "Movies", $"{safeTitle} ({parsed.Year})", safeRelease);
-                }
-                else
-                {
-                    localPath = Path.Combine(localBase, PathSanitizer.Sanitize(match.Category), safeRelease);
-                }
+                var localPath = DownloadPathResolver.ForScene(_config.Downloads, match.Category, match.ReleaseName);
 
                 var item = new DownloadItem
                 {
@@ -1817,7 +1798,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                 return;
             }
 
-            var quality = ParseQuality(UpcomingQualityText);
+            var quality = WishlistQuality.Parse(UpcomingQualityText);
             _wishlistStore.Add(new WishlistItem
             {
                 Type = MediaType.TvShow,
@@ -1858,7 +1839,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                 return;
             }
 
-            var quality = ParseQuality(UpcomingQualityText);
+            var quality = WishlistQuality.Parse(UpcomingQualityText);
             _wishlistStore.Add(new WishlistItem
             {
                 Type = MediaType.Movie,
@@ -1875,15 +1856,6 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             UpcomingStatus = $"Added {movie.Title} to wishlist";
         }
     }
-
-    private static QualityProfile ParseQuality(string text) => text switch
-    {
-        "SD" => QualityProfile.SD,
-        "720p" => QualityProfile.Q720p,
-        "1080p" => QualityProfile.Q1080p,
-        "2160p" => QualityProfile.Q2160p,
-        _ => QualityProfile.Any
-    };
 
     private async Task RefreshAllMetadata()
     {
@@ -2044,25 +2016,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         var server = _serverManager.GetServer(n.ServerId);
         if (server?.Downloads == null) return;
 
-        var parsed = SceneNameParser.Parse(n.ReleaseName);
-        var localBase = _config.Downloads.GetPathForCategory(n.Category);
-        var safeRelease = PathSanitizer.Sanitize(n.ReleaseName);
-        var safeTitle = PathSanitizer.Sanitize(parsed.Title);
-
-        string localPath;
-        if (parsed.Season != null)
-        {
-            var seasonFolder = $"Season {parsed.Season:D2}";
-            localPath = Path.Combine(localBase, "TV", safeTitle, seasonFolder, safeRelease);
-        }
-        else if (parsed.Year != null)
-        {
-            localPath = Path.Combine(localBase, "Movies", $"{safeTitle} ({parsed.Year})", safeRelease);
-        }
-        else
-        {
-            localPath = Path.Combine(localBase, PathSanitizer.Sanitize(n.Category), safeRelease);
-        }
+        var localPath = DownloadPathResolver.ForScene(_config.Downloads, n.Category, n.ReleaseName);
 
         var item = new DownloadItem
         {
@@ -2278,11 +2232,7 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         try
         {
             var json = File.ReadAllText(dlg.FileName);
-            var items = JsonSerializer.Deserialize<List<WishlistItem>>(json, new JsonSerializerOptions
-            {
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-            });
-            if (items == null) return;
+            var items = WishlistQuality.ReadImport(json, _config.Downloads.QualityDefault);
 
             var added = _wishlistStore.AddImported(items);
 
@@ -2377,7 +2327,6 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         {
             long totalUsed = 0;
             long totalSize = 0;
-            bool anyDiskResult = false;
 
             foreach (var server in _serverManager.GetMountedServers())
             {
@@ -2389,7 +2338,6 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
                     var disk = await server.Ftp.GetDiskFree(ct);
                     ct.ThrowIfCancellationRequested();
                     if (disk == null) continue;
-                    anyDiskResult = true;
                     var used = disk.Value.totalBytes - disk.Value.freeBytes;
                     totalUsed += used;
                     totalSize += disk.Value.totalBytes;
@@ -2404,19 +2352,6 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
             else
                 StatusBarDiskSpace = "";
 
-            // Retain the periodic overview/log refresh without letting a completed
-            // poll reactivate a closed dashboard. Collection changes run on the UI.
-            if (anyDiskResult)
-            {
-                try
-                {
-                    Application.Current?.Dispatcher.Invoke(() =>
-                    {
-                        if (!_disposed && !ct.IsCancellationRequested) RefreshOverview();
-                    });
-                }
-                catch { /* dispatcher shut down or VM disposed — ignore */ }
-            }
         }
         catch { }
     }
@@ -2597,12 +2532,11 @@ public class DashboardViewModel : INotifyPropertyChanged, IDisposable
         DiskPollShutdown = _diskPoll.StopAsync();
         // DispatcherTimer is not IDisposable — Stop() removes it from the dispatcher's
         // active-timer list, which is the GC root that keeps this VM alive via the Tick
-        // lambdas (they capture `this`). All four timers use anonymous Tick handlers with
+        // lambdas (they capture `this`). These timers use anonymous Tick handlers with
         // no stored delegate, so Tick -= is impossible; Stop() + null is the correct cleanup.
         _statusTimer?.Stop();
         _statusTimer = null;
-        _overviewTimer?.Stop();
-        _overviewTimer = null;
+        StopOverviewLive();
         _preDbRefreshTimer?.Stop();
         _preDbRefreshTimer = null;
         _preDbCountdownTimer?.Stop();

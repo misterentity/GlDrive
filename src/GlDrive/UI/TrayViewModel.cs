@@ -7,6 +7,7 @@ using System.Windows;
 using System.Windows.Input;
 using GlDrive.Config;
 using GlDrive.Downloads;
+using GlDrive.Ftp;
 using GlDrive.Irc;
 using GlDrive.Services;
 using Serilog;
@@ -27,6 +28,9 @@ public class TrayViewModel : INotifyPropertyChanged
     private readonly Dictionary<string, double> _serverSpeeds = new();
     private readonly Dictionary<string, int> _serverDownloadCounts = new();
     private DateTime _lastSpeedUpdate;
+
+    internal static bool ShouldNotifyConnectionState(MountState state, bool authenticationHeld) =>
+        state == MountState.Connected || (!authenticationHeld && state is MountState.Reconnecting or MountState.Error);
 
     public TrayViewModel(ServerManager serverManager, AppConfig config, NotificationStore notificationStore)
     {
@@ -97,6 +101,7 @@ public class TrayViewModel : INotifyPropertyChanged
                     }
                 }
 
+                if (ShouldNotifyConnectionState(state, _serverManager.IsAuthenticationHeld(serverId)))
                 switch (state)
                 {
                     case MountState.Connected:
@@ -222,6 +227,9 @@ public class TrayViewModel : INotifyPropertyChanged
         // Race completion notifications
         if (_serverManager.Spread != null)
         {
+            _serverManager.Spread.PartialCleanupNotice += (release, message) =>
+                Application.Current?.Dispatcher.BeginInvoke(() =>
+                    ShowNotification("Partial race cleanup", $"{release}: {message}"));
             _serverManager.Spread.JobCompleted += job =>
             {
                 if (_config.Spread.NotifyOnRaceComplete)
@@ -271,6 +279,19 @@ public class TrayViewModel : INotifyPropertyChanged
         {
             Application.Current?.Dispatcher.Invoke(() =>
                 ShowNotification("BNC Rate Limit", $"{serverName}: {message}"));
+        };
+
+        _serverManager.AuthenticationRejected += notice =>
+        {
+            Application.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                var accountKey = ServerLoginGateRegistry.KeyFor(notice.Account.Host, notice.Account.Port, notice.Account.Username);
+                var server = _config.Servers.FirstOrDefault(s =>
+                    ServerLoginGateRegistry.KeyFor(s.Connection.Host, s.Connection.Port, s.Connection.Username) == accountKey);
+                var label = string.IsNullOrWhiteSpace(server?.Name) ? "FTP account" : server.Name;
+                ShowNotification("FTP Authentication", $"{label}: login rejected. Check the saved password and retry the connection. " +
+                    $"Automatic login probe after {notice.NextProbeAtUtc.ToLocalTime():HH:mm}.");
+            });
         };
 
         // Auto-install updates, but never restart while bytes are moving. The gate used to

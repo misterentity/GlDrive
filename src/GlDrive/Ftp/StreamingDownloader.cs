@@ -22,6 +22,7 @@ public class StreamingDownloader
     private readonly DownloadConfig _config;
     private readonly IRaceLoginLender? _raceLender;
     private readonly TransferPacer _serverPacer;
+    private long _serverCap;
 
     public StreamingDownloader(FtpConnectionPool pool, string serverId, DownloadConfig config,
         int serverSpeedLimitKbps, IRaceLoginLender? raceLender)
@@ -30,10 +31,13 @@ public class StreamingDownloader
         _serverId = serverId;
         _config = config;
         _raceLender = raceLender;
-        var serverCap = serverSpeedLimitKbps > 0 ? serverSpeedLimitKbps * 1024L : 0;
-        _serverPacer = new TransferPacer(() => serverCap, _ => 0);
+        UpdateSpeedLimit(serverSpeedLimitKbps);
+        _serverPacer = new TransferPacer(() => ServerBytesPerSecond, _ => 0);
         DownloadNetworkServices.Initialize(config);
     }
+
+    internal long ServerBytesPerSecond => Interlocked.Read(ref _serverCap);
+    internal void UpdateSpeedLimit(int kbps) => Interlocked.Exchange(ref _serverCap, kbps > 0 ? kbps * 1024L : 0);
 
     /// <summary>True when the download pool is in a BNC cooldown — callers should
     /// defer rather than borrow (which would just throw).</summary>

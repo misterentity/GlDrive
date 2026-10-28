@@ -52,7 +52,9 @@ public sealed class SourceListingPruneWiringTests
         // v3.11.24: …via CreditDeliveryNoLock, the one ownership-credit helper.
         Assert.Equal(1, Count("RecordConfirmedDeliveryNoLock(fileName, dstId);"));
         Assert.Equal(1, Count("CreditDeliveryNoLock(file.Name, file.Size, dstId, transfer.WasDupe);"));
-        Assert.Equal(1, Count("lock (_ownershipLock) listingEpoch = _ownershipEpoch;"));
+        Assert.Equal(1, Count("listingEpoch = _ownershipEpoch;"));
+        // The same lock now captures the active upload-attempt identities too.
+        Assert.Matches(@"lock \(_ownershipLock\)\s*\{\s*listingEpoch = _ownershipEpoch;", Source);
         Assert.Equal(1, Count("ProcessFiles(serverId, files, listingEpoch);"));
         Assert.Equal(1, Count("epoch > listingEpoch"));
 

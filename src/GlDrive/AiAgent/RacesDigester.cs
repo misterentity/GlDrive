@@ -5,18 +5,19 @@ public sealed class RacesDigester
     public RacesDigest Build(IEnumerable<RaceOutcomeEvent> events)
     {
         var list = events.ToList();
-        var d = new RacesDigest { TotalRaces = list.Count };
+        var d = new RacesDigest { TotalRaces = list.Count, KnownWinnerRaces = list.Count(HasObservedWinner) };
         if (list.Count == 0) return d;
 
         // Missing winners are unavailable observations, not losses. Reporting
         // fabricated 0% rates caused the agent to disable a healthy destination.
         var serverParticipation = list
-            .SelectMany(r => r.Participants.Select(p => (p.ServerId,
-                known: HasObservedWinner(r), won: r.Winner == p.ServerId)))
+            .SelectMany(r => r.Participants.Select(p => p.ServerId).Distinct(StringComparer.Ordinal).Select(id => (ServerId: id,
+                known: HasObservedWinner(r), won: r.Winner == id)))
             .GroupBy(x => x.ServerId);
         foreach (var g in serverParticipation)
         {
             var observed = g.Where(x => x.known).ToList();
+            d.ParticipationByServer[g.Key] = g.Count();
             d.KnownWinnerSamplesByServer[g.Key] = observed.Count;
             if (observed.Count > 0)
                 d.WinRateByServer[g.Key] = (double)observed.Count(x => x.won) / observed.Count;

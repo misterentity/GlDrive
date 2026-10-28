@@ -17,11 +17,15 @@ public sealed class AgentAutomation : IAutomationModule
     private readonly Func<ChangeApplier?> _applier;
     private readonly string _root;
     private readonly DiagnosticAutomation _diagnostics;
+    private readonly Action? _onConfigChanged;
+    private readonly string _configFilePath;
+    private readonly Action<AppConfig> _persistConfig;
     private readonly object _gate = new();
     private int _manualRunActive;
 
     public AgentAutomation(AppConfig config, Func<AgentRunner?> getRunner, Func<FreezeStore?> getFreeze,
-        Func<AuditTrail?> getAudit, Func<ChangeApplier?> getApplier, string? appDataRoot = null)
+        Func<AuditTrail?> getAudit, Func<ChangeApplier?> getApplier, string? appDataRoot = null,
+        Action? onConfigChanged = null)
     {
         _config = config;
         _runner = getRunner;
@@ -30,6 +34,18 @@ public sealed class AgentAutomation : IAutomationModule
         _applier = getApplier;
         _root = Path.Combine(appDataRoot ?? ConfigManager.AppDataPath, "ai-data");
         _diagnostics = new DiagnosticAutomation(config, appDataRoot);
+        _onConfigChanged = onConfigChanged;
+        _configFilePath = ConfigManager.ConfigPath;
+        _persistConfig = ConfigManager.Save;
+    }
+
+    internal AgentAutomation(AppConfig config, Func<AgentRunner?> getRunner, Func<FreezeStore?> getFreeze,
+        Func<AuditTrail?> getAudit, Func<ChangeApplier?> getApplier, string appDataRoot,
+        Action? onConfigChanged, string configFilePath, Action<AppConfig> persistConfig)
+        : this(config, getRunner, getFreeze, getAudit, getApplier, appDataRoot, onConfigChanged)
+    {
+        _configFilePath = configFilePath;
+        _persistConfig = persistConfig;
     }
 
     public IReadOnlyList<AutomationToolDefinition> Tools { get; } =
@@ -44,7 +60,7 @@ public sealed class AgentAutomation : IAutomationModule
             new { type = "object", properties = new { action = new { type = "string", @enum = new[] { "list", "set", "remove" } }, pointer = new { type = "string" }, note = new { type = "string" } }, required = new[] { "action" }, additionalProperties = false }),
         AutomationToolDefinition.Create("agent_audit", "Read up to 200 recent AI audit rows from a bounded 512 KiB tail, optionally filtered by runId. Secrets are redacted.",
             new { type = "object", properties = new { limit = new { type = "integer", minimum = 1, maximum = 200 }, runId = new { type = "string" } }, additionalProperties = false }, readOnly: true),
-        AutomationToolDefinition.Create("agent_audit_action", "Undo an applied AI configuration change or apply a suggested configuration change through the existing validators and freeze rules. Identifies an audit row by runId and target. Appended/deleted list entries require config_patch; wishlist/error actions use their dedicated tools. Restart after a successful configuration change.",
+        AutomationToolDefinition.Create("agent_audit_action", "Undo an applied AI configuration change or apply a suggested configuration change through the existing validators and freeze rules. Priority and role applies require at least 50% measured winner coverage from local telemetry; explicit undo does not require coverage. Identifies an audit row by runId and target. Appended/deleted list entries require config_patch; wishlist/error actions use their dedicated tools. Successful changes queue the app's targeted runtime refresh; check restartRequired in the result.",
             new { type = "object", properties = new { action = new { type = "string", @enum = new[] { "undo", "apply" } }, runId = new { type = "string" }, target = new { type = "string" } }, required = new[] { "action", "runId", "target" }, additionalProperties = false }, destructive: true),
         AutomationToolDefinition.Create("agent_memo", "Read or atomically replace the agent's persistent Markdown memory. Writes require action=set and content (maximum 32 KiB). Read content is credential-redacted.",
             new { type = "object", properties = new { action = new { type = "string", @enum = new[] { "get", "set" } }, content = new { type = "string", maxLength = 32768 } }, additionalProperties = false })
@@ -163,7 +179,7 @@ public sealed class AgentAutomation : IAutomationModule
         var audit = _audit() ?? throw new InvalidOperationException("Audit trail is unavailable");
         var applier = _applier() ?? throw new InvalidOperationException("AI change service is unavailable");
         object? result = null;
-        SecureFile.WithPathLock(ConfigManager.ConfigPath, () =>
+        SecureFile.WithPathLock(_configFilePath, () =>
         {
             var row = audit.ReadAll().LastOrDefault(r => r.RunId == runId && r.Target == target)
                 ?? throw new ArgumentException("Audit row was not found");
@@ -171,17 +187,14 @@ public sealed class AgentAutomation : IAutomationModule
                 throw new ArgumentException("The audit row is not eligible for this action");
             if (row.Category is AgentCategories.WishlistPrune or AgentCategories.ErrorReport)
                 throw new ArgumentException("Use the dedicated wishlist/diagnostics tools for this action");
-            var candidate = new ConfigurationAutomation(_config).CurrentSnapshot().Deserialize<AppConfig>(ConfigurationAutomation.Json)!;
-            var inverse = new AgentChange
-            {
-                Category = row.Category, Target = row.Target, Before = action == "undo" ? row.After : row.Before,
-                After = action == "undo" ? row.Before : row.After, Confidence = 1,
-                Reasoning = "Explicit MCP " + action, EvidenceRef = row.RunId
-            };
+            var expected = File.ReadAllText(_configFilePath);
+            var candidate = JsonSerializer.Deserialize<AppConfig>(expected, ConfigurationAutomation.Json)
+                ?? throw new InvalidOperationException("Persisted settings are empty");
+            var inverse = ReviewedChange(row, action == "undo");
             var newRunId = "mcp-" + action + "-" + Guid.NewGuid().ToString("N")[..8];
             var pending = new List<AuditRow>();
             var report = action == "undo"
-                ? GlDrive.UI.AgentUndoCompletion.ApplyInverse(row, () => applier.Apply([inverse], candidate, candidate.Agent, newRunId, false, pending.Add))
+                ? GlDrive.UI.AgentUndoCompletion.ApplyInverse(row, () => applier.Apply([inverse], candidate, candidate.Agent, newRunId, false, pending.Add, explicitUndo: true))
                 : applier.Apply([inverse], candidate, candidate.Agent, newRunId, false, pending.Add);
             if (report is not { Applied: 1, Rejected: 0 })
             {
@@ -190,12 +203,17 @@ public sealed class AgentAutomation : IAutomationModule
                 return;
             }
             ConfigurationAutomation.Validate(candidate);
-            var expected = File.ReadAllText(ConfigManager.ConfigPath);
-            AgentConfigCommit.Commit(ConfigManager.ConfigPath, expected, candidate, pending, _root, ConfigManager.Save, audit);
+            AgentConfigCommit.Commit(_configFilePath, expected, candidate, pending, _root, _persistConfig, audit);
             ConfigurationAutomation.Reconcile(_config, candidate);
+            var runtimeRefreshQueued = false;
+            if (_onConfigChanged != null)
+            {
+                try { _onConfigChanged(); runtimeRefreshQueued = true; }
+                catch (Exception ex) { Serilog.Log.Warning(ex, "AI settings saved; runtime refresh could not be queued"); }
+            }
             if (action == "undo") audit.MarkUndone(row.RunId, row.Target, "mcp-undo");
             else audit.Dismiss(row, "mcp-apply");
-            result = new { applied = true, restartRequired = true, runId = newRunId };
+            result = new { applied = true, restartRequired = !runtimeRefreshQueued, runId = newRunId };
         });
         return result!;
     }
@@ -205,4 +223,12 @@ public sealed class AgentAutomation : IAutomationModule
         if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
             throw new ArgumentException("Linked agent files are not supported");
     }
+
+    internal static AgentChange ReviewedChange(AuditRow row, bool undo) => new()
+    {
+        Category = row.Category, Target = row.Target, Before = undo ? row.After : row.Before,
+        After = undo ? row.Before : row.After, Confidence = 1,
+        Reasoning = undo ? "Explicit MCP undo" : row.Reasoning + " [explicit MCP apply]",
+        EvidenceRef = undo ? row.RunId : row.EvidenceRef
+    };
 }

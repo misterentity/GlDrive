@@ -24,6 +24,12 @@ public sealed class DigestBundle
 public sealed class RacesDigest
 {
     [JsonPropertyName("totalRaces")] public int TotalRaces { get; set; }
+    [JsonPropertyName("knownWinnerRaces")] public int KnownWinnerRaces { get; set; }
+    [JsonPropertyName("winnerEvidenceComplete")] public bool WinnerEvidenceComplete { get; set; } = true;
+    [JsonPropertyName("winnerCoverage")] public double WinnerCoverage => Coverage(KnownWinnerRaces, TotalRaces);
+    [JsonPropertyName("participationByServer")] public Dictionary<string, int> ParticipationByServer { get; set; } = new();
+    [JsonPropertyName("winnerCoverageByServer")] public Dictionary<string, double> WinnerCoverageByServer =>
+        ParticipationByServer.ToDictionary(p => p.Key, p => Coverage(KnownWinnerSamplesByServer.GetValueOrDefault(p.Key), p.Value));
     [JsonPropertyName("winRateByServer")] public Dictionary<string, double> WinRateByServer { get; set; } = new();
     [JsonPropertyName("knownWinnerSamplesByServer")] public Dictionary<string, int> KnownWinnerSamplesByServer { get; set; } = new();
     [JsonPropertyName("destinationRacesWithFilesByServer")] public Dictionary<string, int> DestinationRacesWithFilesByServer { get; set; } = new();
@@ -31,6 +37,8 @@ public sealed class RacesDigest
     [JsonPropertyName("kbpsByRoute")] public Dictionary<string, double> KbpsByRoute { get; set; } = new(); // "src->dst"
     [JsonPropertyName("abortReasonHistogram")] public Dictionary<string, int> AbortReasonHistogram { get; set; } = new();
     [JsonPropertyName("completionRateBySection")] public Dictionary<string, double> CompletionRateBySection { get; set; } = new();
+
+    internal static double Coverage(int known, int total) => total > 0 ? Math.Clamp((double)known / total, 0, 1) : 0;
 }
 
 public sealed class NukesDigest
@@ -123,6 +131,7 @@ public sealed class SectionActivityDigest
         [JsonPropertyName("filesIn")]  public int FilesIn { get; set; }
         [JsonPropertyName("ourRaces")] public int OurRaces { get; set; }
         [JsonPropertyName("knownWinnerRaces")] public int KnownWinnerRaces { get; set; }
+        [JsonPropertyName("winnerCoverage")] public double WinnerCoverage => RacesDigest.Coverage(KnownWinnerRaces, OurRaces);
         [JsonPropertyName("ourWinRate")] public double? OurWinRate { get; set; }
     }
 }

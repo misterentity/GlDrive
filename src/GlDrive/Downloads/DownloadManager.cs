@@ -15,7 +15,7 @@ public class DownloadManager : IDisposable
     private readonly List<DownloadItem> _pendingQueue = new();
     private readonly SemaphoreSlim _queueSignal = new(0);
     private readonly object _queueLock = new();
-    private readonly SemaphoreSlim _concurrency;
+    private readonly LiveConcurrencyGate _concurrency;
     private CancellationTokenSource? _cts;
     private Task? _processorTask;
     private int _disposed;
@@ -49,6 +49,7 @@ public class DownloadManager : IDisposable
     public event Action<DownloadItem>? DownloadStatusChanged;
 
     public DownloadStore Store => _store;
+    internal DownloadRelocation? Relocation { get; set; }
 
     private readonly DiskReservation? _disk;
 
@@ -69,8 +70,10 @@ public class DownloadManager : IDisposable
         _store = store;
         _config = config;
         _disk = disk;
-        _concurrency = new SemaphoreSlim(config.MaxConcurrentDownloads);
+        _concurrency = new LiveConcurrencyGate(config.MaxConcurrentDownloads);
     }
+
+    internal void RefreshOptions() => _concurrency.Resize(_config.MaxConcurrentDownloads);
 
     public void Start()
     {
@@ -808,6 +811,50 @@ public class DownloadManager : IDisposable
             // A previously-parked item that got this far reached the network, so the volume
             // question is settled — let the next absence start its backoff from the beginning.
             lock (_volumeWaitLock) _volumeWaitAttempts.Remove(item.Id);
+
+            if (Relocation != null && DownloadRelocation.IsMissingRemotePath(ex))
+            {
+                try
+                {
+                    var relocation = await Relocation.ResolveAsync(item, DateTime.UtcNow,
+                        () => { _store.Update(item); _store.Save(); }, itemCts.Token);
+                    itemCts.Token.ThrowIfCancellationRequested();
+                    if (relocation.Outcome is RelocationOutcome.Relocated or RelocationOutcome.Waiting)
+                    {
+                        lock (_activeCts)
+                        {
+                            itemCts.Token.ThrowIfCancellationRequested();
+                            item.Status = DownloadStatus.Queued;
+                            item.ErrorMessage = relocation.Reason;
+                            _store.Update(item);
+                            _store.Save();
+                        }
+                        DownloadStatusChanged?.Invoke(item);
+                        if (relocation.Outcome == RelocationOutcome.Relocated)
+                            Log.Information("Download {Release} {Relocation}", item.ReleaseName, relocation.Reason);
+                        ScheduleRetry(item, Math.Max(1, (int)Math.Ceiling(relocation.Delay.TotalSeconds)));
+                        return;
+                    }
+                    if (relocation.Outcome == RelocationOutcome.Exhausted)
+                    {
+                        FailVerification(item, relocation.Reason, itemCts.Token);
+                        return;
+                    }
+                    if (relocation.Outcome == RelocationOutcome.Missing)
+                        ex = new IOException(relocation.Reason, ex);
+                }
+                catch (OperationCanceledException)
+                {
+                    RecordCancellation(item, globalCt.IsCancellationRequested);
+                    return;
+                }
+                catch (Exception lookupError)
+                {
+                    // A failed probe is not evidence of absence. Keep ordinary retry
+                    // handling, with the persisted lookup throttle still in force.
+                    ex = new IOException("Release relocation lookup failed: " + lookupError.Message, lookupError);
+                }
+            }
 
             // Auto-retry with backoff
             if (item.RetryCount < _config.MaxRetries)

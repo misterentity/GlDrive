@@ -197,8 +197,8 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
 
         try
         {
-            spread.StartRace(SelectedSection, SpreadReleaseName, serverIds, SpreadMode.Race);
-            SpreadStatus = $"Race queued: {SpreadReleaseName} — scanning {serverIds.Count} servers for release...";
+            var result = spread.StartRaceDetailed(SelectedSection, SpreadReleaseName, serverIds, SpreadMode.Race);
+            SpreadStatus = SpreadStartStatus.Format(result, serverIds.Count);
         }
         catch (Exception ex)
         {
@@ -821,12 +821,21 @@ public class SpreadViewModel : INotifyPropertyChanged, IDisposable
 
 public sealed record QueuedRaceVm(string Section, string ReleaseName, string StatusText, string RetryText)
 {
+    public int ResumeCount { get; init; }
+    public string StopReason { get; init; } = "";
+    public DateTime? FirstUploadAtUtc { get; init; }
+    public bool CleanupOnly { get; init; }
     internal static QueuedRaceVm From(PersistedRace race, DateTime nowUtc) => new(
         race.Section, race.ReleaseName,
-        string.IsNullOrWhiteSpace(race.WaitReason) ? "Queued for an available race slot" : race.WaitReason,
+        (race.ResumeCount > 0 ? $"Resume {race.ResumeCount}/3: " : "") +
+            (string.IsNullOrWhiteSpace(race.WaitReason) ? "Queued for an available race slot" : race.WaitReason),
         race.NextProbeAtUtc is { } next
             ? next > nowUtc ? $"Next check {next.ToLocalTime():HH:mm:ss}" : "Ready to check"
-            : "");
+            : "")
+        {
+            ResumeCount = race.ResumeCount, StopReason = race.StopReason,
+            FirstUploadAtUtc = race.FirstUploadAtUtc, CleanupOnly = race.CleanupOnly
+        };
 }
 
 public class AutoRaceLogVm

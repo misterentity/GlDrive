@@ -51,6 +51,8 @@ public class DownloadItem
     public int RetryCount { get; set; }
     /// <summary>Positive incomplete-source evidence survives restarts until verified.</summary>
     public bool SourceCompletionPending { get; set; }
+    public int RelocationAttempts { get; set; }
+    public DateTime? LastRelocationLookupAt { get; set; }
 }
 
 public class SearchResult

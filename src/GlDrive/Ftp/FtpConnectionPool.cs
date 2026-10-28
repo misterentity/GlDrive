@@ -204,16 +204,7 @@ public class FtpConnectionPool : IAsyncDisposable
     /// Walk the exception chain looking for a "simultaneous logins" message — the BNC's
     /// explicit signal that the account has hit its login cap and ghosts should be killed.
     /// </summary>
-    private static bool HasLoginLimitError(Exception? ex)
-    {
-        while (ex is not null)
-        {
-            if (ex.Message?.Contains("simultaneous logins", StringComparison.OrdinalIgnoreCase) == true)
-                return true;
-            ex = ex.InnerException;
-        }
-        return false;
-    }
+    private static bool HasLoginLimitError(Exception? ex) => ConnectFailureClassifier.HasLoginLimitError(ex);
 
     // Account-wide login gate (v3.6 Phase 1). When non-null, every connection this
     // pool opens first acquires a permit, and releases it when the connection is
@@ -726,6 +717,11 @@ public class FtpConnectionPool : IAsyncDisposable
                 Interlocked.Increment(ref _active);
                 return new PooledConnection(client, this);
             }
+            catch (FtpLoginHeldException)
+            {
+                Interlocked.Decrement(ref _created);
+                throw; // Account admission already decided; never spend a ghost-kill budget.
+            }
             catch (Exception ex)
             {
                 // What did this failure actually tell us? A caller whose own borrow
@@ -748,6 +744,12 @@ public class FtpConnectionPool : IAsyncDisposable
                     Log.Debug("Pool: borrow abandoned by caller deadline (created={Created}, max={Max})",
                         _created, _maxSize);
                     throw;
+                }
+
+                if (verdict == ConnectFailureClassifier.ConnectFailure.AuthRejected)
+                {
+                    Interlocked.Decrement(ref _created);
+                    throw; // The shared guard owns hold/notification; !user cannot fix a password.
                 }
 
                 // BNC cooldown detection: TCP-level refusal, or a 530 that

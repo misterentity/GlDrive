@@ -10,6 +10,9 @@ public sealed class PriorityValidator : IChangeValidator
     private static readonly string[] TierOrder = ["VeryLow", "Low", "Normal", "High", "VeryHigh"];
 
     public ValidationResult Validate(AgentChange change, AppConfig config)
+        => Validate(change, config, new ChangeValidationContext());
+
+    public ValidationResult Validate(AgentChange change, AppConfig config, ChangeValidationContext context)
     {
         if (!SkiplistValidator.TryMatchServer(change.Target, "/spread/sitePriority", out var resolver, out var trailing))
             return new(false, "target-shape-unsupported", null);
@@ -22,7 +25,11 @@ public sealed class PriorityValidator : IChangeValidator
         if (!Enum.TryParse<SitePriority>(afterStr, out var afterTier) || !Enum.IsDefined(afterTier))
             return new(false, "bad-tier-value", null);
         afterStr = afterTier.ToString();
-        if (afterStr == "VeryHigh") return new(false, "veryhigh-is-manual-only", null);
+        if (afterStr == "VeryHigh" && !context.ExplicitUndo) return new(false, "veryhigh-is-manual-only", null);
+        // Free-text reasoning cannot establish independence from unavailable winners.
+        // Conservatively gate this whole category, including reviewed suggestions.
+        if (!context.AllowsPriorityOrRole(resolver(config)?.Id))
+            return new(false, ChangeValidationContext.InsufficientCoverage, null);
 
         return new(true, null, cfg =>
         {

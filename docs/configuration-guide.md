@@ -14,6 +14,8 @@ All persistent state lives under **`%AppData%\GlDrive\`**. This guide walks thro
 | `trusted_certs.json` | JSON | `CertificateManager` | Indirect via Settings → Diagnostics → Trust manager |
 | `downloads-{serverId}.json` | JSON | `DownloadStore` | No (runtime queue state) |
 | `race-history.json` | JSON | `RaceHistoryStore` | No |
+| `race-queue.json` | JSON | `RaceQueueStore` | No (resume counts, partial ownership and cleanup deadlines) |
+| `ftp-auth-holds.json` | JSON with DPAPI-protected credential markers | Authentication circuit | No (account holds and recovery-probe times) |
 | `wishlist.json` | JSON | `WishlistStore` | Yes, and importable/exportable from the Dashboard |
 | `notifications.json` | JSON | `NotificationStore` | No |
 | `fish-keys-{serverId}.json` | DPAPI-encrypted JSON | `FishKeyStore` | No — use IRC `/key` and `/keyx` commands |
@@ -44,6 +46,10 @@ Top-level structure:
 ### `servers` — `List<ServerConfig>`
 
 Each element describes a single glftpd site. Server `id` is an 8-character GUID prefix created by the wizard / Settings dialog; it's the key for per-server data files (`downloads-{id}.json`, `fish-keys-{id}.json`). **Do not rename it by hand** — downloads and FiSH keys live under the old id.
+
+Rejected normal FTP credentials place a shared hold on the configured host, port and username. All pools, ghost cleanup and UI connection probes respect it; library-owned reconnects are disabled. Existing usable leases continue to work. The app issues one authentication notice per episode, with at most one automatic recovery probe every 30 minutes. A changed password or explicit Connect/Retry authentication action permits an earlier probe. Failed recovery probes keep the same hold and do not repeat the notice. Login-cap/BNC replies retain their separate classification; unsupported `!username` ghost login is not proof that the normal account password is wrong. Other connection faults receive a short shared backoff.
+
+Authentication holds survive restart in `ftp-auth-holds.json`. Account keys are hashed and credential-change markers are protected by Windows DPAPI; the file contains no password or readable password digest. If a protected marker cannot be read, the hold remains until manual retry or a scheduled probe. No new `appsettings.json` fields are required.
 
 ```jsonc
 {
@@ -230,16 +236,20 @@ API keys are **not** stored here. `ResolveOmdbKey()`, `ResolveTmdbKey()`, and `R
 
 Scheduling wraps around midnight: `scheduleStartHour: 22` and `scheduleEndHour: 6` means downloads run 22:00 → 06:00.
 
-`categoryPaths` wins over `localPath` when the downloaded release's category key matches.
+Download destinations resolve in this order: an exact raw site-section key in `categoryPaths`, a logical `TV`/`Movies` key inferred from the release name, then `localPath`. Logical keys are case-insensitive. TV covers season/episode tokens, season packs and valid calendar dates with video evidence; Movies requires recognizable video quality, source or codec evidence. A year or bare `WEB` alone is insufficient. Unknown media types retain the default path.
+
+When a logical mapping supplies the root, the normal layout omits its extra `TV`/`Movies` segment. Exact section matches retain the prior layout, including when the raw section itself is named `TV`. Existing queued paths, explicitly supplied MCP `localPath` values and selected torrent destinations stay unchanged.
 
 ### `spread` — `SpreadConfig`
 
 ```jsonc
 "spread": {
-  "spreadPoolSize": 2,              // per-server FXP pool floor; actual size = max(this, maxSlots)
+  "spreadPoolSize": 3,              // separate FXP pool, bounded by transfer and account gates
   "transferTimeoutSeconds": 60,     // per-file
-  "hardTimeoutSeconds": 1200,       // whole-race cap = 20 minutes
-  "maxConcurrentRaces": 1,          // capped to 1 in chain mode (default since v1.44.35)
+  "hardTimeoutSeconds": 1200,       // idle timeout: seconds without payload progress
+  "absoluteRaceTimeoutMinutes": 90, // absolute active-attempt cap (1–1440 minutes)
+  "partialRaceDeadlineHours": 10,   // from first upload (1–11 hours)
+  "maxConcurrentRaces": 1,
   "autoRaceOnNotification": true,
   "notifyOnRaceComplete": true,
   "nukeMarkers": [ ".nuke", "NUKED-" ],
@@ -251,6 +261,10 @@ Scheduling wraps around midnight: `scheduleStartHour: 22` and `scheduleEndHour: 
 ```
 
 `globalSkiplist` applies to every race; per-site `spreadConfig.skiplist` runs first. First match wins (see [system-architecture.md#spread--fxp-engine](system-architecture.md#spread--fxp-engine) for evaluation order).
+
+`hardTimeoutSeconds` measures inactivity in payload progress. Active attempts also obey `absoluteRaceTimeoutMinutes`, even if bytes continue moving. A ceiling- or stall-stopped race with landed files can resume at most three times, after due fresh races. This resume budget is separate from the existing crash/restart budget and survives restart in `race-queue.json`.
+
+`partialRaceDeadlineHours` starts at the first upload and survives retries and restarts. When a partial cannot finish, cleanup uses existing pools and exact successful release-root creation records. It checks current contents before issuing `SITE WIPE`, preserves complete or shared directories, and never treats an existing directory as one GlDrive created. Cleanup failures remain visible and persisted; unavailable sites can prevent remote cleanup. `race-history.json` records the stop reason, resume count and first-upload timestamp. The two new settings are editable through JSON or MCP `config_patch`; omitted settings retain the defaults above.
 
 ---
 

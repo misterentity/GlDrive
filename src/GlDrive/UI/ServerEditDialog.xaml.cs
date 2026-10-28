@@ -290,7 +290,7 @@ public partial class ServerEditDialog : Window
             // existing pin is rejected; replacing it requires Clear Certificate.
             AttachTofuValidation(client, host, port);
 
-            await client.Connect();
+            await GuardedFtpLogin.ConnectAsync(client, new FtpLoginAccount(host, port, username), manualRetry: true);
             var listing = await client.GetListing("/");
             receiveCompleted = true;
 
@@ -586,7 +586,7 @@ public partial class ServerEditDialog : Window
             // TOFU instead of blind accept — see AttachTofuValidation.
             AttachTofuValidation(client, host, port);
 
-            await client.Connect();
+            await GuardedFtpLogin.ConnectAsync(client, new FtpLoginAccount(host, port, username), manualRetry: true);
 
             var useCpsv = client.Capabilities.Contains(FtpCapability.CPSV);
             var controlHost = host;
@@ -686,7 +686,7 @@ public partial class ServerEditDialog : Window
             // TOFU instead of blind accept — see AttachTofuValidation.
             AttachTofuValidation(client, host, port);
 
-            await client.Connect();
+            await GuardedFtpLogin.ConnectAsync(client, new FtpLoginAccount(host, port, username), manualRetry: true);
             var reply = await client.Execute("SITE RULES");
             await client.Disconnect();
             client.Dispose();
@@ -722,7 +722,7 @@ public partial class ServerEditDialog : Window
                 sampleClient.Config.CustomStreamConfig = gnuConfig2;
                 // TOFU instead of blind accept — see AttachTofuValidation.
                 AttachTofuValidation(sampleClient, host, port);
-                await sampleClient.Connect();
+                await GuardedFtpLogin.ConnectAsync(sampleClient, new FtpLoginAccount(host, port, username), manualRetry: false);
 
                 // Also scan the notification watch path for sections
                 var watchPath = WatchPathBox.Text?.Trim() ?? "/recent";
@@ -1110,9 +1110,10 @@ public partial class ServerEditDialog : Window
         // 3. Detect site rules (slots, affils, denied patterns)
         try
         {
-            DetectSiteRules_Click(sender, e);
-            await Task.Delay(500);
-            results.Add("Site rules: detection started");
+            // This is a follow-up within the same user action. A rejected section
+            // login must keep the account held instead of being reset by this step.
+            await DetectSiteRulesAsync(manualRetry: false);
+            results.Add("Site rules: see rule-detection status");
         }
         catch { results.Add("Site rules: detection failed"); }
 
@@ -1186,7 +1187,7 @@ public partial class ServerEditDialog : Window
             AttachTofuValidation(client, host, port);
 
             TestResultText.Text = "Connecting...";
-            await client.Connect();
+            await GuardedFtpLogin.ConnectAsync(client, new FtpLoginAccount(host, port, username), manualRetry: true);
 
             var useCpsv = client.Capabilities.Contains(FtpCapability.CPSV);
             var controlHost = host;
@@ -1521,6 +1522,9 @@ public partial class ServerEditDialog : Window
     }
 
     private async void DetectSiteRules_Click(object sender, RoutedEventArgs e)
+        => await DetectSiteRulesAsync(manualRetry: true);
+
+    private async Task DetectSiteRulesAsync(bool manualRetry)
     {
         try
         {
@@ -1573,7 +1577,7 @@ public partial class ServerEditDialog : Window
             AttachTofuValidation(client, host, port);
 
             TestResultText.Text = "Connecting for SITE RULES...";
-            await client.Connect();
+            await GuardedFtpLogin.ConnectAsync(client, new FtpLoginAccount(host, port, username), manualRetry: manualRetry);
 
             var reply = await client.Execute("SITE RULES");
 

@@ -6,6 +6,8 @@ public interface IChangeValidator
 {
     string Category { get; }
     ValidationResult Validate(AgentChange change, GlDrive.Config.AppConfig config);
+    ValidationResult Validate(AgentChange change, GlDrive.Config.AppConfig config, ChangeValidationContext context)
+        => Validate(change, config);
 }
 
 internal static class ChangeValueJson

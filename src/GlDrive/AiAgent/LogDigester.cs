@@ -30,6 +30,17 @@ public sealed class LogDigester
     public Task<DigestBundle> BuildAsync(int windowDays, CancellationToken cancellationToken = default)
         => Task.Run(() => Build(windowDays, cancellationToken: cancellationToken), cancellationToken);
 
+    /// <summary>Fresh, local-only evidence for manually reviewed changes; independent reader state per call.</summary>
+    public RacesDigest BuildRaceEvidence(int windowDays, DateTime? nowOverride = null)
+    {
+        var now = nowOverride ?? DateTime.Now;
+        var reader = new LogDigester(_aiDataRoot, _openRead);
+        var races = new RacesDigester().Build(reader.ReadStream<RaceOutcomeEvent>("races",
+            now.AddDays(-Math.Clamp(windowDays, 1, 30)).Date, now));
+        races.WinnerEvidenceComplete = reader.ParseSkips == 0;
+        return races;
+    }
+
     public DigestBundle Build(int windowDays, DateTime? nowOverride = null, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -43,6 +54,7 @@ public sealed class LogDigester
         };
 
         bundle.Races           = new RacesDigester().Build(ReadStream<RaceOutcomeEvent>("races", windowStart, now, cancellationToken));
+        bundle.Races.WinnerEvidenceComplete = _parseSkips == 0;
         bundle.Nukes           = new NukesDigester().Build(ReadStream<NukeDetectedEvent>("nukes", windowStart, now, cancellationToken));
         bundle.SiteHealth      = new SiteHealthDigester().Build(ReadStream<SiteHealthEvent>("site-health", windowStart, now, cancellationToken));
         bundle.Announces       = new AnnouncesDigester().Build(ReadStream<AnnounceNoMatchEvent>("announces-nomatch", windowStart, now, cancellationToken));

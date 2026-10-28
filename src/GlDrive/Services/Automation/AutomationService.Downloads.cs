@@ -30,7 +30,7 @@ public sealed partial class AutomationService
             var path = RemotePath(a, allowRoot: false);
             var name = Line(Optional(a, "releaseName", 512) ?? path.Split('/').Last(), "releaseName");
             var category = Line(Optional(a, "category", 128) ?? "", "category");
-            var destination = Optional(a, "localPath") ?? Path.Combine(_config.Downloads.GetPathForCategory(category), PathSanitizer.Sanitize(name));
+            var destination = DownloadPathResolver.Flat(_config.Downloads, category, name, Optional(a, "localPath"));
             if (!Path.IsPathFullyQualified(destination)) throw new ArgumentException("'localPath' must be an absolute local directory path.");
             var wishlistId = Optional(a, "wishlistItemId", 128);
             if (wishlistId != null && _wishlist.GetById(wishlistId) == null)
@@ -230,7 +230,10 @@ public sealed partial class AutomationService
                     throw new ArgumentException("'item' must be an object.");
                 var id = Optional(input, "id", 128);
                 var existing = id == null ? null : _wishlist.GetById(id);
-                var node = JsonSerializer.SerializeToNode(existing ?? new WishlistItem(), Json)!.AsObject();
+                var node = JsonSerializer.SerializeToNode(existing ?? new WishlistItem
+                {
+                    Quality = WishlistQuality.Parse(_config.Downloads.QualityDefault)
+                }, Json)!.AsObject();
                 foreach (var property in input.EnumerateObject())
                 {
                     if (!node.ContainsKey(property.Name)) throw new ArgumentException($"Unknown wishlist field: {property.Name}");

@@ -33,7 +33,7 @@ public sealed class AgentMutationIntegrityTests : IDisposable
         new ChangeApplier(new IChangeValidator[]
         {
             new PoolSizingValidator(), new PriorityValidator(), new RequestFillerValidator(), new SkiplistValidator(),
-        }, freeze ?? new FreezeStore(_dir), new AuditTrail(_dir))
+        }, freeze ?? new FreezeStore(_dir), new AuditTrail(_dir), MeasuredWinnerEvidence.ForConfig)
             .Apply(changes, cfg, cfg.Agent, "test", dryRun: false, rows.Add, configOnly);
         return rows;
     }

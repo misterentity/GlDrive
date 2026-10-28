@@ -13,6 +13,9 @@ public class RaceHistoryItem
     public string Section { get; set; } = "";
     public SpreadMode Mode { get; set; }
     public SpreadJobState Result { get; set; }
+    public string StopReason { get; set; } = "";
+    public int ResumeCount { get; set; }
+    public DateTime? FirstUploadAtUtc { get; set; }
     public DateTime StartedAt { get; set; }
     public DateTime CompletedAt { get; set; }
     public int SiteCount { get; set; }

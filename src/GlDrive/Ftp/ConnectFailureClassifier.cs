@@ -46,6 +46,9 @@ public static class ConnectFailureClassifier
         /// <summary>The local account login gate had no permit to hand out.</summary>
         AccountLoginCapped,
 
+        /// <summary>The FTP server rejected the ordinary account's credentials.</summary>
+        AuthRejected,
+
         /// <summary>
         /// The attempt never reached the server at all: DNS did not resolve the host,
         /// or the network/host was unreachable. Defined by the TRANSPORT-LAYER outcome,
@@ -121,6 +124,8 @@ public static class ConnectFailureClassifier
         if (IsUnreachable(ex))
             return ConnectFailure.HostUnreachable;
 
+        bncStatedLoginLimit |= HasLoginLimitError(ex);
+
         if (IndicatesRefusal(ex) || (bncStatedLoginLimit && ghostKillAlreadySpent))
             return ConnectFailure.ServerRefused;
 
@@ -131,6 +136,9 @@ public static class ConnectFailureClassifier
             && ex.Message?.Contains("login cap reached", System.StringComparison.OrdinalIgnoreCase) == true)
             return ConnectFailure.AccountLoginCapped;
 
+        if (IndicatesAuthenticationRejection(ex))
+            return ConnectFailure.AuthRejected;
+
         return ConnectFailure.ConnectFault;
     }
 
@@ -140,6 +148,38 @@ public static class ConnectFailureClassifier
     /// kill, counting an exhaustion, logging a stack — is gated on this being true.
     /// </summary>
     public static bool IsRealFinding(ConnectFailure f) => f != ConnectFailure.CallerAbandoned;
+
+    public static bool HasLoginLimitError(System.Exception? ex)
+    {
+        for (; ex != null; ex = ex.InnerException)
+            if (ContainsAny(ex.Message, "simultaneous logins", "too many connections", "too many users",
+                "login limit", "already logged in", "maximum number of users", "user limit exceeded",
+                "maximum number of connections", "max users", "maximum logins", "too many logins")) return true;
+        return false;
+    }
+
+    private static bool ContainsAny(string? text, params string[] phrases) =>
+        phrases.Any(p => text?.Contains(p, System.StringComparison.OrdinalIgnoreCase) == true);
+
+    private static bool IndicatesAuthenticationRejection(System.Exception? ex)
+    {
+        // Some BNCs use 530 for an upstream outage or capacity pressure, including
+        // through FtpAuthenticationException. These are not findings about a password.
+        if (HasLoginLimitError(ex)) return false;
+        for (var cause = ex; cause != null; cause = cause.InnerException)
+            if (ContainsAny(cause.Message, "cannot connect", "can't connect", "unable to connect",
+                "upstream", "backend", "try again later", "temporarily unavailable")) return false;
+        for (; ex != null; ex = ex.InnerException)
+        {
+            if (ex is FluentFTP.Exceptions.FtpAuthenticationException auth && auth.CompletionCode == "530")
+                return true;
+            if (System.Text.RegularExpressions.Regex.IsMatch(ex.Message ?? "", @"\b530\b")
+                && ContainsAny(ex.Message, "login incorrect", "login failed", "authentication failed",
+                    "authentication rejected", "invalid password", "incorrect password", "invalid credentials",
+                    "unknown user", "user unknown", "password incorrect")) return true;
+        }
+        return false;
+    }
 
     /// <summary>
     /// Walk the exception chain for a socket outcome in <see cref="Unreachable"/>.

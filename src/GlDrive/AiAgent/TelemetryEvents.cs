@@ -25,6 +25,9 @@ public record RaceOutcomeEvent : TelemetryEnvelope
     [JsonPropertyName("endedAt")]    public string EndedAt { get; init; } = "";
     [JsonPropertyName("participants")] public List<RaceParticipant> Participants { get; init; } = [];
     [JsonPropertyName("winner")]     public string? Winner { get; init; }
+    [JsonPropertyName("stopReason")] public string StopReason { get; init; } = "";
+    [JsonPropertyName("resumeCount")] public int ResumeCount { get; init; }
+    [JsonPropertyName("firstUploadAtUtc")] public string? FirstUploadAtUtc { get; init; }
     [JsonPropertyName("fxpMode")]    public string FxpMode { get; init; } = "";
     [JsonPropertyName("scoreBreakdown")] public Dictionary<string, int> ScoreBreakdown { get; init; } = new();
     [JsonPropertyName("result")]     public string Result { get; init; } = "";  // complete|aborted|blacklisted

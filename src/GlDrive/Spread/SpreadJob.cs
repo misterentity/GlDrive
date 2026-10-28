@@ -22,7 +22,7 @@ public class SiteProgress
     public bool IsSource { get; set; }
 }
 
-public class SpreadJob : IDisposable
+public partial class SpreadJob : IDisposable
 {
     private readonly SpreadConfig _spreadConfig;
     private volatile Dictionary<string, FtpConnectionPool> _pools;
@@ -292,7 +292,6 @@ public class SpreadJob : IDisposable
     private readonly System.Threading.ManualResetEventSlim _pauseSignal = new(true);
 
     // Pre-computed affil checks (computed once per job)
-    private readonly Dictionary<string, bool> _affilCache = new();
 
     public string Id { get; } = Guid.NewGuid().ToString("N")[..8];
     public string ReleaseName { get; }
@@ -418,17 +417,6 @@ public class SpreadJob : IDisposable
                 ServerName = config.Name
             };
 
-            // Pre-compute affil check once — match group name at end of release
-            // (scene releases end with -GROUPNAME). Contains() caused false positives
-            // where short group names like "NOMA" matched inside "Narco.Menomanites".
-            // destinationReachable: true — this loop iterates `pools`, which SpreadManager
-            // builds from the live spread-pool registry, so every server reaching here is
-            // connected by construction. Reachability is re-checked here only to keep the
-            // predicate's contract explicit; the filtering already happened upstream.
-            _affilCache[serverId] = !CandidatePredicates.CanReceiveRelease(
-                releaseName, config.SpreadSite.Affils,
-                downloadOnly: false, destinationBlacklisted: false,
-                destinationReachable: true);
         }
     }
 
@@ -477,7 +465,7 @@ public class SpreadJob : IDisposable
 
     private bool IsReceivingSite(string serverId) =>
         _serverConfigs.TryGetValue(serverId, out var config)
-        && !config.SpreadSite.DownloadOnly && !_affilCache.GetValueOrDefault(serverId);
+        && !config.SpreadSite.DownloadOnly && !LiveSpreadPolicy.IsAffiliated(config, ReleaseName);
 
     /// <summary>Set by SpreadManager: search connected sites (excluding given ids) for
     /// an alternate source of this release. Returns (serverId, path, category) or null.</summary>
@@ -492,9 +480,17 @@ public class SpreadJob : IDisposable
     {
         var ct = _cts.Token;
         var sitePaths = new Dictionary<string, string>();
+        using var lifetimeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var lifetime = _cleanupOnly ? Task.CompletedTask : WatchLifetime(lifetimeCts.Token);
 
         try
         {
+            if (_cleanupOnly)
+            {
+                await CleanupOwnedPartialAsync();
+                State = SpreadJobState.Stopped;
+                return;
+            }
             // Phase 0: Check release name against directory-level skiplist rules
             // This prevents spreading releases that match deny patterns like *GERMAN*, *CADCAM*, etc.
             // Capture the full evaluation trace for the history detail popup.
@@ -524,6 +520,14 @@ public class SpreadJob : IDisposable
 
             // Phase 1: Discover which servers already have the release
             var sourceServers = new HashSet<string>();
+
+            // An owned partial is still a destination on a resumed attempt. Merely
+            // finding its directory must not promote it to the source role.
+            foreach (var owned in CapturePartialState().Directories)
+                if (RaceLifetimePolicy.SafeRoot(owned.RemotePath, ReleaseName)
+                    && _serverConfigs.TryGetValue(owned.ServerId, out var ownedConfig)
+                    && RaceLifetimePolicy.SameAccount(owned, ownedConfig.Connection))
+                    sitePaths[owned.ServerId] = owned.RemotePath;
 
             // If we have a known source (from notification/search), use it directly
             if (!string.IsNullOrEmpty(_knownSourceServerId) && !string.IsNullOrEmpty(_knownSourcePath)
@@ -627,6 +631,7 @@ public class SpreadJob : IDisposable
                 Log.Warning("Spread: {Release} [{Section}] absent from all {Count} probed " +
                     "base path(s): {Bases}", ReleaseName, Section, probedBases.Count,
                     string.Join(", ", probedBases));
+                StopReason = RaceStopReason.SourceGone;
                 SetFailed("Release not found on any server — check release name and section paths");
                 return;
             }
@@ -907,7 +912,7 @@ public class SpreadJob : IDisposable
                         .Select(id => _serverConfigs[id].Name)
                         .ToList();
                     var affilBlocked = nonSource
-                        .Where(id => _affilCache.GetValueOrDefault(id))
+                        .Where(id => LiveSpreadPolicy.IsAffiliated(_serverConfigs[id], ReleaseName))
                         .Select(id => _serverConfigs[id].Name)
                         .ToList();
                     var parts = new List<string>();
@@ -933,16 +938,8 @@ public class SpreadJob : IDisposable
             }
             _sitePathsRef = sitePaths;
 
-            using var hardTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            // HardTimeoutSeconds budgets the transfer phase; add the completion-wait
-            // window so the global timer can't kill a legitimate await phase, while a
-            // wedged race still terminates at this absolute ceiling.
-            var ceilingSeconds = _spreadConfig.HardTimeoutSeconds
-                + (_spreadConfig.WaitForDestinationComplete
-                    ? _spreadConfig.DestinationCompletionWaitMinutes * 60
-                    : 0);
-            hardTimeout.CancelAfter(TimeSpan.FromSeconds(ceilingSeconds));
-            var token = hardTimeout.Token;
+            // WatchLifetime tracks actual byte movement and a separate absolute cap.
+            var token = ct;
             _backgroundReads = new BackgroundReadLifetime(token);
 
             var lastActivity = DateTime.UtcNow;
@@ -1012,9 +1009,8 @@ public class SpreadJob : IDisposable
                         hadTransfersBl = _serversWithSuccessfulTransfer.Count > 0;
                     if (hadTransfersBl)
                     {
-                        State = SpreadJobState.Completed;
-                        Completed?.Invoke(this);
-                        Log.Information("Spread completed (partial): {Release} — all remaining destinations dropped after repeated failures ({Dropped})",
+                        Stop(RaceStopReason.Stall);
+                        Log.Information("Spread stalled: {Release} — all remaining destinations dropped after repeated failures ({Dropped})",
                             ReleaseName, droppedName);
                     }
                     else
@@ -1110,6 +1106,14 @@ public class SpreadJob : IDisposable
                         // race ending was the tray notification.
                         Log.Information("Spread race complete: {Release} — {Summary}",
                             ReleaseName, DestinationStateSummary());
+                        bool ownedPartial;
+                        lock (_ownershipLock) ownedPartial = _partial.Directories.Any(d =>
+                            _destStates.GetValueOrDefault(d.ServerId, DestState.Transferring) != DestState.Complete);
+                        if (_spreadConfig.WaitForDestinationComplete && ownedPartial)
+                        {
+                            Stop(RaceStopReason.Stall);
+                            return;
+                        }
                         State = SpreadJobState.Completed;
                         Completed?.Invoke(this);
                         return;
@@ -1272,8 +1276,8 @@ public class SpreadJob : IDisposable
 
                         if (hadTransfers)
                         {
-                            State = SpreadJobState.Completed;
-                            Completed?.Invoke(this);
+                            if (missingFiles > 0) Stop(RaceStopReason.Stall);
+                            else { State = SpreadJobState.Completed; Completed?.Invoke(this); }
                             Log.Information("Spread completed{Partial}: {Release} — {Missing} files undelivered",
                                 missingFiles > 0 ? " (partial)" : "", ReleaseName, missingFiles);
                         }
@@ -1347,6 +1351,8 @@ public class SpreadJob : IDisposable
         }
         finally
         {
+            lifetimeCts.Cancel();
+            await lifetime;
             // Close admission and capture the actual single-flight task atomically. A second
             // migration request must never replace an active task with a completed no-op.
             Task<bool> migrationDrain;
@@ -1400,9 +1406,12 @@ public class SpreadJob : IDisposable
             // our own incomplete work before leaving.
             // User cancellation and app shutdown must preserve landed volumes for a
             // resumed race. An incomplete upstream release is also legitimate work.
-            if (State is not (SpreadJobState.Stopped or SpreadJobState.Waiting) && !HasPendingReleaseInventory())
-                await CleanupIncompleteDirs(sitePaths);
-            if (State != SpreadJobState.Waiting)
+            // Ownership survives stopped/waiting attempts. The manager decides
+            // whether to resume or schedule cleanup, retaining failures durably.
+            if (!_cleanupOnly && State == SpreadJobState.Completed
+                && !HasPendingReleaseInventory())
+                await CleanupOwnedPartialAsync();
+            if (!_cleanupOnly && State != SpreadJobState.Waiting)
                 EmitRaceOutcome(State == SpreadJobState.Completed ? "complete"
                           : _blacklisted                       ? "blacklisted"
                           :                                      "aborted");
@@ -1453,6 +1462,9 @@ public class SpreadJob : IDisposable
                 EndedAt = DateTime.UtcNow.ToString("O"),
                 Participants = participants,
                 Winner = null,
+                StopReason = StopReason == RaceStopReason.None ? "" : StopReason.ToString(),
+                ResumeCount = ResumeCount,
+                FirstUploadAtUtc = FirstUploadAtUtc?.ToString("O"),
                 FxpMode = Mode.ToString(),
                 ScoreBreakdown = new Dictionary<string, int>(),
                 Result = result,
@@ -1480,115 +1492,6 @@ public class SpreadJob : IDisposable
         if ((pendingWork && elapsed < 180)
             || (awaitingCompletion && elapsed < awaitCapSeconds)) return 0;
         return elapsed;
-    }
-
-    /// <summary>
-    /// Remove release directories on destinations where we created them (MKD)
-    /// but the release didn't fully land. Uses glftpd's SITE WIPE -r which
-    /// removes a directory WITHOUT deducting user credits — that's the whole
-    /// point of wipe vs delete. Any destination with owned &lt; total is
-    /// considered incomplete and wiped. The source server and any destination
-    /// that successfully received every file are left alone.
-    /// </summary>
-    private async Task CleanupIncompleteDirs(Dictionary<string, string> sitePaths)
-    {
-        HashSet<string> created;
-        Dictionary<string, int> ownedCounts;
-        Dictionary<string, DestState> destStates;
-        Dictionary<string, int> deliveredCounts;
-        int total;
-        lock (_ownershipLock)
-        {
-            created = [.._dirsCreated];
-            ownedCounts = new Dictionary<string, int>(_serverFileCount);
-            destStates = new Dictionary<string, DestState>(_destStates);
-            deliveredCounts = new Dictionary<string, int>(_destDelivered);
-            total = ExpectedTotalNoLock();
-        }
-
-        foreach (var serverId in created)
-        {
-            var owned = ownedCounts.GetValueOrDefault(serverId);
-            // If the dest has every file the release needs, it's complete.
-            // Leave it alone (don't wipe a good release!).
-            if (total > 0 && owned >= total) continue;
-
-            // The dest's zipscript declared it complete (marker seen). NEVER wipe
-            // it, even when our own count disagrees — an inflated expected total
-            // (SFV double-count) made this path SITE WIPE a validated-complete
-            // 3.2GB release on 2026-06-08, which then got re-raced and auto-nuked.
-            if (destStates.GetValueOrDefault(serverId) == DestState.Complete)
-            {
-                Log.Information("Spread cleanup: skipping {Server} — dest is zipscript-complete ({Owned}/{Total} per our count)",
-                    _serverConfigs.TryGetValue(serverId, out var c) ? c.Name : serverId, owned, total);
-                continue;
-            }
-
-            // Files we did NOT deliver are present (other racers uploaded, or our
-            // STORs were dupe-skipped against theirs) — the dir belongs to a live
-            // shared race. Wiping it would destroy other traders' work; leave it
-            // for their zipscript to finish.
-            var deliveredHere = deliveredCounts.GetValueOrDefault(serverId);
-            if (owned > deliveredHere)
-            {
-                Log.Information("Spread cleanup: skipping {Server} — {Owned} files present but only {Delivered} delivered by us (shared race, foreign uploads)",
-                    _serverConfigs.TryGetValue(serverId, out var c2) ? c2.Name : serverId, owned, deliveredHere);
-                continue;
-            }
-
-            if (!sitePaths.TryGetValue(serverId, out var path)) continue;
-            if (!_pools.TryGetValue(serverId, out var pool)) continue;
-
-            var serverName = _serverConfigs.TryGetValue(serverId, out var cfg) ? cfg.Name : serverId;
-            var sanitized = Ftp.CpsvDataHelper.SanitizeFtpPath(path);
-
-            try
-            {
-                // Bounded — Borrow(CancellationToken.None) on a login-cap-starved
-                // pool blocked a finished race here for 15+ minutes while it held
-                // a maxConcurrentRaces slot (2026-06-08), and one job hung forever.
-                using var cleanupCts = new CancellationTokenSource(TimeSpan.FromSeconds(45));
-                await using var conn = await pool.Borrow(cleanupCts.Token);
-
-                // Prefer SITE WIPE -r: removes dir + contents without credit
-                // deduction. This is the critical difference — if we use DELE
-                // or plain RMD, the user gets nuked for leaving incomplete
-                // files behind AND pays the credit penalty for deleting their
-                // own upload. SITE WIPE is glftpd's explicit "no penalty"
-                // removal command.
-                var wipeReply = await conn.Client.Execute($"SITE WIPE -r {sanitized}", cleanupCts.Token);
-                if (wipeReply.Success ||
-                    (wipeReply.Message ?? "").Contains("wiped", StringComparison.OrdinalIgnoreCase) ||
-                    (wipeReply.Message ?? "").Contains("removed", StringComparison.OrdinalIgnoreCase))
-                {
-                    Log.Information("Spread cleanup: SITE WIPE -r {Path} on {Server} ({Owned}/{Total} files — {Reason})",
-                        path, serverName, owned, total, owned == 0 ? "empty" : "partial");
-                    continue;
-                }
-
-                // Fall back to plain RMD when SITE WIPE isn't available or
-                // denied. Only useful when the dir is already empty — RMD on
-                // a non-empty dir will fail and glftpd will nuke us anyway,
-                // but it's worth trying as a last resort.
-                Log.Warning("Spread cleanup: SITE WIPE failed on {Server} ({Code} {Msg}), trying RMD",
-                    serverName, wipeReply.Code, wipeReply.Message);
-                var rmdReply = await conn.Client.Execute($"RMD {sanitized}", cleanupCts.Token);
-                if (rmdReply.Success)
-                {
-                    Log.Information("Spread cleanup: RMD {Path} on {Server} (fallback)", path, serverName);
-                }
-                else
-                {
-                    Log.Warning("Spread cleanup: could not remove {Path} on {Server} — site may nuke you ({Code} {Msg})",
-                        path, serverName, rmdReply.Code, rmdReply.Message);
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Warning(ex, "Spread cleanup: failed to wipe {Path} on {Server} — partial release left behind, site may nuke",
-                    path, serverName);
-            }
-        }
     }
 
     private bool TryClaimSlots(string srcId, string dstId)
@@ -1680,7 +1583,8 @@ public class SpreadJob : IDisposable
                 })));
         }
 
-        var results = new List<(string serverId, List<SpreadFileInfo> files, ScanSignals signals, long listingEpoch)>();
+        var results = new List<(string serverId, List<SpreadFileInfo> files, ScanSignals signals, long listingEpoch,
+            Dictionary<string, UploadListingProgress> uploadAttempts)>();
         var scanLock = new Lock();
         var hardFailureCount = 0;
         var contentionDeferralCount = 0;
@@ -1712,7 +1616,15 @@ public class SpreadJob : IDisposable
             var signals = new ScanSignals();
             var scanDone = false;
             long listingEpoch;
-            lock (_ownershipLock) listingEpoch = _ownershipEpoch;
+            Dictionary<string, UploadListingProgress> uploadAttempts;
+            lock (_ownershipLock)
+            {
+                listingEpoch = _ownershipEpoch;
+                // A listing can outlive its transfer. Only the exact attempt
+                // already transferring when this scan started may consume it.
+                uploadAttempts = _uploadListingProgress.Where(p => p.Key.destination == serverId)
+                    .ToDictionary(p => p.Key.file, p => p.Value, StringComparer.OrdinalIgnoreCase);
+            }
             Exception? lastError = null;
 
             if (mainPool != null)
@@ -1817,7 +1729,7 @@ public class SpreadJob : IDisposable
             if (scanDone)
             {
                 Log.Debug("Spread scan: {Server} returned {Count} files", serverName, files.Count);
-                lock (scanLock) results.Add((serverId, files, signals, listingEpoch));
+                lock (scanLock) results.Add((serverId, files, signals, listingEpoch, uploadAttempts));
             }
             else if (!yieldedToTransfers)
             {
@@ -1856,12 +1768,16 @@ public class SpreadJob : IDisposable
         // files is the earliest observable signal of glftpd moving /incoming -> /recent.
         // Queue the async relocation probe after releasing _ownershipLock.
         var suspectedSourceMigrations = new HashSet<string>(StringComparer.Ordinal);
+        long observedUploadProgress = 0;
 
         // Process all results under lock once
         lock (_ownershipLock)
         {
-            foreach (var (serverId, files, signals, listingEpoch) in results)
+            foreach (var (serverId, files, signals, listingEpoch, uploadAttempts) in results)
             {
+                foreach (var file in files)
+                    if (_uploadListingProgress.TryGetValue((file.Name, serverId), out var progress))
+                        observedUploadProgress += progress.ObserveForAttempt(file.Size, uploadAttempts.GetValueOrDefault(file.Name));
                 var serverName = _serverConfigs.TryGetValue(serverId, out var cfg) ? cfg.Name : serverId;
                 Log.Debug("Spread scan: {Server} found {Count} files at {Path}",
                     serverName, files.Count, scanTargets.GetValueOrDefault(serverId, "?"));
@@ -1897,6 +1813,11 @@ public class SpreadJob : IDisposable
             }
         }
 
+        // Direct FXP does not send byte callbacks through this process. A growing
+        // current upload observed by existing destination LISTs is still progress.
+        // First-payload persistence must happen outside the ownership lock.
+        RecordByteProgress(observedUploadProgress);
+
         // Reconcile FilesTotal across ALL sites after the scan cycle. ProcessFiles
         // stamps each site with `_fileInfos.Count` as it observed it — so sites
         // processed first in the loop see a smaller count than sites processed
@@ -1905,6 +1826,7 @@ public class SpreadJob : IDisposable
         // partial _fileInfos snapshot.
         var finalTotal = ReconcileProgressFromOwnership();
         EvaluateDestCompletion(finalTotal);
+        RememberConfirmedCompletion();
         ProgressChanged?.Invoke(this);
 
         foreach (var sourceId in suspectedSourceMigrations)
@@ -2066,7 +1988,8 @@ public class SpreadJob : IDisposable
                     }
                 }
 
-                if (CompletionDetector.IsCompletionMarker(item.Name, _spreadConfig.CompletionMarkers))
+                if (RaceLifetimePolicy.IsWholeReleaseCompletionMarker(depth == 0 ? "" : currentPath,
+                        item.Name, _spreadConfig.CompletionMarkers))
                     signals.SawCompletionMarker = true;
                 if (CompletionDetector.IsMissingStub(item.Name, item.Size)
                     || ReleaseSourceState.IsIncompleteMarker(item.Name))
@@ -2094,7 +2017,8 @@ public class SpreadJob : IDisposable
                     }
                 }
 
-                if (CompletionDetector.IsCompletionMarker(item.Name, _spreadConfig.CompletionMarkers))
+                if (RaceLifetimePolicy.IsWholeReleaseCompletionMarker(depth == 0 ? "" : currentPath,
+                        item.Name, _spreadConfig.CompletionMarkers))
                     signals.SawCompletionMarker = true;
                 if (CompletionDetector.IsMissingStub(item.Name, item.Size)
                     || ReleaseSourceState.IsIncompleteMarker(item.Name))
@@ -2543,7 +2467,8 @@ public class SpreadJob : IDisposable
             // Pre-build per-dest extension/basename sets for Unique/Similar checks
             Dictionary<string, HashSet<string>>? destExtensions = null;
             Dictionary<string, HashSet<string>>? destBaseNames = null;
-            if (_fileActions.Count > 0)
+            // Rules can change while the race is running; current dispatch decisions may
+            // introduce Unique/Similar even when the original scan had no such action.
             {
                 destExtensions = new(StringComparer.Ordinal);
                 destBaseNames = new(StringComparer.Ordinal);
@@ -2644,7 +2569,10 @@ public class SpreadJob : IDisposable
                         if (dstConfig.SpreadSite.DownloadOnly) { skippedDownloadOnly++; continue; }
                         // Mirror of DownloadOnly on the source side.
                         if (_serverConfigs[srcId].SpreadSite.NeverSource) { skippedNeverSource++; continue; }
-                        if (_affilCache.GetValueOrDefault(dstId)) { skippedAffil++; continue; }
+                        if (LiveSpreadPolicy.IsAffiliated(dstConfig, ReleaseName)) { skippedAffil++; continue; }
+                        var srcAction = LiveSpreadPolicy.FileAction(_skiplist, _serverConfigs[srcId], _spreadConfig, Section, ReleaseName, fileName);
+                        var skipAction = LiveSpreadPolicy.FileAction(_skiplist, dstConfig, _spreadConfig, Section, ReleaseName, fileName);
+                        if (srcAction == SkiplistAction.Deny || skipAction == SkiplistAction.Deny) continue;
 
                         // Check slots from snapshot (no nested lock)
                         var dstActive = activeTransferSnapshot.GetValueOrDefault(dstId);
@@ -2654,7 +2582,7 @@ public class SpreadJob : IDisposable
                         { skippedSlots++; continue; }
 
                         // Check Unique/Similar skiplist actions (O(1) via pre-built sets)
-                        if (_fileActions.TryGetValue(fileName, out var skipAction))
+                        if (skipAction is SkiplistAction.Unique or SkiplistAction.Similar)
                         {
                             if (skipAction == SkiplistAction.Unique)
                             {
@@ -2822,6 +2750,16 @@ public class SpreadJob : IDisposable
             var srcPath = ResolveSourcePath(SourceBasePath(srcId), file);
 
             var transfer = new FxpTransfer();
+            transfer.StateChanged += state =>
+            {
+                lock (_ownershipLock)
+                {
+                    if (state == TransferState.Transferring)
+                        _uploadListingProgress[(file.Name, dstId)] = new();
+                    else
+                        _uploadListingProgress.Remove((file.Name, dstId));
+                }
+            };
             // Defer directory creation until just before STOR — prevents empty dirs
             // when PASV/PORT negotiation or connection setup fails
             var dstClient = dstConn!.Client;
@@ -2829,7 +2767,7 @@ public class SpreadJob : IDisposable
             transfer.BeforeStore = async storeCt =>
             {
                 await EnsureDirectoryExists(dstClient, dstId, dstBasePath, fileName, storeCt);
-                lock (_ownershipLock) _dirsCreated.Add(dstId);
+                RecordUploadStart(dstId, dstBasePath, fileName, file.Size);
             };
             // The ceiling clock and the elapsed clock start together. Gates (45s each) and the
             // borrow (30s) are bounded separately; charging their queue time to this file let
@@ -2856,6 +2794,7 @@ public class SpreadJob : IDisposable
                 var delta = totalBytes - lastReportedBytes;
                 lastReportedBytes = totalBytes;
                 var now = DateTime.UtcNow;
+                RecordByteProgress(delta);
                 var elapsed = (now - startTime).TotalSeconds;
                 // Relay ceiling = no-progress window (see FxpFailurePolicy.CeilingTracksProgress).
                 if (FxpFailurePolicy.ShouldRearmOnProgress(lastCeilingRearm, now))
@@ -2897,6 +2836,7 @@ public class SpreadJob : IDisposable
 
                 lock (_ownershipLock)
                     CreditDeliveryNoLock(file.Name, file.Size, dstId, transfer.WasDupe);
+                RecordUploadedFile(dstId, dstBasePath, file.Name, file.Size, transfer.WasDupe);
                 _forceScan = true; // Rescan — new files likely appeared on source from other racers
                 if (transfer.WasDupe)
                     Log.Information("FXP dupe-skip: {File} ({Src} -> {Dst}) — already on dest",
@@ -3162,6 +3102,7 @@ public class SpreadJob : IDisposable
         {
             // Keep the drain entry until success/failure ownership bookkeeping
             // finishes; final outcome snapshots must not race that publication.
+            lock (_ownershipLock) _uploadListingProgress.Remove((file.Name, dstId));
             tracked?.Dispose();
             if (srcConn != null) await srcConn.DisposeAsync();
             if (dstConn != null) await dstConn.DisposeAsync();
@@ -3274,7 +3215,7 @@ public class SpreadJob : IDisposable
             }
 
             // 4. Search connected sites for an alternate source.
-            if (SourceSearch == null) return;
+            if (SourceSearch == null) { Stop(RaceStopReason.SourceGone); return; }
             var exclude = new HashSet<string>(StringComparer.Ordinal) { srcId };
             lock (_ownershipLock) foreach (var s in _sourceMigratedAway) exclude.Add(s);
             // Don't search the destinations as sources.
@@ -3293,6 +3234,7 @@ public class SpreadJob : IDisposable
                 if (alt is not { } a)
                 {
                     Log.Information("Spread: no alternate source found for {Release} — affected dests will time out", ReleaseName);
+                    Stop(RaceStopReason.SourceGone);
                     return;
                 }
 
@@ -4079,7 +4021,9 @@ public class SpreadJob : IDisposable
             ? basePath
             : basePath.TrimEnd('/') + "/" + dirPart.Trim('/');
 
-        var (ok, code, msg) = await EnsurePathByNavigation(client, fullDir, ct);
+        var (ok, code, msg) = await EnsurePathByNavigation(client, fullDir, ct,
+            created => RecordCreatedRoot(dstId, basePath, created,
+                RaceLifetimePolicy.AccountIdentity(client.Host, client.Port, client.Credentials.UserName)));
         if (!ok)
         {
             RecordIfPermanent(dstId, basePath, code, msg);
@@ -4105,32 +4049,45 @@ public class SpreadJob : IDisposable
     /// fully-permissioned account.
     /// </summary>
     private static async Task<(bool ok, string code, string msg)> EnsurePathByNavigation(
-        FluentFTP.AsyncFtpClient client, string fullPath, CancellationToken ct)
+        FluentFTP.AsyncFtpClient client, string fullPath, CancellationToken ct, Action<string>? created = null)
+        => await NavigateOwnedPath((command, token) => client.Execute(command, token), fullPath, ct, created);
+
+    internal static async Task<(bool ok, string code, string msg)> NavigateOwnedPath(
+        Func<string, CancellationToken, Task<FluentFTP.FtpReply>> execute,
+        string fullPath, CancellationToken ct, Action<string>? created = null)
     {
         var sanitized = Ftp.CpsvDataHelper.SanitizeFtpPath(fullPath);
 
         // Fast path: the whole directory already exists. CWD is cheap + idempotent.
-        var whole = await client.Execute($"CWD {sanitized}", ct);
+        var whole = await execute($"CWD {sanitized}", ct);
         if (whole.Success) return (true, whole.Code ?? "250", "exists (CWD)");
 
         var parts = sanitized.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length == 0) return (false, "ERR", "empty path");
 
-        var root = await client.Execute("CWD /", ct);
+        var root = await execute("CWD /", ct);
         if (!root.Success) return (false, root.Code ?? "", root.Message ?? "CWD / failed");
 
         var createdAny = false;
+        var currentPath = "";
         foreach (var part in parts)
         {
-            var cwd = await client.Execute($"CWD {part}", ct);
+            currentPath += "/" + part;
+            var cwd = await execute($"CWD {part}", ct);
             if (cwd.Success) continue; // component already exists — descend into it
 
-            var mkd = await client.Execute($"MKD {part}", ct);
+            var mkd = await execute($"MKD {part}", ct);
             if (!IsMkdSuccess(mkd))
                 return (false, mkd.Code ?? "", mkd.Message ?? "(no reply text)");
-            createdAny = true;
+            // A concurrent creator can answer 550 "already exists". That is
+            // navigable, but never establishes our ownership of the directory.
+            if (mkd.Success && !(mkd.Message ?? "").Contains("exist", StringComparison.OrdinalIgnoreCase))
+            {
+                createdAny = true;
+                created?.Invoke(currentPath);
+            }
 
-            var cwd2 = await client.Execute($"CWD {part}", ct);
+            var cwd2 = await execute($"CWD {part}", ct);
             if (!cwd2.Success)
                 return (false, cwd2.Code ?? "", cwd2.Message ?? "CWD after MKD failed");
         }
@@ -4365,6 +4322,9 @@ public class SpreadJob : IDisposable
             Section = Section,
             Mode = Mode.ToString(),
             State = State.ToString(),
+            StopReason = StopReason == RaceStopReason.None ? "" : StopReason.ToString(),
+            ResumeCount = ResumeCount,
+            FirstUploadAtUtc = FirstUploadAtUtc,
             IsAutoRace = IsAutoRace,
             IsPaused = State == SpreadJobState.Paused,
             StartedAt = StartedAt,
@@ -4382,18 +4342,20 @@ public class SpreadJob : IDisposable
         };
     }
 
-    public void Stop()
+    public void Stop(RaceStopReason reason = RaceStopReason.UserStop)
     {
-        _cts.Cancel();
-        // Unblock any pause wait so the RunAsync loop can observe the
-        // cancellation and exit cleanly.
-        _pausedFlag = false;
-        _pauseSignal.Set();
         lock (_ownershipLock)
         {
             if (State is SpreadJobState.Running or SpreadJobState.Paused or SpreadJobState.Waiting)
+            {
+                StopReason = reason;
                 State = SpreadJobState.Stopped;
+            }
         }
+        _cts.Cancel();
+        // Change state and cancel before waking a paused dispatcher.
+        _pausedFlag = false;
+        _pauseSignal.Set();
     }
 
     /// <summary>
@@ -4602,6 +4564,9 @@ public class RaceDestDetail
 /// <summary>Everything known about one race — backs both the API and the UI expander.</summary>
 public class RaceDetail
 {
+    public string StopReason { get; set; } = "";
+    public int ResumeCount { get; set; }
+    public DateTime? FirstUploadAtUtc { get; set; }
     public string Id { get; set; } = "";
     public string Release { get; set; } = "";
     public string Section { get; set; } = "";

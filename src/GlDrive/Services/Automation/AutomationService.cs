@@ -66,7 +66,7 @@ public sealed partial class AutomationService : IAutomationModule
             return _config.Servers.Select(s => ServerSnapshot(s)).ToArray();
         if (op == "servers.mount_all")
         {
-            await _servers.MountAll(ct);
+            await _servers.MountAll(ct, manualRetry: true);
             return _config.Servers.Select(s => ServerSnapshot(s)).ToArray();
         }
         if (op == "servers.unmount_all")
@@ -79,16 +79,17 @@ public sealed partial class AutomationService : IAutomationModule
         switch (op)
         {
             case "servers.get": return ServerSnapshot(server);
-            case "servers.mount": await _servers.MountServer(id, ct); break;
+            case "servers.mount": await _servers.MountServer(id, ct, manualRetry: true); break;
             case "servers.unmount": await _servers.UnmountServerAsync(id); break;
             case "servers.remount":
                 await _servers.UnmountServerAsync(id);
                 ct.ThrowIfCancellationRequested();
-                await _servers.MountServer(id, ct);
+                await _servers.MountServer(id, ct, manualRetry: true);
                 break;
             case "servers.cache_clear": Mounted(id).RefreshCache(); break;
             case "servers.stats_refresh": await Mounted(id).RefreshStatsAsync(); break;
             case "servers.pool_reinitialize":
+                _servers.RetryAuthentication(id);
                 await (Mounted(id).Pool ?? throw new InvalidOperationException("FTP pool unavailable.")).Reinitialize(ct);
                 break;
             default: throw new ArgumentException($"Unknown operation: {op}");
@@ -106,6 +107,8 @@ public sealed partial class AutomationService : IAutomationModule
             host = server.Connection.Host, port = server.Connection.Port,
             driveLetter = server.Mount.DriveLetter,
             state = live?.CurrentState.ToString() ?? MountState.Unmounted.ToString(),
+            authenticationHeld = _servers.IsAuthenticationHeld(server.Id),
+            authenticationRetryAtUtc = _servers.AuthenticationRetryAtUtc(server.Id),
             stats = live?.Stats,
             ircState = _servers.GetIrcService(server.Id)?.State.ToString() ?? "Disconnected",
             downloads = live?.Downloads?.Store.Items.Count ?? 0,

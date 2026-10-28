@@ -137,7 +137,7 @@ public sealed class AgentReviewFixTests : IDisposable
     {
         var config = new AppConfig();
         config.Servers.Add(new ServerConfig { Id = "site" });
-        var applier = new ChangeApplier([new DownloadOnlyValidator()], new FreezeStore(_root), new AuditTrail(_root));
+        var applier = new ChangeApplier([new DownloadOnlyValidator()], new FreezeStore(_root), new AuditTrail(_root), MeasuredWinnerEvidence.ForConfig);
         var proposal = new AgentChange { Category = AgentCategories.DownloadOnly,
             Target = "/servers/site/spread/downloadOnly", Before = false, After = true, Confidence = 1 };
         var rows = new List<AuditRow>();

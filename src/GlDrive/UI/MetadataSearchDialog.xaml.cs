@@ -18,9 +18,11 @@ public partial class MetadataSearchDialog : Window
 
     public WishlistItem? SelectedItem { get; private set; }
 
-    public MetadataSearchDialog(MediaType mediaType, string omdbApiKey)
+    public MetadataSearchDialog(MediaType mediaType, string omdbApiKey, string? defaultQuality = null)
     {
         InitializeComponent();
+        QualityCombo.SelectedItem = QualityCombo.Items.Cast<ComboBoxItem>()
+            .First(item => item.Content?.ToString() == WishlistQuality.Display(defaultQuality));
         _mediaType = mediaType;
         Title = mediaType == MediaType.Movie ? "Search Movies (OMDB)" : "Search TV Shows (TVMaze)";
 
@@ -205,15 +207,7 @@ public partial class MetadataSearchDialog : Window
     {
         if (ResultsList.SelectedItem is not MetadataResult selected) return;
 
-        var qualityText = (QualityCombo.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Any";
-        var quality = qualityText switch
-        {
-            "SD" => QualityProfile.SD,
-            "720p" => QualityProfile.Q720p,
-            "1080p" => QualityProfile.Q1080p,
-            "2160p" => QualityProfile.Q2160p,
-            _ => QualityProfile.Any
-        };
+        var quality = WishlistQuality.Parse((QualityCombo.SelectedItem as ComboBoxItem)?.Content?.ToString());
 
         SelectedItem = new WishlistItem
         {

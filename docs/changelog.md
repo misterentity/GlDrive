@@ -12,6 +12,20 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.12.0 — feature-gap review, Phase A defects (2026-10-28)
+
+- **Security:** one outbound redactor for every AI request (structural plus a final value scan,
+  fail-closed). The control-API token and FiSH channel keys no longer reach the model; the token
+  can be regenerated from the MCP settings panel.
+- IRC announces feed the wishlist (excluded categories no longer blind it); relocated releases
+  are recovered; Default quality is honoured; `TV`/`Movies` category paths without double nesting.
+- Races resume after a stall or the absolute cap, behind fresh releases. Owned partials are wiped
+  before the 12 h auto-nuke, but only with positive evidence that they are incomplete. Unknown
+  winners no longer drive agent changes.
+- An authentication circuit breaker stops retrying rejected passwords. Settings edits apply live
+  unless the connection, mount, TLS or pool sizing changed. Overview refreshes again.
+  See the [release notes](releases/v3.12.0.md).
+
 ## v3.11.32 — SITE DISKFREE verdict owned by the mount (2026-10-26)
 
 - Stop re-sending `SITE DISKFREE` every 30s to servers that answer `500`

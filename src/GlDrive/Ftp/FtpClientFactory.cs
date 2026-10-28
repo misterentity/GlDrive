@@ -76,9 +76,12 @@ public class FtpClientFactory
         config.SslSessionLength = 0;
     }
 
-    public AsyncFtpClient Create()
+    public AsyncFtpClient Create() => Create(out _);
+
+    private AsyncFtpClient Create(out FtpLoginAccount account)
     {
         var conn = _serverConfig.Connection;
+        account = FtpLoginAccount.From(conn);
         var password = CredentialStore.GetPassword(conn.Host, conn.Port, conn.Username) ?? "";
 
         AsyncFtpClient client;
@@ -214,10 +217,10 @@ public class FtpClientFactory
 
     public async Task<AsyncFtpClient> CreateAndConnect(CancellationToken ct = default)
     {
-        var client = Create();
+        var client = Create(out var account);
         try
         {
-            await client.Connect(ct);
+            await GuardedFtpLogin.ConnectAsync(client, account, ct);
             Log.Information("FTP connection established");
             return client;
         }
@@ -243,7 +246,10 @@ public class FtpClientFactory
     /// </summary>
     public async Task<bool> KillGhosts(CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         var conn = _serverConfig.Connection;
+        var account = FtpLoginAccount.From(conn);
+        if (GuardedFtpLogin.IsAuthenticationHeld(account)) return false;
         if (!_ghostKillThrottle.TryAcquire(DateTime.UtcNow, out var sinceLast))
         {
             Log.Information(
@@ -277,8 +283,16 @@ public class FtpClientFactory
 
         try
         {
-            await client.Connect(ct);
+            await GuardedFtpLogin.ConnectAsync(client, account, ct, allowRecoveryProbe: false);
             Log.Information("Ghost kill: connected as {User} to clear stale sessions", ghostUser);
+        }
+        catch (FtpLoginHeldException)
+        {
+            return false; // No login reached the server, so no ghost-kill was issued.
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {

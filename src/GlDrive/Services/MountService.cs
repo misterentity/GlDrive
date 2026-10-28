@@ -32,6 +32,7 @@ public class MountService : IDisposable
     private FtpSearchService? _searchService;
     private WishlistMatcher? _wishlistMatcher;
     private bool _mounted;
+    private volatile bool _stopping;
 
     public event Action<MountState>? StateChanged;
     public event Action<string, string, string>? NewReleaseDetected; // category, release, remotePath
@@ -47,9 +48,7 @@ public class MountService : IDisposable
     // capped at ~4 logins (directly starving FXP transfers). Once we learn the working
     // command we reuse it; once we confirm NOTHING works we back off for a TTL instead of
     // re-probing every tick.
-    private string? _workingStatsCommand;
-    private bool _statsViaListTrailer;
-    private DateTime _statsUnavailableUntil = DateTime.MinValue;
+    private readonly StatsProbeCache _statsProbeCache = new();
     private static readonly TimeSpan StatsUnavailableTtl = TimeSpan.FromHours(6);
 
     public string ServerId => _serverConfig.Id;
@@ -221,6 +220,7 @@ public class MountService : IDisposable
                 _pool, _serverConfig.Id, _downloadConfig, _serverConfig.SpeedLimitKbps, _raceLoginLender);
             _downloadManager = new DownloadManager(downloadStore, _ftp, _streamingDownloader,
                 _downloadConfig, _diskReservation);
+            _downloadManager.Relocation = new DownloadRelocation(() => _serverConfig, _ftp.DirectoryExists);
             _searchService = new FtpSearchService(_pool, _serverConfig.Search);
             _searchService.StartIndexer();
             _wishlistMatcher = new WishlistMatcher(wishlistStore, _downloadManager, _ftp, _downloadConfig,
@@ -264,6 +264,7 @@ public class MountService : IDisposable
 
     public async Task UnmountAsync()
     {
+        _stopping = true;
         if (!_mounted) return;
 
         Log.Information("Unmounting drive for server {ServerName}...", _serverConfig.Name);
@@ -313,6 +314,7 @@ public class MountService : IDisposable
 
     public void Unmount()
     {
+        _stopping = true;
         if (!_mounted) return;
         // Sync fallback for Dispose() — just signal cancellation and tear down fast
         Log.Information("Unmounting drive (sync) for server {ServerName}...", _serverConfig.Name);
@@ -332,6 +334,55 @@ public class MountService : IDisposable
     public void RefreshCache()
     {
         _cache?.Clear();
+    }
+
+    internal async Task ApplyLiveConfigAsync(IReadOnlyList<string> changes)
+    {
+        if (_stopping) return;
+        bool Changed(string prefix) => changes.Any(p => p == prefix || p.StartsWith(prefix + ".", StringComparison.Ordinal));
+        if (Changed("notifications") && _pool != null)
+        {
+            if (_releaseMonitor != null) await _releaseMonitor.StopAndDrainAsync();
+            if (_stopping) return;
+            _releaseMonitor = new NewReleaseMonitor(_pool, _serverConfig.Notifications, () => CurrentState, ReleaseMonitorHealth);
+            _releaseMonitor.NewReleaseDetected += (category, release, path) =>
+            {
+                NewReleaseDetected?.Invoke(category, release, path);
+                if (_downloadConfig.AutoDownloadWishlist) _wishlistMatcher?.OnNewRelease(category, release, path);
+            };
+            _releaseMonitor.Start();
+            Log.Information("Configuration for {Server}: restarted release monitor", ServerName);
+        }
+        if (Changed("search") && _searchService != null)
+        {
+            await _searchService.RescheduleIndexerAsync();
+            if (_stopping) return;
+            Log.Information("Configuration for {Server}: rescheduled search crawler", ServerName);
+        }
+        if (Changed("cache"))
+        {
+            _cache?.UpdateOptions(_serverConfig.Cache.DirectoryListingTtlSeconds, _serverConfig.Cache.MaxCachedDirectories);
+            _fileSystem?.UpdateCacheOptions(_serverConfig.Cache);
+            if (Changed("cache.fileInfoTimeoutMs") && _host != null)
+                Log.Information("Configuration for {Server}: cache.fileInfoTimeoutMs takes effect on the next drive mount (WinFsp volume parameter)", ServerName);
+        }
+        if (Changed("pool.keepaliveIntervalSeconds"))
+            _pool?.ConfigureHealth(false, Math.Clamp(_serverConfig.Pool.KeepaliveIntervalSeconds, 10, 120));
+        if (Changed("spreadSite.sections") && _serverConfig.SpreadSite.Sections.Count > 0)
+            // Removing sections keeps the conservative bound until the next connection rebuild.
+            // Never increase login ownership merely because a routing rule was removed.
+            _pool?.ShrinkMaxSize(2);
+        if (Changed("speedLimitKbps")) _streamingDownloader?.UpdateSpeedLimit(_serverConfig.SpeedLimitKbps);
+        if (Changed("siteStatsCommand"))
+        {
+            _statsProbeCache.Reset();
+        }
+        if (Changed("name")) _wishlistMatcher?.UpdateServerName(_serverConfig.Name);
+        if (Changed("downloads"))
+        {
+            _downloadManager?.RefreshOptions();
+            GlDrive.Downloads.Segmented.DownloadNetworkServices.Initialize(_downloadConfig);
+        }
     }
 
     private async Task CleanupAsync()
@@ -417,6 +468,10 @@ public class MountService : IDisposable
 
     public async Task RefreshStatsAsync()
     {
+        var probeState = _statsProbeCache.Read();
+        var workingStatsCommand = probeState.WorkingCommand;
+        var statsViaListTrailer = probeState.ViaListTrailer;
+        var statsUnavailableUntil = probeState.UnavailableUntil;
         if (_pool == null || _ftp == null || CurrentState != MountState.Connected)
         {
             Log.Information("RefreshStatsAsync skipped for {Server}: pool={HasPool} state={State}",
@@ -427,7 +482,7 @@ public class MountService : IDisposable
         // Negative cache: if we already learned this site grants NO stats access, don't
         // re-probe the whole candidate chain (+ LIST trailer) every tick — that burns a
         // login per command on accounts capped at ~4 logins. Re-probe only after the TTL.
-        if (_workingStatsCommand == null && DateTime.UtcNow < _statsUnavailableUntil)
+        if (workingStatsCommand == null && DateTime.UtcNow < statsUnavailableUntil)
             return;
 
         // Try the configured command first, then fall back through common glftpd variants
@@ -437,7 +492,7 @@ public class MountService : IDisposable
         var candidates = new List<string>();
         // Positive cache: once a command worked, reuse it first (and let the rest follow
         // as fallback in case the site changed).
-        if (_workingStatsCommand != null) candidates.Add(_workingStatsCommand);
+        if (workingStatsCommand != null) candidates.Add(workingStatsCommand);
         if (!candidates.Contains(_serverConfig.SiteStatsCommand, StringComparer.OrdinalIgnoreCase))
             candidates.Add(_serverConfig.SiteStatsCommand);
         var fallbacks = new List<string>();
@@ -480,7 +535,7 @@ public class MountService : IDisposable
             // so without this flag the 5-command dead chain re-ran every 5-min tick
             // (~1,170 wasted SITE probes/day observed 2026-07-01). Go straight to the
             // trailer; if it ever stops yielding, re-probe the chain next tick.
-            if (!_statsViaListTrailer)
+            if (!statsViaListTrailer)
             foreach (var cmd in candidates)
             {
                 // If the BNC silently dropped this control connection between candidates,
@@ -502,7 +557,7 @@ public class MountService : IDisposable
                     if (stats.Credits != null || stats.Ratio != null)
                     {
                         best = stats;
-                        _workingStatsCommand = cmd; // positive cache: reuse next tick
+                        workingStatsCommand = cmd; // positive cache: reuse next tick
                         break;
                     }
                     best ??= stats; // remember first attempt for null fallback
@@ -537,10 +592,10 @@ public class MountService : IDisposable
                 if (trailer.Credits != null || trailer.Ratio != null)
                 {
                     best = trailer;
-                    if (!_statsViaListTrailer)
+                    if (!statsViaListTrailer)
                         Log.Information("Stats available for {Server} via {Protocol} LIST trailer",
                             _serverConfig.Name, _pool.UseCpsv ? "CPSV" : "standard");
-                    _statsViaListTrailer = true; // positive cache: skip the dead SITE chain next tick
+                    statsViaListTrailer = true; // positive cache: skip the dead SITE chain next tick
                 }
             }
 
@@ -552,17 +607,17 @@ public class MountService : IDisposable
             bool gotStats = best?.Credits != null || best?.Ratio != null;
             if (!gotStats && !connDied)
             {
-                if (_statsViaListTrailer)
+                if (statsViaListTrailer)
                 {
                     // The cached trailer path stopped yielding — the SITE chain was
                     // skipped this tick, so re-probe it next tick before concluding
                     // the site grants no stats access at all.
-                    _statsViaListTrailer = false;
+                    statsViaListTrailer = false;
                 }
                 else
                 {
-                    _workingStatsCommand = null;
-                    _statsUnavailableUntil = DateTime.UtcNow + StatsUnavailableTtl;
+                    workingStatsCommand = null;
+                    statsUnavailableUntil = DateTime.UtcNow + StatsUnavailableTtl;
                     Log.Information("SITE STATS unavailable for {Server} (no command grants access) — " +
                         "backing off probes for {Hours}h", _serverConfig.Name, StatsUnavailableTtl.TotalHours);
                 }
@@ -576,6 +631,13 @@ public class MountService : IDisposable
         catch (Exception ex)
         {
             Log.Warning(ex, "RefreshStatsAsync failed for {Server}", _serverConfig.Name);
+        }
+        finally
+        {
+            // A settings edit can occur while SITE/LIST is in flight. Its result may
+            // still update displayed stats, but must not restore the old probe cache.
+            _statsProbeCache.TryPublish(new(probeState.Generation, workingStatsCommand,
+                statsViaListTrailer, statsUnavailableUntil));
         }
     }
 

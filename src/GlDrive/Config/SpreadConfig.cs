@@ -10,7 +10,12 @@ public class SpreadConfig
     // actually got through. Tight BNCs can lower to 2.
     public int SpreadPoolSize { get; set; } = 3;
     public int TransferTimeoutSeconds { get; set; } = 60;
+    /// <summary>Stop a race after this many seconds without payload byte progress.</summary>
     public int HardTimeoutSeconds { get; set; } = 1200;
+    /// <summary>Absolute active-attempt safety cap, even while payload is progressing.</summary>
+    public int AbsoluteRaceTimeoutMinutes { get; set; } = 90;
+    /// <summary>Deadline from the first upload for finishing or cleaning our partial release.</summary>
+    public int PartialRaceDeadlineHours { get; set; } = 10;
     public int MaxConcurrentRaces { get; set; } = 1;
 
     /// <summary>
@@ -43,7 +48,7 @@ public class SpreadConfig
 
     /// <summary>Max minutes to wait for a destination's zipscript to mark complete
     /// AFTER all files are delivered, before that dest is recorded as a timeout.
-    /// Independent of HardTimeoutSeconds (which budgets the transfer phase).</summary>
+    /// Also bounded by the idle-progress timeout and absolute race cap.</summary>
     public int DestinationCompletionWaitMinutes { get; set; } = 10;
 
     /// <summary>Directory re-list cadence (seconds) while waiting for completion

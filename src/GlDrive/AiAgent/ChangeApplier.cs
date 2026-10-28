@@ -9,12 +9,15 @@ public sealed class ChangeApplier
     private readonly Dictionary<string, IChangeValidator> _validators;
     private readonly FreezeStore _freeze;
     private readonly AuditTrail _audit;
+    private readonly Func<GlDrive.Config.AppConfig, RacesDigest?>? _winnerEvidence;
 
-    public ChangeApplier(IEnumerable<IChangeValidator> validators, FreezeStore freeze, AuditTrail audit)
+    public ChangeApplier(IEnumerable<IChangeValidator> validators, FreezeStore freeze, AuditTrail audit,
+        Func<GlDrive.Config.AppConfig, RacesDigest?>? winnerEvidence = null)
     {
         _validators = validators.ToDictionary(v => v.Category);
         _freeze = freeze;
         _audit = audit;
+        _winnerEvidence = winnerEvidence;
     }
 
     public sealed class RunReport
@@ -27,12 +30,14 @@ public sealed class ChangeApplier
 
     public RunReport Apply(IEnumerable<AgentChange> changes, GlDrive.Config.AppConfig config,
                            GlDrive.Config.AgentConfig agentCfg, string runId, bool dryRun,
-                           Action<AuditRow>? record = null, bool configOnly = false)
+                           Action<AuditRow>? record = null, bool configOnly = false,
+                           RacesDigest? winnerEvidence = null, bool explicitUndo = false)
     {
         record ??= _audit.Append;
         var report = new RunReport();
         var perCategoryCount = new Dictionary<string, int>();
         double confidenceFloor = agentCfg.ConfidenceThreshold_x100 / 100.0;
+        ChangeValidationContext? validationContext = null;
 
         // Cache the current config until a mutation. Both manual and automatic batches must
         // compare later proposals with the values left by earlier changes in this run.
@@ -131,7 +136,20 @@ public sealed class ChangeApplier
 
             if (reject is null)
             {
-                var vr = _validators[change.Category].Validate(change, config);
+                if (validationContext == null && change.Category is AgentCategories.Priority or AgentCategories.DownloadOnly)
+                {
+                    if (!explicitUndo && winnerEvidence == null && _winnerEvidence != null)
+                    {
+                        try { winnerEvidence = _winnerEvidence(config); }
+                        catch (Exception ex)
+                        {
+                            Log.Warning("Winner evidence unavailable ({Failure}); priority and role changes require measured coverage", ex.GetType().Name);
+                        }
+                    }
+                    validationContext = new ChangeValidationContext(winnerEvidence, explicitUndo);
+                }
+                var vr = _validators[change.Category].Validate(change, config,
+                    validationContext ?? new ChangeValidationContext(explicitUndo: explicitUndo));
                 if (!vr.Ok)
                 {
                     reject = vr.RejectionReason ?? "invariant-failed";

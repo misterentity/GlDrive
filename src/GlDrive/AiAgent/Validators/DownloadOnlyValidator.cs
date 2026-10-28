@@ -15,6 +15,9 @@ public sealed class DownloadOnlyValidator : IChangeValidator
     public string Category => AgentCategories.DownloadOnly;
 
     public ValidationResult Validate(AgentChange change, AppConfig config)
+        => Validate(change, config, new ChangeValidationContext());
+
+    public ValidationResult Validate(AgentChange change, AppConfig config, ChangeValidationContext context)
     {
         if (!SkiplistValidator.TryMatchServer(change.Target, "/spread/downloadOnly", out var resolver, out var trailing))
             return new(false, "target-shape-unsupported", null);
@@ -25,6 +28,8 @@ public sealed class DownloadOnlyValidator : IChangeValidator
         if (afterStr != "true" && afterStr != "false")
             return new(false, "after-not-bool", null);
         var newValue = afterStr == "true";
+        if (!context.AllowsPriorityOrRole(resolver(config)?.Id))
+            return new(false, ChangeValidationContext.InsufficientCoverage, null);
 
         return new(true, null, cfg =>
         {

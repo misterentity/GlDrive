@@ -309,7 +309,7 @@ public class SettingsViewModel : INotifyPropertyChanged
                 {
                     var report = AgentUndoCompletion.ApplyInverse(r,
                         () => App.ChangeApplier.Apply(new[] { inverse }, _config, _config.Agent,
-                            "panic-" + Guid.NewGuid().ToString()[..8], dryRun: false));
+                            "panic-" + Guid.NewGuid().ToString()[..8], dryRun: false, explicitUndo: true));
                     if (AgentUndoCompletion.TryComplete(report,
                         () => GlDrive.Config.ConfigManager.Save(_config),
                         () => App.AuditTrail.MarkUndone(r.RunId, r.Target, "panic-all"),

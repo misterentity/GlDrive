@@ -104,7 +104,8 @@ public sealed partial class AutomationService
         {
             case "spread.status": return new
             {
-                jobs = spread.ActiveJobs.Select(j => new { j.Id, j.ReleaseName, j.Section, state = j.State.ToString(), j.StartedAt, j.Score, j.LastError }).ToArray(),
+                jobs = spread.ActiveJobs.Select(j => new { j.Id, j.ReleaseName, j.Section, state = j.State.ToString(), j.StartedAt, j.Score, j.LastError,
+                    stopReason = j.StopReason.ToString(), j.ResumeCount, j.FirstUploadAtUtc }).ToArray(),
                 queued = spread.QueuedRaces, connectedServerIds = spread.GetConnectedServerIds(),
                 pools = spread.PoolHealth(), summary = spread.History.Summarize()
             };
@@ -175,14 +176,27 @@ public sealed partial class AutomationService
         if (source != null && !ids.Contains(source)) throw new ArgumentException("'sourceServerId' must be a race participant.");
         var sourcePath = Optional(a, "sourcePath") == null ? null : RemotePath(a, "sourcePath", false);
         if (sourcePath != null && source == null) throw new ArgumentException("'sourcePath' requires sourceServerId.");
-        var job = Spread.StartRace(section, release, ids, SpreadMode.Race, source, sourcePath);
-        if (job != null) return new { state = "started", job.Id, job.ReleaseName, job.Section };
-        if (Spread.QueuedRaces.Any(r => r.Section.Equals(section, StringComparison.OrdinalIgnoreCase) && r.ReleaseName.Equals(release, StringComparison.OrdinalIgnoreCase)))
-            return new { state = "queued", section, releaseName = release };
-        var active = Spread.ActiveJobs.FirstOrDefault(j => j.Section.Equals(section, StringComparison.OrdinalIgnoreCase) && j.ReleaseName.Equals(release, StringComparison.OrdinalIgnoreCase));
-        if (active != null) return new { state = "already_active", active.Id, active.ReleaseName, active.Section };
-        throw new InvalidOperationException("The race engine rejected the request (check rules, recent failures, and site availability).");
+        return RaceStartResponse(Spread.StartRaceDetailed(section, release, ids, SpreadMode.Race, source, sourcePath));
     }
+
+    internal static object RaceStartResponse(RaceStartResult result) => new
+    {
+        state = result.Outcome switch
+        {
+            RaceStartOutcome.Started => "started",
+            RaceStartOutcome.Queued => "queued",
+            RaceStartOutcome.AlreadyActive => "already_active",
+            RaceStartOutcome.Duplicate => "duplicate",
+            RaceStartOutcome.Suppressed => "suppressed",
+            _ => "unavailable"
+        },
+        id = result.Job?.Id,
+        section = result.Section,
+        releaseName = result.ReleaseName,
+        queuePosition = result.QueuePosition,
+        retryAfterSeconds = result.SuppressedFor is { } remaining ? (long?)Math.Max(0, Math.Ceiling(remaining.TotalSeconds)) : null,
+        reason = result.Reason
+    };
 
     private async Task<int> FxpDirectory(string source, string sourcePath, string destination, string destinationPath, int depth, CancellationToken ct)
     {

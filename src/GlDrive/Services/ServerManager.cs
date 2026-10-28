@@ -18,7 +18,8 @@ public partial class ServerManager : IDisposable
     private readonly CertificateManager _certManager;
     private readonly NotificationStore _notificationStore;
     private readonly ConcurrentDictionary<string, MountService> _servers = new();
-    private readonly ConcurrentDictionary<string, string> _runtimeConfigFingerprints = new();
+    private readonly ConcurrentDictionary<string, RuntimeConfigPolicy.Snapshot> _runtimeConfigSnapshots = new();
+    private readonly ConcurrentDictionary<string, string> _ircConfigFingerprints = new();
     private readonly ConcurrentDictionary<string, IrcService> _ircServices = new();
     private readonly ConcurrentDictionary<string, IrcAnnounceListener> _announceListeners = new();
     private readonly ConcurrentDictionary<string, IrcPatternDetector> _patternDetectors = new();
@@ -32,6 +33,8 @@ public partial class ServerManager : IDisposable
     private Task? _remountLoop;
     private readonly object _remountLoopLock = new();
     private SpreadManager? _spreadManager;
+    private readonly SemaphoreSlim _configSync = new(1, 1);
+    private volatile bool _disposed;
 
     public SpreadManager? Spread => _spreadManager;
 
@@ -39,6 +42,7 @@ public partial class ServerManager : IDisposable
     public event Action<string, string, string, string, string>? NewReleaseDetected; // serverId, serverName, category, release, remotePath
     public event Action<string, string, IrcServiceState>? IrcStateChanged; // serverId, serverName, state
     public event Action<string, string>? BncRateLimitDetected; // serverName, message
+    public event Action<FtpAuthenticationNotice>? AuthenticationRejected;
 
     public ServerManager(AppConfig config, CertificateManager certManager, NotificationStore notificationStore)
     {
@@ -50,10 +54,34 @@ public partial class ServerManager : IDisposable
             _servers.TryGetValue(serverId, out var svc) ? svc.Pool : null;
         _spreadManager._getSearchService = serverId =>
             _servers.TryGetValue(serverId, out var svc) ? svc.Search : null;
+        GuardedFtpLogin.AuthenticationRejected += OnAuthenticationRejected;
     }
 
-    public async Task MountServer(string serverId, CancellationToken ct = default)
+    internal bool OnAuthenticationRejected(FtpAuthenticationNotice notice)
     {
+        var listeners = AuthenticationRejected;
+        if (_disposed || listeners == null) return false;
+        listeners(notice);
+        return true;
+    }
+
+    public bool IsAuthenticationHeld(string serverId) =>
+        _config.Servers.FirstOrDefault(s => s.Id == serverId) is { } server
+        && GuardedFtpLogin.IsAuthenticationHeld(FtpLoginAccount.From(server.Connection));
+
+    public DateTime? AuthenticationRetryAtUtc(string serverId) =>
+        _config.Servers.FirstOrDefault(s => s.Id == serverId) is { } server
+            ? GuardedFtpLogin.AuthenticationRetryAtUtc(FtpLoginAccount.From(server.Connection)) : null;
+
+    public void RetryAuthentication(string serverId)
+    {
+        if (!_disposed && _config.Servers.FirstOrDefault(s => s.Id == serverId) is { } server)
+            GuardedFtpLogin.RequestManualRetry(FtpLoginAccount.From(server.Connection));
+    }
+
+    public async Task MountServer(string serverId, CancellationToken ct = default, bool manualRetry = false)
+    {
+        if (_disposed) return;
         var serverConfig = _config.Servers.FirstOrDefault(s => s.Id == serverId);
         if (serverConfig == null)
         {
@@ -61,8 +89,17 @@ public partial class ServerManager : IDisposable
             return;
         }
 
-        if (_servers.ContainsKey(serverId))
+        var retryHeldAccount = manualRetry && IsAuthenticationHeld(serverId);
+        if (manualRetry) RetryAuthentication(serverId);
+        if (_servers.TryGetValue(serverId, out var existing))
         {
+            if (retryHeldAccount)
+            {
+                // A held account can still have a mounted service and usable leases.
+                // Reinitialize through the existing pool policy; do not remount it.
+                if (existing.Pool is { } pool) await pool.Reinitialize(ct);
+                return;
+            }
             Log.Warning("Server {ServerName} is already mounted", serverConfig.Name);
             return;
         }
@@ -101,12 +138,12 @@ public partial class ServerManager : IDisposable
         try
         {
             await service.Mount(ct);
-            _runtimeConfigFingerprints[serverId] = ComputeRuntimeConfigFingerprint(serverConfig);
+            _runtimeConfigSnapshots[serverId] = CaptureRuntimeConfig(serverConfig);
         }
         catch
         {
             _servers.TryRemove(serverId, out _);
-            _runtimeConfigFingerprints.TryRemove(serverId, out _);
+            _runtimeConfigSnapshots.TryRemove(serverId, out _);
             service.Dispose();
             throw;
         }
@@ -151,7 +188,7 @@ public partial class ServerManager : IDisposable
         await service.UnmountAsync();
         service.Dispose();
         _servers.TryRemove(serverId, out _);
-        _runtimeConfigFingerprints.TryRemove(serverId, out _);
+        _runtimeConfigSnapshots.TryRemove(serverId, out _);
     }
 
     public void UnmountServer(string serverId)
@@ -169,10 +206,10 @@ public partial class ServerManager : IDisposable
         service.Unmount();
         service.Dispose();
         _servers.TryRemove(serverId, out _);
-        _runtimeConfigFingerprints.TryRemove(serverId, out _);
+        _runtimeConfigSnapshots.TryRemove(serverId, out _);
     }
 
-    public async Task MountAll(CancellationToken ct = default)
+    public async Task MountAll(CancellationToken ct = default, bool manualRetry = false)
     {
         // Mount all servers in parallel — don't let one slow server block the others
         var servers = _config.Servers.Where(s => s.Enabled && s.Mount.AutoMountOnStart).ToList();
@@ -181,7 +218,7 @@ public partial class ServerManager : IDisposable
             var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
-                await MountServer(server.Id, ct);
+                await MountServer(server.Id, ct, manualRetry);
                 Log.Information("Server {Name} mounted in {Elapsed}ms", server.Name, sw.ElapsedMilliseconds);
             }
             catch (Exception ex)
@@ -305,11 +342,9 @@ public partial class ServerManager : IDisposable
         foreach (var server in _config.Servers.Where(s => s.Enabled &&
             s.Irc.Enabled && !string.IsNullOrEmpty(s.Irc.Host)))
         {
-            if (_ircServices.ContainsKey(server.Id)) continue;
             try
             {
-                Log.Information("Starting IRC for {ServerName} (independent of FTP)", server.Name);
-                await StartIrcService(server);
+                await SyncIrcService(server);
             }
             catch (Exception ex)
             {
@@ -336,6 +371,18 @@ public partial class ServerManager : IDisposable
     /// </summary>
     public async Task SyncAfterConfigChange()
     {
+        await _configSync.WaitAsync();
+        try { if (!_disposed) await SyncAfterConfigChangeCore(); }
+        finally { _configSync.Release(); }
+    }
+
+    private async Task SyncAfterConfigChangeCore()
+    {
+        lock (_torrentDownloadLock)
+            if (!_torrentDownloadsStopping) _torrentDownloads?.RefreshOptions();
+        RefreshTorrentDownloadRate();
+        _spreadManager?.RefreshPoolHealth();
+        GlDrive.Downloads.Segmented.DownloadNetworkServices.Initialize(_config.Downloads);
         var configIds = new HashSet<string>(_config.Servers.Select(s => s.Id));
 
         // Unmount servers that were removed from config
@@ -351,6 +398,7 @@ public partial class ServerManager : IDisposable
         // Mount new enabled servers that aren't mounted yet
         foreach (var server in _config.Servers.Where(s => s.Enabled))
         {
+            if (_disposed) return;
             if (!_servers.ContainsKey(server.Id))
             {
                 try
@@ -365,11 +413,12 @@ public partial class ServerManager : IDisposable
             }
             else
             {
-                var fingerprint = ComputeRuntimeConfigFingerprint(server);
-                if (!_runtimeConfigFingerprints.TryGetValue(server.Id, out var activeFingerprint) ||
-                    !string.Equals(activeFingerprint, fingerprint, StringComparison.Ordinal))
+                var snapshot = CaptureRuntimeConfig(server);
+                if (!_runtimeConfigSnapshots.TryGetValue(server.Id, out var activeSnapshot) ||
+                    snapshot.Fingerprint != activeSnapshot.Fingerprint)
                 {
-                    Log.Information("Configuration changed for {ServerName}, remounting", server.Name);
+                    Log.Information("Configuration for {ServerName}: remounting: {Properties}", server.Name,
+                        activeSnapshot == null ? "initial configuration" : string.Join(", ", snapshot.Changed(activeSnapshot, RuntimeConfigEffect.Remount)));
                     await UnmountServerAsync(server.Id);
                     try
                     {
@@ -380,6 +429,18 @@ public partial class ServerManager : IDisposable
                         Log.Warning(ex, "Failed to remount changed server {ServerName}", server.Name);
                     }
                     continue;
+                }
+
+                var changes = snapshot.Changed(activeSnapshot);
+                if (changes.Count > 0 && _servers.TryGetValue(server.Id, out var service))
+                {
+                    await service.ApplyLiveConfigAsync(changes);
+                    if (changes.Any(p => p.StartsWith("spreadSite.", StringComparison.Ordinal)))
+                        _spreadManager?.RefreshSiteRules();
+                    _runtimeConfigSnapshots[server.Id] = snapshot;
+                    var live = changes.Where(p => snapshot.Values[p].Effect != RuntimeConfigEffect.NextDriveMount).ToArray();
+                    if (live.Length > 0)
+                        Log.Information("Configuration for {ServerName}: applied live: {Properties}", server.Name, string.Join(", ", live));
                 }
 
                 // Server already mounted — check if IRC config changed
@@ -466,7 +527,7 @@ public partial class ServerManager : IDisposable
 
     public IDictionary<string, IrcService> GetIrcServices() => _ircServices;
 
-    private string ComputeRuntimeConfigFingerprint(ServerConfig server)
+    private RuntimeConfigPolicy.Snapshot CaptureRuntimeConfig(ServerConfig server)
     {
         var connection = server.Connection;
         var proxy = connection.Proxy;
@@ -474,15 +535,31 @@ public partial class ServerManager : IDisposable
             CredentialStore.GetPassword(connection.Host, connection.Port, connection.Username) ?? "",
             proxy is { Enabled: true }
                 ? CredentialStore.GetProxyPassword(proxy.Host, proxy.Port, proxy.Username) ?? ""
-                : "",
-            CredentialStore.GetIrcPassword(server.Irc.Host, server.Irc.Port, server.Irc.Nick) ?? "");
+                : "");
         var credentialFingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(secrets)));
-        return JsonSerializer.Serialize(new RuntimeConfigSnapshot(server, _config.Downloads, credentialFingerprint,
-            _config.Spread.SpreadPoolSize));
+        return RuntimeConfigPolicy.Capture(server, _config.Downloads, credentialFingerprint, _config.Spread.SpreadPoolSize);
     }
 
-    private sealed record RuntimeConfigSnapshot(
-        ServerConfig Server, DownloadConfig Downloads, string CredentialFingerprint, int SpreadPoolSize);
+    private async Task SyncIrcService(ServerConfig server)
+    {
+        if (_disposed) return;
+        var fingerprint = ComputeIrcFingerprint(server);
+        if (_ircServices.ContainsKey(server.Id) &&
+            (!_ircConfigFingerprints.TryGetValue(server.Id, out var previous) || previous != fingerprint))
+        {
+            Log.Information("Configuration for {ServerName}: restarting IRC only", server.Name);
+            await StopIrcService(server.Id);
+        }
+        if (!_ircServices.ContainsKey(server.Id)) await StartIrcService(server);
+        _ircConfigFingerprints[server.Id] = fingerprint;
+    }
+
+    private string ComputeIrcFingerprint(ServerConfig server) => RuntimeConfigPolicy.Hash(new
+        {
+            server.Irc,
+            Password = RuntimeConfigPolicy.Hash(CredentialStore.GetIrcPassword(server.Irc.Host, server.Irc.Port, server.Irc.Nick) ?? ""),
+            _config.Spread.AutoRaceOnNotification
+        });
 
     /// <summary>
     /// Analyze buffered IRC messages for a server and return detected announce patterns.
@@ -509,6 +586,7 @@ public partial class ServerManager : IDisposable
 
     private async Task StartIrcService(ServerConfig serverConfig)
     {
+        if (_disposed) return;
         if (_ircServices.ContainsKey(serverConfig.Id)) return;
 
         var ircService = new IrcService(serverConfig, _certManager);
@@ -543,6 +621,7 @@ public partial class ServerManager : IDisposable
 
         _ircServices[serverConfig.Id] = ircService;
         await ircService.StartAsync();
+        _ircConfigFingerprints[serverConfig.Id] = ComputeIrcFingerprint(serverConfig);
 
         // Start pattern detector for learning announce formats
         var detector = new IrcPatternDetector(ircService, serverConfig.Id);
@@ -580,6 +659,7 @@ public partial class ServerManager : IDisposable
 
     private async Task StopIrcService(string serverId)
     {
+        _ircConfigFingerprints.TryRemove(serverId, out _);
         if (_patternDetectors.TryRemove(serverId, out var detector))
             detector.Dispose();
         if (_announceListeners.TryRemove(serverId, out var listener))
@@ -597,6 +677,9 @@ public partial class ServerManager : IDisposable
 
     public void Dispose()
     {
+        if (_disposed) return;
+        _disposed = true;
+        GuardedFtpLogin.AuthenticationRejected -= OnAuthenticationRejected;
         StopTorrentDownloads();
         try { _remountCts.Cancel(); } catch { }
         try { _remountLoop?.Wait(TimeSpan.FromSeconds(5)); } catch { }

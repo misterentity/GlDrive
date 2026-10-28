@@ -8,7 +8,7 @@ using Serilog;
 
 namespace GlDrive.Spread;
 
-public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLoginLender
+public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLoginLender
 {
     private readonly AppConfig _config;
     private readonly Dictionary<string, FtpConnectionPool> _spreadPools = new();
@@ -33,6 +33,35 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
     private volatile bool _disposed;
     private readonly GlDrive.Util.BackgroundTasks _workers = new();
     private Timer? _queueWakeTimer;
+    private List<PersistedRace>? _shutdownQueueSnapshot;
+    public event Action<string, string>? PartialCleanupNotice;
+    private (bool Validate, int Keepalive)? _appliedPoolHealth;
+
+    internal void RefreshPoolHealth()
+    {
+        lock (_lock)
+        {
+            if (_disposed) return;
+            var options = (_config.Spread.ValidateConnectionOnBorrow, _config.Spread.SpreadKeepaliveSeconds);
+            if (_appliedPoolHealth == options) return;
+            foreach (var pool in _spreadPools.Values.Where(p => !p.IsDisposed))
+                pool.ConfigureHealth(options.ValidateConnectionOnBorrow, options.SpreadKeepaliveSeconds);
+            _appliedPoolHealth = options;
+            Log.Information("Configuration: applied live: spread.validateConnectionOnBorrow, spread.spreadKeepaliveSeconds");
+        }
+    }
+
+    internal void RefreshSiteRules()
+    {
+        lock (_lock)
+        {
+            _topologyVersion++;
+            _sectionFeasibility.Clear();
+            // Cached rule-based refusals must not outlive edits to those rules.
+            foreach (var pair in _recentlyDeadRaces)
+                if (pair.Value.reason == "affil-blocked") _recentlyDeadRaces.TryRemove(pair.Key, out _);
+        }
+    }
 
     // Global per-server transfer-gate (v2.4: Option A). Each FXP transfer
     // acquires BOTH src and dst gates before STOR. Without this, concurrent
@@ -98,7 +127,7 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
     /// <summary>A detached snapshot of requests waiting for a race slot.</summary>
     public IReadOnlyList<PersistedRace> QueuedRaces
     {
-        get { lock (_lock) return _raceQueue.Select(r => r with { ServerIds = r.ServerIds.ToList() }).ToArray(); }
+        get { lock (_lock) return _raceQueue.Select(r => r with { ServerIds = r.ServerIds.ToList(), Partial = r.Partial?.Copy() }).ToArray(); }
     }
 
     /// <summary>Cancel a waiting request without interrupting already active transfers.</summary>
@@ -107,7 +136,7 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
         bool removed;
         lock (_lock)
         {
-            removed = _raceQueue.RemoveAll(r => IsSameRace(r.Section, r.ReleaseName, section, releaseName)) > 0;
+            removed = CancelQueuedNoLock(section, releaseName);
             ScheduleQueueWakeupNoLock();
         }
         if (removed) PersistQueue();
@@ -120,13 +149,29 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
         bool removed;
         lock (_lock)
         {
-            removed = _raceQueue.RemoveAll(r => IsSameRace(r.Section, r.ReleaseName, section, releaseName)) > 0;
+            removed = CancelQueuedNoLock(section, releaseName);
+            foreach (var starting in _startingRequests.Where(r => IsSameRace(r.Section, r.ReleaseName, section, releaseName) && r.HasOwnedPartial))
+                _raceQueue.Add(RaceLifetimePolicy.CleanupRequest(starting, DateTime.UtcNow,
+                    "Stopped by user during admission; owned partial retained until cleanup deadline",
+                    RaceLifetimePolicy.Deadline(starting.Partial, _config.Spread.PartialRaceDeadlineHours))
+                    with { StopReason = RaceStopReason.UserStop.ToString() });
             removed |= _startingRequests.RemoveAll(r => IsSameRace(r.Section, r.ReleaseName, section, releaseName)) > 0;
             foreach (var job in _activeJobs.Where(j => IsSameRace(j.Section, j.ReleaseName, section, releaseName)))
             {
                 // Set Stopped while holding the same lock that requeues a Waiting job.
                 // A cancelled probe can neither be registered nor returned to the queue.
                 job.Stop();
+                if (_activeRequests.TryGetValue(job, out var active))
+                {
+                    var cancelled = active with { Partial = job.CapturePartialState(), StopReason = RaceStopReason.UserStop.ToString() };
+                    if (cancelled.HasOwnedPartial)
+                    {
+                        _raceQueue.RemoveAll(r => IsSameRace(r.Section, r.ReleaseName, section, releaseName));
+                        _raceQueue.Add(RaceLifetimePolicy.CleanupRequest(cancelled, DateTime.UtcNow,
+                            "Stopped by user; owned partial retained until cleanup deadline",
+                            RaceLifetimePolicy.Deadline(cancelled.Partial, _config.Spread.PartialRaceDeadlineHours)));
+                    }
+                }
                 _activeRequests.Remove(job);
                 removed = true;
             }
@@ -401,7 +446,25 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
         IReadOnlyList<string> serverIds, SpreadMode mode,
         string? knownSourceServerId = null, string? knownSourcePath = null)
     {
-        if (_disposed) return null;
+        var result = StartRaceCore(section, releaseName, serverIds, mode, knownSourceServerId, knownSourcePath,
+            throwOnAdmissionFailure: true);
+        // Auto-race callers rely on null for every non-started decision, even when
+        // the detailed result identifies an already running job.
+        return result.Outcome == RaceStartOutcome.Started ? result.Job : null;
+    }
+
+    public RaceStartResult StartRaceDetailed(string section, string releaseName,
+        IReadOnlyList<string> serverIds, SpreadMode mode,
+        string? knownSourceServerId = null, string? knownSourcePath = null) =>
+        StartRaceCore(section, releaseName, serverIds, mode, knownSourceServerId, knownSourcePath,
+            throwOnAdmissionFailure: false);
+
+    internal Func<DateTime> AdmissionUtcNow { get; set; } = () => DateTime.UtcNow;
+
+    private RaceStartResult StartRaceCore(string section, string releaseName,
+        IReadOnlyList<string> serverIds, SpreadMode mode, string? knownSourceServerId, string? knownSourcePath,
+        bool throwOnAdmissionFailure)
+    {
         // Sanitize inputs
         releaseName = SanitizeFtpPath(releaseName);
         section = SanitizeFtpPath(section);
@@ -412,54 +475,95 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
         // ToDictionary with ArgumentException.
         serverIds = serverIds.Distinct().ToList();
 
-        var maxRaces = Math.Max(_config.Spread.MaxConcurrentRaces, 1);
-        var request = new PersistedRace(section, releaseName, serverIds.ToList(), mode,
-            knownSourceServerId, knownSourcePath, DateTime.UtcNow);
-        var queued = true;
+        PersistedRace request;
+        RaceStartResult? queued = null;
         lock (_lock)
         {
-            if (_disposed) return null;
+            if (_disposed) return new(RaceStartOutcome.Unavailable, section, releaseName, Reason: "Spread engine is stopped");
+            var now = AdmissionUtcNow();
+            var maxRaces = Math.Max(_config.Spread.MaxConcurrentRaces, 1);
             // Dedup: skip if this release is already racing or queued.
-            if (_activeJobs.Any(j => IsSameRace(j.Section, j.ReleaseName, section, releaseName)) ||
+            var active = _activeJobs.FirstOrDefault(j => IsSameRace(j.Section, j.ReleaseName, section, releaseName));
+            if (active != null ||
                 _startingRequests.Any(r => IsSameRace(r.Section, r.ReleaseName, section, releaseName)))
             {
                 Log.Information("Race already active, skipping duplicate: {Release}", releaseName);
-                return null;
+                return new(RaceStartOutcome.AlreadyActive, section, releaseName, Job: active,
+                    Reason: active == null ? "Race admission is already in progress" : "Release is already racing");
             }
-            if (_raceQueue.Any(q => IsSameRace(q.Section, q.ReleaseName, section, releaseName)))
+            var duplicate = _raceQueue.FirstOrDefault(q => IsSameRace(q.Section, q.ReleaseName, section, releaseName));
+            if (duplicate != null)
             {
                 Log.Information("Race already queued, skipping duplicate: {Release}", releaseName);
-                return null;
+                return new(RaceStartOutcome.Duplicate, section, releaseName,
+                    QueuePosition: QueuePositionNoLock(duplicate, now), Reason: duplicate.WaitReason ?? "Release is already queued");
             }
 
             // Issue #4 (+ v1.66 expansion): short-circuit re-queues of a release
             // that recently failed with a known dead-end class (affil-blocked,
             // release-not-found, no-activity). The TTL map is populated by the
             // job.Error handler via ClassifyDeadRace.
-            if (IsRecentlyDeadRace(section, releaseName, out var deadReason))
+            if (IsRecentlyDeadRace(section, releaseName, now, out var deadReason, out var remaining))
             {
                 Log.Debug("Spread: skipping {Release} — recently failed: {Reason}", releaseName, deadReason);
-                return null;
+                return new(RaceStartOutcome.Suppressed, section, releaseName, SuppressedFor: remaining, Reason: deadReason);
             }
 
+            request = new PersistedRace(section, releaseName, serverIds.ToList(), mode,
+                knownSourceServerId, knownSourcePath, now);
             if (_activeJobs.Count + _startingRequests.Count >= maxRaces)
             {
                 _raceQueue.Add(request);
                 Log.Information("Race queued (max concurrent {Max}): {Release}", maxRaces, releaseName);
+                var position = QueuePositionNoLock(request, now);
+                queued = new(RaceStartOutcome.Queued, section, releaseName, QueuePosition: position,
+                    Reason: position == null ? "Waiting for connected spread pools" : null);
             }
             else
             {
                 _startingRequests.Add(request);
-                queued = false;
             }
         }
-        if (queued)
+        if (queued != null)
         {
             PersistQueue();
-            return null;
+            return queued;
         }
 
-        return StartReservedRace(request);
+        try { return new(RaceStartOutcome.Started, section, releaseName, Job: StartReservedRace(request)); }
+        catch (Exception ex) when (!throwOnAdmissionFailure && (ex is InvalidOperationException or OperationCanceledException))
+        {
+            // A subscriber failure after registration is not a rejected admission.
+            // Preserve the exception instead of claiming a live job was unavailable.
+            lock (_lock)
+                if (_activeRequests.Values.Any(r => ReferenceEquals(r, request))) throw;
+            return new(RaceStartOutcome.Unavailable, section, releaseName, Reason: ex.Message);
+        }
+    }
+
+    private PersistedRace QueueRequestAt(PersistedRace request, DateTime now) =>
+        !request.CleanupOnly && request.HasOwnedPartial
+        && RaceLifetimePolicy.Deadline(request.Partial, _config.Spread.PartialRaceDeadlineHours) is { } deadline && now >= deadline
+            ? RaceLifetimePolicy.CleanupRequest(request, now, "Partial completion deadline reached; cleaning owned directory")
+                with { StopReason = RaceStopReason.Deadline.ToString() }
+            : request;
+
+    private IEnumerable<int> EligibleQueueIndicesNoLock(DateTime now) => _raceQueue
+        .Select((request, index) => (Request: QueueRequestAt(request, now), Index: index))
+        .Where(p => !p.Request.IsExpired(now) && p.Request.IsDue(now)
+            && (p.Request.CleanupOnly || p.Request.ServerIds.Count(id => _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed) >= 2))
+        .OrderBy(p => RaceLifetimePolicy.QueuePriority(p.Request))
+        .Select(p => p.Index);
+
+    private int? QueuePositionNoLock(PersistedRace request, DateTime now)
+    {
+        var position = 0;
+        foreach (var index in EligibleQueueIndicesNoLock(now))
+        {
+            position++;
+            if (ReferenceEquals(_raceQueue[index], request)) return position;
+        }
+        return null;
     }
 
     private SpreadJob StartReservedRace(PersistedRace request, bool retainOnFailure = false)
@@ -498,7 +602,7 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
                 .Where(id => _config.Servers.Any(s => s.Id == id))
                 .ToDictionary(id => id, id => _config.Servers.First(s => s.Id == id));
 
-            if (pools.Count < 2)
+            if (!request.CleanupOnly && pools.Count < 2)
                 throw new InvalidOperationException(
                     $"Need at least 2 connected spread pools (have {pools.Count}). " +
                     $"Connected pools: [{string.Join(", ", _spreadPools.Keys)}], " +
@@ -507,7 +611,7 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
 
         // Collect main server pools for scanning (spread pools are for FXP only)
         var mainPools = new Dictionary<string, FtpConnectionPool>();
-        if (_getMainPool != null)
+        if (_getMainPool != null && !request.CleanupOnly)
         {
             foreach (var id in serverIds)
             {
@@ -519,6 +623,9 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
         var job = new SpreadJob(section, releaseName, mode, _config.Spread,
             pools, mainPools, configs, _speedTracker, _skiplist, _blacklist,
             knownSourceServerId, knownSourcePath);
+        job.RestorePartial(request);
+        job.PartialStateChanged += j => SavePartialState(j, request);
+        job.PartialCleanupMessage += message => PartialCleanupNotice?.Invoke(releaseName, message);
 
         // Hand the job a closure over our gate acquirer so every individual
         // FXP transfer respects the global per-server concurrency cap
@@ -570,7 +677,7 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
                 // registration; the caller decides whether to retain the request.
                 var currentPools = serverIds.Where(id => _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed)
                     .ToDictionary(id => id, id => _spreadPools[id]);
-                if (currentPools.Count < 2)
+                if (!request.CleanupOnly && currentPools.Count < 2)
                     throw new InvalidOperationException("Spread pools changed during race admission");
                 job.UpdatePools(currentPools);
                 if (!_startingRequests.Remove(request))
@@ -593,7 +700,7 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
                 // Pools die when all connections are poisoned/discarded (GnuTLS crashes,
                 // network errors) and there's no keepalive/reconnect for spread pools.
                 if (_disposed) return;
-                await ReinitDeadPools(sids);
+                if (!request.CleanupOnly) await ReinitDeadPools(sids);
 
                 // Re-capture pool snapshot AFTER reinit — ReinitDeadPools may have
                 // replaced an exhausted undersized pool with a brand new instance,
@@ -606,7 +713,7 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
                         .ToDictionary(id => id, id => _spreadPools[id]);
                 }
 
-                if (fresh.Count < 2)
+                if (!request.CleanupOnly && fresh.Count < 2)
                 {
                     // A participating server was unmounted between StartRace() and here —
                     // not enough pools to race. Keep the durable request queued
@@ -634,22 +741,35 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
                 // permanently blocked the queue.
                 bool wasActive;
                 bool waiting;
+                var partial = job.CapturePartialState();
+                var finishedRequest = request with
+                {
+                    Partial = partial, StopReason = job.StopReason == RaceStopReason.None ? request.StopReason : job.StopReason.ToString()
+                };
+                PersistedRace? followup = null;
                 lock (_lock)
                 {
                     wasActive = _activeJobs.Remove(job);
                     var stillRequested = _activeRequests.Remove(job);
                     waiting = job.State == SpreadJobState.Waiting;
-                    if (wasActive && stillRequested && deferredForPools && !_disposed)
-                        _raceQueue.Insert(0, request);
-                    else if (wasActive && stillRequested && waiting && !_disposed)
-                        _raceQueue.Add(request.Defer(DateTime.UtcNow, job.WaitReason ?? "Waiting for remaining release files",
-                            job.WaitingForIncompleteRelease, job.Sites.Values.Any(s => s.BytesTransferred > 0)));
+                    if (wasActive && !_disposed)
+                    {
+                        followup = NextRequest(finishedRequest, job, DateTime.UtcNow, deferredForPools, stillRequested);
+                        if (followup != null)
+                        {
+                            _raceQueue.RemoveAll(r => IsSameRace(r.Section, r.ReleaseName, section, releaseName));
+                            _raceQueue.Add(followup);
+                        }
+                    }
                     ScheduleQueueWakeupNoLock();
                 }
                 PersistQueue();
+                if (followup?.CleanupOnly == true && (!request.CleanupOnly
+                    || followup.CleanupAttempts >= RaceLifetimePolicy.MaxCleanupAttempts))
+                    PartialCleanupNotice?.Invoke(releaseName, followup.WaitReason ?? "Owned partial needs cleanup");
                 if (wasActive)
                 {
-                    if (!deferredForPools && !waiting) RecordHistory(job);
+                    if (!request.CleanupOnly && !deferredForPools && !waiting) RecordHistory(job);
                     if (job.State == SpreadJobState.Stopped)
                         Log.Information("Spread job stopped: {Release} [{Section}]",
                             job.ReleaseName, job.Section);
@@ -715,6 +835,9 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
                     ? SpreadJob.ClassifyFailure(job.LastError)
                     : "",
                 DestinationState = job.DestinationStateSummary(),
+                StopReason = job.StopReason == RaceStopReason.None ? "" : job.StopReason.ToString(),
+                ResumeCount = job.ResumeCount,
+                FirstUploadAtUtc = job.FirstUploadAtUtc,
             });
         }
         catch (Exception ex)
@@ -824,8 +947,13 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
                 expired.AddRange(_raceQueue.Where(r => r.IsExpired(now)));
                 _raceQueue.RemoveAll(r => r.IsExpired(now));
 
-                var index = _raceQueue.FindIndex(r => r.IsDue(now)
-                    && r.ServerIds.Count(id => _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed) >= 2);
+                for (var i = 0; i < _raceQueue.Count; i++)
+                {
+                    _raceQueue[i] = QueueRequestAt(_raceQueue[i], now);
+                }
+                // Cleanup deadlines get a bounded turn even when the source is
+                // unavailable. All fresh due races outrank ordinary resume attempts.
+                var index = EligibleQueueIndicesNoLock(now).DefaultIfEmpty(-1).First();
                 if (index >= 0)
                 {
                     next = _raceQueue[index];
@@ -879,8 +1007,14 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
     {
         if (_disposed) return;
         var now = DateTime.UtcNow;
-        var next = _raceQueue.Where(r => r.NextProbeAtUtc > now)
-            .Select(r => r.NextProbeAtUtc).Min();
+        var next = _raceQueue.Where(r => !r.CleanupOnly || r.CleanupAttempts < RaceLifetimePolicy.MaxCleanupAttempts)
+            .SelectMany(r => new[]
+            {
+                r.CleanupOnly && r.NextProbeAtUtc <= now ? now.AddSeconds(30) : r.NextProbeAtUtc,
+                r.CleanupOnly ? null : RaceLifetimePolicy.Deadline(r.Partial, _config.Spread.PartialRaceDeadlineHours) is { } deadline
+                    ? deadline <= now ? now.AddSeconds(30) : deadline : (DateTime?)null
+            })
+            .Where(at => at > now).Min();
         if (next == null)
         {
             _queueWakeTimer?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
@@ -899,19 +1033,19 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
     /// Skipped once disposed so shutdown (which stops every job) can't erase the
     /// in-flight races it is about to interrupt.
     /// </summary>
-    private void PersistQueue()
+    private bool PersistQueue()
     {
-        _queueStore?.Save(() =>
+        return _queueStore?.Save(() =>
         {
             lock (_lock)
             {
-                if (_disposed) return null;
+                if (_disposed) return _shutdownQueueSnapshot?.ToList();
                 return _activeRequests.Values.Select(r => r with { WasActive = true })
                     .Concat(_startingRequests)
                     .Concat(_raceQueue)
                     .ToList();
             }
-        });
+        }) ?? true;
     }
 
     /// <summary>
@@ -1698,6 +1832,8 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
         lock (_lock)
         {
             if (_disposed) return;
+            _shutdownQueueSnapshot = _activeRequests.Values.Select(r => r with { WasActive = true })
+                .Concat(_startingRequests).Concat(_raceQueue).ToList();
             _disposed = true;
             jobs = _activeJobs.ToList();
             _raceQueue.Clear();
@@ -1705,7 +1841,12 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
         }
         _poolRecovery.Dispose();
         _queueWakeTimer?.Dispose();
-        foreach (var job in jobs) job.Stop();
+        foreach (var job in jobs)
+        {
+            job.Stop(RaceStopReason.AppShutdown);
+            try { SavePartialState(job, _shutdownQueueSnapshot.FirstOrDefault(r => IsSameRace(r.Section, r.ReleaseName, job.Section, job.ReleaseName))); }
+            catch (Exception ex) { Log.Warning(ex, "Failed to save final race ownership during shutdown"); }
+        }
         var workers = _workers.StopAsync();
         var teardown = Task.Run(async () =>
         {
@@ -1761,17 +1902,19 @@ public class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IRaceLogin
     /// suppress and the cool-down hasn't expired. Outputs the matching reason
     /// for diagnostic logging. Expired entries are evicted on read.
     /// </summary>
-    private bool IsRecentlyDeadRace(string section, string release, out string? reason)
+    private bool IsRecentlyDeadRace(string section, string release, DateTime now, out string? reason, out TimeSpan remaining)
     {
+        remaining = TimeSpan.Zero;
         var key = DeadRaceKey(section, release);
         if (!_recentlyDeadRaces.TryGetValue(key, out var entry))
         {
             reason = null;
             return false;
         }
-        if (entry.expiry > DateTime.UtcNow)
+        if (entry.expiry > now)
         {
             reason = entry.reason;
+            remaining = entry.expiry - now;
             return true;
         }
         _recentlyDeadRaces.TryRemove(key, out _);

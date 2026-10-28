@@ -296,7 +296,7 @@ public sealed class DownloadSourceCompletionTests
         Assert.StartsWith("Waiting for release completion:", h.Item.ErrorMessage);
         Assert.Equal(0, h.Item.RetryCount);
         Assert.Null(h.Item.CompletedAt);
-        var slots = (SemaphoreSlim)typeof(DownloadManager).GetField("_concurrency", BindingFlags.Instance | BindingFlags.NonPublic)!
+        var slots = (LiveConcurrencyGate)typeof(DownloadManager).GetField("_concurrency", BindingFlags.Instance | BindingFlags.NonPublic)!
             .GetValue(h.Manager)!;
         Assert.Equal(1, slots.CurrentCount);
     }

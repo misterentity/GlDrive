@@ -29,6 +29,8 @@ The app supplies the live tool catalog and JSON schemas. New app tools become av
 
 The live catalog is authoritative for exact fields, IDs, available actions, and service prerequisites. UI collections are limited to 200 rows per snapshot; use the domain tools' pagination where available. Reading history or diagnostics does not make those records editable: change the corresponding setting, queue, service, or stored entity through its dedicated operation.
 
+`agent_audit_action` applies priority and download-only suggestions only when local telemetry contains measured winners for at least 50% of the target server's races. Unknown winners are excluded from win rates. This conservative validator rule applies regardless of the suggestion's reasoning; missing or unreadable evidence rejects the apply. Explicit undo and direct `config_patch` edits remain available. Successful reviewed changes queue the same targeted runtime refresh as Settings; inspect `restartRequired` if that refresh could not be queued.
+
 ## Enable the app connection
 
 1. Install a GlDrive build with MCP support.
@@ -102,6 +104,8 @@ See the [MCP guide to connecting local servers](https://modelcontextprotocol.io/
 
 Start by asking the assistant to inspect the app and list its available operations. Tool descriptions and schemas identify required IDs, supported actions, read operations, and destructive operations. Reads return JSON as both MCP text content and structured content. API errors become tool results with `isError: true`.
 
+`servers.list` and `servers.get` expose `authenticationHeld` and `authenticationRetryAtUtc`. A rejected normal FTP login holds new logins for the same host, port and user across all pools, ghost cleanup and UI probes. Existing usable connections remain available. Automatic recovery admits at most one probe per 30 minutes; a changed password or an explicit `servers.mount`, `servers.remount`, `servers.mount_all` or `servers.pool_reinitialize` action permits a retry. Avoid repeating these manual recovery actions in a polling loop.
+
 Operations that take more than about eight seconds return a `jobId` with `status: "running"`. This acknowledges that work started; it is **not** a success result. Use `app.jobs_get` with that ID until `completed`, `failed`, or `cancelled`. `app.jobs` lists recent operations, and `app.jobs_cancel` requests cancellation. Cancellation does not reverse changes already made. Jobs are kept in memory and expire after thirty minutes or when the app exits.
 
 Writes are never automatically retried. If a call times out, is cancelled, or loses its connection, inspect current state or recent jobs before retrying it. Cancelling an MCP request stops waiting for its HTTP response; it does **not** cancel a detached operation in GlDrive. Find the operation with `app.jobs` and use `app.jobs_cancel`, or use the feature's explicit stop/cancel operation. Cancellation is cooperative: existing desktop commands and the updater may continue after a cancellation request. Remote filesystem changes, downloads, messages, sharing changes, and other actions can have effects outside the local app; authorize the intended action in your assistant conversation.
@@ -135,6 +139,16 @@ The bridge reloads connection settings for every request. It never follows HTTP 
 ## Scope and UI boundaries
 
 The catalog covers app configuration, stored credentials, connected services, filesystem operations, queues, messaging, media features, diagnostics, and app UI actions. Each operation's availability depends on the corresponding app service being running and configured. Runtime settings that require a restart say so in their results or descriptions.
+
+Configuration and credential edits schedule a serialized server/download refresh. Connection, TLS, drive-mount and login-budget changes rebuild the affected FTP resources; other server/download edits update their owning services. IRC changes restart IRC independently. Existing race destination paths stay fixed while new races use updated routing. WinFsp `cache.fileInfoTimeoutMs` requires a subsequent drive mount; unrelated listener, logging and UI settings may still require restarting the app.
+
+For `downloads.enqueue`, an explicit `localPath` remains authoritative. If omitted, the base is selected from an exact category key, then the release's logical `TV`/`Movies` key, then download settings `localPath`; one release subfolder is appended. This endpoint retains its flat release layout. Torrent downloads still use the explicitly supplied directory.
+
+For `wishlist.upsert`, a new item with omitted `quality` uses `downloads.qualityDefault` (1080p if invalid). Patching an existing item preserves its quality unless supplied explicitly.
+
+Race lifetime settings are available through `config_schema` and `config_patch`: `spread.hardTimeoutSeconds` now measures idle payload time, `spread.absoluteRaceTimeoutMinutes` defaults to 90, and `spread.partialRaceDeadlineHours` defaults to 10. `spread.status` and `spread.history` expose stop reasons, resume counts and first-upload timestamps; queued cleanup work remains inspectable when the destination is unavailable. Cleanup only considers incomplete release directories with recorded GlDrive creation ownership.
+
+`spread.start` returns the engine's admission decision: `started`, `queued`, `already_active`, `duplicate` (already queued), `suppressed`, or `unavailable`. Inspect this state instead of assuming that a successful tool response created a race. `queuePosition` is a snapshot among currently eligible queued requests; deferred work or unavailable pools can leave it null. Suppressed requests include `retryAfterSeconds` and `reason`. The Spread tab displays the same decisions.
 
 Third-party websites embedded in WebView tabs are separate applications: MCP does not provide arbitrary DOM access to those pages. Interactive authentication and operating-system dialogs may still require the user to act in the app or browser. Certificate tools can manage known trust pins directly; GlDrive's normal connection-time trust behavior still applies. Plex sign-in uses `plex.login_start` to return an authorization URL for the user, followed by `plex.login_status`; credentials stay in Windows Credential Manager. Plex sharing operations change the account's live permissions. `plex.update_share` uses the app's revoke-and-reinvite workflow, which can leave access revoked if the new invitation fails.
 

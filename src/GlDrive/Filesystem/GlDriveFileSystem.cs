@@ -46,9 +46,9 @@ public class GlDriveFileSystem : FileSystemBase
     private readonly DirectoryCache _cache;
     private readonly string _rootPath;
     private readonly string _volumeLabel;
-    private readonly int _fileInfoTimeoutMs;
-    private readonly int _dirListTimeoutSeconds;
-    private readonly long _spillThresholdBytes;
+    private int _fileInfoTimeoutMs;
+    private volatile int _dirListTimeoutSeconds;
+    private long _spillThresholdBytes;
     private readonly SemaphoreSlim _ftpGate;
     private readonly byte[] _defaultSecurityDescriptor;
     private long _cachedTotalSize = 1L * 1024 * 1024 * 1024 * 1024; // 1 TB default
@@ -94,6 +94,17 @@ public class GlDriveFileSystem : FileSystemBase
         if (string.IsNullOrEmpty(ftpPath) || ftpPath == "/")
             return string.IsNullOrEmpty(_rootPath) ? "/" : _rootPath;
         return _rootPath + ftpPath;
+    }
+
+    internal void UpdateCacheOptions(GlDrive.Config.CacheConfig options)
+    {
+        _dirListTimeoutSeconds = Math.Max(1, options.DirectoryListTimeoutSeconds);
+        Interlocked.Exchange(ref _spillThresholdBytes,
+            options.ReadBufferSpillThresholdMb > 0 ? options.ReadBufferSpillThresholdMb * 1024L * 1024 : 0);
+        FileNode[] nodes;
+        lock (_nodesGate) nodes = _openFiles.Values.ToArray();
+        foreach (var node in nodes)
+            lock (node.SyncRoot) node.SpillThresholdBytes = Interlocked.Read(ref _spillThresholdBytes);
     }
 
     public override int Init(object host0)

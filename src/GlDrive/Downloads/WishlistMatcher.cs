@@ -13,7 +13,9 @@ public class WishlistMatcher
     private readonly Action<WishlistAttemptEvent>? _recordAttempt;
     private readonly DownloadConfig _config;
     private readonly string _serverId;
-    private readonly string _serverName;
+    private string _serverName;
+
+    internal void UpdateServerName(string name) => _serverName = name;
 
     public event Action<WishlistItem, string, string>? MatchFound; // item, category, release
 
@@ -153,20 +155,5 @@ public class WishlistMatcher
     }
 
     private string BuildLocalPath(WishlistItem item, string category, string releaseName)
-    {
-        var basePath = _config.GetPathForCategory(category);
-        var safeRelease = PathSanitizer.Sanitize(releaseName);
-        var safeTitle = PathSanitizer.Sanitize(item.Title);
-
-        if (item.Type == MediaType.Movie)
-        {
-            var yearStr = item.Year.HasValue ? $" ({item.Year})" : "";
-            return Path.Combine(basePath, "Movies", $"{safeTitle}{yearStr}", safeRelease);
-        }
-
-        // TV: extract season from release name
-        var parsed = SceneNameParser.Parse(releaseName);
-        var seasonFolder = parsed.Season.HasValue ? $"Season {parsed.Season:D2}" : "Season 01";
-        return Path.Combine(basePath, "TV", safeTitle, seasonFolder, safeRelease);
-    }
+        => DownloadPathResolver.ForWishlist(_config, item, category, releaseName);
 }
