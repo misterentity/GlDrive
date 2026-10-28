@@ -137,7 +137,13 @@ using (var statsService = new MountService(config, new DownloadConfig(), certs))
     File.WriteAllText(Path.Combine(root, "reject-passive"), "1");
     try { await statsService.RefreshStatsAsync(); }
     finally { File.Delete(Path.Combine(root, "reject-passive")); }
-    var unavailableUntil = (DateTime)typeof(MountService).GetField("_statsUnavailableUntil", flags)!.GetValue(statsService)!;
+    var statsCache = typeof(MountService).GetField("_statsProbeCache", flags)!.GetValue(statsService)!;
+    DateTime UnavailableUntil()
+    {
+        var snapshot = statsCache.GetType().GetMethod("Read", flags)!.Invoke(statsCache, null)!;
+        return (DateTime)snapshot.GetType().GetProperty("UnavailableUntil")!.GetValue(snapshot)!;
+    }
+    var unavailableUntil = UnavailableUntil();
     Check(unavailableUntil <= DateTime.UtcNow, "stats data-channel refusal does not cache a six-hour access denial");
     File.WriteAllText(Path.Combine(root, "stats-trailer"), "1");
     try
@@ -149,7 +155,7 @@ using (var statsService = new MountService(config, new DownloadConfig(), certs))
     finally { File.Delete(Path.Combine(root, "stats-trailer")); }
     await statsService.RefreshStatsAsync(); // invalidate the formerly working trailer
     await statsService.RefreshStatsAsync(); // all commands and LIST now answer cleanly without stats
-    unavailableUntil = (DateTime)typeof(MountService).GetField("_statsUnavailableUntil", flags)!.GetValue(statsService)!;
+    unavailableUntil = UnavailableUntil();
     Check(unavailableUntil > DateTime.UtcNow && statsService.Stats is { Credits: null, Ratio: null },
         "clean command and trailer misses still use the bounded no-access cache");
 }
