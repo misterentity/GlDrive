@@ -17,6 +17,12 @@ public class SpreadConfig
     /// <summary>Deadline from the first upload for finishing or cleaning our partial release.</summary>
     public int PartialRaceDeadlineHours { get; set; } = 10;
     public int MaxConcurrentRaces { get; set; } = 1;
+    /// <summary>Nonpreemptive highest-response-ratio ordering within existing lifetime priority classes.</summary>
+    public bool SizeAwareRaceQueue { get; set; } = true;
+    /// <summary>Merge duplicate announce participants and valid source hints into the existing request.</summary>
+    public bool MergeRaceAnnounces { get; set; } = true;
+    /// <summary>Oldest-first override after this queued age, within each lifetime priority class.</summary>
+    public int RaceQueueMaxAgeMinutes { get; set; } = 120;
 
     /// <summary>
     /// Send a NOOP liveness probe before handing out a pooled spread connection
@@ -36,6 +42,10 @@ public class SpreadConfig
     public int SpreadKeepaliveSeconds { get; set; } = 30;
     public bool AutoRaceOnNotification { get; set; }
     public bool NotifyOnRaceComplete { get; set; } = true;
+    /// <summary>Use trusted bot hints only alongside already scheduled listing verification.</summary>
+    public bool UseSitebotCompletionHints { get; set; }
+    /// <summary>Use complete, release-scoped trusted bot metadata before HTTP lookup.</summary>
+    public bool UseSitebotMetadata { get; set; }
     public List<string> NukeMarkers { get; set; } = [".nuke", "NUKED-"];
 
     /// <summary>

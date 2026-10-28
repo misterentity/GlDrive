@@ -49,7 +49,23 @@ public class DownloadManager : IDisposable
     public event Action<DownloadItem>? DownloadStatusChanged;
 
     public DownloadStore Store => _store;
+    private WishlistStore? _wishlist;
+    private string? _wishlistServerId;
     internal DownloadRelocation? Relocation { get; set; }
+
+    internal void AttachWishlist(WishlistStore wishlist, string serverId)
+    {
+        _wishlist = wishlist;
+        _wishlistServerId = serverId;
+        wishlist.ReconcileDownloads(serverId, () => _store.Items, _config);
+    }
+
+    private void NotifyDownloadStatus(DownloadItem item)
+    {
+        try { _wishlist?.ObserveDownloadStatus(item, _config); }
+        catch (Exception ex) { Log.Error(ex, "Failed to record wishlist download state for {Release}", item.ReleaseName); }
+        DownloadStatusChanged?.Invoke(item);
+    }
 
     private readonly DiskReservation? _disk;
 
@@ -73,7 +89,12 @@ public class DownloadManager : IDisposable
         _concurrency = new LiveConcurrencyGate(config.MaxConcurrentDownloads);
     }
 
-    internal void RefreshOptions() => _concurrency.Resize(_config.MaxConcurrentDownloads);
+    internal void RefreshOptions()
+    {
+        _concurrency.Resize(_config.MaxConcurrentDownloads);
+        if (_wishlist != null && _wishlistServerId != null)
+            _wishlist.ReconcileDownloads(_wishlistServerId, () => _store.Items, _config);
+    }
 
     public void Start()
     {
@@ -180,7 +201,7 @@ public class DownloadManager : IDisposable
             _pendingQueue.Add(item);
         }
         _queueSignal.Release();
-        DownloadStatusChanged?.Invoke(item);
+        NotifyDownloadStatus(item);
         Log.Information("Enqueued download: {Release}", item.ReleaseName);
         return true;
     }
@@ -215,7 +236,7 @@ public class DownloadManager : IDisposable
         }
 
         _store.Update(item);
-        DownloadStatusChanged?.Invoke(item);
+        NotifyDownloadStatus(item);
     }
 
     public void Pause(string id)
@@ -232,7 +253,7 @@ public class DownloadManager : IDisposable
         }
         _store.Update(item);
         _store.Save();
-        DownloadStatusChanged?.Invoke(item);
+        NotifyDownloadStatus(item);
     }
 
     public void Resume(string id)
@@ -254,7 +275,7 @@ public class DownloadManager : IDisposable
         }
         _store.Update(item);
         EnqueueForProcessing(item);
-        DownloadStatusChanged?.Invoke(item);
+        NotifyDownloadStatus(item);
     }
 
     public void Retry(string id)
@@ -277,7 +298,7 @@ public class DownloadManager : IDisposable
         item.ErrorMessage = null;
         _store.Update(item);
         EnqueueForProcessing(item);
-        DownloadStatusChanged?.Invoke(item);
+        NotifyDownloadStatus(item);
     }
 
     public void RemoveCompleted() => _store.RemoveCompleted();
@@ -494,7 +515,7 @@ public class DownloadManager : IDisposable
                 item.Status = DownloadStatus.Failed;
                 item.ErrorMessage = $"Insufficient disk space: need {FormatSize(remaining)} (with reservations), have ~{FormatSize(free)}";
                 _store.Update(item);
-                DownloadStatusChanged?.Invoke(item);
+                NotifyDownloadStatus(item);
                 EmitDownloadOutcome(item, "failed");
                 return false;
             }
@@ -506,7 +527,7 @@ public class DownloadManager : IDisposable
         try
         {
             _store.Update(item);
-            DownloadStatusChanged?.Invoke(item);
+            NotifyDownloadStatus(item);
 
             itemCts.Token.ThrowIfCancellationRequested();
             // Check the destination before listing remotely. Otherwise a network outage
@@ -710,7 +731,7 @@ public class DownloadManager : IDisposable
                         item.Status = DownloadStatus.Extracting;
                     }
                     _store.Update(item);
-                    DownloadStatusChanged?.Invoke(item);
+                    NotifyDownloadStatus(item);
 
                     foreach (var directory in plan.Directories)
                     {
@@ -735,7 +756,7 @@ public class DownloadManager : IDisposable
                     item.Status = DownloadStatus.Failed;
                     item.ErrorMessage = $"Extraction failed: {ex.Message}";
                     _store.Update(item);
-                    DownloadStatusChanged?.Invoke(item);
+                    NotifyDownloadStatus(item);
                     EmitDownloadOutcome(item, "failed");
                     return;
                 }
@@ -762,7 +783,7 @@ public class DownloadManager : IDisposable
             item.StatusDetail = null;
             item.RequiresContentApproval = ex.CanSkipFiles;
             _store.Update(item);
-            DownloadStatusChanged?.Invoke(item);
+            NotifyDownloadStatus(item);
             EmitDownloadOutcome(item, "failed");
         }
         catch (Exception ex) when (DownloadTargetVolume.IsVolumeAbsent(ex, item.LocalPath))
@@ -791,7 +812,7 @@ public class DownloadManager : IDisposable
             item.Status = DownloadStatus.Queued;
             item.ErrorMessage = $"Waiting for drive {root} — destination volume is not mounted";
             _store.Update(item);
-            DownloadStatusChanged?.Invoke(item);
+            NotifyDownloadStatus(item);
             ScheduleRetry(item, (int)delay.TotalSeconds);
         }
         catch (GlDrive.Downloads.Segmented.NetworkAllowanceExhaustedException ex)
@@ -803,7 +824,7 @@ public class DownloadManager : IDisposable
             item.Status = DownloadStatus.Queued;
             item.ErrorMessage = $"Waiting: {ex.Message}";
             _store.Update(item);
-            DownloadStatusChanged?.Invoke(item);
+            NotifyDownloadStatus(item);
             ScheduleRetry(item, 15 * 60);
         }
         catch (Exception ex)
@@ -829,7 +850,7 @@ public class DownloadManager : IDisposable
                             _store.Update(item);
                             _store.Save();
                         }
-                        DownloadStatusChanged?.Invoke(item);
+                        NotifyDownloadStatus(item);
                         if (relocation.Outcome == RelocationOutcome.Relocated)
                             Log.Information("Download {Release} {Relocation}", item.ReleaseName, relocation.Reason);
                         ScheduleRetry(item, Math.Max(1, (int)Math.Ceiling(relocation.Delay.TotalSeconds)));
@@ -866,7 +887,7 @@ public class DownloadManager : IDisposable
                 item.Status = DownloadStatus.Queued;
                 item.ErrorMessage = $"Retry {item.RetryCount}/{_config.MaxRetries}: {ex.Message}";
                 _store.Update(item);
-                DownloadStatusChanged?.Invoke(item);
+                NotifyDownloadStatus(item);
                 // NOTE: item.RetryCount is post-increment here — means "scheduling retry attempt N".
                 EmitDownloadOutcome(item, "retried");
                 ScheduleRetry(item, delay);
@@ -877,7 +898,7 @@ public class DownloadManager : IDisposable
                 item.Status = DownloadStatus.Failed;
                 item.ErrorMessage = ex.Message;
                 _store.Update(item);
-                DownloadStatusChanged?.Invoke(item);
+                NotifyDownloadStatus(item);
                 EmitDownloadOutcome(item, "failed");
             }
         }
@@ -919,7 +940,7 @@ public class DownloadManager : IDisposable
             _store.Update(item);
             if (stopping) _store.Save();
         }
-        DownloadStatusChanged?.Invoke(item);
+        NotifyDownloadStatus(item);
         if (item.Status == DownloadStatus.Cancelled) EmitDownloadOutcome(item, "cancelled");
     }
 
@@ -949,7 +970,7 @@ public class DownloadManager : IDisposable
             // closes before the normal progress debounce fires.
             _store.Save();
         }
-        DownloadStatusChanged?.Invoke(item);
+        NotifyDownloadStatus(item);
         Log.Information("Download waiting for release completion: {Release} — {Reason}; rechecking in {Delay}",
             item.ReleaseName, reason, delay);
         ScheduleRetry(item, (int)delay.TotalSeconds);
@@ -965,7 +986,7 @@ public class DownloadManager : IDisposable
             item.ErrorMessage = reason;
             _store.Update(item);
         }
-        DownloadStatusChanged?.Invoke(item);
+        NotifyDownloadStatus(item);
         EmitDownloadOutcome(item, "failed");
     }
 
@@ -988,7 +1009,7 @@ public class DownloadManager : IDisposable
             item.CompletedAt = DateTime.UtcNow;
             _store.Update(item);
         }
-        DownloadStatusChanged?.Invoke(item);
+        NotifyDownloadStatus(item);
         EmitDownloadOutcome(item, "complete");
         Log.Information("Download completed: {Release}", item.ReleaseName);
     }

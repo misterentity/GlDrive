@@ -240,7 +240,33 @@ Download destinations resolve in this order: an exact raw site-section key in `c
 
 When a logical mapping supplies the root, the normal layout omits its extra `TV`/`Movies` segment. Exact section matches retain the prior layout, including when the raw section itself is named `TV`. Existing queued paths, explicitly supplied MCP `localPath` values and selected torrent destinations stay unchanged.
 
+#### Scored wishlist profiles
+
+`downloads.scoredQualityEnabled` defaults to **false**, preserving existing download decisions. When enabled, the wishlist compares candidates with pending and successfully downloaded copies for the same movie or TV unit. Equal or worse copies are rejected; reaching the cutoff after a successful download completes a movie. A TV series remains watching, with separate copy records per episode/season pack. Failure/cancellation releases pending claims; pausing and automatic retries retain them. No local files are removed or renamed.
+
+`downloads.profiles` is a list of user-defined profiles. Each has an `id`, `name`, `allowedResolutions` (the existing quality enum), `minimumScore`, `cutoffScore`, optional `minimumBytes`/`maximumBytes`, and `customFormats` (`pattern` plus signed `score`). Other controls are `allowUnknownResolution`, `allowFullDisc`, `allowLowQualitySources`, `allowUnknownSize`, `allowUpgrades`, `preferProperRepack`, and `upgradeProperRepackAfterCutoff`. Unknown sizes are never probed; a strict size requirement rejects candidates lacking size evidence. Custom regexes have bounded execution and invalid profiles fail closed.
+
+The built-in score prefers BluRay over WEB, higher resolution within a source tier, untouched H264/H265 or remux over encodes, preferred editions, HDR and PROPER/REPACK. Profiles can add custom scores. Existing items without a profile keep an equivalent legacy resolution profile; the recommended built-ins exclude unknown resolution, full discs and CAM/TS/TC and stop at the selected WEB quality. Select a profile through `wishlist.upsert`; manage custom profiles using `config_patch` and inspect their schema with `config_schema`.
+
+Owned records here mean successful GlDrive downloads, not a scan of a media library. Existing historical grabs are conservative duplicate evidence, not proof of ownership. Library imports, replacement/deletion of old copies and burst-window failover are separate features.
+
+#### Trusted sitebot observations
+
+Each IRC channel accepts a `sitebot` object: `enabled` (default true), `botNick` (default empty), optional `userHostPattern` (`*`/`?` wildcards against `user@host`), and `templates` (default empty). An empty bot nickname leaves decoding inactive. Trust is configured explicitly; it is never learned from arbitrary chat. Changes restart only the IRC service. Built-in parsers cover common pzs-ng/ngBot/dZSbot NEW, CHECKERED-FLAG/COMPLETE, CROSSED STICKS/HALFWAY, RACE, NUKE/UNNUKE and TV-MAZE/IMDB families.
+
+Custom templates specify `kind` and an anchored `pattern` with named `section` and `release` groups. Optional captures include `bytes`, `size`/`unit`, `files`, `speed`/`speedunit`, `winner`, `leader`, `actor`, `nukees`, `factor`, `reason`, `imdb`, `network`, `status`, `genres`, `rating` and `votes`. Regexes must support nonbacktracking matching and have bounded length and execution time. Sitebot MB/GB units use binary multipliers. Bot facts are bounded, expire and remain advisory.
+
+`spread.useSitebotCompletionHints` defaults to **false**. When enabled, announced file counts are cross-checked against existing destination verification for outcome diagnostics; they never establish ownership or trigger another LIST. Normal completion detection remains authoritative. `spread.useSitebotMetadata` also defaults to **false**; enabling it lets a trusted exact-source/release metadata event answer before HTTP only when it contains every field needed by the active filters. Missing evidence falls back to the existing lookup.
+
+Final explicit COMPLETE winners are recorded per destination only with a successful existing listing after the announcement and confirmed completion. A HALFWAY leader, copied-byte share or missing winner is never a win/loss observation. The legacy site-id `winner` field remains separate from a bot's winning username. Use `spread.report` for daily/section/site results and `spread.sitebot_facts` to inspect observations. This core does not skip queued races based solely on bot text, wake FTP probes, send nuke notifications, or change per-race toasts.
+
 ### `spread` — `SpreadConfig`
+
+`sizeAwareRaceQueue` defaults to **true**. At dispatch, eligible requests use highest response ratio `(wait + predicted work) / predicted work`. Prediction prefers trusted sitebot announced bytes and an existing route speed, with section × resolution history medians and broader/local fallback estimates when evidence is missing. Predicted work is bounded, persisted with the request and visible in queue snapshots. No prediction performs a lookup or FTP request. Set false to restore FIFO within the existing priority classes.
+
+`raceQueueMaxAgeMinutes` defaults to **120** (1–1440). Requests beyond that age use oldest-first ordering within their class. Cleanup deadlines still take precedence; fresh work stays ahead of ordinary partial resumes. Deferred requests retain their next-probe time. This is nonpreemptive: a running race keeps its slot and a fresh arrival waits for that attempt to finish. Ageing prevents smaller jobs from indefinitely overtaking older eligible work within the same class; partials retain their existing bounded resume/cleanup deadline.
+
+`mergeRaceAnnounces` defaults to **true**. Duplicate announces enrich the existing queued, starting or active request with participants and valid source hints. Source eligibility respects `neverSource`; a receiving-only announcement cannot displace a usable feeder. The original age, backoff, resume counts and owned-partial cleanup state are preserved. Active destination paths stay pinned, and new hints use existing pools and normal scans before any ownership is inferred. Set false for the old first-request-wins behavior. The defaults address queue delays and discarded-source evidence without adding capacity, preemption, logins or polling.
 
 ```jsonc
 "spread": {

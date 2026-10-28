@@ -208,6 +208,9 @@ public class DownloadConfig
     public int StreamingBufferSizeKb { get; set; } = 256;
     public int WriteBufferLimitMb { get; set; } = 0;
     public string QualityDefault { get; set; } = "1080p";
+    /// <summary>Opt in to scored wishlist acquisition, pending-copy dedupe and cutoff completion.</summary>
+    public bool ScoredQualityEnabled { get; set; }
+    public List<GlDrive.Downloads.ScoredQualityProfile> Profiles { get; set; } = [];
     [System.Text.Json.Serialization.JsonIgnore]
     public string OmdbApiKey { get; set; } = "";
     [System.Text.Json.Serialization.JsonIgnore]

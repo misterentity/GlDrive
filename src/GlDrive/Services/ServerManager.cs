@@ -632,7 +632,8 @@ public partial class ServerManager : IDisposable
         {
             var defaultAutoRace = _config.Spread.AutoRaceOnNotification;
             var listener = new IrcAnnounceListener(serverConfig.Id, ircService,
-                serverConfig.Irc.AnnounceRules, defaultAutoRace);
+                serverConfig.Irc.AnnounceRules, defaultAutoRace, serverConfig.Irc.Channels);
+            listener.SitebotEventReceived += ev => _spreadManager?.ObserveSitebot(ev);
             listener.ReleaseAnnounced += (serverId, section, release, autoRace) =>
             {
                 Log.Information("IRC announce: [{Section}] {Release} (autoRace={AutoRace})",

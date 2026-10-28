@@ -17,12 +17,14 @@ public class MetadataFilterService : IDisposable
     private readonly AppConfig _appConfig;
     private readonly OmdbClient _omdb;
     private readonly TvMazeClient _tvMaze;
+    private readonly SitebotFactStore? _sitebotFacts;
     private readonly ConcurrentDictionary<string, CacheEntry> _cache = new();
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(15);
 
-    public MetadataFilterService(AppConfig appConfig)
+    public MetadataFilterService(AppConfig appConfig, SitebotFactStore? sitebotFacts = null)
     {
         _appConfig = appConfig;
+        _sitebotFacts = sitebotFacts;
         _omdb = new OmdbClient(appConfig.Downloads.ResolveOmdbKey());
         _tvMaze = new TvMazeClient();
     }
@@ -33,10 +35,17 @@ public class MetadataFilterService : IDisposable
         MetadataFilterConfig config,
         string releaseName,
         ParsedRelease parsed,
-        CancellationToken ct = default)
+        CancellationToken ct = default, string? sourceServerId = null)
     {
         if (!config.Enabled)
             return new FilterVerdict(true, "filter disabled");
+
+        // Only a trusted, exact server/release fact may replace the HTTP lookup,
+        // and only when it contains all fields needed by the active filters.
+        if (_appConfig.Spread.UseSitebotMetadata && sourceServerId != null &&
+            _sitebotFacts?.TryGet(sourceServerId, releaseName)?.Metadata is { } metadata &&
+            EvaluateSitebotMetadata(config, metadata, releaseName) is { } hinted)
+            return hinted;
 
         var cacheKey = $"{parsed.Title}|{parsed.Year}|{parsed.Season}";
         if (_cache.TryGetValue(cacheKey, out var cached) && cached.IsFresh)
@@ -128,6 +137,22 @@ public class MetadataFilterService : IDisposable
             Genres: genres,
             IsEnded: isEnded,
             Source: "tvmaze");
+    }
+
+    internal static FilterVerdict? EvaluateSitebotMetadata(MetadataFilterConfig config, SitebotEvent metadata, string releaseName)
+    {
+        if (metadata.Kind != SitebotEventKind.Metadata ||
+            !string.Equals(metadata.Release, releaseName, StringComparison.OrdinalIgnoreCase)) return null;
+        if (config.MinImdbRating > 0 && metadata.ImdbRating is not (>= 0 and <= 10)) return null;
+        if (config.MinVotes > 0 && metadata.ImdbVotes is not >= 0) return null;
+        var genres = metadata.Genres;
+        if ((!string.IsNullOrWhiteSpace(config.AllowGenres) || !string.IsNullOrWhiteSpace(config.DenyGenres)) && genres.Count == 0)
+            return null;
+        var status = metadata.ShowStatus?.Trim().ToLowerInvariant();
+        if (config.SkipEndedShows && status is not ("running" or "ended" or "canceled" or "cancelled" or "in development" or "to be determined"))
+            return null;
+        return ApplyThresholds(config, new ReleaseMetadata(releaseName, metadata.ImdbRating, metadata.ImdbVotes,
+            genres, status is "ended" or "canceled" or "cancelled", "trusted sitebot"), releaseName);
     }
 
     private static FilterVerdict ApplyThresholds(

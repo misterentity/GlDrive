@@ -44,6 +44,8 @@ public class RaceHistoryItem
     // Per-destination completion summary captured at race end, e.g. "2 complete · 1 timeout".
     // Empty for legacy/file-count completion or when no dest state was tracked.
     public string DestinationState { get; set; } = "";
+    public List<RaceDestinationOutcome> DestinationOutcomes { get; set; } = [];
+    public double? QueueWaitSeconds { get; set; }
 }
 
 /// <summary>PRD R1/O3 aggregate. CleanRate = Clean / Finished (0 when none).</summary>

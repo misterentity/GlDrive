@@ -9,6 +9,8 @@ using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using GlDrive.AiAgent;
 using GlDrive.Config;
+using GlDrive.Downloads;
+using GlDrive.Spread;
 using GlDrive.Util;
 
 namespace GlDrive.Services.Automation;
@@ -395,6 +397,26 @@ public sealed class ConfigurationAutomation : IAutomationModule
                 schema["minimum"] = ConfigurationLimits.MinConcurrentDownloads;
                 schema["maximum"] = ConfigurationLimits.MaxConcurrentDownloads;
             }
+            if (type == typeof(DownloadConfig) && property.Name == nameof(DownloadConfig.ScoredQualityEnabled))
+                schema["description"] = "Opt in to scored wishlist acquisition, pending-copy dedupe and successful-download cutoff completion. Default false preserves existing resolution-only decisions.";
+            if (type == typeof(DownloadConfig) && property.Name == nameof(DownloadConfig.Profiles))
+                schema["description"] = "User-defined scored quality profiles selected by wishlist profileId. Empty uses built-in legacy/recommended profiles. Does not delete or replace local files.";
+            if (type == typeof(SpreadConfig) && property.Name == nameof(SpreadConfig.UseSitebotCompletionHints))
+                schema["description"] = "Opt in to trusted announced-count cross-checks during already scheduled destination listing verification. Default false; no extra FTP traffic and a bot line never establishes ownership.";
+            if (type == typeof(SpreadConfig) && property.Name == nameof(SpreadConfig.UseSitebotMetadata))
+                schema["description"] = "Opt in to exact-source/release bot metadata before HTTP lookup only when every active filter has evidence. Default false.";
+            if (type == typeof(SpreadConfig) && property.Name == nameof(SpreadConfig.SizeAwareRaceQueue))
+                schema["description"] = "Default true: nonpreemptive highest-response-ratio queue using trusted announced sizes, existing speeds and historical medians. Existing cleanup/fresh/resume priorities and due times remain authoritative; no extra slots or FTP traffic. False restores FIFO within those priorities.";
+            if (type == typeof(SpreadConfig) && property.Name == nameof(SpreadConfig.MergeRaceAnnounces))
+                schema["description"] = "Default true: duplicate announces merge participants and valid source hints into queued/starting/active requests. Existing source/destination roles, pinned active paths, login budgets and cleanup ownership are preserved. False retains first-request-wins behavior.";
+            if (type == typeof(SpreadConfig) && property.Name == nameof(SpreadConfig.RaceQueueMaxAgeMinutes))
+            {
+                schema["minimum"] = 1;
+                schema["maximum"] = 1440;
+                schema["description"] = "Oldest-first override age within each lifetime priority class. Default 120 minutes. Does not override probe backoff, partial cleanup deadlines or available pools.";
+            }
+            if (type == typeof(SitebotChannelConfig) && property.Name == nameof(SitebotChannelConfig.BotNick))
+                schema["description"] = "Exact trusted nickname on this configured channel. Empty (default) disables passive decoding; optional userHostPattern further restricts identity.";
             if (type == typeof(SpreadConfig) && property.Name == nameof(SpreadConfig.AbsoluteRaceTimeoutMinutes))
             {
                 schema["minimum"] = 1;
@@ -432,6 +454,13 @@ public sealed class ConfigurationAutomation : IAutomationModule
         Range(config.Downloads.MaxConcurrentDownloads, ConfigurationLimits.MinConcurrentDownloads, ConfigurationLimits.MaxConcurrentDownloads, "/downloads/maxConcurrentDownloads");
         Range(config.Downloads.ScheduleStartHour, 0, 23, "/downloads/scheduleStartHour");
         Range(config.Downloads.ScheduleEndHour, 0, 23, "/downloads/scheduleEndHour");
+        if (config.Downloads.Profiles.Count > 100 || config.Downloads.Profiles.Select(p => p.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count() != config.Downloads.Profiles.Count)
+            throw new ArgumentException("Quality profiles require unique ids and at most 100 entries.");
+        foreach (var profile in config.Downloads.Profiles)
+        {
+            var errors = ReleaseScorer.ValidateProfile(profile);
+            if (errors.Count > 0) throw new ArgumentException("Invalid quality profile: " + string.Join("; ", errors));
+        }
         Range(config.Downloads.MultiStream.HttpLanesPerNetwork, ConfigurationLimits.MinHttpLanesPerNetwork, ConfigurationLimits.MaxHttpLanesPerNetwork, "/downloads/multiStream/httpLanesPerNetwork");
         Range(config.Agent.RunHourLocal, 0, 23, "/agent/runHourLocal");
         Range(config.Agent.ConfidenceThreshold_x100, 0, 100, "/agent/confidenceThreshold_x100");
@@ -439,6 +468,7 @@ public sealed class ConfigurationAutomation : IAutomationModule
         Range(config.Spread.SpreadPoolSize, 1, 100, "/spread/spreadPoolSize");
         Range(config.Spread.AbsoluteRaceTimeoutMinutes, 1, 1440, "/spread/absoluteRaceTimeoutMinutes");
         Range(config.Spread.PartialRaceDeadlineHours, 1, 11, "/spread/partialRaceDeadlineHours");
+        Range(config.Spread.RaceQueueMaxAgeMinutes, 1, 1440, "/spread/raceQueueMaxAgeMinutes");
         if (!new[] { "Verbose", "Debug", "Information", "Warning", "Error", "Fatal" }.Contains(config.Logging.Level, StringComparer.OrdinalIgnoreCase))
             throw new ArgumentException("Unknown logging level");
         foreach (var server in config.Servers)
@@ -453,6 +483,20 @@ public sealed class ConfigurationAutomation : IAutomationModule
             Range(server.Pool.LoginCap, 1, 100, prefix + " loginCap");
             if (server.Pool.LoginHeadroom >= server.Pool.LoginCap) throw new ArgumentException(prefix + " loginHeadroom must be smaller than loginCap");
             foreach (var rule in server.Irc.AnnounceRules) ValidateRegex(rule.Pattern);
+            foreach (var channel in server.Irc.Channels)
+            {
+                var bot = channel.Sitebot;
+                if (bot == null || bot.BotNick == null || bot.UserHostPattern == null || bot.Templates == null)
+                    throw new ArgumentException("Sitebot settings and their fields cannot be null.");
+                if (bot.BotNick.Length > 128 || bot.BotNick.Any(c => char.IsWhiteSpace(c) || char.IsControl(c)) ||
+                    bot.UserHostPattern.Length > 256 || bot.UserHostPattern.Any(c => char.IsWhiteSpace(c) || char.IsControl(c)) || bot.Templates.Count > 32)
+                    throw new ArgumentException("Invalid sitebot identity or excessive template count.");
+                foreach (var template in bot.Templates)
+                {
+                    var errors = SitebotEventParser.ValidateTemplate(template);
+                    if (errors.Count > 0) throw new ArgumentException("Invalid sitebot template: " + string.Join("; ", errors));
+                }
+            }
             ValidateRegex(server.Irc.RequestFiller.Pattern);
             foreach (var mapping in server.SpreadSite.SectionMappings) ValidateRegex(mapping.TriggerRegex);
         }

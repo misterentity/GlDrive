@@ -8,13 +8,15 @@ internal static class SpreadStartStatus
     {
         RaceStartOutcome.Started => $"Race started: {result.ReleaseName} — scanning {serverCount} servers for release...",
         RaceStartOutcome.Queued => $"Race queued: {result.ReleaseName}{Position(result.QueuePosition, result.Reason)}",
-        RaceStartOutcome.AlreadyActive => $"Race already active: {result.ReleaseName}",
-        RaceStartOutcome.Duplicate => $"Race already queued: {result.ReleaseName}{Position(result.QueuePosition, result.Reason)}",
+        RaceStartOutcome.AlreadyActive => $"Race already active: {result.ReleaseName}{Merged(result)}",
+        RaceStartOutcome.Duplicate => $"Race already queued: {result.ReleaseName}{Position(result.QueuePosition, result.Reason)}{Merged(result)}",
         RaceStartOutcome.Suppressed => $"Race suppressed: {result.ReleaseName}" +
             (result.SuppressedFor is { } delay ? $" — retry in {Duration(delay)}" : " — retry time unavailable") +
             (string.IsNullOrWhiteSpace(result.Reason) ? "" : $" ({result.Reason})"),
         _ => $"Race not started: {result.ReleaseName} — {result.Reason ?? "spread engine unavailable"}"
     };
+
+    private static string Merged(RaceStartResult result) => result.HintsMerged ? " — announce hints merged" : "";
 
     private static string Position(int? position, string? reason) => position is > 0
         ? $" — position {position}" : $" — {reason ?? "waiting for sites or a deferred retry"}";

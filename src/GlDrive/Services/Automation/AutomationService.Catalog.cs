@@ -72,7 +72,9 @@ public sealed partial class AutomationService
         Add("search.refresh", "Rebuild one server's FTP search index. May run for several minutes.", false, false, "serverId");
 
         Add("wishlist.list", "Read the persisted wishlist, including media metadata, quality, watching/paused/completed state and grabbed releases.", true, false, "offset?:integer", "limit?:integer");
-        Add("wishlist.upsert", "Add a wishlist item or patch an existing item by item.id. item fields: id, title, type (Movie/TvShow), year, imdbId, tvMazeId, quality (Any/SD/Q720p/Q1080p/Q2160p), status (Watching/Completed/Paused), grabbedReleases, posterUrl, plot, rating, genres, dead. New items with omitted quality use downloads.qualityDefault (invalid defaults fall back to 1080p). Unspecified existing fields are preserved.", false, false, "item:object");
+        Add("wishlist.upsert", "Add a wishlist item or patch by item.id. Fields: id, title, type (Movie/TvShow), year, imdbId, tvMazeId, quality (Any/SD/Q720p/Q1080p/Q2160p), profileId, status (Watching/Completed/Paused), grabbedReleases, posterUrl, plot, rating, genres, dead. New items with omitted quality use downloads.qualityDefault. profileId selects a built-in or downloads.profiles entry; scored acquisition requires downloads.scoredQualityEnabled. BestOwned and pendingGrabs are read-only download state. Unspecified existing fields are preserved.", false, false, "item:object");
+        Add("wishlist.profiles", "List built-in and configured scored quality profiles and whether scored acquisition is enabled. No network access.", true, false);
+        Add("wishlist.score", "Explain a scored wishlist candidate against its profile, pending and owned copies without enqueueing or network access. Optional sizeBytes is supplied evidence, never probed.", true, false, "itemId", "releaseName", "sizeBytes?:integer");
         Add("wishlist.remove", "Delete a wishlist item by ID.", false, true, "id");
         Add("wishlist.match", "Evaluate a known FTP release against the wishlist and allow the normal configured auto-download behavior.", false, false, "serverId", "category", "releaseName", "path");
         Add("notifications.list", "Read stored release notifications, optionally filtered by server.", true, false, "serverId?", "offset?:integer", "limit?:integer");
@@ -100,13 +102,15 @@ public sealed partial class AutomationService
 
         Add("spread.status", "Read active races, queued requests, connected sites, pool health and historical summary.", true, false);
         Add("spread.detail", "Read the full file/site/transfer detail of an active race.", true, false, "id");
-        Add("spread.start", "Request a race between at least two connected sites. Returns started, queued with queuePosition, already_active, duplicate, suppressed with retryAfterSeconds/reason, or unavailable. Position is a snapshot among eligible queued work. Omit serverIds to select connected enabled sites with sections.", false, false, "section", "releaseName", "serverIds?:strings", "sourceServerId?", "sourcePath?");
+        Add("spread.start", "Request a race between at least two connected sites. Returns started, queued with queuePosition, already_active, duplicate, suppressed with retryAfterSeconds/reason, or unavailable. hintsMerged reports duplicate source/participant enrichment when enabled. Queue position follows the configured size-aware or FIFO policy among eligible work. Omit serverIds to select connected enabled sites with sections.", false, false, "section", "releaseName", "serverIds?:strings", "sourceServerId?", "sourcePath?");
         Add("spread.stop", "Stop an active race.", false, true, "id");
         Add("spread.pause", "Pause an active race.", false, false, "id");
         Add("spread.resume", "Resume a paused race.", false, false, "id");
         Add("spread.queue_remove", "Remove a queued race by exact section and release name. An already started race must be stopped by ID.", false, true, "section", "releaseName");
         Add("spread.fxp", "Copy a file or directory between different connected FTP servers via the app's FXP engine. directory=true recursively copies a directory.", false, true, "sourceServerId", "sourcePath", "destinationServerId", "destinationPath", "directory?:boolean");
         Add("spread.history", "Read persisted race history, newest first.", true, false, "offset?:integer", "limit?:integer");
+        Add("spread.report", "Read a daily/section/site race scoreboard from existing local telemetry. Unknown winners stay outside win/loss rates; coverage and malformed/truncated data are reported. days defaults to 1, maximum 90. No FTP traffic.", true, false, "days?:integer");
+        Add("spread.sitebot_facts", "Read recent trusted per-server sitebot facts, including announced sizes, completion, metadata and nuke hints. These are advisory, not proof of FTP ownership. No network access.", true, false, "serverId?", "releaseName?", "offset?:integer", "limit?:integer");
         Add("spread.blacklist_list", "Read learned per-server section exclusions and their failure evidence.", true, false);
         Add("spread.blacklist_remove", "Remove a learned section exclusion so future races may retry it.", false, true, "serverId", "section");
         Add("spread.blacklist_clear", "Clear all learned section exclusions.", false, true);

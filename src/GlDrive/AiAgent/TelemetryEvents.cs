@@ -25,6 +25,8 @@ public record RaceOutcomeEvent : TelemetryEnvelope
     [JsonPropertyName("endedAt")]    public string EndedAt { get; init; } = "";
     [JsonPropertyName("participants")] public List<RaceParticipant> Participants { get; init; } = [];
     [JsonPropertyName("winner")]     public string? Winner { get; init; }
+    [JsonPropertyName("destinationOutcomes")] public List<GlDrive.Spread.RaceDestinationOutcome> DestinationOutcomes { get; init; } = [];
+    [JsonPropertyName("queueWaitSeconds")] public double? QueueWaitSeconds { get; init; }
     [JsonPropertyName("stopReason")] public string StopReason { get; init; } = "";
     [JsonPropertyName("resumeCount")] public int ResumeCount { get; init; }
     [JsonPropertyName("firstUploadAtUtc")] public string? FirstUploadAtUtc { get; init; }
