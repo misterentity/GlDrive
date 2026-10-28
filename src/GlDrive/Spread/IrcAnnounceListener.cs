@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using GlDrive.Config;
 using GlDrive.Irc;
 using Serilog;
@@ -19,7 +18,7 @@ public class IrcAnnounceListener : IDisposable
     private readonly string _serverId;
     private readonly IrcService? _ircService;
     private readonly List<IrcAnnounceRule> _rules;
-    private readonly Dictionary<string, Regex> _compiledRules = new();
+    private readonly AnnounceMatcher _matcher;
     private readonly LinkedList<string> _recentAnnounceOrder = new();
     private readonly HashSet<string> _recentAnnounces = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _recentChannelAnnounces = new(StringComparer.OrdinalIgnoreCase);
@@ -32,56 +31,8 @@ public class IrcAnnounceListener : IDisposable
     /// <summary>Passive source-health annotation; does not change announce matching or admission.</summary>
     public Func<bool>? SourceDown { get; set; }
 
-    // Built-in pattern for common glftpd verbose announces:
-    //   [ NEW ] in [ section ] Release.Name OK pred 2s ago.
-    //   [ CHECKERED-FLAG ] in [ section ] Release.Name [ stats ]
-    private static readonly Regex VerboseAnnouncePattern = new(
-        @"\[ NEW \] in \[ (?<section>[^\]]+?) \] (?<release>\S+)",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled,
-        TimeSpan.FromMilliseconds(200));
-
-    // A valid release name is also present in removal notices. Loose custom rules
-    // can match their section/name while skipping the event label (e.g. DELETE:
-    // -TV- Release.Name has been deleted). Only classify an explicit leading
-    // label, so titles or group names containing Delete/Nuke remain valid.
-    private static readonly Regex RemovalAnnouncePattern = new(
-        @"^\s*(?:\[\s*(?:DELETE|DELETED|DELDIR|RMDIR|DELPRE|NUKE|NUKED)\s*\]|(?:DELETE|DELETED|DELDIR|RMDIR|DELPRE|NUKE|NUKED)\s*:)",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.NonBacktracking,
-        TimeSpan.FromMilliseconds(200));
-
-    // Common verb / filler words that loose announce regexes accidentally capture
-    // out of racing chatter (e.g. "TeRRaNoVA brings the goods", "switchback leads with 4/8F").
-    // These are NEVER scene release names, so reject them before they reach StartRace.
-    private static readonly HashSet<string> KnownAnnounceVerbs = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "brings", "leads", "racing", "wins", "complete", "completed", "incomplete",
-        "pred", "nuke", "nuked", "unnuke", "unnuked", "delpre", "request", "filled",
-        "the", "from", "for", "with", "and", "now", "new"
-    };
-
-    internal static bool IsPlausibleReleaseName(string? candidate)
-    {
-        if (string.IsNullOrWhiteSpace(candidate)) return false;
-        var s = candidate.Trim();
-        if (s.Length < 10) return false;
-        if (KnownAnnounceVerbs.Contains(s)) return false;
-        // Scene names always carry a structural token: a '.' or '_' separator, a digit
-        // (year / resolution / episode), or an uppercase letter (the group tag). A hyphen
-        // alone is NOT structure — hyphenated lowercase prose ("father-to-be") passed the
-        // old check and launched a 23-probe auto-race off a plot summary (v3.10.118).
-        // Validated against 24,881 matched announces: only the prose line is rejected.
-        bool hasStructure = false;
-        foreach (var c in s)
-        {
-            if (c == '.' || c == '_' || (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z'))
-            {
-                hasStructure = true;
-                break;
-            }
-        }
-        if (!hasStructure) return false;
-        return true;
-    }
+    internal static bool IsPlausibleReleaseName(string? candidate) =>
+        AnnounceMatcher.IsPlausibleReleaseName(candidate);
 
     public event Action<string, string, string, bool>? ReleaseAnnounced; // serverId, section, releaseName, autoRace
     public event Action<SitebotEvent>? SitebotEventReceived;
@@ -108,26 +59,15 @@ public class IrcAnnounceListener : IDisposable
         _recordMatchedAnnounce = recordMatchedAnnounce ?? (row =>
             App.TelemetryRecorder?.Record(GlDrive.AiAgent.TelemetryStream.MatchedAnnounces, row));
 
-        // Pre-compile regex patterns
-        foreach (var rule in rules.Where(r => r.Enabled && !string.IsNullOrEmpty(r.Pattern)))
-        {
-            try
-            {
-                _compiledRules[rule.Channel + "|" + rule.Pattern] = new Regex(rule.Pattern,
-                    RegexOptions.IgnoreCase | RegexOptions.Compiled,
-                    TimeSpan.FromMilliseconds(200));
-            }
-            catch (Exception ex)
-            {
-                Log.Warning(ex, "Invalid IRC announce pattern: {Pattern}", rule.Pattern);
-            }
-        }
+        _matcher = new AnnounceMatcher(rules, defaultAutoRace);
+        foreach (var pattern in _matcher.InvalidPatterns)
+            Log.Warning("Invalid IRC announce pattern: {Pattern}", pattern);
 
         // Always subscribe — the built-in verbose pattern works without any custom rules.
         // Without this, users must configure announce rules before the announce pipeline
         // becomes live, which defeats the purpose of shipping a built-in pattern.
         Log.Information("IRC announce listener active for {Server} ({Count} custom rules, builtin={Builtin})",
-            _serverId, _compiledRules.Count, _defaultAutoRace ? "autoRace" : "logOnly");
+            _serverId, _matcher.CompiledCount, _defaultAutoRace ? "autoRace" : "logOnly");
     }
 
     private int _traceCount;
@@ -166,7 +106,7 @@ public class IrcAnnounceListener : IDisposable
 
         // IrcService has already removed IRC formatting. Reject removal events
         // before either matcher, deduplication or announce-learning telemetry.
-        if (RemovalAnnouncePattern.IsMatch(message.Text))
+        if (AnnounceMatcher.IsRemoval(message.Text))
         {
             Log.Debug("IRC announce: ignoring removal event from {Channel}", target);
             return;
@@ -180,66 +120,21 @@ public class IrcAnnounceListener : IDisposable
                 target, message.Nick, message.Text[..Math.Min(150, message.Text.Length)]);
         }
 
-        // Try built-in verbose pattern first: [ NEW ] in [ section ] Release.Name ...
-        // Only match [ NEW ], skip [ CHECKERED-FLAG ], [ CROSSED STICKS ] etc.
-        var verboseMatch = VerboseAnnouncePattern.Match(message.Text);
-        if (verboseMatch.Success)
+        foreach (var candidate in _matcher.Enumerate(target, message.Text))
         {
-            var section = verboseMatch.Groups["section"].Value.Trim();
-            var release = verboseMatch.Groups["release"].Value;
-
-            // If user has enabled rules for this channel, prefer their autoRace setting.
-            // Otherwise fall back to the global default (from SpreadConfig.AutoRaceOnNotification)
-            // so the built-in pattern is functional without rule configuration.
-            var matchingRule = _rules.FirstOrDefault(r => r.Enabled &&
-                (string.IsNullOrEmpty(r.Channel) || target.Equals(r.Channel, StringComparison.OrdinalIgnoreCase)));
-            var autoRace = matchingRule?.AutoRace ?? _defaultAutoRace;
-
-            if (!string.IsNullOrEmpty(release) && release.Length >= 5)
+            if (candidate.RuleSource == "builtin")
             {
-                // ruleSource "builtin" — matched the shipped verbose [ NEW ] pattern.
-                if (TryFireAnnounce(section, release, target, message.Text, autoRace, "builtin", message.Timestamp.ToUniversalTime()))
-                    return;
+                if (TryFireAnnounce(candidate.Section, candidate.Release, target, message.Text,
+                    candidate.AutoRace, candidate.RuleSource, message.Timestamp.ToUniversalTime())) return;
             }
-        }
-
-        foreach (var rule in _rules.Where(r => r.Enabled))
-        {
-            // Check channel match (empty = all channels)
-            if (!string.IsNullOrEmpty(rule.Channel) &&
-                !target.Equals(rule.Channel, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            var key = rule.Channel + "|" + rule.Pattern;
-            if (!_compiledRules.TryGetValue(key, out var regex))
-                continue;
-
-            try
+            else
             {
-                var match = regex.Match(message.Text);
-                if (!match.Success) continue;
-
-                var section = match.Groups["section"].Success ? match.Groups["section"].Value.Trim() : "";
-                var release = match.Groups["release"].Success ? match.Groups["release"].Value : "";
-
-                if (string.IsNullOrEmpty(release)) continue;
-
-                // Basic validation: release names shouldn't be common words
-                if (release.Length < 5 || release is "in" or "the" or "from" or "to" or "by" or "at")
+                try
                 {
-                    Log.Debug("IRC announce skipped (invalid release name): [{Section}] {Release} from msg: {Msg}",
-                        section, release, message.Text);
-                    continue;
+                    if (TryFireAnnounce(candidate.Section, candidate.Release, target, message.Text,
+                        candidate.AutoRace, candidate.RuleSource, message.Timestamp.ToUniversalTime())) return;
                 }
-
-                // ruleSource "custom" — matched a user-configured announce rule.
-                if (TryFireAnnounce(section, release, target, message.Text, rule.AutoRace, "custom", message.Timestamp.ToUniversalTime()))
-                    return;
-            }
-            catch (RegexMatchTimeoutException) { }
-            catch (Exception ex)
-            {
-                Log.Debug(ex, "IRC announce match error");
+                catch (Exception ex) { Log.Debug(ex, "IRC announce match error"); }
             }
         }
 

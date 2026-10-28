@@ -21,8 +21,7 @@ public static class McpSettingsPersistence
             LoadSavedSettings,
             candidate =>
             {
-                Directory.CreateDirectory(ConfigManager.AppDataPath);
-                SecureFile.WriteAllTextRestricted(ConfigManager.ConfigPath, candidate.ToJsonString(Json));
+                ConfigManager.SaveRawSettings(candidate, "settings-ui:mcp");
             });
 
     /// <summary>Replaces only the saved bearer token and publishes it after persistence succeeds.</summary>
@@ -30,8 +29,7 @@ public static class McpSettingsPersistence
         => RegenerateToken(runtimeConfig, ConfigManager.ConfigPath, LoadSavedSettings,
             candidate =>
             {
-                Directory.CreateDirectory(ConfigManager.AppDataPath);
-                SecureFile.WriteAllTextRestricted(ConfigManager.ConfigPath, candidate.ToJsonString(Json));
+                ConfigManager.SaveRawSettings(candidate, "settings-ui:token");
             });
 
     internal static void RegenerateToken(AppConfig runtimeConfig, string configPath,
@@ -61,7 +59,10 @@ public static class McpSettingsPersistence
 
     /// <summary>Save the full Settings dialog from a detached candidate, retaining the saved bearer token.</summary>
     public static void SaveAll(AppConfig runtimeConfig, Action<AppConfig> applyEdits)
-        => SaveAll(runtimeConfig, applyEdits, ConfigManager.ConfigPath, LoadSavedSettings, ConfigManager.Save);
+    {
+        using var attribution = ConfigWriteScope.Fallback("settings-ui");
+        SaveAll(runtimeConfig, applyEdits, ConfigManager.ConfigPath, LoadSavedSettings, ConfigManager.Save);
+    }
 
     internal static void SaveAll(AppConfig runtimeConfig, Action<AppConfig> applyEdits, string configPath,
         Func<JsonObject> load, Action<AppConfig> save, Func<bool>? isReadOnly = null)

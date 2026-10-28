@@ -46,6 +46,10 @@ internal static class AgentConfigCommit
         List<AuditRow> rows, string root, Action<AppConfig> save, AuditTrail audit,
         Action<AppConfig>? publish = null)
     {
+        var runId = rows.FirstOrDefault()?.RunId ?? "maintenance";
+        using var attribution = ConfigWriteScope.Current.Actor == "mcp:agent_run"
+            ? ConfigWriteScope.Begin("agent:" + runId, runId)
+            : ConfigWriteScope.Fallback("agent:" + runId, runId);
         SecureFile.WithPathLock(configPath, () =>
         {
             Recover(configPath, root, audit);

@@ -76,6 +76,18 @@ public sealed class FreezeStore
         }
     }
 
+    internal void Reload()
+    {
+        lock (_lock)
+        {
+            _entries = [];
+            _loadFailed = false;
+            Load();
+        }
+    }
+
+    internal void WithLock(Action action) { lock (_lock) action(); }
+
     private void Save(List<FreezeEntry> entries)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(_path)!);

@@ -52,7 +52,7 @@ public static class IrcLogStore
             var gate = _writeLocks.GetOrAdd(serverId, _ => new object());
             lock (gate)
             {
-                File.AppendAllText(path, line + Environment.NewLine);
+                GlDrive.Util.LogFileRetry.Append(() => File.AppendAllText(path, line + Environment.NewLine));
             }
         }
         catch (Exception ex)
@@ -171,9 +171,15 @@ public static class IrcLogStore
 
     private static IEnumerable<string> SafeReadAllLines(string path)
     {
-        // Use ReadAllLines with a retry on transient IO errors; we don't need
-        // streaming because a day of IRC traffic is well under 10MB.
-        try { return File.ReadAllLines(path); }
+        // Share append/delete access with live writers and retention.
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            var lines = new List<string>();
+            while (reader.ReadLine() is { } line) lines.Add(line);
+            return lines;
+        }
         catch (IOException) { return []; }
         catch (UnauthorizedAccessException) { return []; }
     }

@@ -202,7 +202,7 @@ public class SettingsViewModel : INotifyPropertyChanged
             }
             _config.Agent.Enabled = value;
             // Persist immediately so a restart preserves the toggle even if user never clicks Save.
-            GlDrive.Config.ConfigManager.Save(_config);
+            GlDrive.Config.ConfigManager.Save(_config, "settings-ui");
             // Start/stop the scheduler — mirrors the tray toggle behavior.
             if (value) App.AgentRunner?.Start();
             else       App.AgentRunner?.Stop();
@@ -311,7 +311,7 @@ public class SettingsViewModel : INotifyPropertyChanged
                         () => App.ChangeApplier.Apply(new[] { inverse }, _config, _config.Agent,
                             "panic-" + Guid.NewGuid().ToString()[..8], dryRun: false, explicitUndo: true));
                     if (AgentUndoCompletion.TryComplete(report,
-                        () => GlDrive.Config.ConfigManager.Save(_config),
+                        () => GlDrive.Config.ConfigManager.Save(_config, "settings-ui"),
                         () => App.AuditTrail.MarkUndone(r.RunId, r.Target, "panic-all"),
                         null, out var failure))
                         reverted++;
@@ -340,8 +340,20 @@ public class SettingsViewModel : INotifyPropertyChanged
             $"Restore config from {System.IO.Path.GetFileName(dlg.FileName)}? A pre-restore snapshot will be saved.",
             "Confirm restore",
             System.Windows.MessageBoxButton.YesNo) != System.Windows.MessageBoxResult.Yes) return;
-        App.SnapshotStore?.Restore(dlg.FileName, GlDrive.Config.ConfigManager.ConfigPath);
-        System.Windows.MessageBox.Show("Restored. Restart the app to pick up the change.");
+        try
+        {
+            var changes = App.ConfigChanges ?? throw new InvalidOperationException("Configuration restoration is unavailable");
+            var snapshot = System.Text.Json.Nodes.JsonNode.Parse(System.IO.File.ReadAllText(dlg.FileName))
+                ?? throw new InvalidOperationException("The snapshot is empty");
+            App.SnapshotStore?.Save(ConfigManager.ConfigPath, "pre-restore");
+            changes.Restore(snapshot, "restore:settings-ui");
+            System.Windows.MessageBox.Show("Restored through settings validation. Runtime refresh was scheduled; unrelated settings may require restart. Close and reopen Settings before editing.");
+        }
+        catch (Exception ex)
+        {
+            Serilog.Log.Warning("Snapshot restore failed ({ErrorType})", ex.GetType().Name);
+            System.Windows.MessageBox.Show("The snapshot could not be restored. Check local diagnostics.");
+        }
     });
 
     public string[] LogLevels { get; } = ["Verbose", "Debug", "Information", "Warning", "Error"];

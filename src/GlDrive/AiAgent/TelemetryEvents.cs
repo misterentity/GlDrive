@@ -119,6 +119,8 @@ public record WishlistAttemptEvent : TelemetryEnvelope
 
 public record ConfigOverrideEvent : TelemetryEnvelope
 {
+    [JsonPropertyName("canonicalPointer")] public string? CanonicalPointer { get; init; }
+    [JsonPropertyName("actor")]        public string Actor { get; init; } = "unknown";
     [JsonPropertyName("jsonPointer")]  public string JsonPointer { get; init; } = "";
     [JsonPropertyName("beforeValue")]  public string? BeforeValue { get; init; }
     [JsonPropertyName("afterValue")]   public string? AfterValue { get; init; }

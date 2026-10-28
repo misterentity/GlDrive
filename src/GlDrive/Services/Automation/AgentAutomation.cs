@@ -50,6 +50,10 @@ public sealed class AgentAutomation : IAutomationModule
 
     public IReadOnlyList<AutomationToolDefinition> Tools { get; } =
     [
+        AutomationToolDefinition.Create("agent_simulate", "Replay proposed agent configuration changes locally through the same validators and impact gates without saving. Returns count-only impact evidence; never sends IRC logs to a model.",
+            new { type = "object", properties = new { changes = new { type = "array", minItems = 1, maxItems = 100, items = new { type = "object" } } }, required = new[] { "changes" }, additionalProperties = false }, readOnly: true),
+        AutomationToolDefinition.Create("agent_outcomes", "Read expected effects and passive measured outcomes from applied agent changes. Missing measurements are unscored; regressions never revert automatically unless explicitly enabled.",
+            new { type = "object", properties = new { }, additionalProperties = false }, readOnly: true),
         AutomationToolDefinition.Create("agent_status", "Read AI agent settings, service availability, freezes, and whether an MCP-triggered run is active. Scheduled run activity is not included in that flag.",
             new { type = "object", properties = new { }, additionalProperties = false }, readOnly: true),
         AutomationToolDefinition.Create("agent_run", "Run the existing AI tuning agent now using its configured model, consent, dry-run, freeze, confidence, and validation rules. Calls the configured external model service and may apply settings.",
@@ -71,6 +75,8 @@ public sealed class AgentAutomation : IAutomationModule
         ct.ThrowIfCancellationRequested();
         switch (operation)
         {
+            case "agent_simulate": return await Task.Run(() => Simulate(arguments, ct), ct);
+            case "agent_outcomes": return await Task.Run(() => Outcomes(), ct);
             case "agent_status":
                 return new { settings = _config.Agent, available = _runner() != null, manualRunActive = Volatile.Read(ref _manualRunActive) != 0,
                     freezes = _freeze()?.All, auditAvailable = _audit() != null };
@@ -93,11 +99,35 @@ public sealed class AgentAutomation : IAutomationModule
             case "agent_audit": return Audit(ConfigurationAutomation.Integer(arguments, "limit", 50), ConfigurationAutomation.String(arguments, "runId"));
             case "agent_memo": return Memo(arguments);
             case "agent_audit_action":
-                if (System.Windows.Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
-                    return await dispatcher.InvokeAsync(() => AuditAction(arguments));
-                return AuditAction(arguments);
+                return await AuditActionAsync(arguments, ct);
             default: throw new ArgumentException("Unknown agent operation");
         }
+    }
+
+    private object Simulate(JsonElement arguments, CancellationToken ct)
+    {
+        var changes = JsonSerializer.Deserialize<List<AgentChange>>(arguments.GetProperty("changes").GetRawText())
+            ?? throw new ArgumentException("changes is required");
+        if (changes.Count is < 1 or > 100) throw new ArgumentException("Supply 1..100 changes");
+        AppConfig? candidate = null;
+        SecureFile.WithPathLock(_configFilePath, () => candidate = File.Exists(_configFilePath)
+            ? JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(_configFilePath), ConfigurationAutomation.Json)
+            : JsonSerializer.Deserialize<AppConfig>(JsonSerializer.Serialize(_config, ConfigurationAutomation.Json), ConfigurationAutomation.Json));
+        var rows = new List<AuditRow>();
+        var result = (_applier() ?? throw new InvalidOperationException("Agent validator service unavailable"))
+            .Apply(changes, candidate!, candidate!.Agent, "simulation", true, rows.Add, configOnly: true, cancellationToken: ct);
+        return new { result.Applied, result.Rejected, rows = rows.Select(r => new
+            { r.Category, r.Target, r.ExpectedEffect, r.RejectionReason, r.Impact, previewAccepted = r.Applied }).ToArray() };
+    }
+
+    private object Outcomes()
+    {
+        try
+        {
+            return new { available = true, rows = _audit()?.ReadAll().Where(r => r.WasApplied).Select(r => new
+                { r.Id, r.RunId, r.Category, r.Target, r.ExpectedEffect, r.Outcome, r.AutomaticRevertOf }).ToArray() };
+        }
+        catch { return new { available = false, message = "Outcome history unavailable; current settings are unchanged." }; }
     }
 
     private object Freeze(JsonElement arguments)
@@ -169,7 +199,7 @@ public sealed class AgentAutomation : IAutomationModule
         }
     }
 
-    private object AuditAction(JsonElement arguments)
+    private async Task<object> AuditActionAsync(JsonElement arguments, CancellationToken ct)
     {
         if (ConfigManager.ReadOnly) throw new InvalidOperationException("Settings are read-only");
         var action = ConfigurationAutomation.String(arguments, "action");
@@ -178,8 +208,7 @@ public sealed class AgentAutomation : IAutomationModule
         var target = ConfigurationAutomation.String(arguments, "target") ?? throw new ArgumentException("target is required");
         var audit = _audit() ?? throw new InvalidOperationException("Audit trail is unavailable");
         var applier = _applier() ?? throw new InvalidOperationException("AI change service is unavailable");
-        object? result = null;
-        SecureFile.WithPathLock(_configFilePath, () =>
+        var prepared = await Task.Run(() =>
         {
             var row = audit.ReadAll().LastOrDefault(r => r.RunId == runId && r.Target == target)
                 ?? throw new ArgumentException("Audit row was not found");
@@ -187,7 +216,8 @@ public sealed class AgentAutomation : IAutomationModule
                 throw new ArgumentException("The audit row is not eligible for this action");
             if (row.Category is AgentCategories.WishlistPrune or AgentCategories.ErrorReport)
                 throw new ArgumentException("Use the dedicated wishlist/diagnostics tools for this action");
-            var expected = File.ReadAllText(_configFilePath);
+            string expected = "";
+            SecureFile.WithPathLock(_configFilePath, () => expected = File.ReadAllText(_configFilePath));
             var candidate = JsonSerializer.Deserialize<AppConfig>(expected, ConfigurationAutomation.Json)
                 ?? throw new InvalidOperationException("Persisted settings are empty");
             var inverse = ReviewedChange(row, action == "undo");
@@ -195,16 +225,25 @@ public sealed class AgentAutomation : IAutomationModule
             var pending = new List<AuditRow>();
             var report = action == "undo"
                 ? GlDrive.UI.AgentUndoCompletion.ApplyInverse(row, () => applier.Apply([inverse], candidate, candidate.Agent, newRunId, false, pending.Add, explicitUndo: true))
-                : applier.Apply([inverse], candidate, candidate.Agent, newRunId, false, pending.Add);
+                : applier.Apply([inverse], candidate, candidate.Agent, newRunId, false, pending.Add,
+                    explicitOperator: true, cancellationToken: ct);
+            return (row, expected, candidate, newRunId, pending, report);
+        }, ct);
+        ct.ThrowIfCancellationRequested();
+        object Commit()
+        {
+            var (row, expected, candidate, newRunId, pending, report) = prepared;
             if (report is not { Applied: 1, Rejected: 0 })
             {
                 foreach (var entry in pending) audit.Append(entry);
-                result = new { applied = false, rejectionReasons = report?.RejectionByReason.Keys.ToArray() ?? ["service-unavailable"], restartRequired = false };
-                return;
+                return new { applied = false, rejectionReasons = report?.RejectionByReason.Keys.ToArray() ?? ["service-unavailable"], restartRequired = false };
             }
             ConfigurationAutomation.Validate(candidate);
-            AgentConfigCommit.Commit(_configFilePath, expected, candidate, pending, _root, _persistConfig, audit);
-            ConfigurationAutomation.Reconcile(_config, candidate);
+            applier.GuardCommit(_configFilePath, pending, candidate, () =>
+            {
+                AgentConfigCommit.Commit(_configFilePath, expected, candidate, pending, _root, _persistConfig, audit);
+                ConfigurationAutomation.Reconcile(_config, candidate);
+            });
             var runtimeRefreshQueued = false;
             if (_onConfigChanged != null)
             {
@@ -213,9 +252,11 @@ public sealed class AgentAutomation : IAutomationModule
             }
             if (action == "undo") audit.MarkUndone(row.RunId, row.Target, "mcp-undo");
             else audit.Dismiss(row, "mcp-apply");
-            result = new { applied = true, restartRequired = !runtimeRefreshQueued, runId = newRunId };
-        });
-        return result!;
+            return new { applied = true, restartRequired = !runtimeRefreshQueued, runId = newRunId };
+        }
+        if (System.Windows.Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
+            return await dispatcher.InvokeAsync(Commit);
+        return Commit();
     }
 
     private static void CheckFile(string path)
@@ -230,5 +271,6 @@ public sealed class AgentAutomation : IAutomationModule
         After = undo ? row.Before : row.After, Confidence = 1,
         Reasoning = undo ? "Explicit MCP undo" : row.Reasoning + " [explicit MCP apply]",
         EvidenceRef = undo ? row.RunId : row.EvidenceRef
+        ,ExpectedEffect = undo ? null : row.ExpectedEffect
     };
 }

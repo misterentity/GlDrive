@@ -1779,6 +1779,9 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
         return best;
     }
 
+    internal int? ObservedTransferLimit(string serverId) =>
+        _serverGates.TryGetValue(serverId, out var gate) ? gate.CurrentLimit : null;
+
     private ServerGate GetOrCreateGate(string serverId) =>
         _serverGates.GetOrAdd(serverId, id =>
         {

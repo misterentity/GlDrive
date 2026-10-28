@@ -11,7 +11,8 @@ public sealed class LogDigester
     private readonly Func<string, Stream> _openRead;
     private int _parseSkips;
 
-    public LogDigester(string aiDataRoot) : this(aiDataRoot, File.OpenRead) { }
+    public LogDigester(string aiDataRoot) : this(aiDataRoot,
+        path => new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)) { }
 
     internal LogDigester(string aiDataRoot, Func<string, Stream> openRead)
     {

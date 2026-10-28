@@ -117,6 +117,7 @@ public sealed class AgentViewModel : INotifyPropertyChanged
 
     private async Task UndoRow(AuditRow row)
     {
+        using var attribution = ConfigWriteScope.Begin("settings-ui:agent-undo");
         if (!row.WasApplied || row.Undone) return;
         try
         {
@@ -157,6 +158,7 @@ public sealed class AgentViewModel : INotifyPropertyChanged
 
     private async Task ApplyAnyway(AuditRow row)
     {
+        using var attribution = ConfigWriteScope.Begin("settings-ui:agent-review");
         if (!row.IsSuggestion) return;
         try
         {
@@ -168,12 +170,13 @@ public sealed class AgentViewModel : INotifyPropertyChanged
                 After = row.After,
                 Reasoning = row.Reasoning + " [user apply-anyway]",
                 EvidenceRef = row.EvidenceRef,
+                ExpectedEffect = row.ExpectedEffect,
                 Confidence = 1.0  // force through confidence gate
             };
             var (baseline, cfg) = ReadCandidate();
             var pending = new List<AuditRow>();
-            var report = App.ChangeApplier?.Apply(new[] { change }, cfg, cfg.Agent,
-                "manual-" + Guid.NewGuid().ToString()[..8], dryRun: false, pending.Add);
+            var report = await Task.Run(() => App.ChangeApplier?.Apply(new[] { change }, cfg, cfg.Agent,
+                "manual-" + Guid.NewGuid().ToString()[..8], dryRun: false, pending.Add, explicitOperator: true));
             if (report is { Applied: 1, Rejected: 0 })
             {
                 await CommitChanges(baseline, cfg, pending);

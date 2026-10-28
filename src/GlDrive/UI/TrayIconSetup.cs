@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using GlDrive.Irc;
 using GlDrive.Services;
+using GlDrive.Services.Alerts;
 using H.NotifyIcon;
 using H.NotifyIcon.Core;
 using Serilog;
@@ -16,6 +17,13 @@ public static class TrayIconSetup
 
     internal static bool ShouldOfferConnectionRetry(bool isActive, bool authenticationHeld) =>
         !isActive || authenticationHeld;
+
+    internal static NotificationIcon NotificationIconFor(AlertSeverity severity) => severity switch
+    {
+        AlertSeverity.Warning => NotificationIcon.Warning,
+        AlertSeverity.Error => NotificationIcon.Error,
+        _ => NotificationIcon.Info
+    };
 
     public static void Configure(TaskbarIcon taskbarIcon, TrayViewModel vm)
     {
@@ -73,10 +81,10 @@ public static class TrayIconSetup
         };
 
         // Wire balloon tip notifications
-        vm.ShowNotificationRequested = (title, message) =>
+        vm.ShowNotificationRequested = (title, message, severity) =>
         {
             TryShowNotification(() =>
-                taskbarIcon.ShowNotification(title, message, NotificationIcon.Info));
+                taskbarIcon.ShowNotification(title, message, NotificationIconFor(severity)));
         };
     }
 

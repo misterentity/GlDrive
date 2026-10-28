@@ -280,9 +280,7 @@ internal sealed class LoginAttemptGovernor
         for (Exception? cause = error; cause != null; cause = cause.InnerException)
             if (cause.Message.Contains("TLS", StringComparison.OrdinalIgnoreCase) ||
                 cause.Message.Contains("handshake", StringComparison.OrdinalIgnoreCase) ||
-                System.Text.RegularExpressions.Regex.IsMatch(cause.Message, @"\bread(?:ing)?\b",
-                    System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.NonBacktracking,
-                    TimeSpan.FromMilliseconds(50))) return false;
+                ContainsReadWord(cause.Message)) return false;
         for (Exception? cause = error; cause != null; cause = cause.InnerException)
         {
             var message = cause.Message;
@@ -306,9 +304,7 @@ internal sealed class LoginAttemptGovernor
         for (Exception? cause = error; cause != null; cause = cause.InnerException)
         {
             var message = cause.Message ?? "";
-            var serverReply = cause is FtpCommandException ||
-                System.Text.RegularExpressions.Regex.IsMatch(message, @"^\s*[45]\d\d\b",
-                    System.Text.RegularExpressions.RegexOptions.NonBacktracking, TimeSpan.FromMilliseconds(50));
+            var serverReply = cause is FtpCommandException || StartsWithServerReply(message);
             if (serverReply && ThrottlePhrases.Any(p => message.Contains(p, StringComparison.OrdinalIgnoreCase))) return true;
         }
         return false;
@@ -316,4 +312,30 @@ internal sealed class LoginAttemptGovernor
 
     private static readonly string[] ThrottlePhrases =
         ["cooldown", "cool down", "cool-down", "rate limit", "rate-limit", "throttl", "too fast", "too frequent"];
+
+    // Classifying a failed login must not itself throw a regex deadline exception and
+    // replace the original authentication failure. These two lexical checks need no regex.
+    private static bool ContainsReadWord(string message)
+    {
+        for (var start = 0; start < message.Length;)
+        {
+            if (!IsWordCharacter(message[start])) { start++; continue; }
+            var end = start + 1;
+            while (end < message.Length && IsWordCharacter(message[end])) end++;
+            var word = message.AsSpan(start, end - start);
+            if (word.Equals("read", StringComparison.OrdinalIgnoreCase) || word.Equals("reading", StringComparison.OrdinalIgnoreCase)) return true;
+            start = end;
+        }
+        return false;
+    }
+
+    private static bool StartsWithServerReply(string message)
+    {
+        var text = message.AsSpan().TrimStart();
+        return text.Length >= 3 && text[0] is '4' or '5' && char.IsAsciiDigit(text[1]) && char.IsAsciiDigit(text[2]) &&
+            (text.Length == 3 || !IsWordCharacter(text[3]));
+    }
+
+    private static bool IsWordCharacter(char value) => char.IsLetterOrDigit(value) ||
+        char.GetUnicodeCategory(value) is System.Globalization.UnicodeCategory.NonSpacingMark or System.Globalization.UnicodeCategory.ConnectorPunctuation;
 }

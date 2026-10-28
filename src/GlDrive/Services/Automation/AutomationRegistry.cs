@@ -80,6 +80,7 @@ public sealed class AutomationRegistry : IDisposable
             {
                 try
                 {
+                    using var attribution = GlDrive.Config.ConfigWriteScope.Begin("mcp:" + name);
                     var result = await entry.Module.ExecuteAsync(name, copy, job.Cancellation.Token);
                     var json = JsonSerializer.SerializeToUtf8Bytes(result, ControlRequest.Json);
                     if (json.Length > MaxResultBytes) throw new InvalidOperationException("Result exceeds 4 MiB; narrow the query or use pagination.");

@@ -28,6 +28,8 @@ public partial class App
     private AppConfig? _runtimeConfig;
     private bool _ownsCrashMarker;
     private Task _runtimeSettingsRefresh = Task.CompletedTask;
+    private System.Windows.Threading.DispatcherTimer? _configLeaseTimer;
+    public static ConfigChangeService? ConfigChanges { get; private set; }
 
     private void QueueRuntimeSettingsRefresh()
     {
@@ -38,6 +40,12 @@ public partial class App
         {
             try
             {
+                if (_runtimeConfig != null)
+                {
+                    SerilogSetup.SetLevel(_runtimeConfig.Logging.Level);
+                    if (_runtimeConfig.Agent.Enabled) AgentRunner?.Start();
+                    else AgentRunner?.Stop();
+                }
                 if (_serverManager != null)
                     await (await Dispatcher.InvokeAsync(() => _serverManager.SyncAfterConfigChange()));
             }
@@ -61,11 +69,15 @@ public partial class App
     internal async Task CommitAgentChangesAsync(string baseline, AppConfig candidate,
         List<GlDrive.AiAgent.AuditRow> rows)
     {
-        await Dispatcher.InvokeAsync(() => GlDrive.AiAgent.AgentConfigCommit.CommitAndPublish(
+        await Dispatcher.InvokeAsync(() =>
+        {
+            (ChangeApplier ?? throw new InvalidOperationException("Agent validator service unavailable"))
+                .GuardCommit(ConfigManager.ConfigPath, rows, candidate, () => GlDrive.AiAgent.AgentConfigCommit.CommitAndPublish(
             ConfigManager.ConfigPath, baseline, candidate, rows,
             Path.Combine(ConfigManager.AppDataPath, "ai-data"), ConfigManager.Save,
             AuditTrail ?? throw new InvalidOperationException("Audit trail is unavailable"),
             _runtimeConfig ?? throw new InvalidOperationException("Runtime settings are unavailable")));
+        });
         if (_serverManager != null)
         {
             // Refresh listeners/pools that cache compiled rules or sizing. The
@@ -82,7 +94,7 @@ public partial class App
         _controlApi?.Dispose();
         _controlApi = null;
         if (!config.ControlApi.Enabled) return;
-        if (ControlApi.EnsureToken(config)) ConfigManager.Save(config);
+        if (ControlApi.EnsureToken(config)) ConfigManager.Save(config, "system:control-api-token");
         _controlApi = new ControlApi(config,
             () => _serverManager?.Spread,
             () => _serverManager?.Spread?.GetConnectedServerIds() ?? [], _automation);
@@ -301,7 +313,9 @@ public partial class App
         LogDigester = new GlDrive.AiAgent.LogDigester(
             System.IO.Path.Combine(ConfigManager.AppDataPath, "ai-data"));
         ChangeApplier = new GlDrive.AiAgent.ChangeApplier(validators, FreezeStore!, AuditTrail!,
-            cfg => LogDigester.BuildRaceEvidence(cfg.Agent.WindowDays));
+            cfg => LogDigester.BuildRaceEvidence(cfg.Agent.WindowDays),
+            transferLimit: id => _serverManager?.Spread?.ObservedTransferLimit(id),
+            cancellableReplayEvidence: (cfg, ct) => GlDrive.AiAgent.ImpactSimulator.Read(ConfigManager.AppDataPath, cfg, cancellationToken: ct));
         AgentRunner = new GlDrive.AiAgent.AgentRunner(
             LogDigester,
             AgentMemo,
@@ -331,6 +345,21 @@ public partial class App
             _runtimeConfig = config;
             GlDrive.Downloads.Segmented.DownloadNetworkServices.Initialize(config.Downloads);
         }
+
+        var reconcilingStartupLeases = true;
+        var configuration = new ConfigurationAutomation(config, settingsApplied: () =>
+        {
+            // Startup MountAll consumes the reconciled config. A normal runtime
+            // refresh here would start mounting before initialization completes.
+            if (!reconcilingStartupLeases) QueueRuntimeSettingsRefresh();
+        });
+        ConfigChanges = new ConfigChangeService(config, configuration, serverId => _serverManager?.Spread != null &&
+            (serverId != null ? _serverManager.Spread.IsRaceIdle(serverId)
+                : config.Servers.All(s => _serverManager.Spread.IsRaceIdle(s.Id))));
+        _configLeaseTimer = new System.Windows.Threading.DispatcherTimer
+            { Interval = TimeSpan.FromMinutes(1) };
+        _configLeaseTimer.Tick += (_, _) => ConfigChanges?.Reconcile();
+        _configLeaseTimer.Start();
 
         // Apply theme
         ThemeManager.ApplyTheme(config.Downloads.Theme);
@@ -366,6 +395,13 @@ public partial class App
         try { notificationStore.Load(); }
         catch (Exception ex) { Log.Warning(ex, "Failed to load notification store"); }
         _serverManager = new ServerManager(config, certManager, notificationStore);
+        // The manager has now restored its race queue, so idle is based on actual
+        // active/starting/queued work, including work persisted before this startup.
+        ConfigChanges.Reconcile();
+        reconcilingStartupLeases = false;
+        SerilogSetup.SetLevel(config.Logging.Level);
+        if (config.Agent.Enabled) AgentRunner?.Start();
+        else AgentRunner?.Stop();
         GlDrive.AiAgent.OutboundSecretInventory.ReadLiveSecrets = () =>
             GlDrive.AiAgent.OutboundSecretInventory.ConfigSecrets(System.Text.Json.JsonSerializer.SerializeToNode(config)!)
             .Concat(_serverManager.GetIrcServices().Values.SelectMany(service =>
@@ -392,8 +428,11 @@ public partial class App
         // UI (tray automation is unreliable). Off unless explicitly enabled in config.
         _automation = new AutomationRegistry(
             new AutomationService(config, _serverManager, notificationStore),
-            new ConfigurationAutomation(config, settingsApplied: QueueRuntimeSettingsRefresh),
+            configuration,
+            new ConfigHistoryAutomation(ConfigChanges, configuration),
             new DiagnosticAutomation(config),
+            new AlertAutomation(() => _trayViewModel!.Alerts),
+            new LibraryAutomation(config),
             new AgentAutomation(config, () => AgentRunner, () => FreezeStore, () => AuditTrail, () => ChangeApplier,
                 onConfigChanged: QueueRuntimeSettingsRefresh),
             new UiAutomation(() =>
@@ -406,7 +445,7 @@ public partial class App
             new ExtractorAutomation(),
             new PlexAutomation(config),
             new ApplicationAutomation(() => _trayViewModel!.AutomationUpdater),
-            new MaintenanceAutomation(config, certManager),
+            new MaintenanceAutomation(config, certManager, settingsApplied: QueueRuntimeSettingsRefresh),
             new InstallerAutomation());
         RefreshControlApi(config);
 
@@ -422,15 +461,14 @@ public partial class App
         // some boots; defer to Background dispatcher tick so the icon is live.
         if (previousExitIncomplete)
         {
-            var icon = _taskbarIcon;
             _ = Dispatcher.BeginInvoke(new Action(() =>
             {
                 try
                 {
-                    icon?.ShowNotification(
+                    _trayViewModel?.ShowNotification(
                         "GlDrive restarted",
                         "Previous shutdown did not complete; cause unknown. Logs in %AppData%\\GlDrive\\logs.",
-                        H.NotifyIcon.Core.NotificationIcon.Warning);
+                        severity: GlDrive.Services.Alerts.AlertSeverity.Warning);
                 }
                 catch (Exception ex) { Log.Debug(ex, "Heartbeat toast failed"); }
             }), System.Windows.Threading.DispatcherPriority.Background);
@@ -653,10 +691,13 @@ public partial class App
 
     protected override void OnExit(ExitEventArgs e)
     {
+        _configLeaseTimer?.Stop();
+        ConfigChanges = null;
         MarkExiting("application exit");
         Log.Information("GlDrive shutting down...");
         _heartbeat?.Dispose();
         _heartbeat = null;
+        _trayViewModel?.Alerts.Dispose();
         try { GlDrive.Logging.SerilogSetup.AgentSink.Flush(); }
         catch (Exception ex) { Log.Debug(ex, "AgentSink final flush failed"); }
         AgentRunner?.Dispose();

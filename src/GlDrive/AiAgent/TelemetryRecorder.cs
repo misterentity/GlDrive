@@ -190,7 +190,8 @@ public sealed class TelemetryRecorder : IDisposable
                     try
                     {
                         var path = Path.Combine(_root, FileName(DateTime.Now));
-                        await _append(path, batch.ToString(), _ct).ConfigureAwait(false);
+                        await GlDrive.Util.LogFileRetry.AppendAsync(
+                            () => _append(path, batch.ToString(), _ct), _ct).ConfigureAwait(false);
                     }
                     catch (Exception ex)
                     {

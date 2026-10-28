@@ -277,7 +277,7 @@ public partial class WizardWindow : Window
 
             // Add to config and save
             _config.Servers.Add(_serverConfig);
-            ConfigManager.Save(_config);
+            ConfigManager.Save(_config, "wizard");
 
             if (!string.IsNullOrEmpty(_password))
             {

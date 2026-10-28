@@ -11,6 +11,9 @@ public class AppConfig
     public ControlApiConfig ControlApi { get; set; } = new();
     public TorrentConfig Torrent { get; set; } = new();
     public HealthConfig Health { get; set; } = new();
+    public AlertConfig Alerts { get; set; } = new();
+    public ConfigHistoryConfig ConfigHistory { get; set; } = new();
+    public LibraryConfig Library { get; set; } = new();
 
     public string ResolveAgentModel() => string.IsNullOrWhiteSpace(Agent.ModelId)
         ? "anthropic/claude-sonnet-4-6" : Agent.ModelId;
@@ -263,6 +266,12 @@ public class DownloadConfig
 
 public class AgentConfig
 {
+    public bool AccountabilityEnabled { get; set; } = true;
+    public bool NoOpRejectionEnabled { get; set; } = true;
+    public bool CounterfactualReplayEnabled { get; set; } = true;
+    public bool AutoRevertRegressions { get; set; }
+    public int OutcomeMinimumSamples { get; set; } = 10;
+    public int OutcomeTolerancePercent { get; set; } = 10;
     public bool Enabled { get; set; } = false;
     public int RunHourLocal { get; set; } = 4;
     public int ConfidenceThreshold_x100 { get; set; } = 70;

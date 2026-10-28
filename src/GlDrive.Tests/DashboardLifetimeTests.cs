@@ -1,7 +1,6 @@
 using System.IO;
 using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
-using System.Net.Http;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Windows.Threading;
@@ -204,8 +203,9 @@ public sealed class DashboardLifetimeTests
         Set(vm, "_ircViewModel", irc);
         var plex = Raw<PlexViewModel>();
         var service = Raw<GlDrive.Plex.PlexService>();
-        var client = Raw<GlDrive.Plex.PlexClient>();
-        Set(client, "_http", new HttpClient());
+        // The HTTP client constructor reads no settings/credentials and sends no requests.
+        // Construct it normally so disposal covers every transport it owns.
+        var client = new GlDrive.Plex.PlexClient("fixture", "GlDrive", "test");
         Set(service, "_client", client);
         Set(plex, "_service", service);
         Set(vm, "_plexViewModel", plex);
