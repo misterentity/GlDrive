@@ -293,21 +293,37 @@ public partial class ServerManager : IDisposable
 
     internal DateTimeOffset? RemountRetryNotBefore(string serverId)
     {
-        DateTimeOffset? due = _config.Health.Enabled ? GetSiteHealth(serverId).NextRetryUtc : null;
+        DateTimeOffset? due = null;
         var server = _config.Servers.FirstOrDefault(s => s.Id == serverId);
+        if (server != null && _config.Health.Enabled)
+        {
+            // Derive supervisor holds live: recovery or disabling health/probes must
+            // remove them immediately, including holds shared by account aliases.
+            due = AccountRetryNotBefore(FtpLoginAccount.From(server.Connection));
+            var health = GetSiteHealth(serverId);
+            if (_config.Health.TcpProbesEnabled &&
+                health.FailureClass is SiteFailureKind.Unreachable or SiteFailureKind.Timeout &&
+                health.FirstFailureUtc is { } first && DateTimeOffset.UtcNow - first >= TimeSpan.FromMinutes(30) &&
+                health.LastProbeUtc is { } probe && (due == null || probe.AddMinutes(15) > due))
+                due = probe.AddMinutes(15);
+        }
         if (server != null && _remountRetryAfter.TryGetValue(serverId, out var retry) &&
-            retry.Identity == EndpointIdentity(server) && (due == null || retry.Due > due))
-            due = retry.Due;
+            retry.Identity == EndpointIdentity(server))
+        {
+            if (due == null || retry.Due > due) due = retry.Due;
+        }
         return due;
     }
 
     internal DateTimeOffset DeferRemount(ServerConfig server, Exception error, int attempt)
     {
-        var due = MountRetryPolicy.RetryAt(error, DateTimeOffset.UtcNow,
-            attempt < int.MaxValue ? attempt + 1 : int.MaxValue,
-            _config.Health.Enabled ? GetSiteHealth(server.Id).NextRetryUtc : null);
+        var now = DateTimeOffset.UtcNow;
+        var nextAttempt = attempt < int.MaxValue ? attempt + 1 : int.MaxValue;
+        var due = MountRetryPolicy.RetryAt(error, now, nextAttempt, healthDeadline: null, includeSupervisor: false);
         _remountRetryAfter[server.Id] = (EndpointIdentity(server), due);
-        return due;
+        // Health is a live supervisor setting, not part of the independent local
+        // retry record: disabling it must also remove its longer outage deadline.
+        return RemountRetryNotBefore(server.Id) ?? due;
     }
 
     /// <summary>

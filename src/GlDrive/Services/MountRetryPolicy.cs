@@ -45,16 +45,16 @@ public static class MountRetryPolicy
     /// Missing or stale admission timestamps retain the ordinary bounded backoff.
     /// </summary>
     internal static DateTimeOffset RetryAt(Exception error, DateTimeOffset now, int nextAttempt,
-        DateTimeOffset? healthDeadline)
+        DateTimeOffset? healthDeadline, bool includeSupervisor = true)
     {
         var due = now.Add(DelayFor(nextAttempt));
-        if (healthDeadline > due) due = healthDeadline.Value;
+        if (includeSupervisor && healthDeadline > due) due = healthDeadline.Value;
         for (Exception? cause = error; cause != null; cause = cause.InnerException)
         {
             DateTimeOffset? admission = cause switch
             {
-                Ftp.FtpLoginHeldException held => held.RetryAtUtc,
-                SiteRetryDeferredException deferred => deferred.RetryAtUtc,
+                Ftp.FtpLoginHeldException held when !held.SiteHealthHold || includeSupervisor => held.RetryAtUtc,
+                SiteRetryDeferredException deferred when includeSupervisor => deferred.RetryAtUtc,
                 _ => null
             };
             if (admission > due) due = admission.Value;
