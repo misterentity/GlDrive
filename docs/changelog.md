@@ -12,6 +12,13 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.17.1 — CLEAR DONE clears immediately again (2026-10-28)
+
+- Spread tab CLEAR DONE removes finished race cards at once, like DISMISS. v3.17.0 routed it
+  through the 10-second bulk Undo slot, so cards stayed on screen, closing the dashboard during the
+  countdown dropped the clear, and another pending removal refused it. Race history is unchanged.
+  See the [release notes](releases/v3.17.1.md).
+
 ## v3.17.0 — waiting reasons, IRC mentions and search, feed views, bulk Undo, collection gaps (2026-10-28)
 
 - Read-only reasons, constraints and ETAs for queued races, parked downloads and offline sites

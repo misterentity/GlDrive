@@ -665,22 +665,25 @@ public partial class SpreadViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(ActiveRaceCount));
     }
 
+    // Finished cards are only a view of completed races; race history is unchanged, so this
+    // is not a destructive action and applies at once, like DISMISS. Routing it through the
+    // shared 10-second Undo slot (v3.17.0) left the cards on screen, dropped the clear when the
+    // dashboard closed inside the countdown, and refused it while another removal was pending.
     private void ClearFinished()
     {
-        var ids = SpreadJobs.Where(job => job.IsFinished).Select(job => job.Id).ToHashSet(StringComparer.Ordinal);
-        if (ids.Count == 0) return;
-        if (_scheduleBulk == null) { SpreadStatus = "Open the dashboard to use removal with Undo."; return; }
-        _scheduleBulk($"Clear {ids.Count} finished race cards", () =>
+        var cleared = 0;
+        for (var i = SpreadJobs.Count - 1; i >= 0; i--)
         {
-            if (_disposed) return;
-            for (var i = SpreadJobs.Count - 1; i >= 0; i--)
-            {
-                if (!SpreadJobs[i].IsFinished || !ids.Contains(SpreadJobs[i].Id)) continue;
-                _jobMaxSpeed.Remove(SpreadJobs[i].Id); SpreadJobs.RemoveAt(i);
-            }
-            SpreadStatus = "Selected finished cards cleared. Persistent race history is unchanged.";
-            OnPropertyChanged(nameof(QueueDepth)); OnPropertyChanged(nameof(LeaderScore)); OnPropertyChanged(nameof(ActiveRaceCount));
-        });
+            if (!SpreadJobs[i].IsFinished) continue;
+            _jobMaxSpeed.Remove(SpreadJobs[i].Id);
+            SpreadJobs.RemoveAt(i);
+            cleared++;
+        }
+        if (cleared == 0) return;
+        SpreadStatus = $"Cleared {cleared} finished race card{(cleared == 1 ? "" : "s")}. Race history is unchanged.";
+        OnPropertyChanged(nameof(QueueDepth));
+        OnPropertyChanged(nameof(LeaderScore));
+        OnPropertyChanged(nameof(ActiveRaceCount));
     }
 
     public void SetOpenSettingsAction(Action action) => _openSettingsAction = action;

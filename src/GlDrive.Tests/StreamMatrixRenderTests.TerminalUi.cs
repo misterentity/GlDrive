@@ -581,6 +581,11 @@ public partial class StreamMatrixRenderTests
     // if that fails, the message says so and a native focus smoke is required instead.
     private static void AssertRealKeyboardFocusIsVisible(string theme)
     {
+        if (!InteractiveDesktop.IsAvailable())
+        {
+            Console.WriteLine($"{theme}: real keyboard focus check not run (workstation locked or session not interactive)");
+            return;
+        }
         var controls = DashboardControls();
         var vm = new SearchChipViewModel(Result("A.2026.1080p.WEB-GRP", 1));
         var primary = new Button { Content = "Search", Margin = new Thickness(8) };
@@ -771,6 +776,11 @@ public partial class StreamMatrixRenderTests
     // Dark→Cyberpunk→Light→Dark: every theme-dependent brush and template must be the current one.
     private static void AssertOpenControlsFollowLiveThemeSwaps()
     {
+        if (!InteractiveDesktop.IsAvailable())
+        {
+            Console.WriteLine("Live theme-swap repaint check not run (workstation locked or session not interactive)");
+            return;
+        }
         var app = Application.Current!;
         var controls = DashboardControls();
         var rows = new[]
