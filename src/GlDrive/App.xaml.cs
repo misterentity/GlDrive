@@ -7,6 +7,7 @@ using GlDrive.Downloads;
 using GlDrive.Logging;
 using GlDrive.Services;
 using GlDrive.Services.Automation;
+using GlDrive.Services.Recovery;
 using GlDrive.Tls;
 using GlDrive.UI;
 using Serilog;
@@ -25,6 +26,9 @@ public partial class App
     private GlDrive.Services.HeartbeatMonitor? _heartbeat;
     private GlDrive.Services.ControlApi? _controlApi;
     private AutomationRegistry? _automation;
+    public static AutomationApprovalBroker? AutomationApprovals { get; private set; }
+    public static AutomationCallLedger? AutomationLedger { get; private set; }
+    private DateTimeOffset _lastApprovalNotice;
     private AppConfig? _runtimeConfig;
     private bool _ownsCrashMarker;
     private Task _runtimeSettingsRefresh = Task.CompletedTask;
@@ -62,6 +66,32 @@ public partial class App
             }
             catch (Exception ex) { Log.Warning(ex, "Settings saved; runtime service refresh failed"); }
         }
+    }
+
+    private void OnAutomationSessionSwitch(object sender, Microsoft.Win32.SessionSwitchEventArgs e)
+    {
+        if (e.Reason == Microsoft.Win32.SessionSwitchReason.SessionLock) AutomationApprovals?.SetSessionLocked(true);
+        else if (e.Reason == Microsoft.Win32.SessionSwitchReason.SessionUnlock) AutomationApprovals?.SetSessionLocked(false);
+    }
+
+    private void OnAutomationApprovalRequested(AutomationApprovalRequest request)
+    {
+        if (Dispatcher.HasShutdownStarted) return;
+        // Avoid carrying request attribution into a window's later callbacks.
+        using (ExecutionContext.IsFlowSuppressed() ? default : ExecutionContext.SuppressFlow())
+            _ = Dispatcher.BeginInvoke(() =>
+            {
+                if (_runtimeConfig == null || AutomationApprovals == null || !AutomationApprovals.Snapshot().Any(r => r.Id == request.Id)) return;
+                var existing = Windows.OfType<AutomationSecurityWindow>().FirstOrDefault();
+                if (existing != null) existing.ShowApprovals();
+                else new AutomationSecurityWindow(_runtimeConfig, AutomationApprovals, showApprovals: true).Show();
+                if (DateTimeOffset.UtcNow - _lastApprovalNotice < TimeSpan.FromMinutes(5)) return;
+                _lastApprovalNotice = DateTimeOffset.UtcNow;
+                _trayViewModel?.Alerts.Publish(new(GlDrive.Services.Alerts.AlertKind.General,
+                    GlDrive.Services.Alerts.AlertSeverity.Warning, "Automation approval requested",
+                    "Review the pending call from the tray. Unanswered requests expire to deny.",
+                    Incident: "automation-approval", LocalOnly: true));
+            });
     }
 
     public static GlDrive.AiAgent.TelemetryRecorder? TelemetryRecorder { get; private set; }
@@ -165,23 +195,23 @@ public partial class App
         // (including native GnuTLS crashes), Windows will automatically restart it.
         // This is the only reliable way to survive native crashes that bypass all
         // managed exception handlers.
-        RegisterApplicationRestart(null, 0);
+        // WER shares the watchdog's crashed-session identity, so competing restart paths
+        // count once. Intended patch/reboot exits start a fresh chain from their marker. Safe mode
+        // uses only its budgeted watchdog, preventing WER from bypassing retry backoff.
+        if (Program.RecoveryStartup?.Decision.SafeMode != true)
+            RegisterApplicationRestart(Program.CrashRestartArguments(e.Args.Contains("--recovery")), 0);
 
         // Preserve the previous marker before claiming this session's marker. Reporting
         // must wait until Serilog is configured, otherwise startup evidence is dropped.
         var crashMarker = Path.Combine(ConfigManager.AppDataPath, ".running");
-        var previousSession = PreviousSessionDiagnostics.Capture(crashMarker);
+        var previousSession = Program.PreviousSession ?? PreviousSessionDiagnostics.Capture(crashMarker);
+        _ownsCrashMarker = Program.OwnsCrashMarker;
         try
         {
-            File.WriteAllText(crashMarker, DateTime.UtcNow.ToString("O"));
+            File.WriteAllText(crashMarker, ExitMarker.Running(DateTime.UtcNow, Program.SessionId));
             _ownsCrashMarker = true;
         }
         catch { }
-
-        // Clean up .old files and stale update marker from a previous update
-        UpdateChecker.CleanupOldUpdateFiles();
-        Irc.IrcLogStore.PruneOld();
-        try { File.Delete(Path.Combine(ConfigManager.AppDataPath, ".updating")); } catch { }
 
         // Global exception handlers to prevent silent crashes.
         //
@@ -257,13 +287,44 @@ public partial class App
             args.SetObserved(); // Prevent process termination
         };
 
+        // Offline modes precede migrations, update cleanup and every engine/network
+        // constructor. Reading settings here has no migration or credential side effects.
+        if (Program.RecoveryStartup?.Decision.SafeMode == true || e.Args.Contains("--recovery"))
+        {
+            var offlineConfig = await Task.Run(() => CrashRecoveryStartup.ReadConfiguration(ConfigManager.ConfigPath));
+            _runtimeConfig = offlineConfig;
+            try { await Task.Run(() => SerilogSetup.Configure(offlineConfig.Logging, offlineConfig)); }
+            catch { /* Unavailable diagnostics storage must not prevent the recovery window. */ }
+            try { ThemeManager.ApplyTheme(offlineConfig.Downloads?.Theme ?? "Dark"); }
+            catch { /* Keep the application's built-in theme when saved theme settings are damaged. */ }
+            Window offlineWindow = Program.RecoveryStartup?.Decision.SafeMode == true
+                ? new SafeModeWindow(offlineConfig, Program.RecoveryStartup)
+                : new RecoveryCenterWindow(offlineConfig, offline: true);
+            MainWindow = offlineWindow;
+            offlineWindow.Closed += (_, _) => Shutdown();
+            offlineWindow.Show();
+            return;
+        }
+
+        try { File.Delete(Path.Combine(ConfigManager.AppDataPath, ".updating")); } catch { }
+
         // Load config
-        var config = ConfigManager.Load();
+        var config = ConfigManager.Load(out var settingsLoaded);
         _runtimeConfig = config;
         GlDrive.Downloads.Segmented.DownloadNetworkServices.Initialize(config.Downloads);
 
         // Init logging
         SerilogSetup.Configure(config.Logging, config);
+        // Include disabled/orphan stores before outbound consumers begin; recovery
+        // continues independently so disk failure cannot hold engine startup.
+        Irc.FishKeyRecovery.Start(ConfigManager.AppDataPath);
+        // Cleanup runs after logging is available, without delaying engine startup.
+        using (ExecutionContext.IsFlowSuppressed() ? default : ExecutionContext.SuppressFlow())
+            _ = Task.Run(() =>
+            {
+                try { UpdateChecker.CleanupOldUpdateFiles(); } catch { }
+                try { Irc.IrcLogStore.PruneOld(); } catch { }
+            });
         var asmVersion = System.Reflection.Assembly.GetExecutingAssembly()
             .GetName().Version?.ToString() ?? "unknown";
         Log.Information("GlDrive starting... version={Version}", asmVersion);
@@ -352,7 +413,7 @@ public partial class App
                 Shutdown();
                 return;
             }
-            config = ConfigManager.Load(); // Reload after wizard saves
+            config = ConfigManager.Load(out settingsLoaded); // Reload after wizard saves
             _runtimeConfig = config;
             GlDrive.Downloads.Segmented.DownloadNetworkServices.Initialize(config.Downloads);
         }
@@ -394,7 +455,7 @@ public partial class App
             if (existing != null) existing.RefreshDecisions();
             else new CertificateDecisionsWindow(certManager).Show();
         });
-        var notificationStore = new NotificationStore();
+        var notificationStore = new NotificationStore(guardFeedPreferences: () => config.DataStewardship.GuardFeedPreferences);
         try { notificationStore.Load(); }
         catch (Exception ex) { Log.Warning(ex, "Failed to load notification store"); }
         _serverManager = new ServerManager(config, certManager, notificationStore);
@@ -441,6 +502,7 @@ public partial class App
         // Loopback control API — lets scripts start/inspect races without driving the WPF
         // UI (tray automation is unreliable). Off unless explicitly enabled in config.
         _automation = new AutomationRegistry(
+            new AutomationLedgerAutomation(() => AutomationLedger),
             new AutomationService(config, _serverManager, notificationStore),
             new StatisticsAutomation(() => Statistics!),
             new OperationsAutomation(() => Dossiers!, () => Operations!),
@@ -470,7 +532,21 @@ public partial class App
             new ApplicationAutomation(() => _trayViewModel!.AutomationUpdater),
             new MaintenanceAutomation(config, certManager, settingsApplied: QueueRuntimeSettingsRefresh),
             new InstallerAutomation());
+        AutomationApprovals = new AutomationApprovalBroker();
+        AutomationApprovals.Requested += OnAutomationApprovalRequested;
+        Microsoft.Win32.SystemEvents.SessionSwitch += OnAutomationSessionSwitch;
+        AutomationApprovals.SetSessionLocked(!LocalApprovalSession.CanPrompt());
+        _automation.Access = new AutomationAccessController(config.ControlApi, AutomationApprovals)
+        { ServerName = id => config.Servers.FirstOrDefault(server => server.Id == id)?.Name };
+        AutomationLedger = new AutomationCallLedger(ConfigManager.AppDataPath,
+            () => config.ControlApi.Security.LedgerEnabled, () => config.ControlApi.Security.LedgerCapacity,
+            knownTool: name => name is "control.auth" or "control.http" or "control.tools" or "spread.sections" ||
+                _automation.Tools.Any(tool => tool.Name == name));
+        _automation.Audit = AutomationLedger.Record;
         RefreshControlApi(config);
+        // Include freshly generated tokens; failed config loads cannot replace recovery evidence.
+        if (settingsLoaded)
+            await Task.Run(() => new ConfigSecretCopy(ConfigManager.AppDataPath).CopyAndVerify(config));
 
         // Init tray
         _trayViewModel = new TrayViewModel(_serverManager, config, notificationStore);
@@ -715,6 +791,7 @@ public partial class App
 
     protected override void OnSessionEnding(SessionEndingCancelEventArgs e)
     {
+        AutomationApprovals?.DenyAll();
         MarkExiting($"Windows session ending ({e.ReasonSessionEnding})");
         Log.Information("Windows session ending ({Reason}) — shutting down", e.ReasonSessionEnding);
         base.OnSessionEnding(e);
@@ -722,6 +799,11 @@ public partial class App
 
     protected override void OnExit(ExitEventArgs e)
     {
+        Microsoft.Win32.SystemEvents.SessionSwitch -= OnAutomationSessionSwitch;
+        AutomationApprovals?.Dispose();
+        AutomationApprovals = null;
+        AutomationLedger?.Dispose();
+        AutomationLedger = null;
         RecordOperation("session-exit", detail: "Application exit requested.");
         _opsRuntime?.Dispose();
         _opsRuntime = null;

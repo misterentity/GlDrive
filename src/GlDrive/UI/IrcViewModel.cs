@@ -654,13 +654,10 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
 
             case "/key":
                 // /key [target] <key>
-                var keyParts = args.Split(' ', 2);
-                if (keyParts.Length >= 2)
-                    irc.SetFishKey(keyParts[0], keyParts[1], _config.Servers
+                if (FishKeyCommand.TryParse(args, _selectedChannel?.Name, out var keyTarget, out var keyValue))
+                    irc.SetFishKey(keyTarget, keyValue, _config.Servers
                         .FirstOrDefault(s => s.Id == irc.ServerId)?.Irc.FishMode ?? FishMode.ECB);
-                else if (_selectedChannel != null && keyParts.Length == 1)
-                    irc.SetFishKey(_selectedChannel.Name, keyParts[0], _config.Servers
-                        .FirstOrDefault(s => s.Id == irc.ServerId)?.Irc.FishMode ?? FishMode.ECB);
+                else AddLocalSystem("/key: specify a non-empty target and key: /key [target] <key>");
                 break;
 
             case "/keyx":

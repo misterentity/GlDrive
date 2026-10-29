@@ -24,6 +24,15 @@ internal static class ExitMarker
     internal const string ExitingPrefix = "EXITING:";
     internal const string CrashPrefix = "CRASH:";
 
+    internal static string Running(DateTime utc, string sessionId) => $"{utc:O}|session:{sessionId}";
+
+    internal static bool BelongsToDifferentSession(string? content, string? expectedSession)
+    {
+        if (!Guid.TryParseExact(expectedSession, "N", out var expected) || content == null) return false;
+        var index = content.LastIndexOf("|session:", StringComparison.Ordinal);
+        return index >= 0 && Guid.TryParseExact(content[(index + 9)..], "N", out var actual) && actual != expected;
+    }
+
     internal static string Exiting(DateTime utc, string reason)
         => $"{ExitingPrefix}{utc:O}|{reason.Replace('\r', ' ').Replace('\n', ' ')}";
 

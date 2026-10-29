@@ -16,7 +16,7 @@ using GlDrive.Util;
 namespace GlDrive.Services.Automation;
 
 /// <summary>Typed, transactional settings edits for explicitly requested external automation.</summary>
-public sealed class ConfigurationAutomation : IAutomationModule
+public sealed class ConfigurationAutomation : IAutomationModule, IAutomationApprovalBinding
 {
     internal static readonly JsonSerializerOptions Json = new()
     {
@@ -73,6 +73,25 @@ public sealed class ConfigurationAutomation : IAutomationModule
             _ => throw new ArgumentException("Unknown configuration operation")
         };
         return result;
+    }
+
+    public Task<IAutomationApprovedCall?> BindApprovalAsync(string operation, JsonElement arguments, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (operation != "config_patch") return Task.FromResult<IAutomationApprovedCall?>(null);
+        // Array pointers select a row in the current document. Hold that exact revision
+        // through local review so a concurrent reorder cannot change the approved target.
+        var revision = String(arguments, "expectedRevision") ?? Revision(CurrentSnapshot());
+        var boundArguments = JsonNode.Parse(arguments.GetRawText())!.AsObject();
+        boundArguments["expectedRevision"] = revision;
+        return Task.FromResult<IAutomationApprovedCall?>(new ApprovedPatch(this,
+            JsonSerializer.SerializeToElement(boundArguments), revision));
+    }
+
+    private sealed record ApprovedPatch(ConfigurationAutomation Owner, JsonElement Arguments, string Revision) : IAutomationApprovedCall
+    {
+        public string Description => "Settings revision: " + Revision + ". Concurrent edits require a new request.";
+        public Task<object?> ExecuteAsync(CancellationToken ct) => Owner.ExecuteAsync("config_patch", Arguments, ct);
     }
 
     public object Get(string pointer = "", bool includeSecrets = false)
@@ -162,6 +181,8 @@ public sealed class ConfigurationAutomation : IAutomationModule
                 ApplyOperation(next, operation as JsonObject ?? throw new ArgumentException("Each operation must be an object"));
             RestoreRedacted(next, original);
             RejectHookChanges(original, next);
+            if (!JsonNode.DeepEquals(original["controlApi"]?["security"], next["controlApi"]?["security"]))
+                throw new ArgumentException("Automation security settings require the local Automation access window.");
             if (!allowSecrets && SecretValuesChanged(original, next))
                 throw new ArgumentException("Changing secrets requires allowSecrets=true");
             ConfigManager.NormalizeLibraryEnable(original, next);
@@ -192,6 +213,10 @@ public sealed class ConfigurationAutomation : IAutomationModule
     {
         if (candidate.IrcAttention.UnparsedJson != null && !JsonNode.DeepEquals(original["ircAttention"], next["ircAttention"]))
             throw new ArgumentException("Invalid /ircAttention settings. Use booleans and arrays of at most 64 strings, each at most 128 characters.");
+        if (candidate.DataStewardship.UnparsedJson != null && !JsonNode.DeepEquals(original["dataStewardship"], next["dataStewardship"]))
+            throw new ArgumentException("Invalid /dataStewardship settings. Use the documented boolean switches.");
+        if (candidate.Recovery.UnparsedJson != null && !JsonNode.DeepEquals(original["recovery"], next["recovery"]))
+            throw new ArgumentException("Invalid /recovery settings. Use a crash threshold of at least three and the documented recovery limits.");
     }
 
     private static void RejectHookChanges(JsonNode original, JsonNode next)
@@ -348,7 +373,9 @@ public sealed class ConfigurationAutomation : IAutomationModule
             foreach (var (key, value) in obj.ToList())
             {
                 var childPointer = pointer + "/" + JsonPointer.Escape(key);
-                if (childPointer is "/controlApi/token" or "/hooks" || (!includeSecrets && ConfigSecretPointers.IsSecret(childPointer)))
+                if (childPointer is "/controlApi/token" or "/hooks" ||
+                    childPointer.StartsWith("/controlApi/security/clients/", StringComparison.OrdinalIgnoreCase) && childPointer.EndsWith("/tokenHash", StringComparison.OrdinalIgnoreCase) ||
+                    (!includeSecrets && ConfigSecretPointers.IsSecret(childPointer)))
                     obj[key] = value?.ToString() is { Length: > 0 } ? Redacted : "";
                 else if (value != null) Redact(value, includeSecrets, childPointer);
             }
@@ -412,7 +439,7 @@ public sealed class ConfigurationAutomation : IAutomationModule
             var existing = property.GetValue(destination);
             // Hook definitions are restart-only snapshots, including retained raw JSON.
             // Recursive POCO reconciliation would lose their private parse state.
-            if (property.PropertyType == typeof(HookConfig) || property.PropertyType == typeof(IrcAttentionConfig)) property.SetValue(destination, value);
+            if (property.PropertyType == typeof(HookConfig) || property.PropertyType == typeof(IrcAttentionConfig) || property.PropertyType == typeof(DataStewardshipConfig) || property.PropertyType == typeof(AutomationSecurityConfig) || property.PropertyType == typeof(RecoveryConfig)) property.SetValue(destination, value);
             else if (value is IList sourceList && existing is IList targetList && !property.PropertyType.IsArray)
             {
                 var previous = targetList.Cast<object>().ToList();
@@ -444,6 +471,7 @@ public sealed class ConfigurationAutomation : IAutomationModule
         var nullable = Nullable.GetUnderlyingType(type);
         if (nullable != null) return new JsonObject { ["anyOf"] = new JsonArray(BuildSchema(nullable), new JsonObject { ["type"] = "null" }) };
         if (type == typeof(string)) return new JsonObject { ["type"] = "string" };
+        if (type == typeof(DateTime) || type == typeof(DateTimeOffset)) return new JsonObject { ["type"] = "string", ["format"] = "date-time" };
         if (type == typeof(bool)) return new JsonObject { ["type"] = "boolean" };
         if (type.IsEnum) return new JsonObject { ["type"] = "integer", ["enum"] = new JsonArray(Enum.GetValues(type).Cast<object>().Select(v => (JsonNode?)JsonValue.Create(Convert.ToInt32(v))).ToArray()), ["x-enumNames"] = new JsonArray(Enum.GetNames(type).Select(v => (JsonNode?)JsonValue.Create(v)).ToArray()) };
         if (type == typeof(int) || type == typeof(long)) return new JsonObject { ["type"] = "integer" };
@@ -455,6 +483,23 @@ public sealed class ConfigurationAutomation : IAutomationModule
         {
             var name = JsonNamingPolicy.CamelCase.ConvertName(property.Name);
             var schema = BuildSchema(property.PropertyType);
+            if (type == typeof(AutomationSecurityConfig))
+            {
+                schema["description"] = property.Name switch
+                {
+                    nameof(AutomationSecurityConfig.RequireDangerousApproval) => "Default true for scoped clients. Local approval for secret reveal, remote administration and destructive local actions. Owner calls are affected only when requireLegacyApproval is enabled.",
+                    nameof(AutomationSecurityConfig.RequireConfigurationApproval) => "Default true for scoped clients. Review configuration writes locally. Owner calls are affected only when requireLegacyApproval is enabled.",
+                    nameof(AutomationSecurityConfig.RequireLegacyApproval) => "Default false. Explicitly opt the owner token into the enabled approval classes through the local Automation access window. Existing clients remain immediate by default.",
+                    nameof(AutomationSecurityConfig.ApprovalTimeoutSeconds) => "Default 120 seconds; unanswered or locked-session requests deny without blocking engine threads.",
+                    nameof(AutomationSecurityConfig.LedgerEnabled) => "Default true. Passive redacted append-only call evidence; storage failure never refuses a call.",
+                    nameof(AutomationSecurityConfig.LedgerCapacity) => "Default 2000. Passive in-memory retention only, evict oldest; never a call or engine rate limit.",
+                    _ => "Empty by default. Named scoped clients are managed only in the local Automation access window; hashes, never raw tokens, are stored."
+                };
+                if (property.Name == nameof(AutomationSecurityConfig.ApprovalTimeoutSeconds)) { schema["minimum"] = 5; schema["maximum"] = 600; }
+                if (property.Name == nameof(AutomationSecurityConfig.LedgerCapacity)) { schema["minimum"] = 100; schema["maximum"] = 10000; }
+            }
+            if (type == typeof(AutomationClientConfig) && property.Name == nameof(AutomationClientConfig.AllowedLocalRoots))
+                schema["description"] = "Empty by default: scoped clients cannot use explicit local file paths. Selected existing roots allow canonical descendants without junctions or symbolic links; legacy token is unaffected.";
             if (type == typeof(IrcAttentionConfig))
             {
                 schema["description"] = property.Name switch
@@ -468,6 +513,29 @@ public sealed class ConfigurationAutomation : IAutomationModule
                 {
                     schema["maxItems"] = 64;
                     if (schema["items"] is JsonObject itemSchema) itemSchema["maxLength"] = 128;
+                }
+            }
+            if (type == typeof(DataStewardshipConfig))
+                schema["description"] = property.Name == nameof(DataStewardshipConfig.CopyConfigSecrets)
+                    ? "Default true. Startup makes and reads back a DPAPI recovery copy. Config remains authoritative and readable by older builds. No login or automation gate."
+                    : "Default false. Guard saved feed preferences with last-good generations and a shrink check. View actions stay immediate; explicit removals bypass the shrink check.";
+            if (type == typeof(RecoveryConfig))
+            {
+                schema["description"] = property.Name switch
+                {
+                    nameof(RecoveryConfig.CrashLoopProtectionEnabled) => "Default true. Safe mode requires a detected loop of explicit crash restarts; ordinary, manual and update launches always start normally. Changes apply on next launch.",
+                    nameof(RecoveryConfig.CrashLoopThreshold) => "Default 3 distinct crashed sessions; minimum 3 prevents a single-crash regression.",
+                    nameof(RecoveryConfig.CrashLoopWindowMinutes) => "Default 15 minutes. Only explicit crash evidence counts, never service health or a site's availability.",
+                    nameof(RecoveryConfig.SafeModeRetryDelaysSeconds) => "Default [60,300,900]. Each entry permits one further safe-mode crash restart after that delay. Empty disables those retries; normal single-crash recovery remains three seconds.",
+                    nameof(RecoveryConfig.UpdateProbationEnabled) => "Default true. Holds subsequent automatic installations during 24-hour probation; retained previous-build files remain protected for 24 hours even when disabled.",
+                    _ => "Default true preserves existing automatic updates: three-hour poll and idle gate. False disables automatic installation, not manual update checks."
+                };
+                if (property.Name == nameof(RecoveryConfig.CrashLoopThreshold)) { schema["minimum"] = 3; schema["maximum"] = 20; }
+                if (property.Name == nameof(RecoveryConfig.CrashLoopWindowMinutes)) { schema["minimum"] = 1; schema["maximum"] = 60; }
+                if (property.Name == nameof(RecoveryConfig.SafeModeRetryDelaysSeconds))
+                {
+                    schema["maxItems"] = 8;
+                    if (schema["items"] is JsonObject item) { item["minimum"] = 3; item["maximum"] = 3600; }
                 }
             }
             if (type == typeof(PlexConfig) && property.Name == nameof(PlexConfig.WatchlistSyncEnabled))
@@ -666,6 +734,8 @@ public sealed class ConfigurationAutomation : IAutomationModule
         if (config.Servers.Any(s => string.IsNullOrWhiteSpace(s.Id)) || config.Servers.Select(s => s.Id).Distinct(StringComparer.Ordinal).Count() != config.Servers.Count)
             throw new ArgumentException("Every server needs a nonempty, unique id");
         Range(config.ControlApi.Port, 1, 65535, "/controlApi/port");
+        AutomationSecurityConfig.Validate(config.ControlApi.Security);
+        RecoveryConfig.Validate(config.Recovery);
         if (config.ControlApi.Enabled && config.ControlApi.Token.Length < 32) throw new ArgumentException("An enabled control API requires a token of at least 32 characters");
         Range(config.Downloads.MaxConcurrentDownloads, ConfigurationLimits.MinConcurrentDownloads, ConfigurationLimits.MaxConcurrentDownloads, "/downloads/maxConcurrentDownloads");
         Range(config.Downloads.SfvRepairMaxAttempts, 1, 2, "/downloads/sfvRepairMaxAttempts");

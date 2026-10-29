@@ -4,6 +4,10 @@ GlDrive includes a local MCP server for Claude Code, Claude Desktop, Codex, and 
 
 The app supplies the live tool catalog and JSON schemas. New app tools become available without a new bridge implementation. `fmountr_connection_status` checks connectivity and refreshes discovery. The resources `gldrive://mcp/help` and `gldrive://mcp/catalog` provide connection help and the complete live catalog.
 
+The existing token retains full capabilities. Optional named tokens, local approval for dangerous operations, private operation jobs and the bounded call ledger are described in [automation access](automation-security.md). Read-only calls and ordinary UI actions do not prompt. Secret or destructive calls can return `awaiting-approval`; poll the resulting job after local review.
+
+Safe mode and offline recovery do not start the control API. [Crash recovery and update probation](crash-recovery.md) describe their local controls and the optional `recovery` settings. Rollback is available only through local offline UI.
+
 ## Feature coverage
 
 | App area | Read access | Write and action access |

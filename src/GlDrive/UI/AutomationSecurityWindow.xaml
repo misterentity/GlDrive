@@ -1,0 +1,70 @@
+<Window x:Class="GlDrive.UI.AutomationSecurityWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Automation access and approvals" Width="960" Height="710" MinWidth="700" MinHeight="460"
+        Background="{DynamicResource BackgroundBrush}" Foreground="{DynamicResource ForegroundBrush}">
+    <DockPanel Margin="16">
+        <TextBlock DockPanel.Dock="Top" x:Name="StatusText" TextWrapping="Wrap" Margin="0,0,0,10"/>
+        <TabControl x:Name="Tabs">
+            <TabItem Header="Pending approvals" x:Name="ApprovalsTab">
+                <DockPanel Margin="12">
+                    <TextBlock DockPanel.Dock="Top" Text="Only approve a call you requested. The decision covers this call once. Unanswered requests expire to deny. Read-only tools and ordinary UI actions do not request approval." TextWrapping="Wrap" Margin="0,0,0,12"/>
+                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,12,0,0">
+                        <Button Content="Approve selected call once" Click="Approve_Click" Margin="0,0,8,0"/>
+                        <Button Content="Deny selected call" Click="Deny_Click"/>
+                    </StackPanel>
+                    <DataGrid x:Name="RequestsGrid" IsReadOnly="True" AutoGenerateColumns="False" SelectionMode="Single">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Client" Binding="{Binding ClientName}" Width="150"/>
+                            <DataGridTextColumn Header="Tool" Binding="{Binding Tool}" Width="180"/>
+                            <DataGridTextColumn Header="Action to review" Binding="{Binding Reason}" Width="*">
+                                <DataGridTextColumn.ElementStyle><Style TargetType="TextBlock"><Setter Property="TextWrapping" Value="Wrap"/></Style></DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="Expires (UTC)" Binding="{Binding ExpiresUtc, StringFormat=u}" Width="160"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </TabItem>
+            <TabItem Header="Scoped clients">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="12">
+                        <TextBlock Text="The existing token retains full capabilities. Scoped clients are optional. New tokens are shown once; set GLDRIVE_CONTROL_TOKEN for that client's MCP bridge. Only their SHA-256 hashes are saved here." TextWrapping="Wrap"/>
+                        <DataGrid x:Name="ClientsGrid" IsReadOnly="True" AutoGenerateColumns="False" Height="160" SelectionMode="Single" Margin="0,10,0,6">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="150"/>
+                                <DataGridTextColumn Header="Scopes" Binding="{Binding Scopes}" Width="*"/>
+                                <DataGridTextColumn Header="Destructive" Binding="{Binding AllowDestructive}" Width="90"/>
+                                <DataGridTextColumn Header="Expires (UTC)" Binding="{Binding ExpiresUtc, StringFormat=u}" Width="160"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <WrapPanel><Button Content="Rotate selected" Click="Rotate_Click" Margin="0,0,8,0"/><Button Content="Revoke selected" Click="Revoke_Click"/></WrapPanel>
+                        <WrapPanel Margin="0,14,0,6">
+                            <TextBlock Text="New client name" VerticalAlignment="Center"/><TextBox x:Name="ClientNameBox" Width="150" MaxLength="80" Margin="8,0,16,0"/>
+                            <ComboBox x:Name="ScopePreset" SelectedIndex="0" Width="150"><ComboBoxItem Content="Read only"/><ComboBoxItem Content="Operate"/><ComboBoxItem Content="Administrator"/></ComboBox>
+                            <TextBlock Text="Expires in days" VerticalAlignment="Center" Margin="16,0,8,0"/><TextBox x:Name="ExpiryDays" Text="30" Width="50"/>
+                        </WrapPanel>
+                        <TextBlock Text="Optional exact tool families (comma separated); empty means all families within the chosen scopes." TextWrapping="Wrap"/>
+                        <TextBox x:Name="FamiliesBox" Margin="0,3,0,8"/>
+                        <TextBlock Text="Allowed local folders (semicolon separated). Administrator clients cannot use local file paths outside these folders." TextWrapping="Wrap"/>
+                        <TextBox x:Name="RootsBox" Margin="0,3,0,8"/>
+                        <CheckBox x:Name="AllowDestructive" Content="Allow destructive tools within this client's scopes (local approval still applies)"/>
+                        <Button Content="Create scoped client" Click="Create_Click" HorizontalAlignment="Left" Margin="0,8,0,10"/>
+                        <TextBlock Text="New token (shown once)"/><PasswordBox x:Name="IssuedToken" IsEnabled="False" Margin="0,4,0,4"/>
+                        <Button Content="Copy new token" Click="CopyToken_Click" HorizontalAlignment="Left"/>
+                        <CheckBox x:Name="RequireApproval" Content="Require local approval for secret reveal, remote administration and destructive local actions" Margin="0,18,0,6"/>
+                        <CheckBox x:Name="RequireConfigurationApproval" Content="Require local approval for automation that edits saved application settings" Margin="0,0,0,6"/>
+                        <CheckBox x:Name="RequireLegacyApproval" Content="Also apply these approvals to the existing owner token (may interrupt unattended clients)" Margin="0,0,0,6"/>
+                        <Button Content="Save approval settings" Click="SaveApproval_Click" HorizontalAlignment="Left"/>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+            <TabItem Header="Call ledger">
+                <DockPanel Margin="12">
+                    <TextBlock DockPanel.Dock="Top" Text="Recent local call events. Arguments are redacted; results and provider errors are not recorded. Oldest entries are evicted at the configured capacity." TextWrapping="Wrap" Margin="0,0,0,10"/>
+                    <Button DockPanel.Dock="Top" Content="Refresh ledger" Click="RefreshLedger_Click" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+                    <DataGrid x:Name="LedgerGrid" IsReadOnly="True" AutoGenerateColumns="True"/>
+                </DockPanel>
+            </TabItem>
+        </TabControl>
+    </DockPanel>
+</Window>

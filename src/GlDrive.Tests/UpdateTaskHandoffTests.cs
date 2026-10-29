@@ -416,15 +416,17 @@ public sealed class OldUpdateCleanupTests : IDisposable
     {
         var source = File.ReadAllText(Path.Combine(
             FindRepositoryRoot(), "src", "GlDrive", "Services", "UpdateChecker.cs"));
-        var entry = source.IndexOf("public static int CleanupOldUpdateFilesFromTask()", StringComparison.Ordinal);
-        var end = source.IndexOf("public void StartPeriodicCheck", entry, StringComparison.Ordinal);
-        var method = source[entry..end];
+        var method = LifecycleSourceGuard.BlockAfter(source, "public static int CleanupOldUpdateFilesFromTask()");
 
         Assert.Contains("AppContext.BaseDirectory", method);
+        Assert.Contains("UpdateProbation.InstalledStore().CleanupWithRetry(", method);
         Assert.Contains("initialDelay: TimeSpan.FromSeconds(10)", method);
         Assert.Contains("retryWindow: TimeSpan.FromSeconds(30)", method);
         Assert.DoesNotContain("string baseDir", method);
         Assert.DoesNotContain("args", method);
+
+        var probation = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "src", "GlDrive", "Services", "UpdateProbation.cs"));
+        Assert.Contains("InstalledStore() => ForInstalledRoot(AppContext.BaseDirectory)", probation);
     }
 
     private static string FindRepositoryRoot()

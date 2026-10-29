@@ -20,7 +20,7 @@ public sealed class SnapshotStore
         var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
         var shortId = runId.Length > 8 ? runId[..8] : runId;
         var dest = Path.Combine(_dir, $"{stamp}-{shortId}.json");
-        File.Copy(appsettingsPath, dest, overwrite: true);
+        GlDrive.Util.SecureFile.WriteAllTextRestricted(dest, File.ReadAllText(appsettingsPath));
         Prune();
         return dest;
     }
@@ -33,9 +33,9 @@ public sealed class SnapshotStore
     public void Restore(string snapshotPath, string appsettingsPath)
     {
         var preRestore = Path.Combine(_dir, $"pre-restore-{DateTime.Now:yyyyMMdd-HHmmss}.json");
-        try { File.Copy(appsettingsPath, preRestore, overwrite: true); }
+        try { GlDrive.Util.SecureFile.WriteAllTextRestricted(preRestore, File.ReadAllText(appsettingsPath)); }
         catch (Exception ex) { Log.Warning(ex, "pre-restore snapshot save failed"); }
-        File.Copy(snapshotPath, appsettingsPath, overwrite: true);
+        GlDrive.Util.SecureFile.WriteAllTextRestricted(appsettingsPath, File.ReadAllText(snapshotPath));
     }
 
     private void Prune()

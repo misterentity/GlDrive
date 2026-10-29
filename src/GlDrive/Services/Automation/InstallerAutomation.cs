@@ -4,7 +4,7 @@ using GlDrive.UI;
 
 namespace GlDrive.Services.Automation;
 
-public sealed class InstallerAutomation : IAutomationModule
+public sealed class InstallerAutomation : IAutomationModule, IAutomationApprovalBinding
 {
     private static object Schema(object properties, params string[] required) => new { type = "object", properties, required, additionalProperties = false };
     public IReadOnlyList<AutomationToolDefinition> Tools { get; } =
@@ -20,18 +20,43 @@ public sealed class InstallerAutomation : IAutomationModule
         AutomationToolDefinition.Create("installer.logs_clear", "Clear the desktop installer log.", Schema(new { }), destructive: true)
     ];
 
-    public async Task<object?> ExecuteAsync(string operation, JsonElement arguments, CancellationToken ct)
+    public Task<object?> ExecuteAsync(string operation, JsonElement arguments, CancellationToken ct)
+        => ExecuteCoreAsync(operation, arguments, ct, null, null);
+
+    public async Task<IAutomationApprovedCall?> BindApprovalAsync(string operation, JsonElement arguments, CancellationToken ct)
+    {
+        if (operation != "installer.start") return null;
+        var dispatcher = Application.Current?.Dispatcher ?? throw new InvalidOperationException("Desktop session is unavailable.");
+        return await dispatcher.InvokeAsync(() =>
+        {
+            ct.ThrowIfCancellationRequested();
+            var window = Application.Current.Windows.OfType<GlftpdInstallerWindow>().FirstOrDefault()
+                ?? throw new InvalidOperationException("Connect the installer before requesting installation approval.");
+            return (IAutomationApprovedCall)new BoundCall(this, arguments.Clone(), window, window.CaptureAutomationApproval());
+        }, System.Windows.Threading.DispatcherPriority.Normal, ct);
+    }
+
+    private sealed class BoundCall(InstallerAutomation owner, JsonElement arguments, GlftpdInstallerWindow window, AutomationStateApproval approval) : IAutomationApprovedCall
+    {
+        public string Description => approval.Description;
+        public Task<object?> ExecuteAsync(CancellationToken ct) => owner.ExecuteCoreAsync("installer.start", arguments, ct, window, approval);
+    }
+
+    private async Task<object?> ExecuteCoreAsync(string operation, JsonElement arguments, CancellationToken ct, GlftpdInstallerWindow? expectedWindow, AutomationStateApproval? approval)
     {
         var dispatcher = Application.Current?.Dispatcher ?? throw new InvalidOperationException("Desktop session is unavailable.");
         return await (await dispatcher.InvokeAsync(async () =>
         {
             var window = Application.Current.Windows.OfType<GlftpdInstallerWindow>().FirstOrDefault();
+            if (expectedWindow != null && !ReferenceEquals(window, expectedWindow))
+                throw new AutomationDeniedException("The installer window changed while approval was pending.");
             if (window == null)
             {
                 window = new GlftpdInstallerWindow { ShowInTaskbar = false };
                 window.Show(); window.Hide();
             }
-            return await window.AutomationExecute(operation, arguments, ct);
+            Action? validate = approval == null ? null : () => window.ValidateAutomationApproval(approval);
+            return await window.AutomationExecute(operation, arguments, ct, validate);
         }, System.Windows.Threading.DispatcherPriority.Normal, ct));
     }
 }

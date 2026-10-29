@@ -22,3 +22,15 @@ public interface IAutomationModule
     IReadOnlyList<AutomationToolDefinition> Tools { get; }
     Task<object?> ExecuteAsync(string operation, JsonElement arguments, CancellationToken ct);
 }
+
+/// <summary>Bind mutable UI selections to stable targets before local approval.</summary>
+public interface IAutomationApprovalBinding
+{
+    Task<IAutomationApprovedCall?> BindApprovalAsync(string operation, JsonElement arguments, CancellationToken ct);
+}
+
+public interface IAutomationApprovedCall
+{
+    string Description { get; }
+    Task<object?> ExecuteAsync(CancellationToken ct);
+}

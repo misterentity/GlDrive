@@ -57,8 +57,6 @@ internal sealed class ControlApiClient : IDisposable
             using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
             if ((int)response.StatusCode is >= 300 and < 400)
                 throw new BridgeException("The local control API returned a redirect; redirects are never followed.");
-            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
-                throw new BridgeException("GlDrive rejected the local control API token. Check the current app settings or remove stale GLDRIVE_CONTROL_TOKEN overrides.");
             if (response.StatusCode == HttpStatusCode.NotFound && body is null)
                 throw new BridgeException("This GlDrive version has no MCP automation catalog. Install a version with MCP support and restart the app.");
             if (response.Content.Headers.ContentLength is > MaxResponseBytes)
@@ -75,6 +73,21 @@ internal sealed class ControlApiClient : IDisposable
             }
             if (!response.IsSuccessStatusCode)
             {
+                if (response.StatusCode == HttpStatusCode.Unauthorized)
+                    throw new BridgeException("GlDrive rejected this client's control API token. Verify or renew the same client's credential; keep its configured token override.");
+                if (response.StatusCode == HttpStatusCode.Forbidden)
+                {
+                    string? code = null;
+                    try
+                    {
+                        using var refusal = JsonDocument.Parse(buffer.GetBuffer().AsMemory(0, (int)buffer.Length));
+                        if (refusal.RootElement.TryGetProperty("code", out var value)) code = value.GetString();
+                    }
+                    catch (Exception ex) when (ex is JsonException or InvalidOperationException) { }
+                    throw new BridgeException(code is "scope_denied" or "approval_denied"
+                        ? $"GlDrive refused this tool ({code}). The token was accepted. Keep the current connection and credential; request the required scope or local approval."
+                        : "GlDrive refused this request (HTTP 403). Keep the current connection and credential; check local access policy.");
+                }
                 // Error bodies are bounded and the transport credential is never echoed to the model.
                 string detail = Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length)
                     .Replace(connection.Token, "[redacted]", StringComparison.Ordinal);

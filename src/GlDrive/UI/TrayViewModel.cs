@@ -40,7 +40,10 @@ public class TrayViewModel : INotifyPropertyChanged
         _serverManager = serverManager;
         _config = config;
         _notificationStore = notificationStore;
-        _updateChecker = new UpdateChecker();
+        _updateChecker = new UpdateChecker
+        {
+            AutoInstallEnabled = () => config.Recovery.AutoInstallUpdates
+        };
         Alerts = new AlertRouter(config, (title, message, severity) =>
             Application.Current?.Dispatcher.BeginInvoke(() => ShowNotificationRequested?.Invoke(title, message, severity)));
         _serverManager.Hooks.Alerts = Alerts;

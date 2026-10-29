@@ -26,15 +26,17 @@ public sealed class ScreenshotModeIsolationTests
         var screenshot = source.IndexOf("e.Args.Contains(\"--screenshots\"", StringComparison.Ordinal);
         var disableCredentials = source.IndexOf("CredentialStore.AccessDisabled = true", screenshot, StringComparison.Ordinal);
         var loadConfig = source.IndexOf("ConfigManager.Load()", screenshot, StringComparison.Ordinal);
-        var restartRegistration = source.IndexOf("RegisterApplicationRestart(null, 0)", StringComparison.Ordinal);
+        var restartRegistration = source.IndexOf("RegisterApplicationRestart(Program.CrashRestartArguments(", StringComparison.Ordinal);
         var crashMarker = source.IndexOf("var crashMarker =", StringComparison.Ordinal);
         var updateCleanup = source.IndexOf("UpdateChecker.CleanupOldUpdateFiles()", StringComparison.Ordinal);
 
         Assert.True(screenshot >= 0);
         Assert.True(disableCredentials > screenshot && disableCredentials < loadConfig);
-        Assert.True(screenshot < restartRegistration);
+        Assert.True(restartRegistration >= 0 && screenshot < restartRegistration);
         Assert.True(screenshot < crashMarker);
         Assert.True(screenshot < updateCleanup);
+        Assert.Contains("return;", LifecycleSourceGuard.BlockAfter(source,
+            "if (e.Args.Contains(\"--screenshots\", StringComparer.OrdinalIgnoreCase))"), StringComparison.Ordinal);
         Assert.Contains("if (_ownsCrashMarker)", source);
         Assert.Contains("_ownsCrashMarker = true", source);
     }
@@ -92,8 +94,13 @@ public sealed class ScreenshotModeIsolationTests
         // Screenshot mode must still bypass BOTH the single-instance guard and the watchdog.
         var screenshots = program.IndexOf("Array.IndexOf(args, \"--screenshots\") >= 0", StringComparison.Ordinal);
         var guardedBlock = program.IndexOf("if (!isScreenshots)", StringComparison.Ordinal);
-        var spawn = program.IndexOf("SpawnWatchdog();", StringComparison.Ordinal);
+        var spawn = program.IndexOf("SpawnWatchdog(args.Contains(\"--recovery\"));", StringComparison.Ordinal);
         Assert.True(screenshots >= 0 && guardedBlock > screenshots && spawn > guardedBlock);
+        var endGuardedBlock = program.IndexOf("App.PreAcquiredGuard = guard", guardedBlock, StringComparison.Ordinal);
+        Assert.True(spawn < endGuardedBlock && endGuardedBlock < wpfConstruction,
+            "The recovery-aware watchdog launch must remain within the non-screenshot branch");
+        Assert.Contains("SpawnWatchdog(args.Contains(\"--recovery\"));",
+            LifecycleSourceGuard.BlockAfter(program, "if (!isScreenshots)"), StringComparison.Ordinal);
 
         var app = ReadSource("src/GlDrive/App.xaml.cs");
         Assert.DoesNotContain("ApplyUpdateFromTask", app);
@@ -127,5 +134,23 @@ public sealed class ScreenshotModeIsolationTests
 
         var tray = ReadSource("src/GlDrive/UI/TrayViewModel.cs");
         Assert.DoesNotContain("File.WriteAllText(Path.Combine(appData, \".updating\")", tray);
+    }
+}
+
+internal static class LifecycleSourceGuard
+{
+    internal static string BlockAfter(string source, string header)
+    {
+        var start = source.IndexOf(header, StringComparison.Ordinal);
+        Assert.True(start >= 0, "Missing lifecycle branch: " + header);
+        start = source.IndexOf('{', start);
+        Assert.True(start >= 0, "Missing lifecycle branch body: " + header);
+        var depth = 0;
+        for (var index = start; index < source.Length; index++)
+        {
+            if (source[index] == '{') depth++;
+            if (source[index] == '}' && --depth == 0) return source[(start + 1)..index];
+        }
+        throw new InvalidOperationException("Unclosed lifecycle branch: " + header);
     }
 }

@@ -17,6 +17,8 @@ public class AppConfig
     public HookConfig Hooks { get; set; } = new();
     public NukeWatchConfig NukeWatch { get; set; } = new();
     public IrcAttentionConfig IrcAttention { get; set; } = new();
+    public DataStewardshipConfig DataStewardship { get; set; } = new();
+    public RecoveryConfig Recovery { get; set; } = new();
 
     public string ResolveAgentModel() => string.IsNullOrWhiteSpace(Agent.ModelId)
         ? "anthropic/claude-sonnet-4-6" : Agent.ModelId;
@@ -182,6 +184,7 @@ public class ControlApiConfig
     public bool Enabled { get; set; }
     public int Port { get; set; } = 8756;
     public string Token { get; set; } = "";
+    public AutomationSecurityConfig Security { get; set; } = new();
 }
 
 public class LoggingConfig

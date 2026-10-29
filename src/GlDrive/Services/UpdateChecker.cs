@@ -82,6 +82,17 @@ public class UpdateChecker : IDisposable
     /// </summary>
     public bool AutoInstall { get; set; } = true;
 
+    /// <summary>Live settings callbacks; absence preserves the established automatic updater.</summary>
+    public Func<bool>? AutoInstallEnabled { get; set; }
+    // Safe mode bounds network preparation so a stalled download cannot hold normal
+    // recovery forever. Ordinary update downloads retain their established timing.
+    internal TimeSpan? PreparationTimeout { get; set; }
+    private readonly Recovery.UpdateRecoveryAdmission _recoveryAdmission = new();
+    internal bool AutomaticInstallInProgress => _recoveryAdmission.Installing;
+    internal IDisposable? TryBeginRecoveryOperation() => _recoveryAdmission.TryBeginRecovery();
+    internal bool TryStopForRecoveryRestart() => _recoveryAdmission.TryStopForRestart();
+    internal void RecoveryRestartFailed() => _recoveryAdmission.RestartFailed();
+
     /// <summary>
     /// Gate for auto-install timing. Returns false to defer (e.g. a spread race is in
     /// flight) — the update retries on the next <see cref="CheckInterval"/> tick. Null
@@ -375,8 +386,11 @@ public class UpdateChecker : IDisposable
         }
     }
 
-    public async Task DownloadAndInstallAsync(GitHubRelease release)
+    public async Task DownloadAndInstallAsync(GitHubRelease release, CancellationToken cancellationToken = default)
     {
+        using var preparation = CreatePreparationCancellation(cancellationToken, PreparationTimeout);
+        var preparationToken = preparation.Token;
+        preparationToken.ThrowIfCancellationRequested();
         var asset = release.Assets.FirstOrDefault(a =>
             a.Name.Contains("win-x64", StringComparison.OrdinalIgnoreCase) &&
             a.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
@@ -412,29 +426,15 @@ public class UpdateChecker : IDisposable
 
         Log.Information("Downloading update: {Url} → {Path}", asset.BrowserDownloadUrl, tempZip);
 
-        // Multi-stream ranged download (plexo-style); the SHA-256 check below guards the result.
-        // Any failure falls back to the original single streamed GET.
-        try
-        {
-            await GlDrive.Downloads.Segmented.SegmentedHttpDownloader.DownloadAsync(
-                new Uri(asset.BrowserDownloadUrl), tempZip, null, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "Multi-stream update download failed — retrying as a single stream");
-            try { File.Delete(tempZip + ".gdpart"); File.Delete(tempZip + ".gdpart.json"); } catch { }
-
-            using var response = await _http.GetAsync(asset.BrowserDownloadUrl, HttpCompletionOption.ResponseHeadersRead);
-            response.EnsureSuccessStatusCode();
-            await using var fs = File.Create(tempZip);
-            await response.Content.CopyToAsync(fs);
-        }
+        await DownloadAssetAsync(_http, new Uri(asset.BrowserDownloadUrl), tempZip,
+            (url, path, token) => GlDrive.Downloads.Segmented.SegmentedHttpDownloader.DownloadAsync(url, path, null, token),
+            preparationToken);
 
         Log.Information("Download complete ({Size:F1} MB), verifying integrity...",
             new FileInfo(tempZip).Length / (1024.0 * 1024));
 
         // Verify SHA-256 hash against checksums.sha256 asset
-        var verifiedPackage = await VerifyDownloadHash(tempZip, release);
+        var verifiedPackage = await VerifyDownloadHash(tempZip, release, preparationToken);
         if (verifiedPackage == null)
         {
             Log.Error("Update integrity check failed — hash mismatch or no checksum available");
@@ -443,6 +443,9 @@ public class UpdateChecker : IDisposable
         }
 
         Log.Information("Integrity verified, preparing updater");
+        // This is the last cancellable boundary. Once the attempt marker and helper
+        // handoff begin, the installer owns shutdown and must not be abandoned.
+        preparationToken.ThrowIfCancellationRequested();
         // Record the in-flight attempt so the NEXT startup can tell whether it actually landed.
         // Written before launching, because a failed ApplyUpdate kills this process.
         try
@@ -453,6 +456,41 @@ public class UpdateChecker : IDisposable
         }
         catch (Exception ex) { Log.Debug(ex, "Could not record update attempt marker"); }
         LaunchUpdater(verifiedPackage, release.TagName);
+    }
+
+    internal static CancellationTokenSource CreatePreparationCancellation(CancellationToken cancellationToken, TimeSpan? timeout)
+    {
+        var preparation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (timeout is { } duration) preparation.CancelAfter(duration);
+        return preparation;
+    }
+
+    internal static async Task DownloadAssetAsync(HttpClient http, Uri url, string destination,
+        Func<Uri, string, CancellationToken, Task> segmentedDownload, CancellationToken cancellationToken)
+    {
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await segmentedDownload(url, destination, cancellationToken);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            Log.Warning(ex, "Multi-stream update download failed — retrying as a single stream");
+            try { File.Delete(destination + ".gdpart"); File.Delete(destination + ".gdpart.json"); } catch { }
+            using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            response.EnsureSuccessStatusCode();
+            await using var file = File.Create(destination);
+            await response.Content.CopyToAsync(file, cancellationToken);
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    internal static async Task<(string Checksums, string Signature)> ReadSignedChecksumsAsync(
+        HttpClient http, string checksumsUrl, string signatureUrl, CancellationToken cancellationToken)
+    {
+        var checksums = await http.GetStringAsync(checksumsUrl, cancellationToken);
+        var signature = await http.GetStringAsync(signatureUrl, cancellationToken);
+        return (checksums, signature);
     }
 
     // PEM-encoded RSA public key used to verify checksums.sha256.sig signatures.
@@ -502,7 +540,7 @@ public class UpdateChecker : IDisposable
         }
     }
 
-    private async Task<VerifiedUpdatePackage?> VerifyDownloadHash(string zipPath, GitHubRelease release)
+    private async Task<VerifiedUpdatePackage?> VerifyDownloadHash(string zipPath, GitHubRelease release, CancellationToken cancellationToken)
     {
         var checksumAsset = release.Assets.FirstOrDefault(a =>
             a.Name.Equals("checksums.sha256", StringComparison.OrdinalIgnoreCase));
@@ -520,7 +558,6 @@ public class UpdateChecker : IDisposable
         }
         try
         {
-            var checksumText = await _http.GetStringAsync(checksumAsset.BrowserDownloadUrl);
             var sigAsset = release.Assets.FirstOrDefault(a =>
                 a.Name.Equals("checksums.sha256.sig", StringComparison.OrdinalIgnoreCase));
             if (sigAsset == null || !IsAllowedDownloadUrl(sigAsset.BrowserDownloadUrl))
@@ -528,7 +565,8 @@ public class UpdateChecker : IDisposable
                 Log.Error("Signed checksum asset is missing or has an untrusted URL — rejecting update");
                 return null;
             }
-            var signatureText = await _http.GetStringAsync(sigAsset.BrowserDownloadUrl);
+            var (checksumText, signatureText) = await ReadSignedChecksumsAsync(_http,
+                checksumAsset.BrowserDownloadUrl, sigAsset.BrowserDownloadUrl, cancellationToken);
             if (!VerifyChecksumSignature(checksumText, signatureText))
                 return null;
             // Match against the actual asset name from GitHub, not the local temp filename
@@ -551,7 +589,7 @@ public class UpdateChecker : IDisposable
             }
 
             await using var fs = File.OpenRead(zipPath);
-            var actualHash = Convert.ToHexStringLower(await SHA256.HashDataAsync(fs));
+            var actualHash = Convert.ToHexStringLower(await SHA256.HashDataAsync(fs, cancellationToken));
 
             if (actualHash.Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
             {
@@ -563,7 +601,7 @@ public class UpdateChecker : IDisposable
                 expectedHash[..16] + "...", actualHash[..16] + "...");
             return null;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
             Log.Error(ex, "Hash verification failed — rejecting update");
             return null;
@@ -1147,7 +1185,7 @@ public class UpdateChecker : IDisposable
         var renamed = 0;
         foreach (var file in Directory.EnumerateFiles(installDir, "*", SearchOption.AllDirectories))
         {
-            if (file.EndsWith(".old", StringComparison.OrdinalIgnoreCase))
+            if (file.EndsWith(".old", StringComparison.OrdinalIgnoreCase) || UpdateProbation.IsMetadataPath(installDir, file))
                 continue;
 
             try
@@ -1233,6 +1271,8 @@ public class UpdateChecker : IDisposable
         var backups = new List<(string Original, string Backup)>();
         var copiedDestinations = new List<string>();
         string? validatedInstallDir = null;
+        FileStream? recoveryMutation = null;
+        var anotherMutationMayOwnRelaunch = false;
         var exitCode = 1;
 
         try
@@ -1368,6 +1408,17 @@ public class UpdateChecker : IDisposable
             }
 
             // Rename existing files to .old
+            if (UpdateInstallationTrust.IsProtected(installDir))
+            {
+                try { recoveryMutation = UpdateProbation.ForInstalledRoot(installDir).AcquireMutationLock(); }
+                catch (IOException error) when ((error.HResult & 0xffff) is 32 or 33)
+                {
+                    anotherMutationMayOwnRelaunch = true;
+                    throw;
+                }
+                if (!legacyExtractedHandoff && Normalize(AssemblyName.GetAssemblyName(Path.Combine(installDir, "GlDrive.dll")).Version!) != Normalize(CurrentVersion))
+                    throw new IOException("The installed version changed while this updater was waiting");
+            }
             LogUpdate("Renaming existing files to .old");
             var renamed = BackUpInstalledFiles(installDir, backups);
             LogUpdate($"Renamed {renamed} files");
@@ -1433,6 +1484,10 @@ public class UpdateChecker : IDisposable
                 throw new FileNotFoundException("Updated executable was not copied", newExe);
             }
 
+            // The current binary is still the old updater. The receipt records versions from
+            // the protected files, not this process's assembly version. Failure keeps backups.
+            UpdateProbation.ForInstalledRoot(installDir).RecordInstallation(backups, DateTime.UtcNow, mutationLockHeld: recoveryMutation != null);
+
             // Clean up the update marker so the watchdog doesn't interfere on next run
             try { File.Delete(Path.Combine(installDir, "..", "GlDrive", ".updating")); } catch { }
             var appDataUpdating = Path.Combine(
@@ -1464,7 +1519,7 @@ public class UpdateChecker : IDisposable
             try { File.Delete(Path.Combine(appData, ".updating")); } catch { }
             try { File.Delete(Path.Combine(appData, ".update-auth")); } catch { }
 
-            if (validatedInstallDir != null)
+            if (validatedInstallDir != null && !anotherMutationMayOwnRelaunch)
             {
                 var restoredExe = Path.Combine(validatedInstallDir, "GlDrive.exe");
                 if (File.Exists(restoredExe))
@@ -1475,10 +1530,11 @@ public class UpdateChecker : IDisposable
             }
         }
 
+        recoveryMutation?.Dispose();
         // Signal the original interactive-session watchdog only after every install or rollback
         // operation is complete. A SYSTEM process cannot reliably launch a desktop application
         // into the signed-in user's session; the watchdog can.
-        SignalUpdateCompletion(pid);
+        if (!anotherMutationMayOwnRelaunch) SignalUpdateCompletion(pid);
 
         // Force-kill instead of normal teardown because loaded files may have been
         // renamed or replaced while this updater process was running. Process.Kill()
@@ -1604,11 +1660,9 @@ public class UpdateChecker : IDisposable
 
     public static void CleanupOldUpdateFiles()
     {
-        var result = DeleteOldUpdateFiles(AppContext.BaseDirectory);
-        if (result.Deleted > 0)
-            Log.Information("Cleaned up {Count} .old update files", result.Deleted);
-
-        if (result.Remaining <= 0) return;
+        // The ordinary process only observes. Receipts and the shared mutation lock live in
+        // the protected install root; expected lack of write access is not a recovery fault.
+        if (!UpdateProbation.InstalledStore().HasPreviousFiles()) return;
 
         // Auto-updates are applied by SYSTEM under Program Files, so their rollback files are
         // also SYSTEM-owned. A normal startup cannot remove them. Ask the separately registered,
@@ -1616,8 +1670,7 @@ public class UpdateChecker : IDisposable
         // caller-controlled arguments or redirect the task to another directory.
         var exit = RunSchtasks($"/run /tn \"{UpdateTaskHandoff.CleanupTaskName}\"");
         if (exit == 0)
-            Log.Information("Requested privileged cleanup of {Count} remaining .old update files",
-                result.Remaining);
+            Log.Information("Requested update recovery observation and cleanup of expired previous files");
         else
             Log.Warning("Could not start update cleanup task {Task} (exit {Exit}); cleanup will be " +
                         "retried at next startup", UpdateTaskHandoff.CleanupTaskName, exit);
@@ -1633,8 +1686,7 @@ public class UpdateChecker : IDisposable
         // Preserve every rollback file until that window closes, then retry while Windows
         // releases the updater's mapped runtime DLLs (34 were still locked on the first live
         // v3.10.103 cleanup pass and all disappeared as soon as the updater exited).
-        var result = DeleteOldUpdateFilesWithRetry(
-            AppContext.BaseDirectory,
+        var result = UpdateProbation.InstalledStore().CleanupWithRetry(
             initialDelay: TimeSpan.FromSeconds(10),
             retryWindow: TimeSpan.FromSeconds(30),
             retryDelay: TimeSpan.FromSeconds(1));
@@ -1646,12 +1698,102 @@ public class UpdateChecker : IDisposable
             Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
             File.AppendAllText(logPath,
                 $"[{DateTime.UtcNow:O}] root={Path.GetFullPath(AppContext.BaseDirectory)} " +
-                $"deleted={result.Deleted} remaining={result.Remaining}{Environment.NewLine}");
+                $"deleted={result.Deleted} retained={result.Retained}{Environment.NewLine}");
         }
         catch { }
 
-        return result.Remaining == 0 ? 0 : 1;
+        // Retention is expected during probation and is not a task failure.
+        return 0;
     }
+
+    private bool IsAutomaticInstallEnabled()
+    {
+        try { return AutoInstall && (AutoInstallEnabled?.Invoke() ?? true); }
+        catch (Exception error) { Log.Debug(error, "Auto-install setting callback failed; retaining default"); return AutoInstall; }
+    }
+
+    /// <summary>Local offline recovery UI only. No profile or destination path crosses elevation.</summary>
+    internal static UpdateRollbackLaunch TryLaunchRollback(string generation)
+    {
+        try
+        {
+            var status = UpdateProbation.GetStatus();
+            if (!status.RollbackAvailable || status.Generation != generation) return new(false, status.Message);
+            var executable = Environment.ProcessPath ?? throw new IOException("Installed executable is unavailable");
+            if (!UpdateInstallationTrust.IsProtected(executable) || !Path.GetFullPath(executable).Equals(
+                    Path.Combine(Path.GetFullPath(AppContext.BaseDirectory), "GlDrive.exe"), StringComparison.OrdinalIgnoreCase))
+                return new(false, "Rollback requires the protected installed executable.");
+            if (!UpdateRollbackGuard.Prepare(GlDrive.Util.AppDataPaths.Root, CurrentVersion, out var reason)) return new(false, reason);
+            var start = new ProcessStartInfo(executable) { UseShellExecute = true, Verb = "runas", WorkingDirectory = AppContext.BaseDirectory };
+            start.ArgumentList.Add("--rollback-update");
+            start.ArgumentList.Add(Environment.ProcessId.ToString());
+            start.ArgumentList.Add(generation);
+            using var child = Process.Start(start);
+            return child == null ? new(false, "Windows did not start the rollback helper.") :
+                new(true, "Rollback was handed to the local helper. It will revalidate the files after this process exits.");
+        }
+        catch (Exception error) { return new(false, "Rollback was not started: " + error.Message); }
+    }
+
+    internal static int RollbackFromLocalRequest(int pid, string generation)
+    {
+        if (pid <= 0 || !Guid.TryParseExact(generation, "N", out _)) return 1;
+        var executable = Environment.ProcessPath;
+        if (executable == null || !UpdateInstallationTrust.IsProtected(executable) ||
+            !Path.GetFullPath(executable).Equals(Path.Combine(Path.GetFullPath(AppContext.BaseDirectory), "GlDrive.exe"), StringComparison.OrdinalIgnoreCase)) return 1;
+        // Read only. An alternate administrator account has a different profile, so that
+        // elevation is refused instead of accepting a caller-supplied profile directory.
+        if (!UpdateRollbackGuard.IsPrepared(GlDrive.Util.AppDataPaths.Root, CurrentVersion))
+            return RejectLocalRollback("The automatic-reinstall guard could not be verified in this Windows account. Use the same account for administrator approval.");
+        try
+        {
+            using var parent = Process.GetProcessById(pid);
+            if (parent.SessionId != Process.GetCurrentProcess().SessionId ||
+                !string.Equals(parent.MainModule?.FileName, executable, StringComparison.OrdinalIgnoreCase))
+                return RejectLocalRollback("The requesting application no longer matches this recovery request.");
+            if (!parent.WaitForExit(60_000)) return RejectLocalRollback("GlDrive did not finish closing. No files were changed; close it and try recovery again.");
+        }
+        catch (ArgumentException) { /* The requesting process already exited cleanly. */ }
+        catch { return RejectLocalRollback("The requesting application could not be verified. No files were changed."); }
+        if (!UpdateRollbackGuard.IsPrepared(GlDrive.Util.AppDataPaths.Root, CurrentVersion))
+            return RejectLocalRollback("Update state changed while GlDrive was closing. No files were changed.");
+        var exitCode = 1;
+        GlDrive.Config.ConfigDowngradeCompatibility.Preparation? profilePreparation = null;
+        var payloadRestored = false;
+        try
+        {
+            profilePreparation = GlDrive.Config.ConfigDowngradeCompatibility.Prepare(GlDrive.Config.ConfigManager.ConfigPath);
+            UpdateProbation.InstalledStore().Rollback(generation, DateTime.UtcNow);
+            payloadRestored = true;
+            LaunchViaDesktopShell(executable);
+            exitCode = 0;
+        }
+        catch (Exception error)
+        {
+            try { if (!payloadRestored) profilePreparation?.Restore(); }
+            catch (Exception restoreError) { UpdateProbation.LogRollbackFailure("Profile restoration failed: " + restoreError); }
+            UpdateProbation.LogRollbackFailure("Local rollback failed: " + error);
+            ShowLocalRollbackFailure("Rollback did not complete. The helper attempted to restore the current build and retained its recovery files. See .update-recovery/rollback.log in the installation folder before trying manual repair.");
+        }
+        TerminateUpdaterProcess(exitCode);
+        return exitCode;
+    }
+
+    private static int RejectLocalRollback(string message)
+    {
+        UpdateProbation.LogRollbackFailure("Local rollback refused: " + message);
+        ShowLocalRollbackFailure(message);
+        return 1;
+    }
+
+    private static void ShowLocalRollbackFailure(string message)
+    {
+        if (Environment.UserInteractive)
+            try { RollbackMessageBox(IntPtr.Zero, message, "GlDrive recovery", 0x10); } catch { }
+    }
+
+    [DllImport("user32.dll", EntryPoint = "MessageBoxW", CharSet = CharSet.Unicode)]
+    private static extern int RollbackMessageBox(IntPtr owner, string text, string caption, uint type);
 
     public void StartPeriodicCheck(CancellationToken cancellationToken = default)
     {
@@ -1683,7 +1825,7 @@ public class UpdateChecker : IDisposable
                     // follow-up was indistinguishable from a healthy deferral. 18 such polls
                     // across 51h hid a wedged auto-installer (v3.10.41).
                     string? skipReason =
-                        !AutoInstall ? "auto-install disabled in config"
+                        !IsAutomaticInstallEnabled() ? "auto-install disabled in config"
                         : release.TagName == _autoInstallAttemptedTag ? "already attempted this session"
                         : WasUpdateDeclined(release.TagName) ? "elevation prompt was declined recently"
                         : WasUpdateTimedOut(release.TagName) ? "elevation prompt expired unanswered recently — retrying later"
@@ -1736,12 +1878,18 @@ public class UpdateChecker : IDisposable
 
                         if (ok)
                         {
+                            using var installation = _recoveryAdmission.TryBeginInstall();
+                            if (installation == null)
+                            {
+                                await Task.Delay(TimeSpan.FromSeconds(30), token);
+                                continue;
+                            }
                             _deferredTag = null;
                             _deferralEscalated = false;
                             ClearDeferralAt(DeferralMarkerPath);
                             _autoInstallAttemptedTag = release.TagName;
                             Log.Information("Auto-installing update {Tag}", release.TagName);
-                            try { await DownloadAndInstallAsync(release); }
+                            try { await DownloadAndInstallAsync(release, token); }
                             catch (Exception ex)
                             {
                                 // Allow a retry on the next tick if it failed.

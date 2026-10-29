@@ -57,14 +57,33 @@ public class JobBreakawayTests
     public void Program_spawns_the_watchdog_through_the_breakaway_launcher()
     {
         var program = File.ReadAllText(FindRepoFile("src/GlDrive/Program.cs"));
-        var spawn = program.IndexOf("private static void SpawnWatchdog()", StringComparison.Ordinal);
-        var breakaway = program.IndexOf("JobBreakaway.StartBrokenAway(exe, $\"--watchdog", spawn, StringComparison.Ordinal);
+        var spawn = program.IndexOf("private static void SpawnWatchdog(bool recovery)", StringComparison.Ordinal);
+        Assert.True(spawn >= 0, "The recovery-aware watchdog launcher must exist");
+        var breakaway = program.IndexOf("JobBreakaway.StartBrokenAway(exe, watchdogArguments)", spawn, StringComparison.Ordinal);
         var fallback = program.IndexOf("Process.Start(psi)", spawn, StringComparison.Ordinal);
         Assert.True(spawn >= 0 && breakaway > spawn && fallback > breakaway,
             "SpawnWatchdog must try the job breakaway before the plain Process.Start fallback");
+        var launchers = program[spawn..fallback];
+        Assert.Contains("var watchdogArguments = $\"--watchdog {Environment.ProcessId} {CrashRestartArguments(recovery)} --watchdog-delay", launchers, StringComparison.Ordinal);
+        Assert.Contains("Arguments = watchdogArguments,", launchers, StringComparison.Ordinal);
+        Assert.DoesNotContain("JobBreakaway.StartBrokenAway(exe, \"", launchers, StringComparison.Ordinal);
 
         var app = File.ReadAllText(FindRepoFile("src/GlDrive/App.xaml.cs"));
         Assert.Contains("Program.WatchdogJobNote", app, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Recovery_mode_is_forwarded_from_watchdog_dispatch_to_crash_relaunch()
+    {
+        var program = File.ReadAllText(FindRepoFile("src/GlDrive/Program.cs"));
+        Assert.Contains("return RunWatchdog(targetPid, args.Contains(\"--recovery\"), args);", program, StringComparison.Ordinal);
+        var run = program.IndexOf("private static int RunWatchdog(int targetPid, bool recovery, string[] args)", StringComparison.Ordinal);
+        Assert.True(run >= 0);
+        var launch = program.IndexOf("var started = Process.Start(new ProcessStartInfo", run, StringComparison.Ordinal);
+        Assert.True(launch > run);
+        var launched = program.IndexOf("if (started == null)", launch, StringComparison.Ordinal);
+        Assert.True(launched > launch);
+        Assert.Contains("Arguments = origin?.Arguments(recovery) ?? (recovery ? \"--recovery\" : \"\"),", program[launch..launched], StringComparison.Ordinal);
     }
 
     /// <summary>

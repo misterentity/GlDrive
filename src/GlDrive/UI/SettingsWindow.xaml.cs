@@ -67,6 +67,13 @@ public partial class SettingsWindow : Window
         }
     }
 
+    private void RecoveryCenter_Click(object sender, RoutedEventArgs e)
+        => new RecoveryCenterWindow(_config, liveKeys: id => _serverManager.GetIrcService(id)?.KeyStore)
+            { Owner = this }.Show();
+
+    private void AutomationSecurity_Click(object sender, RoutedEventArgs e)
+        => new AutomationSecurityWindow(_config, App.AutomationApprovals) { Owner = this }.Show();
+
     private void AddServer_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new ServerEditDialog(serverManager: _serverManager) { Owner = this };

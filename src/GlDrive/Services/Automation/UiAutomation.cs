@@ -7,7 +7,7 @@ using GlDrive.UI;
 namespace GlDrive.Services.Automation;
 
 /// <summary>Exposes the same visible view models and awaited commands used by the desktop.</summary>
-public sealed class UiAutomation(Func<DashboardWindow> getDashboard) : IAutomationModule
+public sealed class UiAutomation(Func<DashboardWindow> getDashboard) : IAutomationModule, IAutomationApprovalBinding
 {
     private readonly HashSet<(object Model, string Command)> _runningCommands = [];
     private static readonly string[] Screens = ["dashboard", "player", "spread", "browse", "plex"];
@@ -50,7 +50,33 @@ public sealed class UiAutomation(Func<DashboardWindow> getDashboard) : IAutomati
         AutomationToolDefinition.Create("player.download_torrent", "Queue a magnet in the main Downloads list and return its durable id and queueId. The item uses a dedicated subfolder of directory. Follow and control it with downloads tools; skipBlockedFiles explicitly approves downloading only permitted files.", Schema(new { magnet = new { type = "string", maxLength = 16384 }, directory = new { type = "string", maxLength = 4096 }, skipBlockedFiles = new { type = "boolean" } }, ["magnet", "directory"]))
     ];
 
-    public async Task<object?> ExecuteAsync(string operation, JsonElement args, CancellationToken ct)
+    public Task<object?> ExecuteAsync(string operation, JsonElement args, CancellationToken ct)
+        => ExecuteCoreAsync(operation, args, ct, null);
+
+    public async Task<IAutomationApprovedCall?> BindApprovalAsync(string operation, JsonElement args, CancellationToken ct)
+    {
+        if (operation != "ui.invoke") return null;
+        var dispatcher = Application.Current?.Dispatcher ?? throw new InvalidOperationException("Desktop session is unavailable");
+        return await dispatcher.InvokeAsync(() =>
+        {
+            ct.ThrowIfCancellationRequested();
+            var model = getDashboard().GetAutomationModel(args.GetProperty("screen").GetString()!);
+            var selected = UiApprovalSelection.Capture(model, args.GetProperty("command").GetString()!);
+            return selected == null ? null : (IAutomationApprovedCall)new BoundCall(this, args.Clone(), model, selected);
+        }, System.Windows.Threading.DispatcherPriority.Normal, ct);
+    }
+
+    private sealed class BoundCall(UiAutomation owner, JsonElement arguments, object expectedModel, UiApprovalSelection selected) : IAutomationApprovedCall
+    {
+        public string Description => selected.Description;
+        public Task<object?> ExecuteAsync(CancellationToken ct) => owner.ExecuteCoreAsync("ui.invoke", arguments, ct, model =>
+        {
+            if (!ReferenceEquals(model, expectedModel)) throw new AutomationDeniedException("The dashboard changed after approval was requested.");
+            selected.Validate(model);
+        });
+    }
+
+    private async Task<object?> ExecuteCoreAsync(string operation, JsonElement args, CancellationToken ct, Action<object>? validateApprovedSelection)
     {
         var dispatcher = Application.Current?.Dispatcher ?? throw new InvalidOperationException("Desktop session is unavailable");
         return await (await dispatcher.InvokeAsync(async () =>
@@ -97,6 +123,9 @@ public sealed class UiAutomation(Func<DashboardWindow> getDashboard) : IAutomati
             }
             if (operation == "ui.invoke")
             {
+                // The check and command start share one dispatcher callback. Removal commands
+                // capture stable IDs synchronously before scheduling their existing Undo action.
+                validateApprovedSelection?.Invoke(model);
                 var name = args.GetProperty("command").GetString()!;
                 if (!Commands.Contains(name)) throw new ArgumentException("Command is not available through automation");
                 var command = model.GetType().GetProperty(name)?.GetValue(model) as IAsyncRelayCommand

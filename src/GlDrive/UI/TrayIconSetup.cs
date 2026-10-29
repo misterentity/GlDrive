@@ -154,6 +154,12 @@ public static class TrayIconSetup
 
         var statusItem = new MenuItem { Header = vm.StatusText, IsEnabled = false };
         menu.Items.Add(statusItem);
+        if (App.AutomationApprovals is { } approvals)
+        {
+            var approvalItem = new MenuItem { Header = $"Automation approvals ({approvals.Snapshot().Count})..." };
+            approvalItem.Click += (_, _) => new AutomationSecurityWindow(vm.Config, approvals, showApprovals: true).Show();
+            menu.Items.Add(approvalItem);
+        }
         if (App.Problems is { } problems)
         {
             var problemItem = new MenuItem { Header = vm.ProblemsBadge + "..." };

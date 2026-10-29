@@ -2,6 +2,7 @@ using System.IO;
 using System.Text;
 using System.Text.Json.Nodes;
 using GlDrive.Config;
+using GlDrive.Irc;
 using Meziantou.Framework.Win32;
 
 namespace GlDrive.AiAgent;
@@ -40,12 +41,12 @@ internal static partial class OutboundSecretInventory
     {
         var files = 0; var remaining = 4 * 1024 * 1024;
         if (!Directory.Exists(directory)) yield break;
-        foreach (var file in Directory.EnumerateFiles(directory, "fish-keys-*.json"))
+        foreach (var file in FishKeyStore.InventoryFiles(directory))
         {
             if (++files > 64) throw new InvalidDataException("Diagnostic key-file bound exceeded");
             var bytes = ReadDiagnosticFile(file, Math.Min(1024 * 1024, remaining));
             remaining -= bytes.Length;
-            foreach (var secret in ReadFishSecrets(bytes)) yield return secret;
+            foreach (var secret in ReadFishSecrets(file, bytes)) yield return secret;
         }
     }
 

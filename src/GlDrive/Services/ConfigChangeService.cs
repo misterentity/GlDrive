@@ -286,8 +286,7 @@ public sealed class ConfigChangeService : IDisposable
             var candidate = snapshot.DeepClone();
             // Never revive a revoked control token. Other secrets are DPAPI protected in
             // version snapshots and are restored only by this explicit user action.
-            candidate["controlApi"] ??= new JsonObject();
-            candidate["controlApi"]!["token"] = _configuration.CurrentSnapshot()["controlApi"]?["token"]?.DeepClone();
+            candidate["controlApi"] = _configuration.CurrentSnapshot()["controlApi"]?.DeepClone();
             candidate["hooks"] = _configuration.CurrentSnapshot()["hooks"]?.DeepClone();
             var typed = candidate.Deserialize<AppConfig>(ConfigurationAutomation.Json) ?? throw new ArgumentException("Invalid snapshot");
             ConfigurationAutomation.Validate(typed);
