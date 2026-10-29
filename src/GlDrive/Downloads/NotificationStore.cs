@@ -57,6 +57,20 @@ public class NotificationStore
         get { lock (_lock) return _items.ToList(); }
     }
 
+    internal (IReadOnlyList<GlDrive.Services.Operations.DossierEvent> Events, bool Partial) ReadDossierEvents(string release)
+    {
+        lock (_lock)
+        {
+            var matches = _items.Take(1000).Where(item => string.Equals(item.ReleaseName, release, StringComparison.OrdinalIgnoreCase)).Take(129).ToArray();
+            var partial = _items.Count > 1000 || matches.Length > 128;
+            string Text(string? value)
+            { if (value is { Length: <= 1024 }) return value; partial = true; return "[oversized or unavailable field omitted]"; }
+            var rows = matches.Take(128).Select(item => new GlDrive.Services.Operations.DossierEvent(new DateTimeOffset(item.Timestamp),
+                "recent-sighting", Text(item.ServerId), "Observed in category " + Text(item.Category))).ToArray();
+            return (rows, partial);
+        }
+    }
+
     public void Load()
     {
         List<NotificationItem> loaded;

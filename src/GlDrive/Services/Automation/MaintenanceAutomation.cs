@@ -20,7 +20,7 @@ public sealed class MaintenanceAutomation : IAutomationModule
         Action? settingsApplied = null)
     {
         _certificates = certificates;
-        _configuration = new ConfigurationAutomation(config, persist, settingsApplied: settingsApplied);
+        _configuration = new ConfigurationAutomation(config, persist, settingsApplied: settingsApplied, certificates: certificates);
         _diagnostics = new DiagnosticAutomation(config, appDataRoot);
         _snapshots = Path.Combine(appDataRoot ?? ConfigManager.AppDataPath, "ai-data", "ai-snapshots");
     }
@@ -29,12 +29,6 @@ public sealed class MaintenanceAutomation : IAutomationModule
     [
         AutomationToolDefinition.Create("certificates_list", "Read all trusted TLS certificate pins and certificate metadata used by the app.",
             new { type = "object", properties = new { }, additionalProperties = false }, readOnly: true),
-        AutomationToolDefinition.Create("certificates_trust", "Trust or replace a TLS certificate pin for host:port using its full SHA-256 fingerprint. Affects future connections immediately.",
-            new { type = "object", properties = new { hostPort = new { type = "string" }, fingerprint = new { type = "string" } }, required = new[] { "hostPort", "fingerprint" }, additionalProperties = false }, destructive: true),
-        AutomationToolDefinition.Create("certificates_remove", "Remove one trusted TLS certificate pin. GlDrive uses trust-on-first-use for previously unseen hosts; the next connection may trust a new certificate automatically.",
-            new { type = "object", properties = new { hostPort = new { type = "string" } }, required = new[] { "hostPort" }, additionalProperties = false }, destructive: true),
-        AutomationToolDefinition.Create("certificates_clear", "Clear all trusted certificate pins. GlDrive uses trust-on-first-use for unseen hosts; subsequent connections may trust new certificates automatically.",
-            new { type = "object", properties = new { }, additionalProperties = false }, destructive: true),
         AutomationToolDefinition.Create("config_snapshots", "List configuration snapshots, newest first. Names are accepted by config_snapshot_get/restore/delete. Paginate using offset and limit.",
             new { type = "object", properties = new { offset = new { type = "integer", minimum = 0 }, limit = new { type = "integer", minimum = 1, maximum = 200 } }, additionalProperties = false }, readOnly: true),
         AutomationToolDefinition.Create("config_snapshot_get", "Read a configuration snapshot with credentials redacted by default. includeSecrets=true reveals stored channel keys, but the control API token is always redacted. External Credential Manager passwords are not in snapshots.",
@@ -91,21 +85,8 @@ public sealed class MaintenanceAutomation : IAutomationModule
                 {
                     hostPort = p.Key, fingerprint = p.Value.Fingerprint, trustedAt = p.Value.TrustedAt,
                     subject = p.Value.Subject, issuer = p.Value.Issuer, notAfter = p.Value.NotAfter
-                }).ToArray() };
-            case "certificates_trust":
-                var hostPort = HostPort(Required(arguments, "hostPort"));
-                var fingerprint = Required(arguments, "fingerprint").Replace(":", "").Replace(" ", "").ToUpperInvariant();
-                if (fingerprint.Length != 64 || !fingerprint.All(Uri.IsHexDigit)) throw new ArgumentException("fingerprint must contain exactly 32 SHA-256 bytes (64 hex digits)");
-                _certificates.TrustCertificate(hostPort, fingerprint);
-                return new { trusted = true, hostPort, fingerprint };
-            case "certificates_remove":
-                var remove = HostPort(Required(arguments, "hostPort"));
-                _certificates.RemoveTrustedCertificate(remove);
-                return new { removed = true, hostPort = remove };
-            case "certificates_clear":
-                _certificates.ClearTrustedCertificates();
-                return new { cleared = true };
-            default: throw new ArgumentException("Unknown certificate operation");
+                }).ToArray(), pendingDecisions = _certificates.GetPendingDecisions() };
+            default: throw new ArgumentException("Certificate changes require explicit local UI review; automation is read-only.");
         }
     }
 

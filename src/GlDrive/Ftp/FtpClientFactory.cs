@@ -16,6 +16,9 @@ public class FtpClientFactory
     private readonly CertificateManager _certManager;
 
     public string Host => _serverConfig.Connection.Host;
+    private string TrustIdentity => "ftp:" + _serverConfig.Id;
+    public bool IsTrustPending => _certManager.IsPending(_serverConfig.Connection.Host, _serverConfig.Connection.Port, TrustIdentity);
+    internal void ThrowIfTrustPending() => _certManager.ThrowIfPending(_serverConfig.Connection.Host, _serverConfig.Connection.Port, TrustIdentity);
 
     // One throttle per factory == one per account/site: MountService builds a single
     // factory and hands the same instance to SpreadManager, so every pool that can
@@ -27,6 +30,7 @@ public class FtpClientFactory
     {
         _serverConfig = serverConfig;
         _certManager = certManager;
+        _certManager.RegisterIdentity(TrustIdentity, serverConfig.Connection.Host, serverConfig.Connection.Port);
         _ghostKillThrottle = ghostKillThrottle ?? new GhostKillThrottle();
     }
 
@@ -80,6 +84,7 @@ public class FtpClientFactory
 
     private AsyncFtpClient Create(out FtpLoginAccount account)
     {
+        ThrowIfTrustPending();
         var conn = _serverConfig.Connection;
         account = FtpLoginAccount.From(conn);
         var password = CredentialStore.GetPassword(conn.Host, conn.Port, conn.Username) ?? "";
@@ -153,6 +158,7 @@ public class FtpClientFactory
         client.Config.StaleDataCheck = false;
 
         ApplyOwnerExclusiveConfig(client.Config);
+        GuardedFtpLogin.RegisterTrustGuard(client, _certManager, conn.Host, conn.Port, TrustIdentity);
 
         // Self-signed cert validation via TOFU
         // Run on a thread pool thread with no sync context to avoid deadlocks
@@ -163,7 +169,7 @@ public class FtpClientFactory
             SynchronizationContext.SetSynchronizationContext(null);
             try
             {
-                e.Accept = _certManager.ValidateCertificate(conn.Host, conn.Port, e.Certificate)
+                e.Accept = _certManager.ValidateCertificate(conn.Host, conn.Port, e.Certificate, TrustIdentity)
                     .ConfigureAwait(false).GetAwaiter().GetResult();
             }
             finally
@@ -227,6 +233,7 @@ public class FtpClientFactory
         catch
         {
             client.Dispose();
+            ThrowIfTrustPending();
             throw;
         }
     }
@@ -247,6 +254,7 @@ public class FtpClientFactory
     public async Task<bool> KillGhosts(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
+        ThrowIfTrustPending();
         var conn = _serverConfig.Connection;
         var account = FtpLoginAccount.From(conn);
         if (GuardedFtpLogin.IsAuthenticationHeld(account)) return false;
@@ -272,6 +280,7 @@ public class FtpClientFactory
         client.Config.ConnectTimeout = 15000;
         client.Config.StaleDataCheck = false;
         client.Config.DisconnectWithQuit = false;
+        GuardedFtpLogin.RegisterTrustGuard(client, _certManager, conn.Host, conn.Port);
         // Use proper TOFU validation — ghost-kill sends the real password,
         // so a MitM with a fake cert could intercept credentials.
         client.ValidateCertificate += (control, e) =>

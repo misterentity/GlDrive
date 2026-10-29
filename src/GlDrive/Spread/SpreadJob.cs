@@ -3,6 +3,7 @@ using FluentFTP;
 using GlDrive.Config;
 using GlDrive.Downloads;
 using GlDrive.Ftp;
+using GlDrive.Tls;
 using Serilog;
 
 namespace GlDrive.Spread;
@@ -67,6 +68,7 @@ public partial class SpreadJob : IDisposable
     private readonly Dictionary<string, long> _sfvSizes = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _parsingSfvs = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DateTime> _poolRetryAt = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _trustParkingLogged = new(StringComparer.Ordinal);
     public string? WaitReason { get; private set; }
     internal bool WaitingForIncompleteRelease { get; private set; }
     private Task? _sfvParseTask;
@@ -2728,6 +2730,9 @@ public partial class SpreadJob : IDisposable
         {
             if (srcPool == null || dstPool == null) return;
             if (KnownNuked(srcId) || KnownNuked(dstId)) return;
+            // Check BOTH endpoints before any peer borrow (including its NOOP probe).
+            srcPool.ThrowIfTrustPending();
+            dstPool.ThrowIfTrustPending();
             // Acquire global per-server gates BEFORE borrowing the connection pool.
             // The gate cap is enforced across ALL concurrent jobs and auto-tightens
             // when a BNC's 530 reveals its login cap. Doing this before Borrow means
@@ -2758,6 +2763,8 @@ public partial class SpreadJob : IDisposable
             // all slots appear permanently exhausted.
             using var borrowTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             borrowTimeout.CancelAfter(TimeSpan.FromSeconds(30));
+            srcPool.ThrowIfTrustPending();
+            dstPool.ThrowIfTrustPending();
             var srcTask = srcPool.BorrowFor(FtpBorrowPurpose.Race, borrowTimeout.Token);
             var dstTask = dstPool.BorrowFor(FtpBorrowPurpose.Race, borrowTimeout.Token);
 
@@ -3098,7 +3105,12 @@ public partial class SpreadJob : IDisposable
             // borrowed (srcConn/dstConn are null, nothing to poison). Log quietly
             // so it doesn't masquerade as an FXP error. The route resumes once the
             // cooldown clears.
-            if (ex is ObjectDisposedException && !transferProtocolStarted)
+            if (ex is CertificateTrustPendingException && !transferProtocolStarted)
+            {
+                ParkForTrust(srcId, srcPool);
+                ParkForTrust(dstId, dstPool);
+            }
+            else if (ex is ObjectDisposedException && !transferProtocolStarted)
             {
                 lock (_ownershipLock)
                 {
@@ -3167,6 +3179,18 @@ public partial class SpreadJob : IDisposable
 
             ProgressChanged?.Invoke(this);
         }
+    }
+
+    private void ParkForTrust(string serverId, FtpConnectionPool? pool)
+    {
+        if (pool?.IsTrustParked != true) return;
+        bool log;
+        lock (_ownershipLock)
+        {
+            _poolRetryAt[serverId] = DateTime.UtcNow.AddSeconds(30);
+            log = _trustParkingLogged.Add(serverId);
+        }
+        if (log) Log.Information("FXP parked for a local certificate decision: {ServerId}", serverId);
     }
 
     /// <summary>

@@ -30,6 +30,18 @@ public class DownloadStore
 
     public IReadOnlyList<DownloadItem> Items { get { lock (_lock) return _items.ToList(); } }
 
+    internal (IReadOnlyList<GlDrive.Services.Operations.DossierEvent> Events, bool Partial) ReadDossierEvents(string release)
+    {
+        lock (_lock)
+        {
+            var rows = _items.Take(10_000).Where(item => string.Equals(item.ReleaseName, release, StringComparison.OrdinalIgnoreCase))
+                .Take(128).Select(item => new GlDrive.Services.Operations.DossierEvent(
+                    new DateTimeOffset(item.CompletedAt ?? item.StartedAt ?? item.QueuedAt), "download-current", item.ServerId,
+                    $"{item.Status}; {item.DownloadedBytes} of {item.TotalBytes} bytes; retries {item.RetryCount}" )).ToArray();
+            return (rows, !_loaded || _items.Count > 10_000 || rows.Length == 128);
+        }
+    }
+
     public DownloadStore(string serverId)
         : this(new FileInfo(Path.Combine(ConfigManager.AppDataPath, $"downloads-{serverId}.json")))
     {

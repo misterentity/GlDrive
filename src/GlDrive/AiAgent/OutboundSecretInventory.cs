@@ -10,7 +10,7 @@ using Meziantou.Framework.Win32;
 namespace GlDrive.AiAgent;
 
 /// <summary>Reads the credentials that must be removed at the outbound LLM boundary.</summary>
-internal static class OutboundSecretInventory
+internal static partial class OutboundSecretInventory
 {
     // Runtime stores can contain a newer key than disk after an unsuccessful save.
     // The application supplies snapshots; the inventory never owns or changes those stores.

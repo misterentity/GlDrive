@@ -100,7 +100,10 @@ public class ConfigManager
     }
 
     public static void Save(AppConfig config)
-        => SecureFile.WithPathLock(ConfigFilePath, () => SaveCore(config));
+    {
+        using var inventoryChange = Logging.DiagnosticRedactorCache.BeginInputChange();
+        SecureFile.WithPathLock(ConfigFilePath, () => SaveCore(config));
+    }
 
     public static void Save(AppConfig config, string actor)
     {
@@ -110,6 +113,7 @@ public class ConfigManager
 
     internal static void SaveRawSettings(JsonObject config, string actor)
     {
+        using var inventoryChange = Logging.DiagnosticRedactorCache.BeginInputChange();
         using var attribution = ConfigWriteScope.Fallback(actor);
         SecureFile.WithPathLock(ConfigFilePath, () =>
         {
@@ -133,6 +137,7 @@ public class ConfigManager
             Log.Debug("ConfigManager.Save suppressed (ReadOnly mode)");
             return json;
         }
+        Tls.CertificateManager.GuardPendingConfiguration(JsonSerializer.Deserialize<AppConfig>(json, JsonOptions)!);
         Directory.CreateDirectory(AppDataFolder);
         string? beforeJson = File.Exists(ConfigFilePath) ? File.ReadAllText(ConfigFilePath) : null;
         var next = JsonNode.Parse(json)!;
@@ -175,21 +180,26 @@ public class ConfigManager
                 var recorder = App.TelemetryRecorder;
                 if (recorder != null && beforeNode != null && afterNode != null)
                 {
+                    var journalPointers = new Services.Operations.ConfigPointerSummary();
                     foreach (var (ptr, b, a) in AiAgent.ConfigDiff.Diff(beforeNode, afterNode))
                     {
+                        var canonicalPointer = AiAgent.CorrectionDetector.CanonicalOverridePointer(ptr, beforeNode, afterNode);
+                        journalPointers.Add(canonicalPointer ?? ptr);
                         // Never write a credential's value to the telemetry stream — the
                         // digest still proves the field changed. See ConfigSecretPointers.
                         recorder.Record(AiAgent.TelemetryStream.Overrides,
                             new AiAgent.ConfigOverrideEvent
                             {
                                 JsonPointer = ptr,
-                                CanonicalPointer = AiAgent.CorrectionDetector.CanonicalOverridePointer(ptr, beforeNode, afterNode),
+                                CanonicalPointer = canonicalPointer,
                                 Actor = ConfigWriteScope.Current.Actor,
                                 AiAuditRef = ConfigWriteScope.Current.AuditRef,
                                 BeforeValue = AiAgent.ConfigSecretPointers.MaskValue(ptr, b),
                                 AfterValue  = AiAgent.ConfigSecretPointers.MaskValue(ptr, a)
                             });
                     }
+                    App.RecordOperation("config-change-set", detail: journalPointers.Detail,
+                        actor: ConfigWriteScope.Current.Actor, correlation: ConfigWriteScope.Current.AuditRef ?? "");
                 }
             }
             catch (Exception ex) { Log.Debug(ex, "ConfigOverride emit failed"); }

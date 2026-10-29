@@ -150,6 +150,10 @@ public record FileTransferEvent : TelemetryEnvelope
     [JsonPropertyName("ttfbMs")]        public long TtfbMs { get; init; }
     [JsonPropertyName("pasvLatencyMs")] public long PasvLatencyMs { get; init; }
     [JsonPropertyName("abortReason")]   public string? AbortReason { get; init; }
+    // Actual transfer protocol. Historical race-level fxpMode is the scheduling mode instead.
+    [JsonPropertyName("transferMode")]  public string? TransferMode { get; init; }
+    // Null on historical rows, which cannot distinguish an already-present file from transferred payload.
+    [JsonPropertyName("duplicateSkipped")] public bool? DuplicateSkipped { get; init; }
 }
 
 public record SectionActivityEvent : TelemetryEnvelope

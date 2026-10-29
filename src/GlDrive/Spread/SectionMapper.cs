@@ -26,11 +26,15 @@ public static class SectionMapper
     /// section matching (SpreadJob already does that).
     /// </summary>
     public static Resolution? Resolve(SiteSpreadConfig site, string ircSection, string releaseName)
+        => Resolve(site, ircSection, releaseName, null);
+
+    internal static Resolution? Resolve(SiteSpreadConfig site, string ircSection, string releaseName, Action? checkBudget)
     {
         if (site.SectionMappings.Count == 0) return null;
 
         foreach (var mapping in site.SectionMappings)
         {
+            checkBudget?.Invoke();
             if (!mapping.Enabled) continue;
             if (!mapping.IrcSection.Equals(ircSection, StringComparison.OrdinalIgnoreCase)) continue;
             if (!MatchesTrigger(mapping.TriggerRegex, releaseName)) continue;

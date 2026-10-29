@@ -1,0 +1,17 @@
+# Flight recorder and log console
+
+Open **Logs** from the dashboard to browse recent redacted activity. Filter by minimum level, component, or message/server/release text. **Follow** refreshes the view; clearing it pauses only the view. **Copy redacted** copies selected entries, or all displayed entries when nothing is selected. Filtering, redaction, capture and export run in the background.
+
+New installations use `logging.level: "Information"` and `logging.retainedFiles: 30` (days). Existing explicit values are preserved. Disk history is also bounded by size, so a noisy installation can retain fewer days. The default disk budget is about 300 MiB. An explicit **Trace for 15 minutes** temporarily writes detailed messages for one component without changing the saved level. It expires by time and is cleared on restart.
+
+Verbose detail remains in memory: the recorder queue holds at most 512 compact entries, each with at most 16,384 text characters (32 KiB of UTF-16 message payload); the redacted ring holds at most 4 MiB, 8,192 entries and 20 minutes. Full buffers evict their oldest entries. Oversized messages are omitted whole rather than cutting through a possible credential. These limits affect diagnostics only and never delay or reject a login, race or download.
+
+`logging.incidentCaptureEnabled` defaults to `true`. Errors, stalls and known generic signatures request a redacted incident capsule. A malformed optional value disables automatic capture without discarding the rest of the configuration. Capsules are at most 1 MiB each, keep at most 32 files, and share a maximum capture rate of one per five minutes. **Capture incident** uses the same bounds. Failed storage keeps the in-memory recorder available.
+
+The shipped `ops-signatures.json` rules describe generic rate, sequence and missing-completion evidence. They contain no site-specific names and only report observations. The remount/disposed signature observes an exception within 120 seconds of a remount; it does not attribute the exception to a particular server. Signature notices share a maximum rate of one per five minutes. Hourly message-template counts have a 90-day age limit and a 128 MiB storage budget; the oldest files are evicted when the budget is reached. Neither rules nor counts are added to model prompts.
+
+**Export diagnostics** writes a new local ZIP containing redacted recent entries, bounded capsules, census data and redacted settings. Choose a fresh filename; existing files are preserved. The export applies current secret redaction per row and never uploads anything. The manifest and completion message report masked rows or omitted files while preserving the other evidence. Native crash dumps and Windows event logs are outside this bundle; an abrupt native crash can lose the unsaved in-memory ring.
+
+The complete secret inventory is cached. Configuration saves, credential changes and FiSH key changes invalidate it immediately; a one-minute refresh also notices external edits. Idle recorder passes do not collect credentials. A transient refresh failure can retain an unchanged good inventory; after a known secret change, unavailable redaction masks new rows until the inventory can be rebuilt.
+
+MCP can read the bounded recorder through `logs_tail` and list/read `capsules` or `census` using `diagnostics_files` and `diagnostics_read`. `logs_capture` explicitly requests a bounded local capsule. No logging tool adds site polling or FTP traffic.

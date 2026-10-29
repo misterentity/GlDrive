@@ -209,12 +209,15 @@ public partial class SettingsWindow : Window
         }
     }
 
+    private void ReviewCerts_Click(object sender, RoutedEventArgs e) => new CertificateDecisionsWindow(new CertificateManager()) { Owner = this }.Show();
+
     private void ClearCerts_Click(object sender, RoutedEventArgs e)
     {
         var certMgr = new CertificateManager();
+        if (MessageBox.Show("Clear pins for endpoints without pending changes? They will use first-use trust on the next connection.", "Clear certificate pins", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
         certMgr.ClearTrustedCertificates();
         _vm.RefreshCertsInfo();
-        MessageBox.Show("Trusted certificates cleared.", "GlDrive", MessageBoxButton.OK, MessageBoxImage.Information);
+        MessageBox.Show("Certificate pins cleared. Pending changes retain their old pins and remain parked.", "GlDrive", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     private void BrowseDownloadPath_Click(object sender, RoutedEventArgs e)

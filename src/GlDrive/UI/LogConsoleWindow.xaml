@@ -1,0 +1,44 @@
+<Window x:Class="GlDrive.UI.LogConsoleWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Log console" Width="1100" Height="650" MinWidth="750" MinHeight="420"
+        WindowStartupLocation="CenterOwner" Background="{DynamicResource BackgroundBrush}"
+        Foreground="{DynamicResource ForegroundBrush}">
+    <DockPanel Margin="16">
+        <StackPanel DockPanel.Dock="Top">
+            <TextBlock Text="Recent activity" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,8"/>
+            <TextBlock Text="The flight recorder keeps recent detail in memory. Filters and exports use redacted copies. Pausing this view leaves recording active."
+                       TextWrapping="Wrap" Margin="0,0,0,12" Foreground="{DynamicResource ForegroundDimBrush}"/>
+            <WrapPanel Margin="0,0,0,8">
+                <TextBlock Text="Minimum level" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <ComboBox x:Name="LevelBox" Width="130" SelectionChanged="Filter_Changed" AutomationProperties.Name="Minimum log level" Margin="0,0,14,0"/>
+                <TextBlock Text="Component" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <ComboBox x:Name="ComponentBox" Width="130" SelectionChanged="Filter_Changed" AutomationProperties.Name="Log component" Margin="0,0,14,0"/>
+                <CheckBox x:Name="FollowBox" Content="Follow" IsChecked="True" VerticalAlignment="Center" Checked="Follow_Changed" Unchecked="Follow_Changed" Margin="0,0,12,0"/>
+                <Button Content="Refresh" Click="Refresh_Click" Style="{DynamicResource SecondaryButton}" Padding="10,5"/>
+            </WrapPanel>
+            <TextBox x:Name="FilterBox" MaxLength="512" TextChanged="FilterText_Changed" AutomationProperties.Name="Filter log text, server or release"
+                     ToolTip="Filter message text, server or release" Margin="0,0,0,10"/>
+            <WrapPanel Margin="0,0,0,8">
+                <Button x:Name="CaptureButton" Content="Capture incident" Click="Capture_Click" Style="{DynamicResource SecondaryButton}" Margin="0,0,8,0" Padding="10,5"/>
+                <Button x:Name="CopyButton" Content="Copy redacted" Click="Copy_Click" Style="{DynamicResource SecondaryButton}" Margin="0,0,8,0" Padding="10,5"/>
+                <Button x:Name="ExportButton" Content="Export diagnostics" Click="Export_Click" Style="{DynamicResource SecondaryButton}" Margin="0,0,18,0" Padding="10,5"/>
+                <ComboBox x:Name="TraceComponentBox" Width="105" AutomationProperties.Name="Temporary trace component" Margin="0,0,8,0"/>
+                <Button Content="Trace for 15 minutes" Click="Trace_Click" Style="{DynamicResource SecondaryButton}" Padding="10,5"
+                        ToolTip="Temporarily write this component's detailed messages to disk. The switch expires automatically and is cleared at restart."/>
+            </WrapPanel>
+            <TextBlock x:Name="StatusLabel" Text="Loading recent logs…" TextWrapping="Wrap" Margin="0,0,0,10" Foreground="{DynamicResource ForegroundDimBrush}"/>
+        </StackPanel>
+        <DataGrid x:Name="LogsGrid" IsReadOnly="True" AutoGenerateColumns="False" SelectionMode="Extended"
+                  Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource ForegroundBrush}"
+                  BorderBrush="{DynamicResource BorderBrush}" EnableRowVirtualization="True" EnableColumnVirtualization="True">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Time" Binding="{Binding Time, StringFormat=HH:mm:ss.fff}" Width="110"/>
+                <DataGridTextColumn Header="Level" Binding="{Binding Level}" Width="95"/>
+                <DataGridTextColumn Header="Component" Binding="{Binding Component}" Width="100"/>
+                <DataGridTextColumn Header="Server / release" Binding="{Binding Correlation}" Width="150"/>
+                <DataGridTextColumn Header="Message" Binding="{Binding Text}" Width="*"/>
+            </DataGrid.Columns>
+        </DataGrid>
+    </DockPanel>
+</Window>

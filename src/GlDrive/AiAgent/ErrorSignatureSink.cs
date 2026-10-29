@@ -16,6 +16,7 @@ public sealed class ErrorSignatureSink : ILogEventSink
 
     public ErrorSignatureSink()
     {
+        using var flow = ExecutionContext.IsFlowSuppressed() ? default : ExecutionContext.SuppressFlow();
         _flushTimer = new Timer(_ => Flush(), null, TimeSpan.FromHours(1), TimeSpan.FromHours(1));
     }
 

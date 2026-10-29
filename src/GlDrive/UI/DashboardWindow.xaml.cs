@@ -33,6 +33,34 @@ public partial class DashboardWindow : Window
     private readonly AutoExpandLatch _streamsExpandLatch = new();
     private bool _expandingStreams;
 
+    private void Logs_Click(object sender, RoutedEventArgs e)
+    {
+        if (_demoMode) return;
+        new LogConsoleWindow(_config) { Owner = this }.Show();
+    }
+
+    private void Problems_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_demoMode && App.Problems is { } problems)
+            new ProblemsWindow(problems) { Owner = this }.Show();
+    }
+
+    private void Statistics_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_demoMode && App.Statistics is { } statistics)
+            new StatisticsWindow(statistics) { Owner = this }.Show();
+    }
+
+    private void Dossier_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_demoMode && App.Dossiers is { } dossier) new ReleaseDossierWindow(dossier) { Owner = this }.Show();
+    }
+
+    private void OpsJournal_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_demoMode && App.Operations is { } journal) new OpsJournalWindow(journal) { Owner = this }.Show();
+    }
+
     private void CollectionGaps_Click(object sender, RoutedEventArgs e)
     {
         if (_demoMode || DataContext is not DashboardViewModel vm) return;

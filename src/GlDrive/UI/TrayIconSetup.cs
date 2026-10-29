@@ -36,6 +36,13 @@ public static class TrayIconSetup
         BuildMenu(menu, vm);
         taskbarIcon.ContextMenu = menu;
 
+        if (App.Problems is { } problems)
+            problems.Changed += () => Application.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                BuildMenu(menu, vm);
+                UpdateToolTip(taskbarIcon, $"GlDrive v{versionStr} — {vm.StatusText} — {vm.ProblemsBadge}");
+            });
+
         // Settings and authentication holds can change without a mount-state event.
         menu.Opened += (_, _) => BuildMenu(menu, vm);
 
@@ -62,7 +69,7 @@ public static class TrayIconSetup
                         bestState = MountState.Error;
                 }
 
-                UpdateToolTip(taskbarIcon, $"GlDrive v{versionStr} — {vm.StatusText}");
+                UpdateToolTip(taskbarIcon, $"GlDrive v{versionStr} — {vm.StatusText} — {vm.ProblemsBadge}");
                 taskbarIcon.Icon = CyberpunkIconGenerator.Generate(bestState);
             });
         };
@@ -147,6 +154,12 @@ public static class TrayIconSetup
 
         var statusItem = new MenuItem { Header = vm.StatusText, IsEnabled = false };
         menu.Items.Add(statusItem);
+        if (App.Problems is { } problems)
+        {
+            var problemItem = new MenuItem { Header = vm.ProblemsBadge + "..." };
+            problemItem.Click += (_, _) => new ProblemsWindow(problems).Show();
+            menu.Items.Add(problemItem);
+        }
 
         menu.Items.Add(new Separator());
 

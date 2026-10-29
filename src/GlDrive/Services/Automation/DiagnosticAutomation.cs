@@ -4,6 +4,10 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using GlDrive.Config;
+using GlDrive.AiAgent;
+using GlDrive.Irc;
+using GlDrive.Logging;
+using Serilog.Events;
 
 namespace GlDrive.Services.Automation;
 
@@ -12,30 +16,50 @@ public sealed class DiagnosticAutomation : IAutomationModule
 {
     private readonly AppConfig _config;
     private readonly string _root;
+    private readonly DiagnosticRedactorCache _completeRedactor;
+    private static readonly JsonSerializerOptions SecretJsonOptions = new()
+    { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
     public DiagnosticAutomation(AppConfig config, string? appDataRoot = null)
     {
         _config = config;
         _root = Path.GetFullPath(appDataRoot ?? ConfigManager.AppDataPath);
+        _completeRedactor = new(() => BuildTextRedactor(true));
     }
 
     public IReadOnlyList<AutomationToolDefinition> Tools { get; } =
     [
-        AutomationToolDefinition.Create("diagnostics_files", "List bounded app log, telemetry, or agent brief files. Returns names accepted by diagnostics_read; credentials are never included.",
-            new { type = "object", properties = new { kind = new { type = "string", @enum = new[] { "logs", "telemetry", "briefs" } }, limit = new { type = "integer", minimum = 1, maximum = 200 } }, additionalProperties = false }, readOnly: true),
+        AutomationToolDefinition.Create("diagnostics_files", "List bounded app log, telemetry, brief, capsule or hourly log census files. Returns names accepted by diagnostics_read; credentials are never included.",
+            new { type = "object", properties = new { kind = new { type = "string", @enum = new[] { "logs", "telemetry", "briefs", "capsules", "census" } }, limit = new { type = "integer", minimum = 1, maximum = 200 } }, additionalProperties = false }, readOnly: true),
         AutomationToolDefinition.Create("diagnostics_read", "Read a bounded tail of one app-owned log, telemetry, or agent brief. Omit name for the newest file. Pass nextBeforeByte back as beforeByte to page backwards through history. Known credentials and token/password assignments are redacted. Does not accept paths.",
-            new { type = "object", properties = new { kind = new { type = "string", @enum = new[] { "logs", "telemetry", "briefs" } }, name = new { type = "string" }, lines = new { type = "integer", minimum = 1, maximum = 1000 }, maxBytes = new { type = "integer", minimum = 1024, maximum = 524288 }, beforeByte = new { type = "integer", minimum = 0 } }, additionalProperties = false }, readOnly: true)
+            new { type = "object", properties = new { kind = new { type = "string", @enum = new[] { "logs", "telemetry", "briefs", "capsules", "census" } }, name = new { type = "string" }, lines = new { type = "integer", minimum = 1, maximum = 1000 }, maxBytes = new { type = "integer", minimum = 1024, maximum = 524288 }, beforeByte = new { type = "integer", minimum = 0 } }, additionalProperties = false }, readOnly: true),
+        AutomationToolDefinition.Create("logs_tail", "Read the bounded, redacted in-memory flight recorder. Text matches server or release text too. No file or network requests.",
+            new { type = "object", properties = new { minimumLevel = new { type = "string" }, component = new { type = "string" }, text = new { type = "string" }, limit = new { type = "integer", minimum = 1, maximum = 500 } }, additionalProperties = false }, readOnly: true),
+        AutomationToolDefinition.Create("logs_capture", "Capture a redacted local incident capsule, at most once per five minutes. Never uploads anything.",
+            new { type = "object", properties = new { }, additionalProperties = false })
     ];
 
-    public Task<object?> ExecuteAsync(string operation, JsonElement arguments, CancellationToken ct)
+    public async Task<object?> ExecuteAsync(string operation, JsonElement arguments, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         var kind = ConfigurationAutomation.String(arguments, "kind") ?? "logs";
-        return Task.FromResult<object?>(operation switch
+        if (operation == "logs_capture")
+        {
+            var captured = await (SerilogSetup.Recorder?.CaptureAsync("manual") ?? Task.FromResult<string?>(null));
+            return new { name = Path.GetFileName(captured), rateLimitedOrUnavailable = captured == null };
+        }
+        if (operation == "logs_tail")
+        {
+            Enum.TryParse<LogEventLevel>(ConfigurationAutomation.String(arguments, "minimumLevel"), true, out var level);
+            var rows = await Task.Run(() => SerilogSetup.Recorder?.Snapshot(level, ConfigurationAutomation.String(arguments, "component") ?? "",
+                ConfigurationAutomation.String(arguments, "text") ?? "", Math.Clamp(ConfigurationAutomation.Integer(arguments, "limit", 200), 1, 500)) ?? [], ct);
+            return new { rows = SerilogSetup.Recorder == null ? rows : await SerilogSetup.Recorder.RedactSnapshotAsync(rows), redacted = true };
+        }
+        return await Task.Run<object?>(() => operation switch
         {
             "diagnostics_files" => ListFiles(kind, ConfigurationAutomation.Integer(arguments, "limit", 50)),
             "diagnostics_read" => Read(kind, ConfigurationAutomation.String(arguments, "name"), ConfigurationAutomation.Integer(arguments, "lines", 100), ConfigurationAutomation.Integer(arguments, "maxBytes", 131072), arguments.TryGetProperty("beforeByte", out var before) ? before.GetInt64() : null),
             _ => throw new ArgumentException("Unknown diagnostics operation")
-        });
+        }, ct);
     }
 
     public object ListFiles(string kind = "logs", int limit = 50)
@@ -71,7 +95,9 @@ public sealed class DiagnosticAutomation : IAutomationModule
         "logs" => (Path.Combine(_root, "logs"), "gldrive-*.log"),
         "telemetry" => (Path.Combine(_root, "ai-data"), "*.jsonl"),
         "briefs" => (Path.Combine(_root, "ai-data", "ai-briefs"), "*.md"),
-        _ => throw new ArgumentException("kind must be logs, telemetry, or briefs")
+        "capsules" => (Path.Combine(_root, "logs", "capsules"), "incident-*.log"),
+        "census" => (Path.Combine(_root, "logs", "census"), "census-*.json"),
+        _ => throw new ArgumentException("kind must be logs, telemetry, briefs, capsules, or census")
     };
 
     internal void EnsureDirectory(string directory)
@@ -129,26 +155,79 @@ public sealed class DiagnosticAutomation : IAutomationModule
 
     internal string RedactText(string text) => CreateTextRedactor()(text);
 
-    internal Func<string, string> CreateTextRedactor()
+    internal Func<string, string> CreateTextRedactor(bool requireCompleteInventory = false)
     {
-        // Strip known current credentials even when a third-party log message lacks labels.
+        if (requireCompleteInventory) return _completeRedactor.Get();
+        try { return BuildTextRedactor(false); }
+        catch { return DiagnosticRedactorCache.Unavailable; }
+    }
+
+    internal static bool IsRedactionUnavailable(Func<string, string> redact)
+        => ReferenceEquals(redact, DiagnosticRedactorCache.Unavailable);
+
+    private Func<string, string> BuildTextRedactor(bool requireCompleteInventory)
+    {
         var secrets = new HashSet<string>(StringComparer.Ordinal);
-        void Add(string? value) { if (!string.IsNullOrEmpty(value)) secrets.Add(value); }
+        var total = 0;
+        void Add(string? value)
+        {
+            if (string.IsNullOrEmpty(value) || !secrets.Add(value)) return;
+            if (value.Length > 65536 || secrets.Count > 4096 || (total += value.Length) > 256 * 1024)
+                throw new InvalidDataException("Diagnostic secret inventory exceeds its bound");
+        }
+        if (requireCompleteInventory)
+            foreach (var secret in OutboundSecretInventory.CollectForDiagnostics()) Add(secret);
         Add(_config.ControlApi.Token);
         foreach (var server in _config.Servers)
         {
             foreach (var channel in server.Irc.Channels) Add(channel.Key);
+            if (requireCompleteInventory) continue;
             Add(CredentialStore.GetPassword(server.Connection.Host, server.Connection.Port, server.Connection.Username));
             Add(CredentialStore.GetIrcPassword(server.Irc.Host, server.Irc.Port, server.Irc.Nick));
             if (server.Connection.Proxy is { } proxy) Add(CredentialStore.GetProxyPassword(proxy.Host, proxy.Port, proxy.Username));
         }
-        foreach (var service in new[] { "omdb", "tmdb", "openrouter", "plex" }) Add(CredentialStore.GetApiKey(service));
-        var ordered = secrets.OrderByDescending(s => s.Length).ToArray();
-        return text =>
+        if (!requireCompleteInventory)
         {
-            foreach (var secret in ordered) text = text.Replace(secret, "[redacted]", StringComparison.Ordinal);
-            return Regex.Replace(text, "(?i)(authorization\\s*[:=]\\s*bearer\\s+|(?:password|passphrase|token|api[_-]?key|secret|key)\\s*[\\\"']?\\s*[:=]\\s*[\\\"']?)[^\\s\\\"',;}]+", "$1[redacted]", RegexOptions.None, TimeSpan.FromMilliseconds(250));
-        };
+            foreach (var service in new[] { "omdb", "tmdb", "openrouter", "plex" }) Add(CredentialStore.GetApiKey(service));
+            if (OutboundSecretInventory.ReadLiveSecrets is { } live) foreach (var secret in live()) Add(secret);
+            foreach (var secret in OutboundSecretInventory.ReadDiagnosticFishSecrets(_root)) Add(secret);
+        }
+        return DiagnosticTextRedactor.Create(secrets.SelectMany(SecretVariants), RedactProtocol, throwOnInventoryFailure: true);
+    }
+
+    private static string RedactProtocol(string text)
+    {
+        const string assignment = @"(?i)(authorization[ \t]*[:=][ \t]*bearer[ \t]+|\b(?:password|passphrase|token|api[_-]?key|secret|key)[""']?[ \t]*[:=][ \t]*)";
+        text = Regex.Replace(text, assignment + @"(""(?:\\.|[^""\\\r\n])*""?|'(?:\\.|[^'\\\r\n])*'?)",
+            match => match.Groups[1].Value + match.Groups[2].Value[0] + "[redacted]" + match.Groups[2].Value[0],
+            RegexOptions.None, TimeSpan.FromMilliseconds(250));
+        // An unquoted human-log assignment has no reliable value boundary. Mask its
+        // remainder; quoted JSON values above retain their quotes and neighbouring fields.
+        text = Regex.Replace(text, assignment + @"(?![ \t]*[""'])[^\r\n]+", "$1[redacted]", RegexOptions.None, TimeSpan.FromMilliseconds(250));
+        text = Regex.Replace(text, @"(?im)(\b(?:PASS|USER)\s+)[^\r\n]+", "$1[redacted]", RegexOptions.None, TimeSpan.FromMilliseconds(250));
+        var lines = text.Split('\n');
+        if (lines.Length > 8192) throw new InvalidDataException("Diagnostic line bound exceeded");
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        return string.Join('\n', lines.Select(line =>
+        {
+            if (watch.Elapsed > TimeSpan.FromMilliseconds(250)) throw new TimeoutException();
+            var marker = line.IndexOf("[IRC >]", StringComparison.Ordinal);
+            if (marker < 0) marker = line.IndexOf("[IRC <]", StringComparison.Ordinal);
+            if (marker < 0) return line;
+            var offset = marker + 7;
+            while (offset < line.Length && char.IsWhiteSpace(line[offset])) offset++;
+            return line[..offset] + IrcLineRedactor.Redact(line[offset..]);
+        }));
+    }
+    private static IEnumerable<string> SecretVariants(string secret)
+    {
+        var relaxed = secret;
+        for (var i = 0; i < 4; i++)
+        {
+            yield return secret; yield return relaxed;
+            secret = JsonSerializer.Serialize(secret)[1..^1];
+            relaxed = JsonSerializer.Serialize(relaxed, SecretJsonOptions)[1..^1];
+        }
     }
 
     internal JsonNode? RedactJson(JsonNode? node, Func<string, string>? redactText = null)

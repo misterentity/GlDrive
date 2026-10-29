@@ -19,6 +19,12 @@
     <ProjectReference Include="..\GlDrive.Mcp\GlDrive.Mcp.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Offscreen pixel assertions still need actual rendering when the test host has no display.
+         Set before WPF caches this switch; production rendering behavior is unchanged. -->
+    <RuntimeHostConfigurationOption Include="Switch.System.Windows.Media.ShouldRenderEvenWhenNoDisplayDevicesAreAvailable" Value="true" />
+  </ItemGroup>
+
 
   <ItemGroup>
     <!-- Production-SHAPED (synthetic) telemetry fixtures for ProductionDataSmokeTests.

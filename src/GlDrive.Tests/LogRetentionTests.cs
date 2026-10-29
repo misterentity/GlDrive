@@ -30,7 +30,7 @@ public class LogRetentionTests
     {
         // The count limit is only a disk-blowout stop. For it to be a stop and not the
         // effective retention policy, it must exceed one-file-per-retained-day.
-        var countCap = retainedDays * SerilogSetup.IntradayRollAllowance;
+        var countCap = SerilogSetup.RetainedFileCount(new LoggingConfig { RetainedFiles = retainedDays });
         Assert.True(countCap > retainedDays,
             $"count cap {countCap} must not bind before {retainedDays} days of history");
     }
@@ -39,7 +39,7 @@ public class LogRetentionTests
     public void Worst_case_log_disk_usage_stays_bounded()
     {
         var cfg = new LoggingConfig();
-        var worstCaseMb = cfg.RetainedFiles * SerilogSetup.IntradayRollAllowance * cfg.MaxFileSizeMb;
+        var worstCaseMb = SerilogSetup.RetainedFileCount(cfg) * cfg.MaxFileSizeMb;
 
         // Bounded, and small enough that the fix can't fill a disk with defaults.
         Assert.True(worstCaseMb <= 512,
@@ -47,11 +47,11 @@ public class LogRetentionTests
     }
 
     [Fact]
-    public void Default_retention_is_three_days_of_history()
+    public void Default_retention_targets_thirty_days_with_a_size_cap()
     {
         var cfg = new LoggingConfig();
-        // Default intent: three DAYS of history, not three files.
-        Assert.Equal(3, cfg.RetainedFiles);
+        // Time retention is subject to the independent disk-size budget.
+        Assert.Equal(30, cfg.RetainedFiles);
         Assert.Equal(10, cfg.MaxFileSizeMb);
     }
 }

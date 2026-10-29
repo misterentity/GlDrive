@@ -486,6 +486,7 @@
 
                     <TextBlock Text="Trusted Certificates:" Margin="0,0,0,4" FontWeight="SemiBold"/>
                     <TextBlock Text="{Binding TrustedCertsInfo}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                    <Button Content="Review Certificate Changes" Click="ReviewCerts_Click" HorizontalAlignment="Left" Padding="16,6" Margin="0,0,0,8"/>
                     <Button Content="Clear Trusted Certificates" Click="ClearCerts_Click"
                             HorizontalAlignment="Left" Padding="16,6" Margin="0,0,0,12"/>
 

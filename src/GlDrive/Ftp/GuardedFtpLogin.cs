@@ -1,7 +1,9 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Runtime.CompilerServices;
 using FluentFTP;
 using GlDrive.Config;
+using GlDrive.Tls;
 using Serilog;
 
 namespace GlDrive.Ftp;
@@ -32,6 +34,13 @@ public sealed record FtpLoginObservation(FtpLoginAccount Account, bool Succeeded
 /// <summary>One explicit login boundary for pooled, UI, and ghost connections.</summary>
 public static class GuardedFtpLogin
 {
+    private sealed record TrustGuard(CertificateManager Certificates, string Host, int Port, string? Identity);
+    private static readonly ConditionalWeakTable<AsyncFtpClient, TrustGuard> TrustGuards = new();
+    internal static void RegisterTrustGuard(AsyncFtpClient client, CertificateManager certificates, string host, int port, string? identity = null)
+    {
+        TrustGuards.Remove(client);
+        TrustGuards.Add(client, new(certificates, host, port, identity));
+    }
     private static readonly Lazy<AuthenticationCircuitBreaker> Shared = new(() => new(
         store: new AuthHoldStore(System.IO.Path.Combine(ConfigManager.AppDataPath, "ftp-auth-holds.json")))
     {
@@ -75,8 +84,22 @@ public static class GuardedFtpLogin
     {
         // A later Execute/LIST must not silently reconnect outside this boundary.
         FtpClientFactory.ApplyOwnerExclusiveConfig(client.Config);
-        return RunAsync(Shared.Value, account, client.Credentials.Password ?? "", client.Connect,
+        TrustGuards.TryGetValue(client, out var trust);
+        trust?.Certificates.ThrowIfPending(trust.Host, trust.Port, trust.Identity);
+        return RunAsync(Shared.Value, account, client.Credentials.Password ?? "", Connect,
             ct, manualRetry, allowRecoveryProbe, Governor.Value, policy, DeliverObservation, AdmissionDeadline);
+
+        async Task Connect(CancellationToken token)
+        {
+            try { await client.Connect(token).ConfigureAwait(false); }
+            catch
+            {
+                // Translate the library TLS exception before account/health observers
+                // see it. A local trust decision is not an outage or rejected password.
+                trust?.Certificates.ThrowIfPending(trust.Host, trust.Port, trust.Identity);
+                throw;
+            }
+        }
     }
 
     private static DateTime? AdmissionDeadline(FtpLoginAccount account)
@@ -156,6 +179,7 @@ public static class GuardedFtpLogin
             var timedOut = failure != ConnectFailureClassifier.ConnectFailure.CallerAbandoned && LoginAttemptGovernor.IsTimeout(ex);
             var cooldown = failure != ConnectFailureClassifier.ConnectFailure.CallerAbandoned && LoginAttemptGovernor.IsBncCooldown(ex);
             if (governed != null) governor!.Complete(governed, failure, timedOut, cooldown);
+            if (failure == ConnectFailureClassifier.ConnectFailure.TrustRejected) throw;
             Notify(new(account, false, failure, timedOut, cooldown, !allowRecoveryProbe, governor?.UtcNow ?? DateTime.UtcNow));
             throw;
         }

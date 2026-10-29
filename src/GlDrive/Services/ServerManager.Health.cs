@@ -65,7 +65,7 @@ public partial class ServerManager
     private void ObserveLoginHealth(FtpLoginObservation observation)
     {
         if (_disposed || !_config.Health.Enabled || observation.Ghost ||
-            observation.Failure == ConnectFailureClassifier.ConnectFailure.CallerAbandoned) return;
+            observation.Failure is ConnectFailureClassifier.ConnectFailure.CallerAbandoned or ConnectFailureClassifier.ConnectFailure.TrustRejected) return;
         var kind = observation.BncCooldown ? SiteFailureKind.BncCooldown : observation.TimedOut ? SiteFailureKind.Timeout :
             KindFor(observation.Failure);
         foreach (var server in _config.Servers.Where(s => FtpLoginAccount.From(s.Connection).Key == observation.Account.Key))
@@ -109,6 +109,7 @@ public partial class ServerManager
         // reconnect that follows is a real login and is observed at the login boundary. Arming
         // the ladder here deferred that reconnect and every race login on the account.
         if (!connectAttempt) return;
+        if (ConnectFailureClassifier.Classify(exception, false, false, false) == ConnectFailureClassifier.ConnectFailure.TrustRejected) return;
         // Admission holds and local capacity waits are not new remote evidence.
         // Actual connects were already observed at the single login boundary.
         for (var cause = exception; cause != null; cause = cause.InnerException!)
@@ -150,6 +151,7 @@ public partial class ServerManager
 
     private async Task CheckAutomaticSiteRetry(ServerConfig server, CancellationToken ct, bool manualRetry)
     {
+        _certManager.ThrowIfPending(server.Connection.Host, server.Connection.Port);
         if (!_config.Health.Enabled || manualRetry) return;
         // Let A9 atomically admit its single changed-credential recovery probe.
         // This read-only comparison grants no login and never bypasses ordinary

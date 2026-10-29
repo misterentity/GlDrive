@@ -188,7 +188,10 @@ public class LoggingConfig
 {
     public string Level { get; set; } = "Information";
     public int MaxFileSizeMb { get; set; } = 10;
-    public int RetainedFiles { get; set; } = 3;
+    public int RetainedFiles { get; set; } = 30;
+    // Passive, locally bounded evidence collection; never an engine admission limit.
+    [System.Text.Json.Serialization.JsonConverter(typeof(OptionalCaptureFlagConverter))]
+    public bool IncidentCaptureEnabled { get; set; } = true;
 }
 
 public class NotificationConfig
