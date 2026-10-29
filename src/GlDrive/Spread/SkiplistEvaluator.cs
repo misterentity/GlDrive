@@ -19,6 +19,8 @@ public class SkiplistEvaluator
 {
     private static readonly TimeSpan MatchTimeout = TimeSpan.FromMilliseconds(100);
     private readonly ConcurrentDictionary<string, Regex?> _regexCache = new();
+    internal Action? CheckBudget { get; init; }
+    internal bool CompileRegex { get; init; } = true;
 
     public SkiplistAction Evaluate(string fileName, bool isDir, bool inRace,
         string serverId, string? section,
@@ -146,6 +148,7 @@ public class SkiplistEvaluator
     {
         foreach (var rule in rules)
         {
+            CheckBudget?.Invoke();
             if (isDir && !rule.MatchDirectories) continue;
             if (!isDir && !rule.MatchFiles) continue;
             if (rule.Scope == SkiplistScope.InRace && !inRace) continue;
@@ -166,6 +169,7 @@ public class SkiplistEvaluator
     {
         foreach (var rule in rules)
         {
+            CheckBudget?.Invoke();
             if (onlyDeny && rule.Action != SkiplistAction.Deny) continue;
             if (!onlyDeny && rule.Action == SkiplistAction.Deny) continue;
             if (isDir && !rule.MatchDirectories) continue;
@@ -196,7 +200,8 @@ public class SkiplistEvaluator
                 {
                     var p = isRegex ? pattern : "^" + Regex.Escape(pattern)
                         .Replace("\\*", ".*").Replace("\\?", ".") + "$";
-                    return new Regex(p, RegexOptions.IgnoreCase | RegexOptions.NonBacktracking | RegexOptions.Compiled,
+                    return new Regex(p, RegexOptions.IgnoreCase | RegexOptions.NonBacktracking |
+                        (CompileRegex ? RegexOptions.Compiled : RegexOptions.None),
                         MatchTimeout);
                 }
                 catch { return null; }

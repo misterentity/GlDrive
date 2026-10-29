@@ -9,6 +9,12 @@ public sealed class ReleaseMonitorHealth
     public string WatchPath { get; private set; } = "";
     public DateTime? LastCheckedUtc { get; private set; }
 
+    public sealed record Observation(bool Empty, string Path, DateTime? CheckedAtUtc);
+    public Observation Snapshot()
+    {
+        lock (_gate) return new(HasNoCategories, WatchPath, LastCheckedUtc);
+    }
+
     internal bool Observe(string watchPath, int categoryCount, DateTime utcNow)
     {
         lock (_gate)

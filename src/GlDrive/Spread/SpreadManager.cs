@@ -457,9 +457,12 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
 
     public RaceStartResult StartRaceDetailed(string section, string releaseName,
         IReadOnlyList<string> serverIds, SpreadMode mode,
-        string? knownSourceServerId = null, string? knownSourcePath = null) =>
-        StartRaceCore(section, releaseName, serverIds, mode, knownSourceServerId, knownSourcePath,
+        string? knownSourceServerId = null, string? knownSourcePath = null)
+    {
+        var result = StartRaceCore(section, releaseName, serverIds, mode, knownSourceServerId, knownSourcePath,
             throwOnAdmissionFailure: false);
+        return result;
+    }
 
     internal Func<DateTime> AdmissionUtcNow { get; set; } = () => DateTime.UtcNow;
 
@@ -545,7 +548,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
         .Select((request, index) => (Request: QueueRequestAt(request, now), Index: index))
         .Where(p => !p.Request.IsExpired(now) && p.Request.IsDue(now) && !IsRaceNuked(p.Request)
             && !_controlRequestsInFlight.Contains(p.Request.RequestId)
-            && (p.Request.CleanupOnly || p.Request.ServerIds.Count(id => _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed) >= 2))
+            && (p.Request.CleanupOnly || p.Request.ServerIds.Count(id => _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed && !pool.IsTrustParked) >= 2))
         .Select(p => (PredictRaceNoLock(p.Request), p.Index)), now, _config.Spread.SizeAwareRaceQueue, _config.Spread.RaceQueueMaxAgeMinutes);
 
     private int? QueuePositionNoLock(PersistedRace request, DateTime now)
@@ -598,7 +601,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             (section, releaseName, serverIds, mode, knownSourceServerId, knownSourcePath, _, _, _) = request;
             if (IsRaceNuked(request)) throw new InvalidOperationException(NukeHoldMessage);
             pools = serverIds
-                .Where(id => _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed)
+                .Where(id => _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed && !pool.IsTrustParked)
                 .ToDictionary(id => id, id => _spreadPools[id]);
 
             configs = serverIds
@@ -633,7 +636,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             // and register from its canonical request in the same critical section.
             request = _startingRequests[startingIndex];
             (section, releaseName, serverIds, mode, knownSourceServerId, knownSourcePath, _, _, _) = request;
-            pools = serverIds.Where(id => _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed)
+            pools = serverIds.Where(id => _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed && !pool.IsTrustParked)
                 .ToDictionary(id => id, id => _spreadPools[id]);
             configs = serverIds.Where(id => _config.Servers.Any(s => s.Id == id))
                 .ToDictionary(id => id, id => _config.Servers.First(s => s.Id == id));
@@ -719,7 +722,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
                 lock (_lock)
                 {
                     fresh = sids
-                        .Where(id => _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed)
+                        .Where(id => _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed && !pool.IsTrustParked)
                         .ToDictionary(id => id, id => _spreadPools[id]);
                 }
 
@@ -878,7 +881,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
                 if (!_spreadPools.TryGetValue(id, out pool)) continue;
             }
 
-            if (!pool.IsExhausted) continue;
+            if (!pool.IsExhausted || pool.IsTrustParked) continue;
 
             var serverName = _config.Servers.FirstOrDefault(s => s.Id == id)?.Name ?? id;
 
@@ -935,7 +938,8 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             }
             catch (Exception ex)
             {
-                Log.Warning(ex, "Failed to reinitialize spread pool for {Server}", serverName);
+                if (pool.IsTrustParked) Log.Information("Spread pool parked for a local certificate decision: {Server}", serverName);
+                else Log.Warning(ex, "Failed to reinitialize spread pool for {Server}", serverName);
             }
         }
     }
@@ -1028,6 +1032,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
         var next = _raceQueue.Where(r => !IsRaceNuked(r) && (!r.CleanupOnly || r.CleanupAttempts < RaceLifetimePolicy.MaxCleanupAttempts))
             .SelectMany(r => new[]
             {
+                r.ServerIds.Any(id => _spreadPools.TryGetValue(id, out var pool) && pool.IsTrustParked) ? now.AddSeconds(30) : (DateTime?)null,
                 r.CleanupOnly && r.NextProbeAtUtc <= now ? now.AddSeconds(30) : r.NextProbeAtUtc,
                 r.CleanupOnly ? null : RaceLifetimePolicy.Deadline(r.Partial, _config.Spread.PartialRaceDeadlineHours) is { } deadline
                     ? deadline <= now ? now.AddSeconds(30) : deadline : (DateTime?)null

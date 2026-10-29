@@ -97,6 +97,13 @@ public class RaceHistoryStore
         get { lock (_lock) return _items.ToList(); }
     }
 
+    /// <summary>Bounded read-only projection, including when a legacy loaded file exceeds today's retention cap.</summary>
+    public IReadOnlyList<RaceHistoryItem> ReadSnapshot(int limit = 500)
+    {
+        if (limit is < 1 or > 10_001) throw new ArgumentOutOfRangeException(nameof(limit));
+        lock (_lock) return _items.Take(limit).ToArray();
+    }
+
     /// <summary>
     /// PRD R1/O3 — aggregate outcome summary across recorded races. CleanRate is
     /// clean completions as a fraction of finished (non-running) races.

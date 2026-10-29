@@ -58,6 +58,9 @@ public static class ConnectFailureClassifier
 
         /// <summary>A genuine connect fault — timeout, TLS failure, reset.</summary>
         ConnectFault,
+
+        /// <summary>A changed TLS pin is parked until an explicit local decision.</summary>
+        TrustRejected,
     }
 
     /// <summary>
@@ -100,6 +103,9 @@ public static class ConnectFailureClassifier
         // around the real OperationCanceledException, not the exception itself.
         if (callerCancelled && IsOrWrapsCancellation(ex))
             return ConnectFailure.CallerAbandoned;
+
+        for (var cause = ex; cause != null; cause = cause.InnerException)
+            if (cause is GlDrive.Tls.CertificateTrustPendingException) return ConnectFailure.TrustRejected;
 
         // The pre-classifier handler ORed three things: a top-level "actively
         // refused" match, "target machine actively refused" (a strict substring of

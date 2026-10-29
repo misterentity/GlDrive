@@ -207,6 +207,12 @@ public partial class ServerEditDialog : Window
         var port = int.TryParse(PortBox.Text, out var p) ? Math.Clamp(p, 1, 65535) : 21;
         var key = $"{host}:{port}";
         var certMgr = new Tls.CertificateManager();
+        if (certMgr.IsPending(host, port))
+        {
+            new CertificateDecisionsWindow(certMgr) { Owner = this }.Show();
+            TestResultText.Text = "Pending certificate changes must be reviewed explicitly; the old pin was retained.";
+            return;
+        }
         certMgr.RemoveTrustedCertificate(key);
         TestResultText.Text = $"Certificate cleared for {key}. Will be re-accepted on next connect.";
     }
@@ -220,16 +226,18 @@ public partial class ServerEditDialog : Window
     // blocking .GetResult() can't deadlock when the callback fires on the WPF
     // dispatcher (mirrors FtpClientFactory.Create).
     internal static void AttachTofuValidation(AsyncFtpClient client, string host, int port,
-        Tls.CertificateManager? certificateManager = null)
+        Tls.CertificateManager? certificateManager = null, string? serverId = null)
     {
         var certMgr = certificateManager ?? new Tls.CertificateManager();
+        var identity = serverId == null ? null : "ftp:" + serverId;
+        GuardedFtpLogin.RegisterTrustGuard(client, certMgr, host, port, identity);
         client.ValidateCertificate += (control, e) =>
         {
             var prevCtx = SynchronizationContext.Current;
             SynchronizationContext.SetSynchronizationContext(null);
             try
             {
-                e.Accept = certMgr.ValidateCertificate(host, port, e.Certificate)
+                e.Accept = certMgr.ValidateCertificate(host, port, e.Certificate, identity)
                     .ConfigureAwait(false).GetAwaiter().GetResult();
             }
             finally
@@ -287,8 +295,8 @@ public partial class ServerEditDialog : Window
                 gnuConfig.AdvancedOptions = [GnuAdvanced.NoTickets];
             client.Config.CustomStreamConfig = gnuConfig;
             // Validate during the TLS handshake, before USER/PASS. A changed
-            // existing pin is rejected; replacing it requires Clear Certificate.
-            AttachTofuValidation(client, host, port);
+            // existing pin is rejected; replacing it requires a local certificate decision.
+            AttachTofuValidation(client, host, port, serverId: ServerId);
 
             await GuardedFtpLogin.ConnectAsync(client, new FtpLoginAccount(host, port, username), manualRetry: true);
             var listing = await client.GetListing("/");
@@ -566,7 +574,7 @@ public partial class ServerEditDialog : Window
                 gnuConfig.AdvancedOptions = [GnuAdvanced.NoTickets];
             client.Config.CustomStreamConfig = gnuConfig;
             // TOFU instead of blind accept — see AttachTofuValidation.
-            AttachTofuValidation(client, host, port);
+            AttachTofuValidation(client, host, port, serverId: ServerId);
 
             await GuardedFtpLogin.ConnectAsync(client, new FtpLoginAccount(host, port, username), manualRetry: true);
 
@@ -666,7 +674,7 @@ public partial class ServerEditDialog : Window
                 gnuConfig.AdvancedOptions = [GnuAdvanced.NoTickets];
             client.Config.CustomStreamConfig = gnuConfig;
             // TOFU instead of blind accept — see AttachTofuValidation.
-            AttachTofuValidation(client, host, port);
+            AttachTofuValidation(client, host, port, serverId: ServerId);
 
             await GuardedFtpLogin.ConnectAsync(client, new FtpLoginAccount(host, port, username), manualRetry: true);
             var reply = await client.Execute("SITE RULES");
@@ -1166,7 +1174,7 @@ public partial class ServerEditDialog : Window
                 gnuConfig.AdvancedOptions = [GnuAdvanced.NoTickets];
             client.Config.CustomStreamConfig = gnuConfig;
             // TOFU instead of blind accept — see AttachTofuValidation.
-            AttachTofuValidation(client, host, port);
+            AttachTofuValidation(client, host, port, serverId: ServerId);
 
             TestResultText.Text = "Connecting...";
             await GuardedFtpLogin.ConnectAsync(client, new FtpLoginAccount(host, port, username), manualRetry: true);
@@ -1556,7 +1564,7 @@ public partial class ServerEditDialog : Window
                 gnuConfig.AdvancedOptions = [GnuAdvanced.NoTickets];
             client.Config.CustomStreamConfig = gnuConfig;
             // TOFU instead of blind accept — see AttachTofuValidation.
-            AttachTofuValidation(client, host, port);
+            AttachTofuValidation(client, host, port, serverId: ServerId);
 
             TestResultText.Text = "Connecting for SITE RULES...";
             await GuardedFtpLogin.ConnectAsync(client, new FtpLoginAccount(host, port, username), manualRetry: manualRetry);

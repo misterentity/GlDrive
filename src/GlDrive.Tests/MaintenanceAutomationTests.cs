@@ -17,27 +17,27 @@ public sealed class MaintenanceAutomationTests : IDisposable
     private MaintenanceAutomation Create(AppConfig? config = null) => new(config ?? new(), new CertificateManager(Path.Combine(_root, "certificates.json")), _root, _ => { });
     private static async Task<JsonNode> Call(MaintenanceAutomation automation, string name, object args) => JsonSerializer.SerializeToNode(await automation.ExecuteAsync(name, Args(args), default))!;
 
-    [Fact]
-    public async Task CertificatesCanBeTrustedInspectedAndRemovedInTheExistingStore()
+    [Theory]
+    [InlineData("certificates_trust")]
+    [InlineData("certificates_remove")]
+    [InlineData("certificates_clear")]
+    public async Task CertificateMutationIsUnavailableToAutomation(string operation)
     {
         var automation = Create();
-        var fingerprint = new string('a', 64);
-        await Call(automation, "certificates_trust", new { hostPort = "site.example:21", fingerprint });
-        var listed = await Call(automation, "certificates_list", new { });
-        Assert.Equal(fingerprint.ToUpperInvariant(), listed["certificates"]![0]!["fingerprint"]!.GetValue<string>());
-        await Call(automation, "certificates_remove", new { hostPort = "site.example:21" });
-        Assert.Empty((await Call(automation, "certificates_list", new { }))["certificates"]!.AsArray());
+        Assert.DoesNotContain(automation.Tools, tool => tool.Name == operation);
+        await Assert.ThrowsAsync<ArgumentException>(() => Call(automation, operation,
+            new { hostPort = "site.example:21", fingerprint = new string('a', 64) }));
+        Assert.False(File.Exists(Path.Combine(_root, "certificates.json")));
     }
 
-    [Theory]
-    [InlineData("site.example", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
-    [InlineData("site.example:70000", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
-    [InlineData("site.example:21", "short")]
-    public async Task InvalidCertificatePinsAreRejectedBeforeWrites(string hostPort, string fingerprint)
+    [Fact]
+    public async Task CertificatesAndPendingDecisionsRemainReadable()
     {
-        var automation = Create();
-        await Assert.ThrowsAsync<ArgumentException>(() => Call(automation, "certificates_trust", new { hostPort, fingerprint }));
-        Assert.False(File.Exists(Path.Combine(_root, "certificates.json")));
+        var certificates = new CertificateManager(Path.Combine(_root, "certificates.json"));
+        certificates.TrustCertificate("site.example:21", new string('A', 64));
+        var listed = await Call(Create(), "certificates_list", new { });
+        Assert.Equal(new string('A', 64), listed["certificates"]![0]!["fingerprint"]!.GetValue<string>());
+        Assert.Empty(listed["pendingDecisions"]!.AsArray());
     }
 
     [Fact]

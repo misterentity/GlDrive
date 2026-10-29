@@ -369,6 +369,8 @@ public class TrayViewModel : INotifyPropertyChanged
         private set { _statusText = value; OnPropertyChanged(); }
     }
 
+    public string ProblemsBadge => $"Problems ({App.Problems?.Snapshot.Problems.Count ?? 0})";
+
     public ICommand OpenDriveCommand { get; }
     public ICommand DashboardCommand { get; }
     public ICommand SettingsCommand { get; }

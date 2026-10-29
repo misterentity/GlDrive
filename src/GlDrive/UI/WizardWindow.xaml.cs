@@ -197,10 +197,10 @@ public partial class WizardWindow : Window
             };
 
             string fingerprint = "";
+            ServerEditDialog.AttachTofuValidation(client, _hostBox.Text, int.Parse(_portBox.Text), _certManager);
             client.ValidateCertificate += (_, e) =>
             {
                 fingerprint = _certManager.GetFingerprint(e.Certificate);
-                e.Accept = true; // Accept for verification display
             };
 
             await GuardedFtpLogin.ConnectAsync(client,
@@ -255,12 +255,6 @@ public partial class WizardWindow : Window
                 return;
             }
             _password = _passwordBox.Password;
-        }
-
-        if (_step == 2 && _trustCertBox.IsChecked == true && !string.IsNullOrEmpty(_certFingerprint))
-        {
-            var key = $"{_hostBox.Text}:{_portBox.Text}";
-            _certManager.TrustCertificate(key, _certFingerprint);
         }
 
         if (_step == 4)

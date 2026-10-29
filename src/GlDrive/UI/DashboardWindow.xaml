@@ -188,6 +188,16 @@
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,16,0">
                     <TextBlock x:Name="UtcClockText" Text="--:--:-- UTC" FontFamily="{DynamicResource MonoFontFamily}" FontSize="11"
                                Foreground="{DynamicResource ForegroundDimBrush}" VerticalAlignment="Center" Margin="0,0,16,0"/>
+                    <Button Content="Logs" Click="Logs_Click" Padding="12,7" Margin="0,0,8,0"
+                            Style="{DynamicResource SecondaryButton}" ToolTip="Open the flight recorder log console"/>
+                    <Button Content="{Binding ProblemsBadge}" Click="Problems_Click" Padding="12,7" Margin="0,0,8,0"
+                             Style="{DynamicResource SecondaryButton}" ToolTip="Review standing health conditions and preview explicit fixes"/>
+                    <Button Content="Statistics" Click="Statistics_Click" Padding="12,7" Margin="0,0,8,0"
+                            Style="{DynamicResource SecondaryButton}" ToolTip="Read statistics and traffic from existing telemetry"/>
+                    <Button Content="Explain release" Click="Dossier_Click" Padding="12,7" Margin="0,0,8,0"
+                            Style="{DynamicResource SecondaryButton}" ToolTip="Join retained release evidence and preview current policy"/>
+                    <Button Content="Journal" Click="OpsJournal_Click" Padding="12,7" Margin="0,0,8,0"
+                            Style="{DynamicResource SecondaryButton}" ToolTip="Read the local operations journal and incidents"/>
                     <Button Content="Shortcuts" Click="Shortcuts_Click" Padding="12,7" Margin="0,0,8,0"
                             Style="{DynamicResource SecondaryButton}" ToolTip="Keyboard shortcuts (?)"/>
                     <Button Content="Settings" Click="Settings_Click" Padding="12,7"
@@ -3064,6 +3074,7 @@
                                 <Binding Path="StatusBarSpeed"/>
                                 <Binding Path="StatusBarQueueCount"/>
                                 <Binding Path="StatusBarConnections"/>
+                                <Binding Path="ProblemsBadge"/>
                                 <Binding Path="Irc.CompactStatusText"/>
                                 <Binding Path="StatusBarDiskSpace"/>
                             </MultiBinding>
@@ -3073,6 +3084,7 @@
                                 <Binding Path="StatusBarSpeed"/>
                                 <Binding Path="StatusBarQueueCount"/>
                                 <Binding Path="StatusBarConnections"/>
+                                <Binding Path="ProblemsBadge"/>
                                 <Binding Path="Irc.StatusText"/>
                                 <Binding Path="StatusBarDiskSpace"/>
                             </MultiBinding>

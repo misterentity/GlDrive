@@ -47,6 +47,7 @@ public static class CredentialStore
 
     public static void SaveProxyPassword(string host, int port, string username, string password)
     {
+        using var inventoryChange = Logging.DiagnosticRedactorCache.BeginInputChange();
         if (AccessDisabled) return;
         var target = GetProxyTargetName(host, port, username);
         try
@@ -78,6 +79,7 @@ public static class CredentialStore
 
     public static void DeleteProxyPassword(string host, int port, string username)
     {
+        using var inventoryChange = Logging.DiagnosticRedactorCache.BeginInputChange();
         if (AccessDisabled) return;
         try { CredentialManager.DeleteCredential(GetProxyTargetName(host, port, username)); }
         catch (Exception ex) { Log.Warning(ex, "Failed to delete proxy credential"); }
@@ -85,6 +87,7 @@ public static class CredentialStore
 
     public static void SavePassword(string host, int port, string username, string password)
     {
+        using var inventoryChange = Logging.DiagnosticRedactorCache.BeginInputChange();
         if (AccessDisabled) return;
         var target = GetTargetName(host, port, username);
         try
@@ -104,6 +107,7 @@ public static class CredentialStore
 
     public static void DeletePassword(string host, int port, string username)
     {
+        using var inventoryChange = Logging.DiagnosticRedactorCache.BeginInputChange();
         if (AccessDisabled) return;
         var target = GetTargetName(host, port, username);
         try
@@ -137,6 +141,7 @@ public static class CredentialStore
 
     public static void SaveIrcPassword(string host, int port, string nick, string password)
     {
+        using var inventoryChange = Logging.DiagnosticRedactorCache.BeginInputChange();
         if (AccessDisabled) return;
         var target = GetIrcTargetName(host, port, nick);
         try
@@ -152,6 +157,7 @@ public static class CredentialStore
 
     public static void DeleteIrcPassword(string host, int port, string nick)
     {
+        using var inventoryChange = Logging.DiagnosticRedactorCache.BeginInputChange();
         if (AccessDisabled) return;
         var target = GetIrcTargetName(host, port, nick);
         try
@@ -187,6 +193,7 @@ public static class CredentialStore
 
     public static void SaveSshPassword(string host, int port, string username, string password)
     {
+        using var inventoryChange = Logging.DiagnosticRedactorCache.BeginInputChange();
         if (AccessDisabled) return;
         var target = GetSshTargetName(host, port, username);
         try
@@ -215,6 +222,7 @@ public static class CredentialStore
 
     public static void SaveApiKey(string service, string key)
     {
+        using var inventoryChange = Logging.DiagnosticRedactorCache.BeginInputChange();
         if (AccessDisabled) return;
         if (string.IsNullOrEmpty(key)) return;
         try
@@ -229,6 +237,7 @@ public static class CredentialStore
 
     public static void DeleteApiKey(string service)
     {
+        using var inventoryChange = Logging.DiagnosticRedactorCache.BeginInputChange();
         if (AccessDisabled) return;
         try
         {

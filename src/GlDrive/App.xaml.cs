@@ -30,6 +30,17 @@ public partial class App
     private Task _runtimeSettingsRefresh = Task.CompletedTask;
     private System.Windows.Threading.DispatcherTimer? _configLeaseTimer;
     public static ConfigChangeService? ConfigChanges { get; private set; }
+    public static ProblemsService? Problems { get; private set; }
+    public static GlDrive.Services.Statistics.StatisticsService? Statistics { get; private set; }
+    public static GlDrive.Services.Operations.OpsJournal? Operations { get; private set; }
+    public static GlDrive.Services.Operations.ReleaseDossierService? Dossiers { get; private set; }
+    private GlDrive.Services.Operations.OpsJournalRuntime? _opsRuntime;
+
+    internal static void RecordOperation(string kind, string serverId = "", string subject = "", string detail = "", string actor = "application", string correlation = "")
+    {
+        try { Operations?.TryRecord(new(DateTimeOffset.UtcNow, kind, "Information", serverId, subject, detail, actor, correlation)); }
+        catch { /* Observational bookkeeping never changes operational decisions. */ }
+    }
 
     private void QueueRuntimeSettingsRefresh()
     {
@@ -252,7 +263,7 @@ public partial class App
         GlDrive.Downloads.Segmented.DownloadNetworkServices.Initialize(config.Downloads);
 
         // Init logging
-        SerilogSetup.Configure(config.Logging);
+        SerilogSetup.Configure(config.Logging, config);
         var asmVersion = System.Reflection.Assembly.GetExecutingAssembly()
             .GetName().Version?.ToString() ?? "unknown";
         Log.Information("GlDrive starting... version={Version}", asmVersion);
@@ -377,20 +388,12 @@ public partial class App
         // Init services — certificates auto-trusted on first connect (TOFU model)
         // Users can clear per-server certs in Settings > Servers > Edit > Clear Certificate
         var certManager = new CertificateManager();
-        certManager.CertificatePrompt += (key, message) =>
+        certManager.DecisionRaised += _ => Dispatcher.BeginInvoke(() =>
         {
-            var tcs = new TaskCompletionSource<bool>();
-            Dispatcher.Invoke(() =>
-            {
-                var result = System.Windows.MessageBox.Show(
-                    message,
-                    "GlDrive — Certificate Changed",
-                    System.Windows.MessageBoxButton.YesNo,
-                    System.Windows.MessageBoxImage.Warning);
-                tcs.SetResult(result == System.Windows.MessageBoxResult.Yes);
-            });
-            return tcs.Task;
-        };
+            var existing = Windows.OfType<CertificateDecisionsWindow>().FirstOrDefault();
+            if (existing != null) existing.RefreshDecisions();
+            else new CertificateDecisionsWindow(certManager).Show();
+        });
         var notificationStore = new NotificationStore();
         try { notificationStore.Load(); }
         catch (Exception ex) { Log.Warning(ex, "Failed to load notification store"); }
@@ -423,14 +426,28 @@ public partial class App
             Path.Combine(ConfigManager.AppDataPath, "ai-data"),
             config.Agent.NukePollIntervalHours);
         NukePoller.NukeObserved += _serverManager.ObservePolledNuke;
+        Problems = new ProblemsService(config, _serverManager, certManager, configuration);
+        Statistics = new GlDrive.Services.Statistics.StatisticsService(ConfigManager.AppDataPath,
+            () => _serverManager.Spread?.History.ReadSnapshot(10_001) ?? [],
+            () => new DiagnosticAutomation(config).CreateTextRedactor(requireCompleteInventory: true));
+        Operations = new GlDrive.Services.Operations.OpsJournal(ConfigManager.AppDataPath,
+            () => new DiagnosticAutomation(config).CreateTextRedactor(requireCompleteInventory: true));
+        Dossiers = new GlDrive.Services.Operations.ReleaseDossierService(ConfigManager.AppDataPath,
+            () => GlDrive.Services.Operations.ReleasePrediction.Capture(config), _serverManager.ReadDossierSnapshot,
+            release => Operations.SnapshotForSubject(release),
+            () => new DiagnosticAutomation(config).CreateTextRedactor(requireCompleteInventory: true));
+        RecordOperation("session-start", detail: previousExitIncomplete ? "Previous shutdown was incomplete; cause unknown." : "Session started.");
 
         // Loopback control API — lets scripts start/inspect races without driving the WPF
         // UI (tray automation is unreliable). Off unless explicitly enabled in config.
         _automation = new AutomationRegistry(
             new AutomationService(config, _serverManager, notificationStore),
+            new StatisticsAutomation(() => Statistics!),
+            new OperationsAutomation(() => Dossiers!, () => Operations!),
             configuration,
             new ConfigHistoryAutomation(ConfigChanges, configuration),
             new DiagnosticAutomation(config),
+            new ProblemAutomation(() => Problems!),
             new AlertAutomation(() => _trayViewModel!.Alerts),
             new FeedAutomation(notificationStore),
             new HookAutomation(() => _serverManager!.Hooks),
@@ -457,6 +474,13 @@ public partial class App
 
         // Init tray
         _trayViewModel = new TrayViewModel(_serverManager, config, notificationStore);
+        _opsRuntime = new GlDrive.Services.Operations.OpsJournalRuntime(Operations, _serverManager,
+            _trayViewModel.AutomationUpdater, _trayViewModel.Alerts, AgentRunner);
+        if (SerilogSetup.Recorder is { } flightRecorder)
+            flightRecorder.SignatureDetected += (signature, correlation) => _trayViewModel?.Alerts.Publish(new(
+                GlDrive.Services.Alerts.AlertKind.General, GlDrive.Services.Alerts.AlertSeverity.Warning,
+                "Diagnostic signature", "Tell: " + signature + ". Open Logs to review local evidence.",
+                Incident: "log-signature:" + signature + ":" + correlation, LocalOnly: true));
         _taskbarIcon = new H.NotifyIcon.TaskbarIcon();
         _taskbarIcon.DataContext = _trayViewModel;
         TrayIconSetup.Configure(_taskbarIcon, _trayViewModel);
@@ -489,6 +513,7 @@ public partial class App
             var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
+                Log.Information("Initial server mounts started");
                 await _serverManager.MountAll();
                 Log.Information("All servers mounted in {Elapsed}ms", sw.ElapsedMilliseconds);
             }
@@ -697,6 +722,14 @@ public partial class App
 
     protected override void OnExit(ExitEventArgs e)
     {
+        RecordOperation("session-exit", detail: "Application exit requested.");
+        _opsRuntime?.Dispose();
+        _opsRuntime = null;
+        Operations?.Dispose();
+        Operations = null;
+        Dossiers = null;
+        Problems?.Dispose();
+        Problems = null;
         _configLeaseTimer?.Stop();
         ConfigChanges?.Dispose();
         ConfigChanges = null;
@@ -737,6 +770,7 @@ public partial class App
         _guard?.Dispose();
 
         Log.CloseAndFlush();
+        SerilogSetup.Recorder?.Dispose();
         base.OnExit(e);
     }
 }

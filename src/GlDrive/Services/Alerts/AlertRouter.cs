@@ -8,6 +8,7 @@ namespace GlDrive.Services.Alerts;
 
 public sealed class AlertRouter : IDisposable, IAsyncDisposable
 {
+    internal event Action<AlertEvent>? Observed;
     private sealed class TargetDelivery(Channel<PendingDelivery> queue)
     {
         public Channel<PendingDelivery> Queue { get; } = queue;
@@ -59,6 +60,8 @@ public sealed class AlertRouter : IDisposable, IAsyncDisposable
     public void Publish(AlertEvent alert)
     {
         if (Volatile.Read(ref _disposed) != 0) return;
+        foreach (Action<AlertEvent> observer in Observed?.GetInvocationList() ?? [])
+            try { observer(alert); } catch { /* Observers cannot interfere with delivery. */ }
         try
         {
             var settings = _config.Alerts;

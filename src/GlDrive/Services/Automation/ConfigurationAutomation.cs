@@ -27,14 +27,16 @@ public sealed class ConfigurationAutomation : IAutomationModule
     private readonly Action<AppConfig> _persist;
     private readonly Func<AppConfig> _readCurrent;
     private readonly Action? _settingsApplied;
+    private readonly Tls.CertificateManager? _certificates;
     private readonly object _gate = new();
     private const string Redacted = "[redacted]";
 
     public ConfigurationAutomation(AppConfig config, Action<AppConfig>? persist = null, Func<AppConfig>? readCurrent = null,
-        Action? settingsApplied = null)
+        Action? settingsApplied = null, Tls.CertificateManager? certificates = null)
     {
         _config = config;
         _settingsApplied = settingsApplied;
+        _certificates = certificates;
         _persist = persist ?? ConfigManager.Save;
         _readCurrent = readCurrent ?? (persist == null ? () =>
             File.Exists(ConfigManager.ConfigPath)
@@ -124,6 +126,7 @@ public sealed class ConfigurationAutomation : IAutomationModule
                 RejectHookChanges(original, next);
                 if (SecretValuesChanged(original, next)) throw new ArgumentException("Secret changes are not supported by preview");
                 ConfigManager.NormalizeLibraryEnable(original, next);
+                ValidateCaptureFlag(next);
                 var candidate = next.Deserialize<AppConfig>(Json)!;
                 RejectInvalidAttentionChanges(original, next, candidate);
                 Validate(candidate);
@@ -162,6 +165,7 @@ public sealed class ConfigurationAutomation : IAutomationModule
             if (!allowSecrets && SecretValuesChanged(original, next))
                 throw new ArgumentException("Changing secrets requires allowSecrets=true");
             ConfigManager.NormalizeLibraryEnable(original, next);
+            ValidateCaptureFlag(next);
             var candidate = next.Deserialize<AppConfig>(Json) ?? throw new ArgumentException("Settings must be an object");
             RejectInvalidAttentionChanges(original, next, candidate);
             Validate(candidate);
@@ -169,6 +173,8 @@ public sealed class ConfigurationAutomation : IAutomationModule
             var changed = !JsonNode.DeepEquals(original, canonical);
             if (changed)
             {
+                if (_certificates != null) _certificates.GuardConfiguration(candidate);
+                else Tls.CertificateManager.GuardPendingConfiguration(candidate);
                 // Save first: a failed disk write must leave the live settings untouched.
                 // ConfigManager uses SecureFile's restricted, flushed, atomic rename.
                 _persist(candidate);
@@ -724,6 +730,13 @@ public sealed class ConfigurationAutomation : IAutomationModule
             ValidateRegex(server.Irc.RequestFiller.Pattern);
             foreach (var mapping in server.SpreadSite.SectionMappings) ValidateRegex(mapping.TriggerRegex);
         }
+    }
+
+    private static void ValidateCaptureFlag(JsonNode next)
+    {
+        if (next["logging"] is JsonObject logging && logging.TryGetPropertyValue("incidentCaptureEnabled", out var flag) &&
+            (flag is not JsonValue value || !value.TryGetValue<bool>(out _)))
+            throw new ArgumentException("/logging/incidentCaptureEnabled must be a boolean");
     }
 
     private static void ValidateObject(object? value, string path)

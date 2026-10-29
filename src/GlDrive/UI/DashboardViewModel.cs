@@ -143,6 +143,11 @@ public partial class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     // Mounts tab: TOFU trusted-cert list. RefreshMounts() rebuilds.
     public ObservableCollection<TrustedCertVm> TrustedCerts { get; } = new();
+    public string ProblemsBadge => $"Problems ({App.Problems?.Snapshot.Problems.Count ?? 0})";
+    private void ProblemsChanged() => Application.Current?.Dispatcher.BeginInvoke(() =>
+    {
+        if (!_disposed) OnPropertyChanged(nameof(ProblemsBadge));
+    });
 
     // Overview throughput sparkline (rolling 60 samples; Y in [0..40] relative
     // to a 40px chart height). Mutated each DispatcherTimer tick.
@@ -982,6 +987,7 @@ public partial class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     public DashboardViewModel(ServerManager serverManager, AppConfig config, NotificationStore notificationStore)
     {
+        if (App.Problems is { } problems) problems.Changed += ProblemsChanged;
         _serverManager = serverManager;
         _config = config;
         _notificationStore = notificationStore;
@@ -2544,6 +2550,7 @@ public partial class DashboardViewModel : INotifyPropertyChanged, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        if (App.Problems is { } problems) problems.Changed -= ProblemsChanged;
         _bulkTimer?.Stop();
         _bulkTimer = null;
         _bulkAction.Dispose();

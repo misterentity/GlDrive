@@ -71,6 +71,7 @@ public class FishKeyStore
 
     public void SetKey(string target, string key, FishMode mode = FishMode.ECB, bool manual = true)
     {
+        using var inventoryChange = Logging.DiagnosticRedactorCache.BeginInputChange();
         lock (_keyLock)
         {
             _keys[target] = new FishKeyEntry { Key = key, AltKey = "", Mode = mode, Manual = manual, SetAt = DateTime.UtcNow };
@@ -84,6 +85,7 @@ public class FishKeyStore
     /// </summary>
     public void SetKeyWithAlt(string target, string key, string altKey, FishMode mode)
     {
+        using var inventoryChange = Logging.DiagnosticRedactorCache.BeginInputChange();
         // Read-manual-flag + replace must be atomic so a concurrent SetDh1080Keys/SetKey can't
         // interleave and flip the Manual decision or lose the promoted dual-alphabet variant.
         // Preserve the DH shared secret so alternate-KDF recovery still works after a mode flip
@@ -105,6 +107,7 @@ public class FishKeyStore
     /// </summary>
     public bool SetDh1080Keys(string target, string key, string altKey, string secretHex, FishMode mode)
     {
+        using var inventoryChange = Logging.DiagnosticRedactorCache.BeginInputChange();
         // Check-manual + write atomic: protects the manual-key invariant from a racing /key
         // that could otherwise let DH1080 overwrite a just-set manual key (or vice-versa).
         lock (_keyLock)
@@ -119,6 +122,7 @@ public class FishKeyStore
 
     public void RemoveKey(string target)
     {
+        using var inventoryChange = Logging.DiagnosticRedactorCache.BeginInputChange();
         lock (_keyLock)
         {
             if (_keys.Remove(target))
@@ -136,6 +140,7 @@ public class FishKeyStore
 
     private void Load()
     {
+        using var inventoryChange = Logging.DiagnosticRedactorCache.BeginInputChange();
         if (!File.Exists(_filePath)) return;
         try
         {

@@ -9,6 +9,7 @@ namespace GlDrive.AiAgent;
 
 public sealed class AgentRunner : IDisposable
 {
+    public event Action<string, string>? RunCompleted;
     private readonly LogDigester _digester;
     private readonly AgentMemo _memo;
     private readonly FreezeStore _freeze;
@@ -396,6 +397,8 @@ public sealed class AgentRunner : IDisposable
             }
             catch (Exception ex) { Log.Debug(ex, "ai-briefs prune failed"); }
             Log.Information("AgentRunner run {Id} finished status={Status}", runId, status);
+            foreach (Action<string, string> observer in RunCompleted?.GetInvocationList() ?? [])
+                try { observer(runId, status); } catch { /* Diagnostics never alter agent scheduling. */ }
             _runGate.Release();
         }
     }

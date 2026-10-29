@@ -769,6 +769,7 @@ public partial class StreamMatrixRenderTests
         bitmap.Render(visual);
         var pixels = new byte[w * h * 4];
         bitmap.CopyPixels(pixels, w * 4, 0);
+        Assert.Contains(pixels, pixel => pixel != 0);
         return Convert.ToHexString(SHA256.HashData(pixels));
     }
 

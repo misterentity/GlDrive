@@ -12,6 +12,16 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.18.0 — certificate decisions, flight recorder, Problems panel, statistics, release dossier (2026-10-29)
+
+- A changed certificate parks only that server behind a local decision window; trust can't be
+  accepted or bypassed via MCP, edits or restores; an unreadable pin store fails closed.
+- Flight-recorder logging: saved levels kept, bounded redacted incident capsules, log console.
+- Read-only Problems panel with previewed, click-only fixes; statistics page; per-release dossier
+  with a side-effect-free "what would happen now" dry run; durable ops journal.
+- Review: 14 findings fixed before release, including a parked server making races spin every 50 ms.
+  See the [release notes](releases/v3.18.0.md).
+
 ## v3.17.1 — CLEAR DONE clears immediately again (2026-10-28)
 
 - Spread tab CLEAR DONE removes finished race cards at once, like DISMISS. v3.17.0 routed it

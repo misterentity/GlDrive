@@ -26,8 +26,10 @@ public class IrcClient : IDisposable
 
     public bool IsConnected { get; private set; }
 
-    public async Task ConnectAsync(string host, int port, bool useTls, CertificateManager? certManager, CancellationToken ct)
+    public async Task ConnectAsync(string host, int port, bool useTls, CertificateManager? certManager, CancellationToken ct, string? trustIdentity = null)
     {
+        // Check before allocating a socket. Pending trust never causes repeat handshakes.
+        certManager?.ThrowIfPending(host, port, trustIdentity);
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _tcp = new TcpClient();
         _tcp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
@@ -49,7 +51,7 @@ public class IrcClient : IDisposable
                     SynchronizationContext.SetSynchronizationContext(null);
                     try
                     {
-                        return certManager.ValidateCertificate(host, port, cert)
+                        return certManager.ValidateCertificate(host, port, cert, trustIdentity)
                             .ConfigureAwait(false).GetAwaiter().GetResult();
                     }
                     finally

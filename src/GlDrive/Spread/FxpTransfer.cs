@@ -36,6 +36,12 @@ internal sealed class DirectFxpCompletionException(string message) : IOException
 
 public class FxpTransfer
 {
+    private readonly Action<GlDrive.AiAgent.FileTransferEvent> _recordTransfer;
+
+    public FxpTransfer() : this(evt => App.TelemetryRecorder?.Record(GlDrive.AiAgent.TelemetryStream.Transfers, evt)) { }
+
+    internal FxpTransfer(Action<GlDrive.AiAgent.FileTransferEvent> recordTransfer) => _recordTransfer = recordTransfer;
+
     private static readonly Regex PasvRegex = new(@"\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)\)", RegexOptions.Compiled);
 
     // Route memory for Relay mode's direct-transfer probe. The CpsvPasv attempt
@@ -163,6 +169,7 @@ public class FxpTransfer
         // For Relay mode, we could measure the first ReadAsync, but for consistency across all
         // modes we set ttfbMs=0 and put the full negotiation cost into pasvLatencyMs.
         var pasvSw = Stopwatch.StartNew();
+        var actualMode = mode;
         bool ok;
         string? abortReason = null;
         System.Runtime.ExceptionServices.ExceptionDispatchInfo? cancellation = null;
@@ -180,12 +187,14 @@ public class FxpTransfer
                 {
                     // Route already known to fail direct CPSV-PASV — go straight to
                     // Relay and keep both connections reusable.
+                    actualMode = FxpMode.Relay;
                     ok = await ExecuteRelay(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, fileSizeBytes, ct, pasvSw);
                 }
                 else
                 {
                     try
                     {
+                        actualMode = FxpMode.CpsvPasv;
                         ok = await ExecuteCpsvPasv(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct, pasvSw);
                         if (ok)
                             RecordDirectSuccess(srcServerId, dstServerId);
@@ -234,6 +243,7 @@ public class FxpTransfer
                         // so any subsequent Relay failure attributes to the Relay outcome.
                         FaultSide = FxpFaultSide.None;
                         pasvSw.Restart();
+                        actualMode = FxpMode.Relay;
                         ok = await ExecuteRelay(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, fileSizeBytes, ct, pasvSw);
                     }
                 }
@@ -291,8 +301,7 @@ public class FxpTransfer
 
         try
         {
-            var recorder = App.TelemetryRecorder;
-            recorder?.Record(GlDrive.AiAgent.TelemetryStream.Transfers, new GlDrive.AiAgent.FileTransferEvent
+            _recordTransfer(new GlDrive.AiAgent.FileTransferEvent
             {
                 RaceId        = raceId,
                 SrcServer     = srcServerId,
@@ -302,7 +311,9 @@ public class FxpTransfer
                 ElapsedMs     = totalSw.ElapsedMilliseconds,
                 TtfbMs        = 0,   // not measurable via FluentFTP server-to-server API
                 PasvLatencyMs = pasvSw.ElapsedMilliseconds,
-                AbortReason   = abortReason
+                AbortReason   = abortReason,
+                TransferMode  = actualMode.ToString(),
+                DuplicateSkipped = WasDupe
             });
         }
         catch (Exception ex)

@@ -507,8 +507,11 @@ public partial class ServerManager : IDisposable
                 if (!_runtimeConfigSnapshots.TryGetValue(server.Id, out var activeSnapshot) ||
                     snapshot.Fingerprint != activeSnapshot.Fingerprint)
                 {
+                    var remountProperties = activeSnapshot == null ? "initial configuration" :
+                        string.Join(", ", snapshot.Changed(activeSnapshot, RuntimeConfigEffect.Remount));
                     Log.Information("Configuration for {ServerName}: remounting: {Properties}", server.Name,
-                        activeSnapshot == null ? "initial configuration" : string.Join(", ", snapshot.Changed(activeSnapshot, RuntimeConfigEffect.Remount)));
+                        remountProperties);
+                    App.RecordOperation("config-remount", server.Id, detail: remountProperties);
                     await UnmountServerAsync(server.Id);
                     try
                     {

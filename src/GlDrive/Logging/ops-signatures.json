@@ -1,0 +1,8 @@
+[
+  { "id": "native-io-drain", "kind": "rate", "match": "native I/O did not drain", "then": "", "threshold": 1, "windowSeconds": 60 },
+  { "id": "local-disk-stall", "kind": "rate", "match": "local disk write took", "then": "", "threshold": 1, "windowSeconds": 60 },
+  { "id": "transfer-stall", "kind": "rate", "match": "Spread stalled:", "then": "", "threshold": 1, "windowSeconds": 60 },
+  { "id": "pool-exhaustion-burst", "kind": "rate", "match": "Pool exhausted", "then": "", "threshold": 3, "windowSeconds": 60 },
+  { "id": "remount-disposed", "kind": "sequence", "match": "remounting:", "then": "ObjectDisposedException", "threshold": 1, "windowSeconds": 120 },
+  { "id": "mount-completion-not-observed", "kind": "absence", "match": "Initial server mounts started", "then": "All servers mounted", "threshold": 1, "windowSeconds": 600 }
+]

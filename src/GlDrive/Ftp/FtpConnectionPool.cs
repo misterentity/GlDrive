@@ -127,7 +127,9 @@ public class FtpConnectionPool : IAsyncDisposable
     /// </summary>
     public bool IsHostUnreachable => Interlocked.Read(ref _unreachableUntilTicks) > DateTime.UtcNow.Ticks;
 
-    public bool IsThrottled => IsInCooldown || IsInLoginGateBackoff || IsHostUnreachable;
+    public bool IsTrustParked => _factory?.IsTrustPending == true;
+    internal void ThrowIfTrustPending() => _factory?.ThrowIfTrustPending();
+    public bool IsThrottled => IsInCooldown || IsInLoginGateBackoff || IsHostUnreachable || IsTrustParked;
 
     /// <summary>True after this pool has been retired, including during a server remount.</summary>
     public bool IsDisposed => Volatile.Read(ref _disposed);
@@ -249,6 +251,7 @@ public class FtpConnectionPool : IAsyncDisposable
     /// </summary>
     private async Task<AsyncFtpClient> AcquireAndConnect(CancellationToken ct)
     {
+        _factory?.ThrowIfTrustPending();
         if (_loginGate != null)
         {
             var got = await _loginGate.TryAcquireAsync(ct, PermitAcquireTimeout, _priorityLogins);
@@ -267,7 +270,7 @@ public class FtpConnectionPool : IAsyncDisposable
             // Cancellation can race a successful permit grant. Release that permit
             // through the catch below without opening a new native connection.
             ct.ThrowIfCancellationRequested();
-            var client = await _factory.CreateAndConnect(ct);
+            var client = await _factory!.CreateAndConnect(ct);
             Interlocked.Increment(ref _permitsHeld);
             return client;
         }
@@ -753,7 +756,7 @@ public class FtpConnectionPool : IAsyncDisposable
                     throw;
                 }
 
-                if (verdict == ConnectFailureClassifier.ConnectFailure.AuthRejected)
+                if (verdict is ConnectFailureClassifier.ConnectFailure.AuthRejected or ConnectFailureClassifier.ConnectFailure.TrustRejected)
                 {
                     Interlocked.Decrement(ref _created);
                     throw; // The shared guard owns hold/notification; !user cannot fix a password.

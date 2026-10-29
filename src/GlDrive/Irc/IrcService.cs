@@ -203,6 +203,7 @@ public class IrcService : IDisposable
     {
         _serverConfig = serverConfig;
         _certManager = certManager;
+        _certManager.RegisterIdentity("irc:" + serverConfig.Id, serverConfig.Irc.Host, serverConfig.Irc.Port);
         _fishKeyStore = new FishKeyStore(serverConfig.Id);
         _fishFallbackCharset = ResolveFallbackCharset(serverConfig.Irc.FallbackCharset);
         _pmHistory = new PmHistoryStore(serverConfig.Id);
@@ -378,7 +379,7 @@ public class IrcService : IDisposable
             AddSystemMessage("*", $"Disconnected: {reason}");
         };
 
-        await _client.ConnectAsync(irc.Host, irc.Port, irc.UseTls, _certManager, ct);
+        await _client.ConnectAsync(irc.Host, irc.Port, irc.UseTls, _certManager, ct, "irc:" + _serverConfig.Id);
 
         // Authenticate
         var password = CredentialStore.GetIrcPassword(irc.Host, irc.Port, irc.Nick);
