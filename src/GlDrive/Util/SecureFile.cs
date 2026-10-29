@@ -59,6 +59,12 @@ public static class SecureFile
     }
 
     private static void WriteAllTextRestrictedInner(string path, string content)
+        => WriteAllBytesRestrictedInner(path, System.Text.Encoding.UTF8.GetBytes(content));
+
+    public static void WriteAllBytesRestricted(string path, byte[] content)
+        => WithPathLock(path, () => WriteAllBytesRestrictedInner(path, content));
+
+    private static void WriteAllBytesRestrictedInner(string path, byte[] content)
     {
         var security = new FileSecurity();
         security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
@@ -77,10 +83,8 @@ public static class SecureFile
                 bufferSize: 4096,
                 FileOptions.None,
                 security))
-            using (var writer = new StreamWriter(fs, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
             {
-                writer.Write(content);
-                writer.Flush();
+                fs.Write(content);
                 fs.Flush(flushToDisk: true);
             }
 

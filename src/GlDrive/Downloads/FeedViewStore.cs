@@ -18,46 +18,43 @@ public sealed class FeedViewStore
     internal const int MaximumReadIds = 5000;
     internal const int MaximumBytes = 4 * 1024 * 1024;
     private readonly Lock _sync = new();
-    private readonly Action<string> _write;
+    private readonly Action<string, bool> _write;
+    private GuardedJsonFile? _guardedFile;
+    private bool _loadTrimmed;
     private bool _warned;
     private List<FeedView> _views = [];
     private List<FeedCategoryMute> _mutes = [];
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private sealed record Saved(List<FeedView> Views, List<FeedCategoryMute> MutedCategories);
 
-    public static FeedViewStore ForFile(string path) => new(() =>
+    public static FeedViewStore ForFile(string path, Func<bool>? guardEnabled = null)
     {
-        if (!File.Exists(path)) return null;
-        if (new FileInfo(path).Length > MaximumBytes) throw new InvalidDataException("Feed preferences are too large");
-        return File.ReadAllText(path);
-    }, json =>
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
-        SecureFile.WriteAllTextRestricted(path, json);
-    }, () => { try { File.Copy(path, path + ".corrupt", true); } catch { } });
+        var guarded = new GuardedJsonFile(path, json =>
+        {
+            var saved = Parse(json);
+            return saved.Views.Count + saved.MutedCategories.Count;
+        }, MaximumBytes, guardEnabled);
+        return new FeedViewStore(guarded.Read, guarded.Write) { _guardedFile = guarded };
+    }
+
+    public Task FlushPendingWritesAsync() => _guardedFile?.FlushPendingWritesAsync() ?? Task.CompletedTask;
 
     internal FeedViewStore(Func<string?> read, Action<string> write, Action? quarantine = null)
+        : this(read, (json, _) => write(json), quarantine) { }
+
+    private FeedViewStore(Func<string?> read, Action<string, bool> write, Action? quarantine = null)
     {
         _write = write;
         try
         {
             var json = read();
             if (json == null) return;
-            var saved = JsonSerializer.Deserialize<Saved>(json, Json) ?? throw new JsonException("Missing feed preferences");
-            if (saved.Views == null || saved.MutedCategories == null) throw new JsonException("Invalid feed preferences");
-            foreach (var view in saved.Views)
-            {
-                Validate(view.Id, 128); Validate(view.Name, 80); Validate(view.Text, 512, allowEmpty: true);
-                Validate(view.Category, 128, allowEmpty: true); Validate(view.ServerName, 256, allowEmpty: true);
-                if (view.ReadIds == null || view.ReadIds.Any(id => string.IsNullOrWhiteSpace(id) || id.Length > 128))
-                    throw new JsonException("Invalid feed read markers");
-            }
-            foreach (var mute in saved.MutedCategories)
-            { Validate(mute.ServerId, 128); Validate(mute.Category, 128); }
+            var saved = Parse(json);
             _views = saved.Views.OrderByDescending(v => v.SavedAtUtc).DistinctBy(v => v.Id)
                 .Take(MaximumViews).Select(v => v with { ReadIds = v.ReadIds.Distinct(StringComparer.Ordinal).Take(MaximumReadIds).ToArray() }).ToList();
             _mutes = saved.MutedCategories.OrderByDescending(m => m.CreatedAtUtc)
                 .DistinctBy(m => (m.ServerId, m.Category.ToUpperInvariant())).Take(MaximumMutes).ToList();
+            _loadTrimmed = saved.Views.Count != _views.Count || saved.MutedCategories.Count != _mutes.Count;
         }
         catch (Exception ex)
         {
@@ -94,7 +91,7 @@ public sealed class FeedViewStore
     public bool Remove(string id)
     {
         bool removed;
-        lock (_sync) { removed = _views.RemoveAll(v => v.Id == id) > 0; if (removed) PersistNoLock(); }
+        lock (_sync) { removed = _views.RemoveAll(v => v.Id == id) > 0; if (removed) PersistNoLock(allowShrink: true); }
         if (removed) Notify();
         return removed;
     }
@@ -128,14 +125,14 @@ public sealed class FeedViewStore
             var added = muted ? new FeedCategoryMute(serverId, category, DateTime.UtcNow) : null;
             if (added != null) _mutes.Add(added);
             while (_mutes.Count > MaximumMutes) _mutes.Remove(_mutes.Where(m => !ReferenceEquals(m, added)).MinBy(m => m.CreatedAtUtc)!);
-            PersistNoLock(protectedMute: added);
+            PersistNoLock(protectedMute: added, allowShrink: !muted);
         }
         Notify();
     }
 
     public void ClearMutes()
     {
-        lock (_sync) { _mutes.Clear(); PersistNoLock(); }
+        lock (_sync) { _mutes.Clear(); PersistNoLock(allowShrink: true); }
         Notify();
     }
 
@@ -160,12 +157,31 @@ public sealed class FeedViewStore
     public static bool IsMuted(IEnumerable<FeedCategoryMute> mutes, string serverId, string category) =>
         mutes.Any(m => m.ServerId == serverId && m.Category.Equals(category, StringComparison.OrdinalIgnoreCase));
     private static FeedView Clone(FeedView view) => view with { ReadIds = view.ReadIds.ToArray() };
+    private static Saved Parse(string json)
+    {
+        var saved = JsonSerializer.Deserialize<Saved>(json, Json) ?? throw new JsonException("Missing feed preferences");
+        if (saved.Views == null || saved.MutedCategories == null) throw new JsonException("Invalid feed preferences");
+        foreach (var view in saved.Views)
+        {
+            if (view == null) throw new JsonException("Invalid feed view");
+            Validate(view.Id, 128); Validate(view.Name, 80); Validate(view.Text, 512, allowEmpty: true);
+            Validate(view.Category, 128, allowEmpty: true); Validate(view.ServerName, 256, allowEmpty: true);
+            if (view.ReadIds == null || view.ReadIds.Any(id => string.IsNullOrWhiteSpace(id) || id.Length > 128))
+                throw new JsonException("Invalid feed read markers");
+        }
+        foreach (var mute in saved.MutedCategories)
+        {
+            if (mute == null) throw new JsonException("Invalid feed mute");
+            Validate(mute.ServerId, 128); Validate(mute.Category, 128);
+        }
+        return saved;
+    }
     private static void Validate(string value, int length, bool allowEmpty = false)
     {
         if (value == null || value.Length > length || !allowEmpty && string.IsNullOrWhiteSpace(value))
             throw new ArgumentException("Feed preference value is missing or too long");
     }
-    private void PersistNoLock(string? protectedViewId = null, FeedCategoryMute? protectedMute = null)
+    private void PersistNoLock(string? protectedViewId = null, FeedCategoryMute? protectedMute = null, bool allowShrink = false)
     {
         try
         {
@@ -179,9 +195,11 @@ public sealed class FeedViewStore
                 if (view != null && (mute == null || view.SavedAtUtc <= mute.CreatedAtUtc)) _views.Remove(view);
                 else if (mute != null) _mutes.Remove(mute);
                 else break;
+                allowShrink = true; // The established capacity policy deliberately evicts older preferences.
                 json = JsonSerializer.Serialize(new Saved(_views, _mutes), Json);
             }
-            _write(json);
+            _write(json, allowShrink || _loadTrimmed);
+            _loadTrimmed = false;
         }
         catch (Exception ex)
         {

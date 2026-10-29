@@ -492,6 +492,8 @@
 
                     <Button Content="Open Log Folder" Click="OpenLogs_Click"
                             HorizontalAlignment="Left" Padding="16,6"/>
+                    <Button Content="Recovery Center" Click="RecoveryCenter_Click"
+                            HorizontalAlignment="Left" Padding="16,6" Margin="0,10,0,0"/>
                 </StackPanel>
                 </ScrollViewer>
             </TabItem>
@@ -507,7 +509,10 @@
                         <TextBlock Grid.Column="1" Text="MCP" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
-                <ui:McpSettingsPanel DataContext="{Binding Mcp}"/>
+                <DockPanel>
+                    <Button DockPanel.Dock="Bottom" Content="Scoped clients, approvals and call ledger" Click="AutomationSecurity_Click" HorizontalAlignment="Left" Margin="16,8"/>
+                    <ui:McpSettingsPanel DataContext="{Binding Mcp}"/>
+                </DockPanel>
             </TabItem>
                     </TabControl>
                 </Grid>

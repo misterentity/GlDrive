@@ -3,17 +3,26 @@ using System.IO;
 using System.Runtime.InteropServices;
 using GlDrive.Logging;
 using GlDrive.Services;
+using GlDrive.Services.Recovery;
 
 namespace GlDrive;
 
 public static class Program
 {
+    internal static CrashRecoveryStartup? RecoveryStartup { get; private set; }
+    internal static PreviousSessionDiagnostics? PreviousSession { get; private set; }
+    internal static bool OwnsCrashMarker { get; private set; }
+    internal static string SessionId => RecoveryStartup?.SessionId ?? FallbackSessionId;
+    private static readonly string FallbackSessionId = Guid.NewGuid().ToString("N");
+    internal static string CrashRestartArguments(bool recovery) => RecoveryStartup?.NextCrash.Arguments(recovery) ??
+        new CrashRestartOrigin(FallbackSessionId, FallbackSessionId, false).Arguments(recovery);
+
     [STAThread]
     public static int Main(string[] args)
     {
         // A requested restart waits for the current app to release its single-instance
         // mutex before constructing WPF or starting a watchdog. Never terminate the old app.
-        if (args.Length == 2 && args[0] == "--restart-after" && int.TryParse(args[1], out var restartPid))
+        if (args.Length >= 2 && args[0] == "--restart-after" && int.TryParse(args[1], out var restartPid))
         {
             try
             {
@@ -30,6 +39,11 @@ public static class Program
             arg => arg.Equals("--cleanup-old-updates", StringComparison.OrdinalIgnoreCase));
         if (cleanupIdx >= 0)
             return UpdateChecker.CleanupOldUpdateFilesFromTask();
+
+        var rollbackIdx = Array.IndexOf(args, "--rollback-update");
+        if (rollbackIdx >= 0)
+            return args.Length == rollbackIdx + 3 && int.TryParse(args[rollbackIdx + 1], out var rollbackPid)
+                ? UpdateChecker.RollbackFromLocalRequest(rollbackPid, args[rollbackIdx + 2]) : 1;
 
         var taskIdx = Array.FindIndex(args,
             arg => arg.Equals("--apply-update-task", StringComparison.OrdinalIgnoreCase));
@@ -54,7 +68,7 @@ public static class Program
         var wdIdx = Array.IndexOf(args, "--watchdog");
         if (wdIdx >= 0 && wdIdx + 1 < args.Length && int.TryParse(args[wdIdx + 1], out var targetPid))
         {
-            return RunWatchdog(targetPid);
+            return RunWatchdog(targetPid, args.Contains("--recovery"), args);
         }
 
         // Normal mode — hold the single-instance mutex BEFORE spawning the watchdog or
@@ -77,11 +91,27 @@ public static class Program
                 AppendDirectLogLine("WRN",
                     $"Second GlDrive instance (PID {Environment.ProcessId}) blocked — an instance is " +
                     "already running; exiting without touching its markers or spawning a watchdog.");
-                System.Windows.MessageBox.Show("GlDrive is already running.", "GlDrive",
-                    System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
+                if (CrashRestartOrigin.Parse(args) == null)
+                    System.Windows.MessageBox.Show("GlDrive is already running.", "GlDrive",
+                        System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
                 return 0;
             }
-            SpawnWatchdog();
+            // Only the primary counts crash evidence. An ordinary/manual/update launch
+            // gets a new chain so stale history can never make its first crash a loop.
+            RecoveryStartup = CrashRecoveryStartup.Prepare(args, GlDrive.Util.AppDataPaths.Root,
+                DateTimeOffset.UtcNow, warning => AppendDirectLogLine("WRN", warning));
+            // Claim before WPF construction: native initialization can fail before OnStartup.
+            // Preserve the old evidence for App's diagnostics while the primary owns the mutex.
+            var crashMarker = Path.Combine(GlDrive.Util.AppDataPaths.Root, ".running");
+            PreviousSession = PreviousSessionDiagnostics.Capture(crashMarker);
+            try
+            {
+                Directory.CreateDirectory(GlDrive.Util.AppDataPaths.Root);
+                File.WriteAllText(crashMarker, ExitMarker.Running(DateTime.UtcNow, SessionId));
+                OwnsCrashMarker = true;
+            }
+            catch { }
+            SpawnWatchdog(args.Contains("--recovery"));
         }
 
         App.PreAcquiredGuard = guard;
@@ -109,12 +139,14 @@ public static class Program
     /// Spawns a background copy of ourselves in watchdog mode to monitor our PID.
     /// The watchdog is a hidden process that restarts GlDrive if it crashes.
     /// </summary>
-    private static void SpawnWatchdog()
+    private static void SpawnWatchdog(bool recovery)
     {
         try
         {
+            if (RecoveryStartup?.Decision.RestartDelaySeconds == null && RecoveryStartup != null) return;
             var exe = Environment.ProcessPath;
             if (string.IsNullOrEmpty(exe)) return;
+            var watchdogArguments = $"--watchdog {Environment.ProcessId} {CrashRestartArguments(recovery)} --watchdog-delay {RecoveryStartup?.Decision.RestartDelaySeconds ?? 3}";
 
             // The watchdog must not share a job object with us: terminating the launcher's
             // job would kill both at once and nothing would restart the app (see JobBreakaway).
@@ -124,7 +156,7 @@ public static class Program
             {
                 try
                 {
-                    JobBreakaway.StartBrokenAway(exe, $"--watchdog {Environment.ProcessId}");
+                    JobBreakaway.StartBrokenAway(exe, watchdogArguments);
                     WatchdogJobNote = JobBreakaway.DescribeForLog(jobState, brokeAway: true, null);
                     return;
                 }
@@ -138,7 +170,7 @@ public static class Program
             var psi = new ProcessStartInfo
             {
                 FileName = exe,
-                Arguments = $"--watchdog {Environment.ProcessId}",
+                Arguments = watchdogArguments,
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 WindowStyle = ProcessWindowStyle.Hidden
@@ -155,7 +187,7 @@ public static class Program
     /// Watchdog loop: wait for the target process to exit, then restart if it was a crash.
     /// A clean exit deletes the .running marker file; if it still exists, it was a crash.
     /// </summary>
-    private static int RunWatchdog(int targetPid)
+    private static int RunWatchdog(int targetPid, bool recovery, string[] args)
     {
         // Hide the console window if one was allocated
         var hwnd = GetConsoleWindow();
@@ -246,6 +278,10 @@ public static class Program
         {
             try { markerContent = File.ReadAllText(crashMarker); } catch { }
         }
+        var origin = CrashRestartOrigin.Parse(args);
+        // WER may have won the restart race during the established three-second wait.
+        // A positive different-session marker belongs to the replacement primary.
+        if (ExitMarker.BelongsToDifferentSession(markerContent, origin?.SessionId) && AnotherPrimaryIsRunning()) return 0;
         var verdict = ExitMarker.ClassifyForWatchdog(markerExists, markerContent);
         if (verdict == WatchdogExitVerdict.Clean)
         {
@@ -291,7 +327,16 @@ public static class Program
         {
             var crashReason = GetCrashReason(targetPid);
             var identified = crashReason != UnknownCrashReason;
-            File.WriteAllText(crashMarker, $"CRASH:{DateTime.UtcNow:O}");
+            // GetCrashReason may be slow. Recheck and claim the primary mutex before
+            // changing shared evidence, so a WER replacement cannot claim it between
+            // our liveness check and the write. Do not hold this probe during backoff.
+            using var markerGuard = new SingleInstanceGuard(retryDelay: TimeSpan.Zero);
+            if (!markerGuard.TryAcquire()) return 0;
+            string? latest = null;
+            var latestExists = File.Exists(crashMarker);
+            if (latestExists) try { latest = File.ReadAllText(crashMarker); } catch { }
+            if (ExitMarker.ClassifyForWatchdog(latestExists, latest) != WatchdogExitVerdict.Unclean) return 0;
+            File.WriteAllText(crashMarker, $"CRASH:{DateTime.UtcNow:O}" + (origin == null ? "" : $"|session:{origin.SessionId}"));
 
             AppendLog(identified ? "FTL" : "WRN",
                 identified
@@ -311,6 +356,19 @@ public static class Program
         // was indistinguishable from one that did.
         try
         {
+            // Extra backoff is carried only by an already-safe-mode process. Normal
+            // single-crash recovery has exactly the original three-second wait above.
+            var delayIndex = Array.IndexOf(args, "--watchdog-delay");
+            if (origin?.WasSafeMode == true && delayIndex >= 0 && delayIndex + 1 < args.Length &&
+                int.TryParse(args[delayIndex + 1], out var delaySeconds) && delaySeconds > 3)
+            {
+                Thread.Sleep(TimeSpan.FromSeconds(Math.Clamp(delaySeconds, 3, 3600) - 3));
+                string? current = null;
+                var exists = File.Exists(crashMarker);
+                if (exists) try { current = File.ReadAllText(crashMarker); } catch { }
+                if (ExitMarker.BelongsToDifferentSession(current, origin.SessionId) && AnotherPrimaryIsRunning() ||
+                    ExitMarker.ClassifyForWatchdog(exists, current) != WatchdogExitVerdict.Unclean) return 0;
+            }
             var exe = Environment.ProcessPath;
             if (string.IsNullOrEmpty(exe))
             {
@@ -318,9 +376,12 @@ public static class Program
                 return 0;
             }
 
+            if (AnotherPrimaryIsRunning()) return 0;
+
             var started = Process.Start(new ProcessStartInfo
             {
                 FileName = exe,
+                Arguments = origin?.Arguments(recovery) ?? (recovery ? "--recovery" : ""),
                 UseShellExecute = false
             });
 
@@ -348,6 +409,18 @@ public static class Program
                 $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{level}] WATCHDOG: {message}");
         }
         catch { }
+    }
+
+    private static bool AnotherPrimaryIsRunning()
+    {
+        try
+        {
+            // A different historical marker alone is not a live replacement: the target
+            // may have crashed during WPF construction before claiming its own marker.
+            using var probe = new SingleInstanceGuard(retryDelay: TimeSpan.Zero);
+            return !probe.TryAcquire();
+        }
+        catch { return false; } // Unknown bookkeeping/liveness cannot suppress recovery.
     }
 
     internal const string UnknownCrashReason = "unknown (no matching event log entry found)";

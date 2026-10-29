@@ -5,6 +5,7 @@ using System.Text.Json;
 using GlDrive.Config;
 using GlDrive.Services.Control;
 using GlDrive.Services.Control.Endpoints;
+using GlDrive.Services.Automation;
 using GlDrive.Spread;
 using Serilog;
 
@@ -41,6 +42,8 @@ public sealed class ControlApi : IDisposable
     private readonly Func<IReadOnlyList<string>> _getConnectedServerIds;
     private readonly RouteTable _routes = new();
     private readonly StatusEndpoints _statusEndpoints;
+    private readonly AutomationRegistry? _automation;
+    private readonly AutomationAccessController _access;
     private HttpListener? _listener;
     private CancellationTokenSource? _cts;
     private Task? _loop;
@@ -58,6 +61,8 @@ public sealed class ControlApi : IDisposable
         _config = config;
         _getSpread = getSpread;
         _getConnectedServerIds = getConnectedServerIds;
+        _automation = automation;
+        _access = automation?.Access ?? new AutomationAccessController(config.ControlApi, new AutomationApprovalBroker());
 
         // Endpoints receive only what they need. See ControlApiBoundaryTests for why they
         // must never take ServerManager/AppConfig-reaching handles once readers land.
@@ -105,8 +110,16 @@ public sealed class ControlApi : IDisposable
         }
 
         _cts = new CancellationTokenSource();
-        _loop = Task.Run(() => AcceptLoop(_cts.Token));
+        _loop = RunAcceptLoop(() => AcceptLoop(_cts.Token));
         Log.Information("Control API listening on {Prefix} (loopback only, token required)", prefix);
+    }
+
+    internal static Task RunAcceptLoop(Func<Task> acceptLoop)
+    {
+        // Settings refresh can restart the listener inside an attributed config write.
+        // That caller must not become the ambient owner of later independent requests.
+        using var flow = ExecutionContext.IsFlowSuppressed() ? default : ExecutionContext.SuppressFlow();
+        return Task.Run(acceptLoop);
     }
 
     private async Task AcceptLoop(CancellationToken ct)
@@ -155,6 +168,12 @@ public sealed class ControlApi : IDisposable
 
     private async Task Handle(HttpListenerContext ctx, CancellationToken ct)
     {
+        var callId = Guid.NewGuid().ToString("N");
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        AutomationPrincipal? principal = null;
+        ControlRequest? request = null;
+        string? auditTool = "control.auth";
+        var outcome = "denied";
         try
         {
             // Defence in depth: the prefix is already loopback-only, but never serve a
@@ -170,7 +189,9 @@ public sealed class ControlApi : IDisposable
             const string scheme = "Bearer ";
             var presented = auth.StartsWith(scheme, StringComparison.OrdinalIgnoreCase)
                 ? auth[scheme.Length..].Trim() : "";
-            if (!FixedTimeEquals(presented, _config.ControlApi.Token))
+            principal = !string.IsNullOrEmpty(_config.ControlApi.Token) && FixedTimeEquals(presented, _config.ControlApi.Token)
+                ? AutomationAccessController.LegacyPrincipal(_config.ControlApi.Token) : AutomationAccessController.Authenticate(_config.ControlApi, presented);
+            if (principal == null)
             {
                 await Respond(ctx, 401, new { error = "unauthorized" });
                 return;
@@ -179,6 +200,7 @@ public sealed class ControlApi : IDisposable
             var path = (ctx.Request.Url?.AbsolutePath ?? "/").TrimEnd('/');
             if (path.Length == 0) path = "/";
             var method = ctx.Request.HttpMethod.ToUpperInvariant();
+            auditTool = "control.http";
 
             // Routing dispatch: this used to be a hand-written `switch (method, path)` plus
             // two StartsWith prefix scans that sliced /races/{id} and /races/{id}/stop out
@@ -187,7 +209,17 @@ public sealed class ControlApi : IDisposable
             // (now the router) only ever sees an already-authenticated, already-loopback request.
             if (_routes.TryMatch(method, path, out var handler, out var parameters))
             {
-                await handler!(ControlRequest.FromContext(ctx, path, parameters, ct));
+                request = ControlRequest.FromContext(ctx, path, parameters, ct, principal);
+                if (path == "/automation/call") auditTool = null; // Registry records exact tools and eventual job outcomes.
+                else
+                {
+                    var definition = RestTool(method, path);
+                    auditTool = definition?.Name ?? "control.tools";
+                    if (definition != null) _access.Authorize(principal, definition, JsonSerializer.SerializeToElement(new { }));
+                    RecordAudit(callId, principal, auditTool, request.AuditArguments, "accepted", watch.ElapsedMilliseconds);
+                }
+                await handler!(request);
+                outcome = request.ResponseStatus < 400 ? "completed" : "failed";
                 return;
             }
 
@@ -199,9 +231,12 @@ public sealed class ControlApi : IDisposable
 
             await Respond(ctx, 404, new { error = "not found", code = "not_found", path });
         }
+        catch (AutomationDeniedException ex)
+        { await Respond(ctx, 403, new { error = "Client scope does not permit this operation", code = ex.Code }); }
         catch (Exception) when (ct.IsCancellationRequested) { }
         catch (Exception ex)
         {
+            outcome = "failed";
             Log.Debug(ex, "Control API request failed");
             // Same four-field envelope every handler error uses (see ControlRequest.ErrorAsync)
             // — recomputed from ctx directly rather than the `path` local, which may not have
@@ -219,6 +254,35 @@ public sealed class ControlApi : IDisposable
             }
             catch { }
         }
+        finally
+        {
+            if (auditTool != null) RecordAudit(callId, principal, auditTool, request?.AuditArguments ?? JsonSerializer.SerializeToElement(new { }),
+                ct.IsCancellationRequested ? "cancelled" : outcome, watch.ElapsedMilliseconds);
+        }
+    }
+
+    internal static AutomationToolDefinition? RestTool(string method, string path)
+    {
+        var name = (method, path) switch
+        {
+            ("GET", "/") or ("GET", "/status") => "app.status",
+            ("GET", "/sections") => "spread.sections",
+            ("GET", "/history") => "spread.history",
+            ("GET", "/races") => "spread.status",
+            ("POST", "/races") => "spread.start",
+            _ when path.StartsWith("/races/", StringComparison.Ordinal) && method == "GET" => "spread.detail",
+            _ when path.StartsWith("/races/", StringComparison.Ordinal) && path.EndsWith("/stop", StringComparison.Ordinal) && method == "POST" => "spread.stop",
+            _ => null
+        };
+        return name == null ? null : AutomationToolDefinition.Create(name, "Authenticated control route", new { type = "object" },
+            readOnly: method == "GET", destructive: name == "spread.stop");
+    }
+
+    private void RecordAudit(string callId, AutomationPrincipal? principal, string tool, JsonElement arguments, string outcome, long duration)
+    {
+        try { _automation?.Audit?.Invoke(new(callId, principal?.Id ?? "unauthenticated", principal?.Name ?? "Unauthenticated",
+            tool, arguments, outcome, duration)); }
+        catch { /* An unavailable local ledger must not alter control operation results. */ }
     }
 
     /// <summary>

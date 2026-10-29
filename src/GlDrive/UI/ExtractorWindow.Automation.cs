@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using GlDrive.Services.Automation;
 
 namespace GlDrive.UI;
 
@@ -8,6 +9,7 @@ public partial class ExtractorWindow
     internal object AutomationState() => new
     {
         extracting = _extracting,
+        savedWatchersDeferred = _watchResumeDeferred,
         archives = Archives.ToArray(),
         settings = new ExtractorSettings
         {
@@ -18,9 +20,46 @@ public partial class ExtractorWindow
         }
     };
 
+    internal AutomationStateApproval CaptureAutomationApproval(string operation, JsonElement arguments)
+    {
+        Dispatcher.VerifyAccess();
+        if (_extracting) throw new InvalidOperationException("Wait for extraction to finish before requesting approval.");
+        var settings = operation == "extractor.settings"
+            ? arguments.GetProperty("settings").Deserialize<ExtractorSettings>(_jsonOptions) ?? throw new ArgumentException("settings required")
+            : new ExtractorSettings
+            {
+                WatchFolders = _watchFolders.ToList(), WatchEnabled = _watchEnabled,
+                DeleteAfterExtract = ChkDeleteAfter.IsChecked == true, ScanSubfolders = ChkRecursive.IsChecked == true,
+                CreateSubfolder = ChkCreateSubfolder.IsChecked == true, OutputMode = OutputMode.SelectedIndex,
+                OverwriteMode = OverwriteMode.SelectedIndex, CustomOutputPath = CustomOutputPath.Text
+            };
+        var paths = Archives.Where(a => a.Status != "Done").Select(a => a.FilePath).ToArray();
+        var description = (operation == "extractor.start" ? $"Extract {paths.Length} queued archives." : "Change extractor settings.") +
+            $"\nDelete source archives after success: {settings.DeleteAfterExtract}. Overwrite mode: {settings.OverwriteMode} (0 overwrite, 1 skip, 2 rename)." +
+            $"\nOutput mode: {settings.OutputMode} (0 beside archive, 1 archive subfolder, 2 custom). Custom path: {settings.CustomOutputPath}." +
+            $"\nCreate subfolder: {settings.CreateSubfolder}. Watch enabled: {settings.WatchEnabled}. Recursive scan: {settings.ScanSubfolders}." +
+            "\nWatch folders:\n" + string.Join("\n", (settings.WatchFolders ?? []).Take(10)) +
+            "\nQueued archives:\n" + string.Join("\n", paths.Take(10));
+        if (paths.Length > 10 || settings.WatchFolders?.Count > 10) description += "\nAdditional paths omitted; inspect the local extractor or deny.";
+        var secrets = new[] { ArchivePassword.Password, arguments.TryGetProperty("password", out var password) ? password.GetString() ?? "" : "" };
+        return new(AutomationApprovalState(), description, secrets, this);
+    }
+
+    internal void ValidateAutomationApproval(AutomationStateApproval approval)
+    {
+        Dispatcher.VerifyAccess();
+        approval.Validate(AutomationApprovalState(), this);
+    }
+
+    private object AutomationApprovalState() => new
+    {
+        state = AutomationState(), password = ArchivePassword.Password
+    };
+
     internal async Task<object> AutomationExecute(string action, JsonElement arguments, CancellationToken ct)
     {
         Dispatcher.VerifyAccess();
+        ct.ThrowIfCancellationRequested();
         if (action == "extractor.state") return AutomationState();
         if (action == "extractor.cancel") { _cts?.Cancel(); return AutomationState(); }
         if (_extracting) throw new InvalidOperationException("Wait for extraction to finish or cancel it first");
@@ -51,6 +90,7 @@ public partial class ExtractorWindow
             if (settings.WatchEnabled && settings.WatchFolders.Count == 0) throw new ArgumentException("Watch folders required");
             if (settings.OutputMode == 2 && !Path.IsPathFullyQualified(settings.CustomOutputPath)) throw new ArgumentException("Custom output must be absolute");
             StopAllWatchers();
+            _watchResumeDeferred = false;
             _watchEnabled = false;
             _initialized = false;
             try

@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using GlDrive.AiAgent;
 using GlDrive.Config;
+using GlDrive.Irc;
 using GlDrive.Services.Alerts;
 using Xunit;
 
@@ -109,5 +110,48 @@ public sealed class OutboundSecretInventoryTests : IDisposable
         File.WriteAllText(ConfigPath, "{}");
         File.WriteAllText(Path.Combine(_directory, "fish-keys-synthetic.json"), "invalid JSON");
         Assert.ThrowsAny<Exception>(() => OutboundSecretInventory.Collect(ConfigPath, _directory, () => []));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void BothInventoriesRecoverAfterVerifiedQuarantine(bool primaryStillPresent)
+    {
+        File.WriteAllText(ConfigPath, "{}");
+        var path = Path.Combine(_directory, "fish-keys-synthetic.json");
+        var damaged = new byte[] { 1, 2, 3 };
+        File.WriteAllBytes(path, damaged);
+        File.WriteAllText(path + ".pending", """{"#valid":{"key":"retained-secret"}}""");
+        if (primaryStillPresent) File.WriteAllBytes(path + ".corrupt", damaged);
+        else
+        {
+            var store = new FishKeyStore(path, bytes => bytes.ToArray(), _ => throw new CryptographicException());
+            Assert.True(store.PersistenceHealthy);
+            Assert.Equal("retained-secret", store.GetKey("#valid")!.Key);
+        }
+        Assert.Contains("retained-secret", OutboundSecretInventory.Collect(ConfigPath, _directory, () => []));
+        Assert.Contains("retained-secret", OutboundSecretInventory.CollectForDiagnostics(ConfigPath, _directory, () => []));
+    }
+
+    [Fact]
+    public void MismatchedQuarantineCopyCannotAuthorizeSkippingCorruptPrimary()
+    {
+        File.WriteAllText(ConfigPath, "{}");
+        var path = Path.Combine(_directory, "fish-keys-synthetic.json");
+        File.WriteAllBytes(path, [1, 2, 3]);
+        File.WriteAllBytes(path + ".corrupt", [1, 2, 4]);
+        Assert.ThrowsAny<Exception>(() => OutboundSecretInventory.Collect(ConfigPath, _directory, () => []));
+        Assert.ThrowsAny<Exception>(() => OutboundSecretInventory.CollectForDiagnostics(ConfigPath, _directory, () => []));
+    }
+
+    [Fact]
+    public void InventoriesIncludePendingWithoutPrimaryAndSecretsFromInvalidEntries()
+    {
+        File.WriteAllText(ConfigPath, "{}");
+        File.WriteAllText(Path.Combine(_directory, "fish-keys-synthetic.json.pending"),
+            """{"#valid":{"key":"working-secret"},"":{"key":"invalid-target-secret","mode":99},"#bad":{"key":4,"altKey":"retained-alt"},"#null":null}""");
+        foreach (var values in new[] { OutboundSecretInventory.Collect(ConfigPath, _directory, () => []),
+                     OutboundSecretInventory.CollectForDiagnostics(ConfigPath, _directory, () => []) })
+            Assert.Equal(new[] { "invalid-target-secret", "retained-alt", "working-secret" }, values.Order());
     }
 }

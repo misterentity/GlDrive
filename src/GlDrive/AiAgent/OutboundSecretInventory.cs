@@ -51,8 +51,8 @@ internal static partial class OutboundSecretInventory
 
         foreach (var value in ConfigSecrets(config)) Add(value);
         foreach (var value in readCredentialSecrets()) Add(value);
-        foreach (var file in Directory.EnumerateFiles(fishDirectory, "fish-keys-*.json", SearchOption.TopDirectoryOnly))
-            foreach (var value in ReadFishSecrets(File.ReadAllBytes(file))) Add(value);
+        foreach (var file in FishKeyStore.InventoryFiles(fishDirectory))
+            foreach (var value in ReadFishSecrets(file, File.ReadAllBytes(file))) Add(value);
         if (readLiveSecrets != null)
             foreach (var value in readLiveSecrets()) Add(value);
 
@@ -105,10 +105,19 @@ internal static partial class OutboundSecretInventory
             json = Encoding.UTF8.GetString(bytes);
         }
 
-        var keys = JsonSerializer.Deserialize<Dictionary<string, FishKeyEntry>>(json.TrimStart('\uFEFF'),
-            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })
-            ?? throw new InvalidDataException("FiSH keys must contain a JSON object.");
-        return keys.Values.SelectMany(entry => new[] { entry.Key, entry.AltKey, entry.DhSecretHex })
+        using var doc = JsonDocument.Parse(json.TrimStart('\uFEFF'));
+        if (doc.RootElement.ValueKind != JsonValueKind.Object) throw new InvalidDataException("FiSH keys must contain a JSON object.");
+        // Even an invalid entry can contain a secret. Inventory strings independently
+        // of the runtime entry validation, without letting one malformed row poison all keys.
+        return doc.RootElement.EnumerateObject().Where(p => p.Value.ValueKind == JsonValueKind.Object)
+            .SelectMany(p => p.Value.EnumerateObject()).Where(p => p.Name is "key" or "altKey" or "dhSecretHex")
+            .Where(p => p.Value.ValueKind == JsonValueKind.String).Select(p => p.Value.GetString()!)
             .Where(value => !string.IsNullOrEmpty(value)).ToArray();
+    }
+
+    internal static IReadOnlyList<string> ReadFishSecrets(string path, byte[] bytes)
+    {
+        try { return ReadFishSecrets(bytes); }
+        catch when (FishKeyStore.HasVerifiedQuarantine(path, bytes)) { return []; }
     }
 }

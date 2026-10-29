@@ -36,6 +36,9 @@ public partial class ExtractorWindow : Window
     private readonly List<FileSystemWatcher> _watchers = new();
     private readonly List<string> _watchFolders = new();
     private bool _watchEnabled;
+    // An automation-created window can inspect settings without starting saved automation.
+    // Preserve the saved preference until an explicit watch toggle/settings operation changes it.
+    private bool _watchResumeDeferred;
     private readonly HashSet<string> _watchProcessed = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _managedDownloadParked = new(StringComparer.OrdinalIgnoreCase);
     private readonly DownloadExtractionGuard _downloadGuard = new(ConfigManager.AppDataPath);
@@ -87,7 +90,7 @@ public partial class ExtractorWindow : Window
 
     public ExtractorWindow() : this(demoMode: false) { }
 
-    internal ExtractorWindow(bool demoMode)
+    internal ExtractorWindow(bool demoMode, bool startWatchers = true)
     {
         _demoMode = demoMode;
         InitializeComponent();
@@ -96,7 +99,7 @@ public partial class ExtractorWindow : Window
         UpdateDropHint();
         if (!demoMode)
         {
-            LoadSettings();
+            LoadSettings(startWatchers);
             _abandonStore.Load();
         }
         _initialized = true; // Enable Settings_Changed → SaveSettings from here on
@@ -437,6 +440,8 @@ public partial class ExtractorWindow : Window
 
         var toExtract = Archives.Where(a => a.Status != "Done").ToList();
         if (toExtract.Count == 0) return;
+        // Keep the approved output destinations fixed throughout an asynchronous batch.
+        var outputDirectories = toExtract.ToDictionary(item => item, GetOutputDir);
 
         _extracting = true;
         ExtractButton.Content = "Cancel";
@@ -463,7 +468,7 @@ public partial class ExtractorWindow : Window
                 item.Status = "Extracting";
                 item.Progress = 0;
 
-                var outputDir = GetOutputDir(item);
+                var outputDir = outputDirectories[item];
 
                 try
                 {
@@ -1072,7 +1077,7 @@ public partial class ExtractorWindow : Window
             StartWatcherFor(folder);
     }
 
-    private void LoadSettings()
+    private void LoadSettings(bool startWatchers)
     {
         try
         {
@@ -1113,7 +1118,8 @@ public partial class ExtractorWindow : Window
             // re-enter SaveSettings (via Settings_Changed) if _initialized were
             // somehow true here; defensive either way — the saved state will
             // have WatchEnabled set correctly.
-            _watchEnabled = s.WatchEnabled && _watchFolders.Count > 0;
+            _watchResumeDeferred = !startWatchers && s.WatchEnabled && _watchFolders.Count > 0;
+            _watchEnabled = startWatchers && s.WatchEnabled && _watchFolders.Count > 0;
 
             ChkDeleteAfter.IsChecked = s.DeleteAfterExtract;
             ChkRecursive.IsChecked = s.ScanSubfolders;
@@ -1208,7 +1214,7 @@ public partial class ExtractorWindow : Window
             var s = new ExtractorSettings
             {
                 WatchFolders = _watchFolders,
-                WatchEnabled = _watchEnabled,
+                WatchEnabled = _watchEnabled || _watchResumeDeferred,
                 DeleteAfterExtract = ChkDeleteAfter.IsChecked == true,
                 ScanSubfolders = ChkRecursive.IsChecked == true,
                 CreateSubfolder = ChkCreateSubfolder.IsChecked == true,
@@ -1244,6 +1250,7 @@ public partial class ExtractorWindow : Window
 
     private void WatchToggle_Click(object sender, RoutedEventArgs e)
     {
+        _watchResumeDeferred = false;
         if (_watchEnabled)
         {
             StopAllWatchers();
@@ -1267,10 +1274,15 @@ public partial class ExtractorWindow : Window
             StartAbandonSweep();
 
             // Scan existing archives in watch folders
-            foreach (var folder in _watchFolders)
+            // Watchers and the initial scan outlive the call that enabled them. Do not
+            // let an automation save attribution become their permanent identity.
+            using (ExecutionContext.IsFlowSuppressed() ? default : ExecutionContext.SuppressFlow())
             {
-                StartWatcherFor(folder);
-                _ = ScanAndAutoExtractAsync(folder);
+                foreach (var folder in _watchFolders)
+                {
+                    StartWatcherFor(folder);
+                    _ = ScanAndAutoExtractAsync(folder);
+                }
             }
         }
         SaveSettings();
@@ -1296,7 +1308,8 @@ public partial class ExtractorWindow : Window
             };
 
             _watchers.Add(watcher);
-            watcher.EnableRaisingEvents = true;
+            using (ExecutionContext.IsFlowSuppressed() ? default : ExecutionContext.SuppressFlow())
+                watcher.EnableRaisingEvents = true;
             Log.Information("Watching folder: {Dir}", folder);
         }
         catch (Exception ex)
@@ -2154,7 +2167,10 @@ public partial class ExtractorWindow : Window
     private void StartAbandonSweep()
     {
         if (Interlocked.Exchange(ref _abandonSweepStarted, 1) == 0)
+        {
+            using var flow = ExecutionContext.IsFlowSuppressed() ? default : ExecutionContext.SuppressFlow();
             _ = SweepAbandonedAsync();
+        }
     }
 
     private bool ParkForManagedDownload(string path, ArchiveItem? item = null)

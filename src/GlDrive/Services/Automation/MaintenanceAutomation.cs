@@ -35,7 +35,7 @@ public sealed class MaintenanceAutomation : IAutomationModule
             new { type = "object", properties = new { name = new { type = "string" }, includeSecrets = new { type = "boolean" } }, required = new[] { "name" }, additionalProperties = false }, readOnly: true),
         AutomationToolDefinition.Create("config_snapshot_create", "Create a private, atomic snapshot of current application settings, including stored channel keys. External Credential Manager passwords are not copied.",
             new { type = "object", properties = new { }, additionalProperties = false }),
-        AutomationToolDefinition.Create("config_snapshot_restore", "Restore a named configuration snapshot through typed validation and atomic persistence, saving a pre-restore snapshot first. Retains the current control API token and executable hook definitions. Restart required. Optional expectedRevision prevents overwriting newer settings.",
+        AutomationToolDefinition.Create("config_snapshot_restore", "Restore a named configuration snapshot through typed validation and atomic persistence, saving a pre-restore snapshot first. Retains the current control listener, token, security policy and executable hook definitions. Restart required. Optional expectedRevision prevents overwriting newer settings.",
             new { type = "object", properties = new { name = new { type = "string" }, expectedRevision = new { type = "string" } }, required = new[] { "name" }, additionalProperties = false }, destructive: true),
         AutomationToolDefinition.Create("config_snapshot_delete", "Delete one named configuration snapshot from the app's snapshot directory.",
             new { type = "object", properties = new { name = new { type = "string" } }, required = new[] { "name" }, additionalProperties = false }, destructive: true)
@@ -108,8 +108,7 @@ public sealed class MaintenanceAutomation : IAutomationModule
             // Restore ordinary settings without reviving a revoked token or substituting
             // executable code. Preserve these values before parsing the historical config.
             var currentSettings = _configuration.CurrentSnapshot();
-            candidate["controlApi"] ??= new JsonObject();
-            candidate["controlApi"]!["token"] = currentSettings["controlApi"]?["token"]?.DeepClone();
+            candidate["controlApi"] = currentSettings["controlApi"]?.DeepClone();
             candidate["hooks"] = currentSettings["hooks"]?.DeepClone();
             var snapshot = candidate.Deserialize<AppConfig>(ConfigurationAutomation.Json)
                 ?? throw new ArgumentException("Snapshot does not contain app settings");

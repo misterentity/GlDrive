@@ -10,7 +10,7 @@ using GlDrive.Spread;
 namespace GlDrive.Services.Automation;
 
 /// <summary>Automation uses the running services, so UI and MCP share queues and state.</summary>
-public sealed partial class AutomationService : IAutomationModule
+public sealed partial class AutomationService : IAutomationModule, IAutomationTargetDescription
 {
     private readonly AppConfig _config;
     private readonly ServerManager _servers;
@@ -30,6 +30,14 @@ public sealed partial class AutomationService : IAutomationModule
     }
 
     public IReadOnlyList<AutomationToolDefinition> Tools { get; } = BuildTools();
+
+    public string? ApprovalTargetName(string tool, JsonElement arguments) => tool switch
+    {
+        "wishlist.remove" => _wishlist.GetById(Required(arguments, "id", 128))?.Title,
+        "downloads.remove" => _servers.GetDownloadManager(Required(arguments, "serverId", 128))?
+            .Store.GetById(Required(arguments, "id", 128))?.ReleaseName,
+        _ => null
+    };
 
     public async Task<object?> ExecuteAsync(string operation, JsonElement arguments, CancellationToken ct)
     {

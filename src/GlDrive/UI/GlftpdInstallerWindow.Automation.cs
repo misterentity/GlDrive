@@ -13,7 +13,7 @@ public partial class GlftpdInstallerWindow
     private bool _automationConnecting;
     private readonly HashSet<string> _installerKnownSecrets = new(StringComparer.Ordinal);
 
-    internal async Task<object?> AutomationExecute(string operation, JsonElement args, CancellationToken ct)
+    internal async Task<object?> AutomationExecute(string operation, JsonElement args, CancellationToken ct, Action? validateApproval = null)
     {
         Dispatcher.VerifyAccess();
         ct.ThrowIfCancellationRequested();
@@ -35,12 +35,16 @@ public partial class GlftpdInstallerWindow
                 Disconnect();
                 return AutomationState();
             case "installer.start":
+                validateApproval?.Invoke();
                 RequireInstallerIdle();
                 if (_ssh?.IsConnected != true || _sftp?.IsConnected != true)
                     throw new InvalidOperationException("Connect with installer.connect first.");
                 // The underlying installer prompts interactively when this directory exists.
                 // Refuse that case rather than feeding guessed answers to a destructive prompt.
                 await AutomationCommand("test ! -e /glftpd", ct, "An existing /glftpd installation needs interactive maintenance; unattended installation requires a fresh destination.");
+                ct.ThrowIfCancellationRequested();
+                // The preflight yields the dispatcher: bind the actual session and form again.
+                validateApproval?.Invoke();
                 await RunInstallationAsync(interactive: false, ct);
                 return AutomationState();
             case "installer.cancel":
@@ -62,6 +66,30 @@ public partial class GlftpdInstallerWindow
             default: throw new ArgumentException($"Unknown installer operation: {operation}");
         }
     }
+
+    internal AutomationStateApproval CaptureAutomationApproval()
+    {
+        Dispatcher.VerifyAccess();
+        RequireInstallerIdle();
+        if (_ssh?.IsConnected != true || _sftp?.IsConnected != true)
+            throw new InvalidOperationException("Connect the installer before requesting installation approval.");
+        var description = $"Install glFTPd using sudo on {_ssh.ConnectionInfo.Username}@{_ssh.ConnectionInfo.Host}:{_ssh.ConnectionInfo.Port}.\n" +
+            "Remote destination: /glftpd; staging: /tmp/glftpd-installer.\nProfile (credential values omitted):\n" + JsonSerializer.Serialize(CollectProfile());
+        return new(AutomationApprovalState(), description, AutomationSecrets().Values.Concat(_installerKnownSecrets), _ssh, _sftp);
+    }
+
+    internal void ValidateAutomationApproval(AutomationStateApproval approval)
+    {
+        Dispatcher.VerifyAccess();
+        approval.Validate(AutomationApprovalState(), _ssh, _sftp);
+    }
+
+    private object AutomationApprovalState() => new
+    {
+        profile = AutomationProfile(true), installing = _installing, connecting = _automationConnecting,
+        ssh = new { connected = _ssh?.IsConnected == true, host = _ssh?.ConnectionInfo.Host, port = _ssh?.ConnectionInfo.Port, user = _ssh?.ConnectionInfo.Username },
+        sftp = new { connected = _sftp?.IsConnected == true, host = _sftp?.ConnectionInfo.Host, port = _sftp?.ConnectionInfo.Port, user = _sftp?.ConnectionInfo.Username }
+    };
 
     private void RequireInstallerIdle()
     {

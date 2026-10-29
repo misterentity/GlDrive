@@ -76,6 +76,7 @@ public partial class GlftpdInstallerWindow : Window
 
     private void Connect_Click(object sender, RoutedEventArgs e)
     {
+        if (_installing || _automationConnecting) { ShowError("Wait for the active installer operation or cancel it first."); return; }
         var host = SshHost.Text.Trim();
         if (string.IsNullOrEmpty(host)) { ShowError("Enter a hostname"); return; }
         if (!int.TryParse(SshPort.Text, out var port)) { ShowError("Invalid port"); return; }
@@ -164,6 +165,7 @@ public partial class GlftpdInstallerWindow : Window
 
     private void Disconnect_Click(object sender, RoutedEventArgs e)
     {
+        if (_installing || _automationConnecting) { ShowError("Wait for the active installer operation or cancel it first."); return; }
         Disconnect();
         AppendLog("Disconnected", "info");
     }
@@ -402,7 +404,8 @@ public partial class GlftpdInstallerWindow : Window
         InstallButton.IsEnabled = false;
         ProgressBar.Value = 0;
         _stopwatch = Stopwatch.StartNew();
-        _elapsedTimer.Start();
+        using (ExecutionContext.IsFlowSuppressed() ? default : ExecutionContext.SuppressFlow())
+            _elapsedTimer.Start();
         MainTabs.SelectedItem = LogTab;
 
         const string remotePath = "/tmp/glftpd-installer";

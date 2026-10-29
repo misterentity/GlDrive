@@ -213,7 +213,7 @@ public sealed class ProblemsService : IDisposable
             return new DoctorServer(server.Id, manager.GetSiteHealth(server.Id), mount?.CurrentState == MountState.Connected,
                 monitor?.Empty ?? false, monitor?.Path ?? "", monitor?.CheckedAtUtc,
                 irc?.State == IrcServiceState.Connected, irc?.GetChannelSnapshot().Select(c => c.Name).Take(256).ToArray() ?? [],
-                manager.AnnounceHealth(server.Id));
+                manager.AnnounceHealth(server.Id), irc?.KeyStore.RecoveryRequired == true || irc?.KeyStore.PersistenceHealthy == false);
         }).ToArray();
         var paths = new[] { config.Downloads.LocalPath }.Concat(config.Downloads.CategoryPaths.Values)
             .Distinct(StringComparer.OrdinalIgnoreCase).Take(257).ToArray();
@@ -222,7 +222,7 @@ public sealed class ProblemsService : IDisposable
             App.FreezeStore?.All ?? [], config);
         return new(config, servers, drives, frozen.Decisions,
             certificates.GetPendingDecisions().Take(HealthDoctor.MaxServers).Select(d => new DoctorCertificate(d.Id, d.HostPort, d.DetectedAtUtc, d.KeptRejected)).ToArray(),
-            paths.Length > 256 || frozen.Partial, frozen.Bounded);
+            paths.Length > 256 || frozen.Partial, frozen.Bounded, FishKeyRecovery.Snapshot.NeedsReview);
     }
 
     internal static IReadOnlyList<DoctorDrive> ReadDriveRoots(IEnumerable<string> paths)

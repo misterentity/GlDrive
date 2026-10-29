@@ -25,13 +25,15 @@ public sealed record ProblemSnapshot(IReadOnlyList<HealthProblem> Problems, Date
 }
 internal sealed record DoctorServer(string Id, SiteHealthSnapshot? Health, bool Connected,
     bool MonitorEmpty, string MonitorPath, DateTime? MonitorCheckedUtc,
-    bool IrcConnected, IReadOnlyList<string> JoinedChannels, IReadOnlyList<AnnounceFeedSnapshot> Feeds);
+    bool IrcConnected, IReadOnlyList<string> JoinedChannels, IReadOnlyList<AnnounceFeedSnapshot> Feeds,
+    bool FishRecoveryRequired = false);
 internal sealed record DoctorDrive(string Root, string State);
 internal sealed record FrozenDoctorDecision(string Id, string Target, string Timestamp, string Note);
 internal sealed record DoctorCertificate(string Id, string Endpoint, DateTime DetectedAtUtc, bool Rejected);
 internal sealed record DoctorContext(AppConfig Config, IReadOnlyList<DoctorServer> Servers,
     IReadOnlyList<DoctorDrive> Drives, IReadOnlyList<FrozenDoctorDecision> FrozenDecisions,
-    IReadOnlyList<DoctorCertificate> Certificates, bool Partial = false, bool Bounded = false);
+    IReadOnlyList<DoctorCertificate> Certificates, bool Partial = false, bool Bounded = false,
+    bool LocalFishRecoveryRequired = false);
 
 /// <summary>Standing conditions only. None of these rules probes a service or changes a setting.</summary>
 internal static class HealthDoctor
@@ -53,6 +55,10 @@ internal static class HealthDoctor
         }
 
         var logging = context.Config.Logging.Level;
+        if (context.LocalFishRecoveryRequired)
+            Add("fish-storage-recovery", "", "profile", "Warning", "Local FiSH key storage needs review",
+                "The startup storage check found preserved or unreadable key files, including stores for disabled or removed servers. Available keys remain usable.",
+                "Open the Recovery Center in Settings to review preserved files and restore missing keys. No connections are started by the storage check.");
         if (string.Equals(logging, "Verbose", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(logging, "Debug", StringComparison.OrdinalIgnoreCase))
             Add("verbose", "", "disk", "Warning", "Verbose left on", $"Disk logging is explicitly set to {logging}; how long it has been enabled is unknown.",
@@ -84,6 +90,10 @@ internal static class HealthDoctor
             if (!server.Enabled) continue;
             var state = context.Servers.FirstOrDefault(s => s.Id == server.Id);
             var name = string.IsNullOrWhiteSpace(server.Name) ? server.Id : server.Name;
+            if (state?.FishRecoveryRequired == true)
+                Add("fish-recovery", server.Id, "keys", "Warning", $"FiSH key storage needs review: {name}",
+                    "Invalid entries were skipped or unreadable key storage was preserved in quarantine. Available keys continue to work.",
+                    "Open the Recovery Center in Settings to review preserved files and restore missing keys from a backup or set them again.");
             if (context.Config.Health.Enabled &&
                 state is { Connected: false, Health: { FirstFailureUtc: not null, EscalationStep: > 0, State: SiteHealthState.Down or SiteHealthState.Quarantined } health } &&
                 now - health.FirstFailureUtc.Value >= TimeSpan.FromMinutes(30) &&

@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
+using GlDrive.Services.Automation;
 
 namespace GlDrive.Services.Control;
 
@@ -36,20 +37,24 @@ public sealed class ControlRequest
 
     public string Path { get; }
     public CancellationToken Cancellation => _ct;
+    public AutomationPrincipal Principal { get; }
+    internal int ResponseStatus { get; private set; } = 200;
+    internal JsonElement AuditArguments { get; private set; } = JsonSerializer.SerializeToElement(new { });
 
     private ControlRequest(HttpListenerContext? ctx, string path,
-        IReadOnlyDictionary<string, string> parameters, NameValueCollection query, CancellationToken ct = default)
+        IReadOnlyDictionary<string, string> parameters, NameValueCollection query, CancellationToken ct = default, AutomationPrincipal? principal = null)
     {
         _ctx = ctx;
         Path = path;
         _parameters = parameters;
         _query = query;
         _ct = ct;
+        Principal = principal ?? AutomationPrincipal.Legacy;
     }
 
     public static ControlRequest FromContext(HttpListenerContext ctx, string path,
-        IReadOnlyDictionary<string, string> parameters, CancellationToken ct = default)
-        => new(ctx, path, parameters, ctx.Request.QueryString, ct);
+        IReadOnlyDictionary<string, string> parameters, CancellationToken ct = default, AutomationPrincipal? principal = null)
+        => new(ctx, path, parameters, ctx.Request.QueryString, ct, principal);
 
     /// <summary>Parsing-only instance for unit tests; responding on it throws.</summary>
     public static ControlRequest ForTesting(
@@ -99,7 +104,10 @@ public sealed class ControlRequest
         }
 
         if (total > MaxBodyBytes) return null;
-        return Encoding.UTF8.GetString(buffer, 0, total);
+        var body = Encoding.UTF8.GetString(buffer, 0, total);
+        try { using var document = JsonDocument.Parse(body); AuditArguments = document.RootElement.Clone(); }
+        catch (JsonException) { }
+        return body;
     }
 
     public async Task RespondAsync(int status, object payload)
@@ -107,6 +115,7 @@ public sealed class ControlRequest
         if (_ctx == null) throw new InvalidOperationException("No context — test instance");
 
         var bytes = JsonSerializer.SerializeToUtf8Bytes(payload, Json);
+        ResponseStatus = status;
         _ctx.Response.StatusCode = status;
         _ctx.Response.ContentType = "application/json";
         _ctx.Response.ContentLength64 = bytes.Length;

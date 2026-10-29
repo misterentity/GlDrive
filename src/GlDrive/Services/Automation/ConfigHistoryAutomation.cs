@@ -12,7 +12,7 @@ public sealed class ConfigHistoryAutomation(ConfigChangeService changes, Configu
     [
         AutomationToolDefinition.Create("config_history", "Read numbered, attributed configuration versions and secret-masked diffs. History recording requires configHistory.enabled; encrypted snapshots are never returned.",
             new { type = "object", properties = new { limit = new { type = "integer", minimum = 1, maximum = 200 } }, additionalProperties = false }, readOnly: true),
-        AutomationToolDefinition.Create("config_restore", "Explicitly restore a numbered version through typed validation, normal settings persistence and runtime refresh. Retains the current control token. requireIdle optionally refuses the operation while races are active or queued.",
+        AutomationToolDefinition.Create("config_restore", "Explicitly restore a numbered version through typed validation, normal settings persistence and runtime refresh. Retains the current control listener, token and security policy. requireIdle optionally refuses the operation while races are active or queued.",
             new { type = "object", properties = new { version = new { type = "integer", minimum = 1 }, requireIdle = new { type = "boolean" } }, required = new[] { "version" }, additionalProperties = false }, destructive: true),
         AutomationToolDefinition.Create("config_preview", "Preview the A4 server remount and IRC restart impact of a JSON Patch without saving.",
             new { type = "object", properties = new { operations = new { type = "array", minItems = 1, maxItems = 100, items = new { type = "object" } } }, required = new[] { "operations" }, additionalProperties = false }, readOnly: true),

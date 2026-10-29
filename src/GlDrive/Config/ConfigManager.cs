@@ -44,8 +44,11 @@ public class ConfigManager
     /// </summary>
     public static bool ReadOnly { get; set; }
 
-    public static AppConfig Load()
+    public static AppConfig Load() => Load(out _);
+
+    internal static AppConfig Load(out bool loadedFromFile)
     {
+        loadedFromFile = false;
         using var attribution = ConfigWriteScope.Begin("migration");
         if (!File.Exists(ConfigFilePath))
             return new AppConfig();
@@ -60,6 +63,7 @@ public class ConfigManager
                 Log.Information("Migrating config from single-server to multi-server format");
                 var config = MigrateFromLegacy(json);
                 Save(config);
+                loadedFromFile = true;
                 return config;
             }
 
@@ -74,6 +78,7 @@ public class ConfigManager
                 try { Save(result); }
                 catch (Exception ex) { Log.Warning(ex, "Section mapping migration could not be persisted"); }
             }
+            loadedFromFile = true;
             return result;
         }
         catch (Exception ex)
@@ -145,6 +150,9 @@ public class ConfigManager
         try { if (beforeJson != null) before = JsonNode.Parse(beforeJson); }
         catch (JsonException) { /* Unknown prior enablement cannot authorize destructive imports. */ }
         NormalizeLibraryEnable(before, next);
+        // Keep default-only additions invisible to older strict MCP config readers.
+        // Runtime snapshots still include them so JSON Pointer edits and schema defaults work.
+        ConfigDowngradeCompatibility.OmitDefaultSections(next);
         // Preserve the hand-edited optional block byte-for-byte when normalization
         // only changes other settings (including an unparseable hooks draft).
         var hookSource = before is JsonObject && JsonNode.DeepEquals(before["hooks"], next["hooks"])
@@ -153,11 +161,15 @@ public class ConfigManager
         SecureFile.WriteAllTextRestricted(ConfigFilePath, json);
 
         if (SettingsSaved is { } saved)
+        {
+            var effectiveBefore = ConfigDowngradeCompatibility.EffectiveSnapshot(before);
+            var effectiveAfter = ConfigDowngradeCompatibility.EffectiveSnapshot(next)!;
             foreach (Action<string, JsonNode?, JsonNode, ConfigWriteContext> observer in saved.GetInvocationList())
             {
-                try { observer(ConfigFilePath, before, next, ConfigWriteScope.Current); }
+                try { observer(ConfigFilePath, effectiveBefore, effectiveAfter, ConfigWriteScope.Current); }
                 catch { Log.Warning("A configuration save observer failed; settings were saved"); }
             }
+        }
 
         // Journal failure must not turn a successful settings write into an error.
         try

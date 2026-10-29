@@ -12,6 +12,20 @@ namespace GlDrive.Tests;
 public class ProblemsServiceTests
 {
     [Fact]
+    public async Task QuarantinedFishStorageIsVisibleWithoutBlockingOtherProblems()
+    {
+        var config = HealthDoctorTests.Config();
+        config.Logging.Level = "Verbose";
+        using var service = new ProblemsService(new(config, _ => { }), current => HealthDoctorTests.Context(current) with
+        { Servers = [new("server-a", null, false, false, "", null, true, [], [], FishRecoveryRequired: true)] });
+        var snapshot = await service.RefreshAsync();
+        var issue = Assert.Single(snapshot.Problems, p => p.Id.StartsWith("fish-recovery:"));
+        Assert.Contains("Recovery Center", issue.Remedy);
+        Assert.False(issue.FixAvailable);
+        Assert.Contains(snapshot.Problems, p => p.Title == "Verbose left on");
+    }
+
+    [Fact]
     public async Task RefreshAndPreviewNeverSaveAndExplicitApplyIsAttributed()
     {
         var config = HealthDoctorTests.Config();

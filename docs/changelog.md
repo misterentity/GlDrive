@@ -12,6 +12,18 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.19.0 — data stewardship, least-privilege automation, crash-loop safe mode (2026-10-29)
+
+- Verified DPAPI-protected copies of the control token and channel keys (originals kept for older
+  builds); per-entry FiSH store validation and quarantine; Argon2id/AES-GCM portable backup.
+- The existing control token keeps full access unchanged; opt-in scoped tokens with asynchronous
+  local approval; append-only bounded call ledger with redacted arguments.
+- Crash-loop safe mode that still updates and ends on its own; 24 h update probation that never
+  blocks a newer hotfix; restart flags preserved.
+- Review: 15 findings fixed before release (one partly: manual downgrades with non-default opt-ins),
+  including a single bad /key entry wiping the FiSH store at the next start.
+  See the [release notes](releases/v3.19.0.md).
+
 ## v3.18.1 — log-sweep fixes: zipscript markers, persisted relay routes (2026-10-29)
 
 - The release monitor no longer reports zipscript status links (`[incomplete]-X`, `(no-sfv)-X`,

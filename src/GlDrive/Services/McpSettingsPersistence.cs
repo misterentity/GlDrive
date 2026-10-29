@@ -81,6 +81,7 @@ public static class McpSettingsPersistence
             ValidatePort(candidate.ControlApi.Port);
             var saved = load();
             candidate.ControlApi.Token = SavedToken(saved);
+            candidate.ControlApi.Security = saved["controlApi"]?["security"]?.Deserialize<AutomationSecurityConfig>(Json) ?? new();
             ControlApi.EnsureToken(candidate);
             EnsureWritable(isReadOnly);
             save(candidate);

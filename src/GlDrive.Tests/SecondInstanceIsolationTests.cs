@@ -33,12 +33,16 @@ public sealed class SecondInstanceIsolationTests
         var program = ReadSource("src/GlDrive/Program.cs");
 
         var acquire = program.IndexOf(".TryAcquire()", StringComparison.Ordinal);
-        var spawn = program.IndexOf("SpawnWatchdog();", StringComparison.Ordinal);
+        var spawn = program.IndexOf("SpawnWatchdog(args.Contains(\"--recovery\"));", StringComparison.Ordinal);
         var wpf = program.IndexOf("var app = new App()", StringComparison.Ordinal);
 
         Assert.True(acquire >= 0, "Program.Main must acquire the single-instance guard");
         Assert.True(spawn >= 0 && acquire < spawn, "guard must be acquired before the watchdog is spawned");
         Assert.True(wpf >= 0 && acquire < wpf, "guard must be acquired before the WPF App is constructed");
+        var refused = program[acquire..spawn];
+        Assert.Contains("return 0;", refused, StringComparison.Ordinal);
+        Assert.DoesNotContain("SpawnWatchdog(", refused, StringComparison.Ordinal);
+        Assert.Contains("return 0;", LifecycleSourceGuard.BlockAfter(program, "if (!guard.TryAcquire())"), StringComparison.Ordinal);
 
         // The blocked branch must leave a trace in the log file. Serilog is not initialised
         // this early, so it has to be a direct append (same mechanism the watchdog uses).
@@ -62,13 +66,16 @@ public sealed class SecondInstanceIsolationTests
         var markerWrite = source.IndexOf("File.WriteAllText(crashMarker", StringComparison.Ordinal);
         var ownMarker = source.IndexOf("_ownsCrashMarker = true", StringComparison.Ordinal);
         var updatingDelete = source.IndexOf(".updating\")); } catch { }", StringComparison.Ordinal);
-        var restartRegistration = source.IndexOf("RegisterApplicationRestart(null, 0)", StringComparison.Ordinal);
+        var restartRegistration = source.IndexOf("RegisterApplicationRestart(Program.CrashRestartArguments(", StringComparison.Ordinal);
 
         Assert.True(guard >= 0);
         Assert.True(markerWrite > guard, ".running must not be written before the guard is held");
         Assert.True(ownMarker > guard, ".running must not be claimed before the guard is held");
         Assert.True(updatingDelete > guard, ".updating must not be deleted before the guard is held");
         Assert.True(restartRegistration > guard, "restart registration belongs to the primary only");
+        var rejected = LifecycleSourceGuard.BlockAfter(source, "if (!_guard.TryAcquire())");
+        Assert.Contains("Shutdown();", rejected, StringComparison.Ordinal);
+        Assert.Contains("return;", rejected, StringComparison.Ordinal);
     }
 
     [Fact]
