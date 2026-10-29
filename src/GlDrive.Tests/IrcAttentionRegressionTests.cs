@@ -71,12 +71,12 @@ public sealed class IrcAttentionRegressionTests : IDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void Service_throttles_before_both_plain_tray_and_enabled_alert_router(bool enabled)
+    public async Task Service_throttles_before_both_plain_tray_and_enabled_alert_router(bool enabled)
     {
         using var store = Store();
         var service = Service(store, new() { Nick = "viewer" });
         var trays = new List<string>();
-        using var router = new AlertRouter(new() { Alerts = new() { Enabled = enabled } },
+        await using var router = new AlertRouter(new() { Alerts = new() { Enabled = enabled } },
             (_, message, _) => trays.Add(message), Path.Combine(_root, "alerts.json"), (_, _, _) => Task.CompletedTask, () => []);
         service.AttentionReceived += router.Publish;
         for (var i = 0; i < 100; i++) Track(service, i % 2 == 0 ? "Peer" : "peer", "peer", "private text");
@@ -85,6 +85,10 @@ public sealed class IrcAttentionRegressionTests : IDisposable
         Assert.All(trays, text => { Assert.Contains("1", text); Assert.DoesNotContain("private text", text); });
         Assert.Equal(101, store.Snapshot().Sum(e => e.Highlights));
         Assert.Equal(enabled ? 2 : 0, router.Store.Snapshot().Length);
+        // Dispose() starts a background final save; directory teardown must await it.
+        await router.DisposeAsync();
+        Assert.Equal(enabled ? 2 : 0, new AlertStore(Path.Combine(_root, "alerts.json"), () => 100).Snapshot().Length);
+        Assert.Empty(Directory.GetFiles(_root, "alerts.json.*.tmp"));
     }
 
     [Fact]

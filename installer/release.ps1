@@ -41,6 +41,12 @@ if ($tagExists) {
     exit 1
 }
 
+# Local tests supplement CI; they cannot authorize a release whose pushed build failed.
+. (Join-Path $InstallerDir 'ReleaseCi.ps1')
+$CiApproval = Get-ReleaseCiApproval
+$ReleaseCommit = $CiApproval.Commit
+Write-Host "Exact-commit CI verified: run $($CiApproval.RunId), commit $ReleaseCommit" -ForegroundColor Green
+
 # --- Pin winfsp.msi SHA-256 ---
 # Update this constant when upgrading WinFsp.
 $WinFspMsiPin = '073A70E00F77423E34BED98B86E600DEF93393BA5822204FAC57A29324DB9F7A'
@@ -65,6 +71,8 @@ $Solution = Join-Path $Root 'GlDrive.sln'
 if ($LASTEXITCODE -ne 0) { exit 1 }
 & dotnet build $Solution -c Release --no-restore '-warnaserror:NU1901,NU1902,NU1903,NU1904'
 if ($LASTEXITCODE -ne 0) { exit 1 }
+& dotnet build (Join-Path $Root 'tools\ReleaseCheck\ReleaseCheck.csproj') -c Release -p:RestoreLockedMode=true '-warnaserror:NU1901,NU1902,NU1903,NU1904'
+if ($LASTEXITCODE -ne 0) { exit 1 }
 
 foreach ($testProject in @('GlDrive.Core.Tests','GlDrive.Tests','GlDrive.Mcp.Tests')) {
     Write-Host "`n=== Running $testProject ===" -ForegroundColor Cyan
@@ -72,6 +80,7 @@ foreach ($testProject in @('GlDrive.Core.Tests','GlDrive.Tests','GlDrive.Mcp.Tes
     if ($LASTEXITCODE -ne 0) { exit 1 }
 }
 & (Join-Path $InstallerDir 'tests\Test-PublishManifest.ps1')
+& (Join-Path $InstallerDir 'tests\Test-ReleaseCi.ps1')
 
 Write-Host "`n=== Running build.ps1 ===" -ForegroundColor Cyan
 & "$InstallerDir\build.ps1"
@@ -166,8 +175,8 @@ Write-Host "`n=== Creating GitHub release $Tag ===" -ForegroundColor Cyan
 
 Push-Location $Root
 try {
-    $ReleaseCommit = git rev-parse HEAD
-    if ($LASTEXITCODE -ne 0) { throw 'Could not resolve release commit' }
+    $FinalCiApproval = Get-ReleaseCiApproval
+    if ($FinalCiApproval.Commit -ne $ReleaseCommit) { throw 'Release commit changed during packaging. Rebuild from the reviewed commit.' }
     $NotesFile = Join-Path $Root "docs\releases\$Tag.md"
     if (Test-Path -LiteralPath $NotesFile) {
         gh release create $Tag @assets --target $ReleaseCommit --title $Tag --notes-file $NotesFile

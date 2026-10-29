@@ -29,6 +29,19 @@ internal sealed class RelayDurationExceededException : OperationCanceledExceptio
 /// </summary>
 internal static class FxpFailurePolicy
 {
+    internal static GlDrive.Ftp.FtpLoginHeldException? FindLoginHold(System.Exception? exception)
+    {
+        if (exception == null) return null;
+        if (exception is GlDrive.Ftp.FtpLoginHeldException held) return held;
+        if (exception is System.AggregateException aggregate)
+        {
+            foreach (var inner in aggregate.InnerExceptions)
+                if (FindLoginHold(inner) is { } nested) return nested;
+            return null;
+        }
+        return FindLoginHold(exception.InnerException);
+    }
+
     internal static bool ShouldPoisonPeers(bool transferProtocolStarted)
         => transferProtocolStarted;
 

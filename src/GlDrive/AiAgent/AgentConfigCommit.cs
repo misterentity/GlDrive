@@ -2,6 +2,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using GlDrive.Config;
 using GlDrive.Util;
 
@@ -34,9 +35,9 @@ internal static class AgentConfigCommit
             if (!File.Exists(path)) return;
             var pending = JsonSerializer.Deserialize<Pending>(File.ReadAllText(path))
                 ?? throw new IOException("Unreadable pending AI commit; restore it before running the agent.");
-            var current = Hash(File.ReadAllText(configPath));
-            if (current == pending.AfterHash) audit.AppendBatchRequired(pending.Rows);
-            else if (current != pending.BeforeHash)
+            var current = File.ReadAllText(configPath);
+            if (MatchesCommittedSettings(current, pending.AfterHash)) audit.AppendBatchRequired(pending.Rows);
+            else if (Hash(current) != pending.BeforeHash)
                 throw new IOException("Pending AI commit conflicts with current settings; retained for recovery.");
             File.Delete(path);
         });
@@ -55,7 +56,7 @@ internal static class AgentConfigCommit
             Recover(configPath, root, audit);
             if (File.ReadAllText(configPath) != expected)
                 throw new IOException("Settings changed during the AI run; proposals were discarded to preserve your edits.");
-            var next = JsonSerializer.Serialize(candidate, Options);
+            var next = ConfigManager.PrepareSerializedSettings(JsonSerializer.Serialize(candidate, Options), expected);
             foreach (var row in rows) row.Id ??= Guid.NewGuid().ToString("N");
             var journal = Path.Combine(root, "pending-config-commit.json");
             SecureFile.WriteAllTextRestricted(journal, JsonSerializer.Serialize(new Pending(Hash(expected), Hash(next), rows)));
@@ -66,5 +67,24 @@ internal static class AgentConfigCommit
             audit.AppendBatchRequired(rows);
             File.Delete(journal);
         });
+    }
+
+    private static bool MatchesCommittedSettings(string current, string expectedHash)
+    {
+        if (Hash(current) == expectedHash) return true;
+        // v3.19.0 journals hashed the full typed candidate before Save omitted default
+        // sections and retained hook formatting. Recover those already-saved commits only
+        // when rebuilding that exact candidate proves its old hash. Also compare the whole
+        // persisted document, so unknown fields or intervening edits cannot disappear in
+        // typed deserialization and be mistaken for a successful commit.
+        try
+        {
+            var candidate = JsonSerializer.Deserialize<AppConfig>(current, Options);
+            if (candidate == null) return false;
+            var typed = JsonSerializer.Serialize(candidate, Options);
+            return Hash(typed) == expectedHash && JsonNode.DeepEquals(JsonNode.Parse(current),
+                JsonNode.Parse(ConfigManager.PrepareSerializedSettings(typed, current)));
+        }
+        catch (JsonException) { return false; }
     }
 }

@@ -191,7 +191,8 @@ public sealed class AgentReviewRegressionTests : IDisposable
             return new([], [], false);
         });
         var service = new AgentAutomation(config, () => null, () => freeze, () => audit, () => applier, _root,
-            () => { }, path, candidate => File.WriteAllText(path, JsonSerializer.Serialize(candidate, json)));
+            () => { }, path, candidate => File.WriteAllText(path,
+                ConfigManager.PrepareSerializedSettings(JsonSerializer.Serialize(candidate, json), File.ReadAllText(path))));
         var apply = service.ExecuteAsync("agent_audit_action",
             JsonSerializer.SerializeToElement(new { action = "apply", runId = "original", target }), default);
         try

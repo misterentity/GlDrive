@@ -145,19 +145,11 @@ public class ConfigManager
         Tls.CertificateManager.GuardPendingConfiguration(JsonSerializer.Deserialize<AppConfig>(json, JsonOptions)!);
         Directory.CreateDirectory(AppDataFolder);
         string? beforeJson = File.Exists(ConfigFilePath) ? File.ReadAllText(ConfigFilePath) : null;
+        json = PrepareSerializedSettings(json, beforeJson);
         var next = JsonNode.Parse(json)!;
         JsonNode? before = null;
         try { if (beforeJson != null) before = JsonNode.Parse(beforeJson); }
         catch (JsonException) { /* Unknown prior enablement cannot authorize destructive imports. */ }
-        NormalizeLibraryEnable(before, next);
-        // Keep default-only additions invisible to older strict MCP config readers.
-        // Runtime snapshots still include them so JSON Pointer edits and schema defaults work.
-        ConfigDowngradeCompatibility.OmitDefaultSections(next);
-        // Preserve the hand-edited optional block byte-for-byte when normalization
-        // only changes other settings (including an unparseable hooks draft).
-        var hookSource = before is JsonObject && JsonNode.DeepEquals(before["hooks"], next["hooks"])
-            ? beforeJson! : json;
-        json = PreserveHookText(next.ToJsonString(JsonOptions), hookSource);
         SecureFile.WriteAllTextRestricted(ConfigFilePath, json);
 
         if (SettingsSaved is { } saved)
@@ -217,6 +209,22 @@ public class ConfigManager
             catch (Exception ex) { Log.Debug(ex, "ConfigOverride emit failed"); }
         }
         return json;
+    }
+
+    // Predict the exact persisted representation without writing or mutating the caller.
+    // The AI commit journal must hash this same representation before the durable save.
+    internal static string PrepareSerializedSettings(string json, string? beforeJson)
+    {
+        var next = JsonNode.Parse(json)!;
+        JsonNode? before = null;
+        try { if (beforeJson != null) before = JsonNode.Parse(beforeJson); }
+        catch (JsonException) { /* A damaged prior file cannot authorize a destructive import. */ }
+        NormalizeLibraryEnable(before, next);
+        ConfigDowngradeCompatibility.OmitDefaultSections(next);
+        // Preserve the hand-edited optional block byte-for-byte, including invalid drafts.
+        var hookSource = before is JsonObject && JsonNode.DeepEquals(before["hooks"], next["hooks"])
+            ? beforeJson! : json;
+        return PreserveHookText(next.ToJsonString(JsonOptions), hookSource);
     }
 
     internal static string PreserveHookText(string serialized, string source)

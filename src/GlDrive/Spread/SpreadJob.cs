@@ -2778,6 +2778,15 @@ public partial class SpreadJob : IDisposable
             if (srcTask.IsCompletedSuccessfully) srcConn = srcTask.Result;
             if (dstTask.IsCompletedSuccessfully) dstConn = dstTask.Result;
 
+            // Account/site admission can reject a new login without throttling the
+            // pool itself. Carry each endpoint's deadline into scheduling before
+            // rethrowing either task: otherwise one immediate denial is retried for
+            // every file on every pass (370 warnings in 26 seconds on 2026-10-29).
+            // Attribute both failures independently; a pristine peer remains usable
+            // and alternate routes must not inherit the other endpoint's hold.
+            ParkForLoginHold(srcId, srcTask.Exception);
+            ParkForLoginHold(dstId, dstTask.Exception);
+
             // If either side failed, rethrow its exception so the catch blocks below
             // run their failure bookkeeping. The succeeded side (if any) is now held
             // on srcConn/dstConn and will be disposed by the finally block.
@@ -3110,6 +3119,12 @@ public partial class SpreadJob : IDisposable
                 ParkForTrust(srcId, srcPool);
                 ParkForTrust(dstId, dstPool);
             }
+            else if (!transferProtocolStarted && FxpFailurePolicy.FindLoginHold(ex) != null)
+            {
+                // The failed borrow's deadline was recorded above. Admission was
+                // denied before protocol began, so this is not a file/transfer fault.
+                Log.Debug("FXP deferred for account admission: {File} ({Src} -> {Dst})", file.Name, srcId, dstId);
+            }
             else if (ex is ObjectDisposedException && !transferProtocolStarted)
             {
                 lock (_ownershipLock)
@@ -3179,6 +3194,22 @@ public partial class SpreadJob : IDisposable
 
             ProgressChanged?.Invoke(this);
         }
+    }
+
+    private void ParkForLoginHold(string serverId, Exception? exception)
+    {
+        if (FxpFailurePolicy.FindLoginHold(exception) is not { } held) return;
+        var now = DateTime.UtcNow;
+        // An unavailable admission store has no deadline; do not hot-loop or
+        // permanently drop the route. The race idle allowance remains bounded.
+        var retryAt = held.RetryAtUtc is { } requested && requested > now ? requested : now.AddSeconds(30);
+        lock (_ownershipLock)
+        {
+            if (_poolRetryAt.GetValueOrDefault(serverId) >= retryAt) return;
+            _poolRetryAt[serverId] = retryAt;
+        }
+        Log.Information("FXP account admission deferred for {ServerId} until {RetryAt}: {Reason}",
+            serverId, retryAt, held.Message);
     }
 
     private void ParkForTrust(string serverId, FtpConnectionPool? pool)
@@ -3671,8 +3702,8 @@ public partial class SpreadJob : IDisposable
     }
 
     /// <summary>
-    /// Return the soonest retryAt among non-dropped dests, or null if none
-    /// are in backoff. Used to extend the idle timer past a pending backoff —
+    /// Return the soonest future retry among non-dropped dests and held pools,
+    /// or null if none are in backoff. Used to extend the idle timer past a pending backoff —
     /// killing a race because the 15s idle timer fires 2s before a 17s backoff
     /// expires is a waste of the whole race.
     /// </summary>
@@ -3681,9 +3712,10 @@ public partial class SpreadJob : IDisposable
         lock (_ownershipLock)
         {
             DateTime? earliest = null;
-            foreach (var (_, at) in _destRetryAt)
+            var now = DateTime.UtcNow;
+            foreach (var at in _destRetryAt.Values.Concat(_poolRetryAt.Values))
             {
-                if (at == DateTime.MaxValue) continue; // dropped
+                if (at == DateTime.MaxValue || at <= now) continue; // dropped or already eligible
                 if (earliest == null || at < earliest) earliest = at;
             }
             return earliest;
