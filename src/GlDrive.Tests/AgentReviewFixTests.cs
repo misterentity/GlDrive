@@ -35,7 +35,7 @@ public sealed class AgentReviewFixTests : IDisposable
         candidate.Servers[0].SpreadSite.DownloadOnly = true;
 
         AgentConfigCommit.CommitAndPublish(path, baseline, candidate, [], _root,
-            config => File.WriteAllText(path, Serialize(config)), new AuditTrail(_root), live);
+            config => File.WriteAllText(path, ConfigManager.PrepareSerializedSettings(Serialize(config), baseline)), new AuditTrail(_root), live);
 
         Assert.Same(site, live.Servers[0]);
         Assert.Same(agent, live.Agent);

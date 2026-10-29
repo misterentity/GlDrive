@@ -197,7 +197,7 @@ public sealed class ReleaseReliabilityTests : IDisposable
         Directory.CreateDirectory(auditPath); // Settings save succeeds; audit publication cannot.
         Assert.ThrowsAny<Exception>(() => AgentConfigCommit.Commit(path, baseline, cfg,
             [new AuditRow { RunId = "run", Applied = true }], _root,
-            c => SecureFile.WriteAllTextRestricted(path, JsonSerializer.Serialize(c, options)), audit));
+            c => SecureFile.WriteAllTextRestricted(path, ConfigManager.PrepareSerializedSettings(JsonSerializer.Serialize(c, options), baseline)), audit));
         Assert.Equal(99, JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(path), options)!.Agent.DryRunsRemaining);
         Assert.True(File.Exists(Path.Combine(_root, "pending-config-commit.json")));
         Directory.Delete(auditPath);

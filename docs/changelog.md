@@ -12,6 +12,16 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.19.1 — persisted AI settings, login-hold scheduling and release gates (2026-10-29)
+
+- AI commits hash the exact saved settings representation, preserving default-section omission
+  and hook formatting. Proven v3.19.0 pending commits recover their audit evidence automatically.
+- FXP scheduling waits for held endpoints' admission deadlines without burning file retries
+  or blocking unrelated routes. Clean peers remain reusable before protocol starts.
+- IRC alert regression teardown awaits the final asynchronous save, resolving the CI cleanup race.
+- Releases require successful CI for the exact pushed source; CI and release builds compile
+  the native smoke harness and test the release guard. See [release notes](releases/v3.19.1.md).
+
 ## v3.19.0 — data stewardship, least-privilege automation, crash-loop safe mode (2026-10-29)
 
 - Verified DPAPI-protected copies of the control token and channel keys (originals kept for older

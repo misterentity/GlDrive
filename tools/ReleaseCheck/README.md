@@ -1,5 +1,9 @@
 # Local release verification
 
+CI and `installer/release.ps1` compile this harness on every release. Native execution
+still runs separately on the release machine using the fixtures below; CI compilation
+does not exercise FTPS, WinFsp or CPSV.
+
 Every harness mode redirects the shared application-data root to a unique `app-state-*`
 directory under its evidence directory before initializing any application store. This
 also isolates the persistent authentication and login-admission guards; a synthetic

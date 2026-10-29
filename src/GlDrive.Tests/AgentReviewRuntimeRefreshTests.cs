@@ -87,7 +87,8 @@ public sealed class AgentReviewRuntimeRefreshTests : IDisposable
         var applier = new ChangeApplier([new PriorityValidator()], freeze, audit,
             c => enoughCoverage && !undo ? MeasuredWinnerEvidence.ForConfig(c) : null);
         return new AgentAutomation(cfg, () => null, () => freeze, () => audit, () => applier, _root,
-            refresh, path, save ?? (candidate => File.WriteAllText(path, JsonSerializer.Serialize(candidate, Json))));
+            refresh, path, save ?? (candidate => File.WriteAllText(path,
+                ConfigManager.PrepareSerializedSettings(JsonSerializer.Serialize(candidate, Json), File.ReadAllText(path)))));
     }
 
     private static async Task<JsonElement> Run(AgentAutomation service, bool undo = false) =>
