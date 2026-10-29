@@ -71,6 +71,28 @@ public sealed class NewReleaseMonitorRecoveryTests
     }
 
     [Fact]
+    public async Task Zipscript_indicator_links_are_not_reported_as_new_releases()
+    {
+        var round = 0;
+        var monitor = Monitor((path, _) =>
+        {
+            if (path == "/recent") return Task.FromResult(Dirs("TV"));
+            if (round == 0) return Task.FromResult(Dirs("old"));
+            var items = Dirs("old", "Show.S01E01.1080p.WEB.H264-GRP").ToList();
+            items.AddRange(new[] { "[incomplete]-Show.S01E01.1080p.WEB.H264-GRP",
+                    "(no-sfv)-Show.S01E01.1080p.WEB.H264-GRP", "[no-nfo]-Show.S01E01.1080p.WEB.H264-GRP" }
+                .Select(name => new FtpListItem { Name = name, Type = FtpObjectType.Link }));
+            return Task.FromResult(items.ToArray());
+        });
+        var detected = new List<string>();
+        monitor.NewReleaseDetected += (_, release, _) => detected.Add(release);
+        await monitor.PollCycle(CancellationToken.None);
+        round = 1;
+        await monitor.PollCycle(CancellationToken.None);
+        Assert.Equal(new[] { "Show.S01E01.1080p.WEB.H264-GRP" }, detected);
+    }
+
+    [Fact]
     public async Task Shutdown_inside_category_does_not_continue_to_other_categories()
     {
         using var stop = new CancellationTokenSource();

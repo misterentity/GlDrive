@@ -465,7 +465,6 @@ internal static class CpsvSharingCheck
             };
             var certs = new CertificateManager(Path.Combine(root, "trusted.json"));
             certs.TrustCertificate($"127.0.0.1:{peer.Port}", peer.Certificate.GetCertHashString(HashAlgorithmName.SHA256));
-            certs.CertificatePrompt += (_, _) => Task.FromResult(false);
             var factory = new FtpClientFactory(config, certs);
             var gate = new ServerLoginGate(config.Id, 2, 2, reserved: 1);
             var main = new FtpConnectionPool(factory, 1, gate);

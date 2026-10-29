@@ -61,7 +61,6 @@ var config = new ServerConfig
 };
 var certs = new CertificateManager(Path.Combine(root, "trusted.json"));
 certs.TrustCertificate($"127.0.0.1:{port}", fingerprint);
-certs.CertificatePrompt += (_, _) => Task.FromResult(false);
 var factory = new FtpClientFactory(config, certs);
 // Exercise the same certificate callback used by Settings > Test Connection.
 // A changed pin must stop the handshake before any authentication command.
@@ -72,8 +71,7 @@ var authenticationsBefore = File.Exists(authenticationLog) ? File.ReadAllLines(a
 var probe = factory.Create();
 try
 {
-    typeof(GlDrive.UI.ServerEditDialog).GetMethod("AttachTofuValidation", BindingFlags.Static | BindingFlags.NonPublic)!
-        .Invoke(null, [probe, "127.0.0.1", port, rejectedPins]);
+    GlDrive.UI.ServerEditDialog.AttachTofuValidation(probe, "127.0.0.1", port, rejectedPins);
     var rejected = false;
     using var certificateDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
     try { await probe.Connect(certificateDeadline.Token); }

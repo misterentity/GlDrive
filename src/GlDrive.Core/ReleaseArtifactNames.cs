@@ -13,6 +13,14 @@ public static class ReleaseArtifactNames
         name.EndsWith(".imdb.html", StringComparison.OrdinalIgnoreCase) ||
         name.EndsWith(".imdb.nfo", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// A section-listing entry that cannot be a release: zipscript status links
+    /// ([incomplete]-X, (no-sfv)-X, [no-nfo]-X), dot metadata and -MISSING stubs. Keyed on the
+    /// class property — release names begin with a letter or digit — not on observed tags.
+    /// </summary>
+    public static bool IsSectionIndicatorName(string name) =>
+        name.Length == 0 || !char.IsLetterOrDigit(name[0]);
+
     public static bool IsZeroByteMarker(string name, long size) =>
         size == 0 && (name.StartsWith('-') || name.StartsWith('['));
 }

@@ -12,6 +12,16 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.18.1 — log-sweep fixes: zipscript markers, persisted relay routes (2026-10-29)
+
+- The release monitor no longer reports zipscript status links (`[incomplete]-X`, `(no-sfv)-X`,
+  `[no-nfo]-X`) as new releases. They were 62 of 309 detected releases in the retained logs, each
+  a duplicate notification, feed row, auto-race attempt and wishlist pass.
+- A route whose direct FXP failed stays on Relay across restarts (6 h TTL unchanged). Before,
+  every restart re-probed superbnc->zephyr and paid two fresh logins: 10 failed probes in 2 days.
+- The native smoke harness compiles again; v3.18.0's certificate API change had broken it.
+  See the [release notes](releases/v3.18.1.md).
+
 ## v3.18.0 — certificate decisions, flight recorder, Problems panel, statistics, release dossier (2026-10-29)
 
 - A changed certificate parks only that server behind a local decision window; trust can't be

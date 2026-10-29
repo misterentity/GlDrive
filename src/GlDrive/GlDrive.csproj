@@ -11,7 +11,7 @@
     <StartupObject>GlDrive.Program</StartupObject>
     <AssemblyName>GlDrive</AssemblyName>
     <RootNamespace>GlDrive</RootNamespace>
-    <Version>3.18.0</Version>
+    <Version>3.18.1</Version>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Description>Mount a glftpd FTPS server as a Windows drive letter</Description>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
@@ -26,6 +26,8 @@
   <ItemGroup>
     <!-- Expose internals to the test project (PRD Q1) — IsZipscriptArtifact etc. -->
     <InternalsVisibleTo Include="GlDrive.Tests" />
+    <!-- The local native smoke harness (tools/ReleaseCheck, never shipped) pins fixture certificates. -->
+    <InternalsVisibleTo Include="ReleaseCheck" />
   </ItemGroup>
 
   <ItemGroup>
