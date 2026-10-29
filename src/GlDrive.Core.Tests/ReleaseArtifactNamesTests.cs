@@ -36,4 +36,19 @@ public class ReleaseArtifactNamesTests
     [InlineData("", 0, false)]
     public void Zero_byte_marker_requires_both_marker_prefix_and_empty_file(string name, long size, bool expected)
         => Assert.Equal(expected, ReleaseArtifactNames.IsZeroByteMarker(name, size));
+
+    [Theory]
+    [InlineData("[incomplete]-Scrubs.2026.S02E06.1080p.HDTV.x264-SYNCOPY", true)]
+    [InlineData("(no-sfv)-Suur.Seiklus.S01E08.EE.1080p.WEB.H264-EMX", true)]
+    [InlineData("[no-nfo]-Taiuslik.Sobranna.S02E06.EE.1080p.WEB.H264-EMX", true)]
+    [InlineData("{unseen-tag}-Release.Name-GRP", true)]
+    [InlineData(".imdb", true)]
+    [InlineData("-MISSING-release", true)]
+    [InlineData("", true)]
+    [InlineData("Scrubs.2026.S02E06.1080p.HDTV.x264-SYNCOPY", false)]
+    [InlineData("1000-lb.Roomies.S02E10.1080p.WEB.h264-EDITH", false)]
+    [InlineData("Nicolas_Giordano-The_Unison-(PS025)-SINGLE-WEB-2026-PTC", false)]
+    [InlineData("Ärzte-Live-2026-GRP", false)]
+    public void Section_entries_that_cannot_be_a_release_start_with_punctuation(string name, bool expected)
+        => Assert.Equal(expected, ReleaseArtifactNames.IsSectionIndicatorName(name));
 }

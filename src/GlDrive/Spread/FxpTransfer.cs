@@ -54,8 +54,63 @@ public class FxpTransfer
     // (~1700 extra logins, 146 BNC-cooldown mentions), and each teardown is
     // GnuTLS recv-race crash exposure. Remember a failed route and go straight
     // to Relay; re-probe direct after the TTL in case reachability changed.
+    //
+    // The verdict is persisted: held only in memory, every restart re-probed the route
+    // and paid the two logins again — 10 failed probes on 2026-10-27/28, one per
+    // auto-update restart, on a route that has never succeeded direct since 2026-07-01.
     private static readonly ConcurrentDictionary<(string Src, string Dst), DateTime> _relayOnlyRoutes = new();
     internal static readonly TimeSpan RelayRouteRetry = TimeSpan.FromHours(6);
+    private static readonly object _relayRouteFileLock = new();
+    private static string? _relayRouteFile;
+
+    private sealed record RelayRouteEntry(string Src, string Dst, DateTime FailedAtUtc);
+
+    /// <summary>
+    /// Loads remembered relay-only routes from <paramref name="path"/> and saves every later
+    /// change there. An unreadable file starts empty: the cost is one direct probe, never a lockout.
+    /// </summary>
+    internal static void EnableRelayRoutePersistence(string path)
+    {
+        lock (_relayRouteFileLock)
+        {
+            _relayRouteFile = path;
+            try
+            {
+                if (!File.Exists(path)) return;
+                var entries = System.Text.Json.JsonSerializer.Deserialize<List<RelayRouteEntry>>(File.ReadAllText(path));
+                foreach (var e in entries ?? [])
+                {
+                    if (string.IsNullOrEmpty(e.Src) || string.IsNullOrEmpty(e.Dst)) continue;
+                    var failedAt = DateTime.SpecifyKind(e.FailedAtUtc, DateTimeKind.Utc);
+                    _relayOnlyRoutes.AddOrUpdate((e.Src, e.Dst), failedAt, (_, current) => current > failedAt ? current : failedAt);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "FXP relay route memory unreadable at {Path} — direct routes will be re-probed", path);
+            }
+        }
+    }
+
+    private static void SaveRelayRoutes()
+    {
+        lock (_relayRouteFileLock)
+        {
+            if (_relayRouteFile is not { } path) return;
+            try
+            {
+                var entries = _relayOnlyRoutes.Select(kv => new RelayRouteEntry(kv.Key.Src, kv.Key.Dst, kv.Value)).ToList();
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                var temp = path + ".tmp";
+                File.WriteAllText(temp, System.Text.Json.JsonSerializer.Serialize(entries));
+                File.Move(temp, path, overwrite: true);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "FXP relay route memory could not be saved to {Path}", path);
+            }
+        }
+    }
 
     internal static bool ShouldAttemptDirect(string srcServerId, string dstServerId, DateTime nowUtc)
     {
@@ -80,16 +135,22 @@ public class FxpTransfer
         var key = (srcServerId, dstServerId);
         var first = !_relayOnlyRoutes.ContainsKey(key);
         _relayOnlyRoutes[key] = nowUtc;
+        SaveRelayRoutes();
         return first ? DirectProbeFailure.First : DirectProbeFailure.Reprobe;
     }
 
     internal static void RecordDirectSuccess(string srcServerId, string dstServerId)
     {
         if (string.IsNullOrEmpty(srcServerId) || string.IsNullOrEmpty(dstServerId)) return;
-        _relayOnlyRoutes.TryRemove((srcServerId, dstServerId), out _);
+        if (_relayOnlyRoutes.TryRemove((srcServerId, dstServerId), out _))
+            SaveRelayRoutes();
     }
 
-    internal static void ResetRelayRoutesForTests() => _relayOnlyRoutes.Clear();
+    internal static void ResetRelayRoutesForTests()
+    {
+        lock (_relayRouteFileLock) _relayRouteFile = null;
+        _relayOnlyRoutes.Clear();
+    }
 
     public event Action<TransferState>? StateChanged;
     public event Action<long>? BytesTransferred;

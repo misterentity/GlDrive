@@ -1,3 +1,4 @@
+using System.IO;
 using GlDrive.Spread;
 using Xunit;
 
@@ -92,5 +93,62 @@ public class FxpRelayRouteMemoryTests : IDisposable
         Assert.Equal(DirectProbeFailure.NotCached, FxpTransfer.RecordDirectFailure("src", "", Now));
         Assert.True(FxpTransfer.ShouldAttemptDirect("", "dst", Now));
         Assert.True(FxpTransfer.ShouldAttemptDirect("src", "", Now));
+    }
+
+    private static string TempRouteFile() =>
+        Path.Combine(Path.GetTempPath(), "gldrive-relay-routes-" + Guid.NewGuid().ToString("N"), "fxp-relay-routes.json");
+
+    private static void Restart(string path)
+    {
+        FxpTransfer.ResetRelayRoutesForTests();
+        FxpTransfer.EnableRelayRoutePersistence(path);
+    }
+
+    [Fact]
+    public void Failed_route_survives_a_restart_until_its_ttl()
+    {
+        var path = TempRouteFile();
+        try
+        {
+            FxpTransfer.EnableRelayRoutePersistence(path);
+            FxpTransfer.RecordDirectFailure("src", "dst", Now);
+            Restart(path);
+            Assert.False(FxpTransfer.ShouldAttemptDirect("src", "dst", Now.AddHours(1)));
+            Assert.True(FxpTransfer.ShouldAttemptDirect("src", "dst", Now + FxpTransfer.RelayRouteRetry));
+            Assert.True(FxpTransfer.ShouldAttemptDirect("dst", "src", Now.AddHours(1)));
+        }
+        finally { Directory.Delete(Path.GetDirectoryName(path)!, true); }
+    }
+
+    [Fact]
+    public void Direct_success_is_persisted_as_forgetting_the_route()
+    {
+        var path = TempRouteFile();
+        try
+        {
+            FxpTransfer.EnableRelayRoutePersistence(path);
+            FxpTransfer.RecordDirectFailure("src", "dst", Now);
+            FxpTransfer.RecordDirectSuccess("src", "dst");
+            Restart(path);
+            Assert.True(FxpTransfer.ShouldAttemptDirect("src", "dst", Now.AddHours(1)));
+        }
+        finally { Directory.Delete(Path.GetDirectoryName(path)!, true); }
+    }
+
+    [Fact]
+    public void Unreadable_route_file_starts_empty_instead_of_blocking_direct()
+    {
+        var path = TempRouteFile();
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, "{ torn");
+            FxpTransfer.EnableRelayRoutePersistence(path);
+            Assert.True(FxpTransfer.ShouldAttemptDirect("src", "dst", Now));
+            Assert.Equal(DirectProbeFailure.First, FxpTransfer.RecordDirectFailure("src", "dst", Now));
+            Restart(path);
+            Assert.False(FxpTransfer.ShouldAttemptDirect("src", "dst", Now.AddHours(1)));
+        }
+        finally { Directory.Delete(Path.GetDirectoryName(path)!, true); }
     }
 }

@@ -171,9 +171,12 @@ public class NewReleaseMonitor
                 continue;
             }
 
+            // Zipscript status links sit beside the release they describe; reporting them
+            // duplicated every notification, feed row, auto-race and wishlist pass.
             var currentNames = releases
                 .Where(i => i.Type is FtpObjectType.Directory or FtpObjectType.Link)
                 .Select(i => i.Name)
+                .Where(name => !GlDrive.Downloads.ReleaseArtifactNames.IsSectionIndicatorName(name))
                 .ToHashSet();
 
             if (_snapshot.TryGetValue(category, out var previous))
