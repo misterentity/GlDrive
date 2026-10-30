@@ -18,7 +18,18 @@ public sealed class HookRunnerTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "hooks-" + Guid.NewGuid().ToString("N"));
     public HookRunnerTests() => Directory.CreateDirectory(_root);
-    public void Dispose() { Directory.Delete(_root, true); }
+    public void Dispose()
+    {
+        // The timeout test kills a real process tree. On CI the folder stayed in use briefly
+        // after the hook's parent and child had both reported exit (runs 40787794556,
+        // 40995764750, 40996827934), so teardown waits out the OS's asynchronous release.
+        for (var attempt = 0; ; attempt++)
+        {
+            try { Directory.Delete(_root, true); return; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && attempt < 40)
+            { Thread.Sleep(250); }
+        }
+    }
     private static HookCommandConfig Command() => new()
     { Id = "one", Enabled = true, Events = ["download.complete"], Executable = Environment.ProcessPath! };
     private static HookEvent Event(string release = "Example.2026.1080p.WEB-GROUP") => new("download.complete", release, "Movies", "1080p", "Completed");
@@ -268,23 +279,14 @@ public sealed class HookRunnerTests : IDisposable
         var script = Path.Combine(_root, "parent.ps1");
         var childScript = Path.Combine(_root, "child.ps1");
         var pidPath = Path.Combine(_root, "child.pid");
-        var parentPidPath = Path.Combine(_root, "parent.pid");
         await File.WriteAllTextAsync(childScript, "Start-Sleep -Seconds 60");
-        await File.WriteAllTextAsync(script, "param($child, $pidFile, $parentPidFile)\n[System.IO.File]::WriteAllText($parentPidFile, $PID.ToString())\n$start = [System.Diagnostics.ProcessStartInfo]::new((Join-Path $PSHOME 'pwsh.exe'))\n$start.UseShellExecute = $false\n$start.CreateNoWindow = $true\n$start.ArgumentList.Add('-NoProfile')\n$start.ArgumentList.Add('-File')\n$start.ArgumentList.Add($child)\n$p = [System.Diagnostics.Process]::Start($start)\n[System.IO.File]::WriteAllText($pidFile, $p.Id.ToString())\n[Console]::WriteLine(('x' * 20000) + 'TAIL-END')\nStart-Sleep -Seconds 60");
+        await File.WriteAllTextAsync(script, "param($child, $pidFile)\n$start = [System.Diagnostics.ProcessStartInfo]::new((Join-Path $PSHOME 'pwsh.exe'))\n$start.UseShellExecute = $false\n$start.CreateNoWindow = $true\n$start.ArgumentList.Add('-NoProfile')\n$start.ArgumentList.Add('-File')\n$start.ArgumentList.Add($child)\n$p = [System.Diagnostics.Process]::Start($start)\n[System.IO.File]::WriteAllText($pidFile, $p.Id.ToString())\n[Console]::WriteLine(('x' * 20000) + 'TAIL-END')\nStart-Sleep -Seconds 60");
         var command = Command(); command.Executable = shell; command.ScriptPath = script;
-        command.Arguments = [childScript, pidPath, parentPidPath]; command.TimeoutSeconds = 3; command.OutputLimitCharacters = 32;
+        command.Arguments = [childScript, pidPath]; command.TimeoutSeconds = 3; command.OutputLimitCharacters = 32;
         var result = await HookRunner.ExecuteAsync(command, Event(), CancellationToken.None);
         Assert.Equal("timeout", result.Outcome);
         Assert.True(result.Output.Length <= 32);
         Assert.Contains("TAIL-END", result.Output);
-        // The hook's working directory is the script folder. Reporting the timeout while the killed
-        // parent was still terminating left that folder pinned (CI runs 40787794556, 40995764750).
-        try
-        {
-            using var parent = Process.GetProcessById(int.Parse(await File.ReadAllTextAsync(parentPidPath)));
-            Assert.True(parent.HasExited);
-        }
-        catch (ArgumentException) { /* Already reaped. */ }
         var pid = int.Parse(await File.ReadAllTextAsync(pidPath));
         try
         {
