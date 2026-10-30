@@ -43,4 +43,32 @@ public class AnnouncePlausibilityTests
     [InlineData("")]
     public void Existing_rejections_still_hold(string candidate)
         => Assert.False(IrcAnnounceListener.IsPlausibleReleaseName(candidate));
+
+    // v3.19.2: zephyr #ent "AUTONUKE: TV/Nocturne...-CAKES created by altruist is still empty"
+    // matched the user's "(?<section>\w[\w-]*)\s*:\s*(?<release>\S+)" rule as release
+    // "TV/Nocturne...", and #SYN-SPAM "Plot: Dr. Victor Frankenstein, a brilliant..." as
+    // "Frankenstein,". A release is one directory name that ends in its group tag, so a path
+    // separator / filename-illegal character or a non-alphanumeric tail is a capture of
+    // something else. Checked against 2,350 distinct real names from 3 days of logs and race
+    // history: only these two were rejected.
+    [Theory]
+    [InlineData("TV/Nocturne.2026.S01E01.2160p.WEB.H265-CAKES")]
+    [InlineData(@"TV\Nocturne.2026.S01E01.2160p.WEB.H265-CAKES")]
+    [InlineData("Nocturne.2026.S01E01.2160p.WEB.H265-CAKES/")]
+    [InlineData("Show.2026.S01E01.1080p.WEB:H264-GRP")]
+    [InlineData("Show.2026.S01E01.1080p.WEB.H264-GRP?")]
+    [InlineData("Frankenstein,")]
+    [InlineData("Eyewitness.2026.S01E03.1080p.WEB.H264-AFO.")]
+    [InlineData("Eyewitness.2026.S01E03.1080p.WEB.H264-AFO;")]
+    public void Paths_and_prose_tails_are_rejected(string candidate)
+        => Assert.False(IrcAnnounceListener.IsPlausibleReleaseName(candidate));
+
+    [Theory]
+    [InlineData("Human_Rebellion-Terror_Machine-(HRRDN)-WEB-2026-TR")]
+    [InlineData("(HED)P.E.--Detox-CD-FLAC-2023-MEOWZiK")]
+    [InlineData("Artist-Album-(CAT001)")]
+    [InlineData("Some.Show.S01E01.1080p.WEB-DL[rartv]")]
+    [InlineData("1000-lb.Sisters.S09E09.1080p.WEB.h264-EDITH")]
+    public void Real_names_with_brackets_and_leading_digits_are_accepted(string candidate)
+        => Assert.True(IrcAnnounceListener.IsPlausibleReleaseName(candidate));
 }
