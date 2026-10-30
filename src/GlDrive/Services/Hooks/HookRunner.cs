@@ -208,6 +208,10 @@ public sealed class HookRunner : IDisposable, IAsyncDisposable
             var timedOut = deadline.IsCancellationRequested;
             job.Dispose(); // Also kills descendants whose parent has already exited.
             try { process.Kill(entireProcessTree: true); } catch { }
+            // Kill only requests termination. Until the parent has exited it still holds its
+            // working directory (the script folder) and any files it opened.
+            try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false); }
+            catch { }
             deadline.Cancel();
             try { await Task.WhenAll(stdout, stderr, input).WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false); }
             catch { }
