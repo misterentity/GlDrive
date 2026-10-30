@@ -1,3 +1,4 @@
+using System.IO;
 using System.Text.RegularExpressions;
 using GlDrive.Config;
 using GlDrive.Irc;
@@ -31,6 +32,8 @@ internal sealed class AnnounceMatcher
         "the", "from", "for", "with", "and", "now", "new"
     };
 
+    private static readonly char[] InvalidReleaseNameChars = Path.GetInvalidFileNameChars();
+
     internal AnnounceMatcher(IEnumerable<IrcAnnounceRule> rules, bool defaultAutoRace, CancellationToken cancellationToken = default)
     {
         _rules = rules as IReadOnlyList<IrcAnnounceRule> ?? rules.ToArray();
@@ -54,6 +57,10 @@ internal sealed class AnnounceMatcher
         if (string.IsNullOrWhiteSpace(candidate)) return false;
         var value = candidate.Trim();
         if (value.Length < 10 || KnownVerbs.Contains(value)) return false;
+        // A release is a single directory name ending in its group tag: a path ("TV/Name" from
+        // an AUTONUKE notice) or a word glued to prose punctuation ("Frankenstein,") is not.
+        if (value.IndexOfAny(InvalidReleaseNameChars) >= 0) return false;
+        if (!(char.IsAsciiLetterOrDigit(value[^1]) || value[^1] is ')' or ']')) return false;
         return value.Any(c => c is '.' or '_' or >= '0' and <= '9' or >= 'A' and <= 'Z');
     }
 
