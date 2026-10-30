@@ -1113,7 +1113,7 @@ public partial class SpreadJob : IDisposable
 
                     var waitingForRelease = HasPendingReleaseInventory();
                     var waitingForAnnounce = HasUnverifiedAnnounceSources();
-                    var poolsUnavailable = sitePaths.Keys.Any(id => ResolveSpreadPool(id) == null);
+                    var poolsUnavailable = sitePaths.Keys.Any(id => ResolveSpreadPool(id) == null || IsScanAdmissionDeferred(id));
                     var done = !waitingForRelease && !waitingForAnnounce && !poolsUnavailable && (_spreadConfig.WaitForDestinationComplete
                         ? AllDestinationsTerminal(sitePaths, sourceServers)
                         : IsJobComplete());
@@ -1274,6 +1274,7 @@ public partial class SpreadJob : IDisposable
                             {
                                 var livePool = ResolveSpreadPool(serverId);
                                 if (livePool == null) continue;
+                                if (ScanPoolAdmissionDeferred(serverId, livePool)) continue;
                                 try
                                 {
                                     await livePool.Reinitialize(token);
@@ -1620,6 +1621,7 @@ public partial class SpreadJob : IDisposable
         var scanLock = new Lock();
         var hardFailureCount = 0;
         var contentionDeferralCount = 0;
+        var admissionDeferralCount = 0;
 
         var tasks = scanTargets.Select(async kvp =>
         {
@@ -1630,6 +1632,12 @@ public partial class SpreadJob : IDisposable
 
             var mainPool = ResolveMainPool(serverId);
             var spreadPool = ResolveSpreadPool(serverId);
+
+            if (IsScanAdmissionDeferred(serverId))
+            {
+                Interlocked.Increment(ref admissionDeferralCount);
+                return;
+            }
 
             if (mainPool == null && spreadPool == null)
             {
@@ -1660,8 +1668,9 @@ public partial class SpreadJob : IDisposable
                     .ToDictionary(p => p.Key.file, p => p.Value, StringComparer.OrdinalIgnoreCase);
             }
             Exception? lastError = null;
+            Exception? mainFailure = null;
 
-            if (mainPool != null)
+            if (mainPool != null && !ScanPoolAdmissionDeferred(serverId, mainPool))
             {
                 try
                 {
@@ -1708,6 +1717,12 @@ public partial class SpreadJob : IDisposable
                     files.Clear();
                     lastError = ex;
                 }
+                catch (FtpLoginHeldException ex)
+                {
+                    RememberScanAdmissionHold(serverId, ex);
+                    lastError = ex;
+                    files.Clear();
+                }
                 catch (Exception ex)
                 {
                     Log.Information("Spread scan: main pool listing of {Server} failed ({Type}: {Message}) — " +
@@ -1715,6 +1730,7 @@ public partial class SpreadJob : IDisposable
                     lastError = ex;
                     files.Clear();
                 }
+                if (!scanDone && !ScanFailureClassifier.IsContention(lastError)) mainFailure = lastError;
             }
 
             // The fallback must never take the LAST spread permit — an FXP borrow waits
@@ -1723,7 +1739,7 @@ public partial class SpreadJob : IDisposable
             ct.ThrowIfCancellationRequested();
             if (readStop.IsCancellationRequested) return;
             var yieldedToTransfers = false;
-            if (!scanDone && spreadPool != null)
+            if (!scanDone && spreadPool != null && !ScanPoolAdmissionDeferred(serverId, spreadPool))
             {
                 var mainUsable = mainPool != null && !mainPool.IsExhausted;
                 // EffectiveMaxSize, NOT MaxSize — the account login gate, not the pool's
@@ -1753,6 +1769,13 @@ public partial class SpreadJob : IDisposable
                     {
                         return;
                     }
+                    catch (FtpLoginHeldException ex)
+                    {
+                        RememberScanAdmissionHold(serverId, ex);
+                        // A fallback hold cannot erase a real failure after the main
+                        // pool lent a connection. Keep the original fault evidence.
+                        lastError = mainFailure ?? ex;
+                    }
                     catch (Exception ex)
                     {
                         lastError = ex;
@@ -1773,7 +1796,11 @@ public partial class SpreadJob : IDisposable
                 // main-pool branch above logs at INF, it self-corrects next cycle, and at
                 // ~9 lines a piece it was 8% of the log and rolled a day of history off
                 // the 10 MB cap (v3.10.54). Real faults keep their WRN and their stack.
-                if (ScanFailureClassifier.IsContention(lastError))
+                if (lastError is FtpLoginHeldException || lastError == null && IsScanAdmissionDeferred(serverId))
+                {
+                    Interlocked.Increment(ref admissionDeferralCount);
+                }
+                else if (ScanFailureClassifier.IsContention(lastError))
                 {
                     Interlocked.Increment(ref contentionDeferralCount);
                     Log.Information("Spread scan: no login available for {Server} at {Path} " +
@@ -1843,9 +1870,11 @@ public partial class SpreadJob : IDisposable
                     Log.Warning("Spread scan: all scans failed ({HardFailures} genuine failure(s), " +
                         "{ContentionDeferrals} contention deferral(s))",
                         hardFailureCount, contentionDeferralCount);
-                else
+                else if (contentionDeferralCount > 0)
                     Log.Information("Spread scan: all {Count} scan(s) deferred by login contention — " +
                         "rescanning next cycle", contentionDeferralCount);
+                else if (admissionDeferralCount > 0)
+                    Log.Debug("Spread scan: {Count} scan(s) waiting for account admission deadlines", admissionDeferralCount);
             }
         }
 

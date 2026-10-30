@@ -39,6 +39,10 @@ internal static class ScanFailureClassifier
         // recognised before either of those is read as "never got a connection".
         if (ex is ScanListingFailedException) return false;
 
+        // Typed pre-connect admission says no command or new login was attempted.
+        // These holds supersede the older message-based cooldown cases below.
+        if (ex is GlDrive.Ftp.FtpLoginHeldException) return true;
+
         // A borrow that timed out or was cancelled never opened a connection.
         // TaskCanceledException derives from OperationCanceledException.
         if (ex is System.OperationCanceledException) return true;

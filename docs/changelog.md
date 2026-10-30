@@ -12,6 +12,13 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.19.3 — defer scans and race starts during login holds (2026-10-30)
+
+- Scans honor login-admission deadlines for empty pools, retain usable authenticated sessions,
+  and preserve genuine post-borrow failures. This resolves the outage-driven warning flood.
+- Held races and pool recovery wait for admission without repeatedly consuming race slots;
+  queued requests remain durable and resume when eligible. See [release notes](releases/v3.19.3.md).
+
 ## v3.19.1 — persisted AI settings, login-hold scheduling and release gates (2026-10-29)
 
 - AI commits hash the exact saved settings representation, preserving default-section omission
