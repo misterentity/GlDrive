@@ -14,6 +14,9 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
     private readonly Dictionary<string, FtpConnectionPool> _spreadPools = new();
     private readonly Dictionary<string, int> _directFxpActivity = new();
     private readonly Dictionary<string, FtpClientFactory> _factories = new();
+    // A refused local admission is already a decision, not another network fault.
+    // Scope it to the pool/factory that observed it so remounts do not inherit stale holds.
+    private readonly Dictionary<string, (object Owner, DateTime RetryAtUtc)> _poolAdmissionHolds = new();
     private readonly List<SpreadJob> _activeJobs = new();
     private readonly List<PersistedRace> _raceQueue = new();
     // Admission runs callbacks outside _lock. Reserve its request before leaving
@@ -244,6 +247,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
         if (!ConfigManager.ReadOnly)
             _speedTracker.EnablePersistence(
                 Path.Combine(stateDirectory, "spread-speed-history.json"));
+        GuardedFtpLogin.LoginObserved += OnLoginObserved;
     }
 
     public async Task InitializePool(string serverId, FtpClientFactory factory, CancellationToken ct)
@@ -253,6 +257,8 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
         lock (_lock)
         {
             if (_spreadPools.ContainsKey(serverId)) return;
+            if (!_factories.TryGetValue(serverId, out var previous) || !ReferenceEquals(previous, factory))
+                _poolAdmissionHolds.Remove(serverId);
             // Record the desired factory before the first attempt. v3.10.73 only
             // recorded it after success, so the existing dead-pool recovery path
             // had nothing with which to recover a pool that failed at startup.
@@ -288,6 +294,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
                 if (_spreadPools.ContainsKey(serverId)) return true;
                 if (_disposed || !_factories.TryGetValue(serverId, out var desired) ||
                     !ReferenceEquals(desired, factory)) return false;
+                if (PoolAdmissionRetryAtNoLock(serverId, factory, AdmissionUtcNow()) != null) return false;
             }
 
             // Chain mode is gone — races now run N² concurrent routes throttled by
@@ -349,6 +356,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
                     ReferenceEquals(desired, factory))
                 {
                     _spreadPools[serverId] = pool;
+                    _poolAdmissionHolds.Remove(serverId);
                     _topologyVersion++; // invalidate the section-feasibility cache
                     registered = true;
                 }
@@ -368,6 +376,12 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
+            await DisposeFailedPool(pool, serverId);
+            return false;
+        }
+        catch (FtpLoginHeldException ex)
+        {
+            RecordPoolAdmissionHold(serverId, factory, ex);
             await DisposeFailedPool(pool, serverId);
             return false;
         }
@@ -436,6 +450,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
         {
             _spreadPools.Remove(serverId, out pool);
             _factories.Remove(serverId);
+            _poolAdmissionHolds.Remove(serverId);
             _topologyVersion++; // invalidate the section-feasibility cache
         }
 
@@ -509,13 +524,18 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             }
 
             request = _config.Spread.MergeRaceAnnounces ? MergeRaceNoLock(request, request, true) : PredictRaceNoLock(request);
-            if (_activeJobs.Count + _startingRequests.Count >= maxRaces)
+            var waitingForAdmission = request.ServerIds.Any(id => IsPoolAdmissionHeldNoLock(id, now))
+                && (request.ServerIds.Count(id => CanUsePoolNoLock(id, now)) < 2 || KnownSourcesAdmissionHeldNoLock(request, now));
+            if (_activeJobs.Count + _startingRequests.Count >= maxRaces || waitingForAdmission)
             {
                 _raceQueue.Add(request);
-                Log.Information("Race queued (max concurrent {Max}): {Release}", maxRaces, releaseName);
+                ScheduleQueueWakeupNoLock();
+                if (waitingForAdmission)
+                    Log.Information("Race queued while FTP login admission is deferred: {Release}", releaseName);
+                else Log.Information("Race queued (max concurrent {Max}): {Release}", maxRaces, releaseName);
                 var position = QueuePositionNoLock(request, now);
                 queued = new(RaceStartOutcome.Queued, section, releaseName, QueuePosition: position,
-                    Reason: position == null ? "Waiting for connected spread pools" : null);
+                    Reason: waitingForAdmission ? "Waiting for FTP login admission" : position == null ? "Waiting for connected spread pools" : null);
             }
             else
             {
@@ -526,6 +546,8 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
         if (queued != null)
         {
             PersistQueue();
+            if (queued.HintsMerged)
+                _workers.TryRun(() => { DequeueNextRace(); return Task.CompletedTask; });
             return queued;
         }
 
@@ -551,7 +573,8 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
         .Select((request, index) => (Request: QueueRequestAt(request, now), Index: index))
         .Where(p => !p.Request.IsExpired(now) && p.Request.IsDue(now) && !IsRaceNuked(p.Request)
             && !_controlRequestsInFlight.Contains(p.Request.RequestId)
-            && (p.Request.CleanupOnly || p.Request.ServerIds.Count(id => _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed && !pool.IsTrustParked) >= 2))
+            && (p.Request.CleanupOnly || p.Request.ServerIds.Count(id => CanUsePoolNoLock(id, now)) >= 2
+                && !KnownSourcesAdmissionHeldNoLock(p.Request, now)))
         .Select(p => (PredictRaceNoLock(p.Request), p.Index)), now, _config.Spread.SizeAwareRaceQueue, _config.Spread.RaceQueueMaxAgeMinutes);
 
     private int? QueuePositionNoLock(PersistedRace request, DateTime now)
@@ -604,7 +627,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             (section, releaseName, serverIds, mode, knownSourceServerId, knownSourcePath, _, _, _) = request;
             if (IsRaceNuked(request)) throw new InvalidOperationException(NukeHoldMessage);
             pools = serverIds
-                .Where(id => _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed && !pool.IsTrustParked)
+                .Where(id => CanUsePoolNoLock(id, AdmissionUtcNow()))
                 .ToDictionary(id => id, id => _spreadPools[id]);
 
             configs = serverIds
@@ -639,7 +662,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             // and register from its canonical request in the same critical section.
             request = _startingRequests[startingIndex];
             (section, releaseName, serverIds, mode, knownSourceServerId, knownSourcePath, _, _, _) = request;
-            pools = serverIds.Where(id => _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed && !pool.IsTrustParked)
+            pools = serverIds.Where(id => CanUsePoolNoLock(id, AdmissionUtcNow()))
                 .ToDictionary(id => id, id => _spreadPools[id]);
             configs = serverIds.Where(id => _config.Servers.Any(s => s.Id == id))
                 .ToDictionary(id => id, id => _config.Servers.First(s => s.Id == id));
@@ -725,11 +748,13 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
                 lock (_lock)
                 {
                     fresh = sids
-                        .Where(id => _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed && !pool.IsTrustParked)
+                        .Where(id => CanUsePoolNoLock(id, AdmissionUtcNow()))
                         .ToDictionary(id => id, id => _spreadPools[id]);
                 }
 
-                if (!request.CleanupOnly && fresh.Count < 2)
+                bool sourceAdmissionHeld;
+                lock (_lock) sourceAdmissionHeld = KnownSourcesAdmissionHeldNoLock(request, AdmissionUtcNow());
+                if (!request.CleanupOnly && (fresh.Count < 2 || sourceAdmissionHeld))
                 {
                     // A participating server was unmounted between StartRace() and here —
                     // not enough pools to race. Keep the durable request queued
@@ -882,6 +907,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             lock (_lock)
             {
                 if (!_spreadPools.TryGetValue(id, out pool)) continue;
+                if (PoolAdmissionRetryAtNoLock(id, pool, AdmissionUtcNow()) != null) continue;
             }
 
             if (!pool.IsExhausted || pool.IsTrustParked) continue;
@@ -926,11 +952,22 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
                     lock (_lock) _factories.TryGetValue(id, out factory);
                     if (factory != null)
                     {
-                        await pool.DisposeAsync();
                         var newPool = new FtpConnectionPool(factory, neededSize, ResolveAccountLoginGate(id), priorityLogins: true);
                         newPool.ConfigureHealth(_config.Spread.ValidateConnectionOnBorrow, _config.Spread.SpreadKeepaliveSeconds);
-                        await newPool.Initialize(CancellationToken.None);
-                        lock (_lock) _spreadPools[id] = newPool;
+                        try { await newPool.Initialize(CancellationToken.None); }
+                        catch { await DisposeFailedPool(newPool, id); throw; }
+                        var replaced = false;
+                        lock (_lock)
+                        {
+                            if (!_disposed && _spreadPools.TryGetValue(id, out var current) && ReferenceEquals(current, pool))
+                            {
+                                _spreadPools[id] = newPool;
+                                _poolAdmissionHolds.Remove(id);
+                                replaced = true;
+                            }
+                        }
+                        if (!replaced) { await DisposeFailedPool(newPool, id); continue; }
+                        await pool.DisposeAsync();
                         Log.Information("Spread pool replaced for {Server} (old size={Old}, new size={New})",
                             serverName, pool.MaxSize, neededSize);
                         continue;
@@ -938,6 +975,11 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
                 }
 
                 await pool.Reinitialize(CancellationToken.None);
+                lock (_lock) _poolAdmissionHolds.Remove(id);
+            }
+            catch (FtpLoginHeldException ex)
+            {
+                RecordPoolAdmissionHold(id, pool, ex);
             }
             catch (Exception ex)
             {
@@ -945,6 +987,75 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
                 else Log.Warning(ex, "Failed to reinitialize spread pool for {Server}", serverName);
             }
         }
+    }
+
+    private DateTime? PoolAdmissionRetryAtNoLock(string id, object owner, DateTime now)
+    {
+        if (!_poolAdmissionHolds.TryGetValue(id, out var hold)) return null;
+        if (ReferenceEquals(hold.Owner, owner) && hold.RetryAtUtc > now) return hold.RetryAtUtc;
+        _poolAdmissionHolds.Remove(id);
+        return null;
+    }
+
+    private bool IsPoolAdmissionHeldNoLock(string id, DateTime now) =>
+        _spreadPools.TryGetValue(id, out var pool) && pool.IsExhausted
+        && PoolAdmissionRetryAtNoLock(id, pool, now) != null;
+
+    private bool CanUsePoolNoLock(string id, DateTime now) =>
+        _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed && !pool.IsTrustParked
+        // Admission holds forbid new logins, never the reuse of an existing session.
+        && !IsPoolAdmissionHeldNoLock(id, now);
+
+    private bool KnownSourcesAdmissionHeldNoLock(PersistedRace request, DateTime now)
+    {
+        var sources = RaceAnnounceMerge.Hints(request).Select(hint => hint.ServerId)
+            .Where(id => request.ServerIds.Contains(id) && RaceAnnounceMerge.CanSource(_config.Servers.FirstOrDefault(s => s.Id == id)))
+            .Distinct().ToArray();
+        return sources.Any(id => IsPoolAdmissionHeldNoLock(id, now))
+            && !sources.Any(id => CanUsePoolNoLock(id, now));
+    }
+
+    private void RecordPoolAdmissionHold(string id, object owner, FtpLoginHeldException error)
+    {
+        DateTime retryAt;
+        lock (_lock)
+        {
+            if (_disposed || !(_spreadPools.TryGetValue(id, out var currentPool) && ReferenceEquals(currentPool, owner))
+                && !(_factories.TryGetValue(id, out var currentFactory) && ReferenceEquals(currentFactory, owner))) return;
+            var now = AdmissionUtcNow();
+            retryAt = error.RetryAtUtc is { } deadline && deadline > now ? deadline : now.AddSeconds(30);
+            _poolAdmissionHolds[id] = (owner, retryAt);
+            ScheduleQueueWakeupNoLock();
+        }
+        Log.Information("Spread pool login admission deferred for {ServerId} until {RetryAtUtc}", id, retryAt);
+    }
+
+    private void OnLoginObserved(FtpLoginObservation observation)
+    {
+        if (!observation.Succeeded || observation.Ghost) return;
+        var initialize = new List<(string Id, FtpClientFactory Factory)>();
+        lock (_lock)
+        {
+            if (_disposed) return;
+            var recovered = _config.Servers.Where(server => _poolAdmissionHolds.ContainsKey(server.Id)
+                && FtpLoginAccount.From(server.Connection).Key == observation.Account.Key).Select(server => server.Id).ToArray();
+            if (recovered.Length == 0) return;
+            foreach (var id in recovered)
+            {
+                _poolAdmissionHolds.Remove(id);
+                if (!_spreadPools.ContainsKey(id) && _factories.TryGetValue(id, out var factory))
+                    initialize.Add((id, factory));
+            }
+            ScheduleQueueWakeupNoLock();
+        }
+        // A successful manual/main-pool login supersedes an old outage deadline.
+        // Resume through normal admission; the shared login guards remain authoritative.
+        _workers.TryRun(async () =>
+        {
+            foreach (var (id, factory) in initialize)
+                await TryInitializePool(id, factory, CancellationToken.None, recoveryAttempt: null);
+            DequeueNextRace();
+        });
     }
 
     /// <summary>
@@ -1036,6 +1147,8 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             .SelectMany(r => new[]
             {
                 r.ServerIds.Any(id => _spreadPools.TryGetValue(id, out var pool) && pool.IsTrustParked) ? now.AddSeconds(30) : (DateTime?)null,
+                r.CleanupOnly ? null : r.ServerIds.Where(id => IsPoolAdmissionHeldNoLock(id, now))
+                    .Select(id => (DateTime?)_poolAdmissionHolds[id].RetryAtUtc).Min(),
                 r.CleanupOnly && r.NextProbeAtUtc <= now ? now.AddSeconds(30) : r.NextProbeAtUtc,
                 r.CleanupOnly ? null : RaceLifetimePolicy.Deadline(r.Partial, _config.Spread.PartialRaceDeadlineHours) is { } deadline
                     ? deadline <= now ? now.AddSeconds(30) : deadline : (DateTime?)null
@@ -1873,6 +1986,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             _raceQueue.Clear();
             _startingRequests.Clear();
         }
+        GuardedFtpLogin.LoginObserved -= OnLoginObserved;
         _poolRecovery.Dispose();
         _queueWakeTimer?.Dispose();
         foreach (var job in jobs)
