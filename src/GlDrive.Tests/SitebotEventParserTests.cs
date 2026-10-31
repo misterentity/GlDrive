@@ -197,6 +197,39 @@ public class SitebotEventParserTests
         Assert.Equal(accepted, SitebotEventParser.IsTrusted(new() { BotNick = nick, UserHostPattern = mask }, incomingNick, incomingHost));
     }
 
+    [Theory]
+    [InlineData("*", "bot@host.example", true)]
+    [InlineData("**", "", false)]
+    [InlineData("*@*", "bot@host.example", true)]
+    [InlineData("*@*", "bothost.example", false)]
+    [InlineData("b*t@*.ex?mple", "bOT@a.b.example", true)]
+    [InlineData("b*t@*.ex?mple", "bot@example", false)]
+    [InlineData("bot@host.example*", "bot@host.example", true)]
+    [InlineData("bot@host.example", "bot@host.example.evil", false)]
+    [InlineData("bot+1@h(o)st.[ex]", "bot+1@h(o)st.[ex]", true)]
+    [InlineData("bot+1@h(o)st.[ex]", "bott1@hostXex", false)]
+    [InlineData("a*a*a*a*a*a*a*a*a*b", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false)]
+    [InlineData("?*?", "ab", true)]
+    [InlineData("?*?", "a", false)]
+    public void Host_mask_wildcards_match_the_whole_host_literally(string mask, string host, bool accepted)
+    {
+        Assert.Equal(accepted, SitebotEventParser.IsTrusted(new() { BotNick = "bot", UserHostPattern = mask }, "bot", host));
+    }
+
+    [Fact]
+    public void Trust_verdict_does_not_depend_on_machine_load()
+    {
+        // CI run 41164126807: the first exact-host check took 65 ms against a 50 ms regex
+        // timeout, and the timeout was answered as "untrusted". A busy box at startup must not
+        // reject its own sitebot.
+        var config = new SitebotChannelConfig { BotNick = "bot", UserHostPattern = "*b*o*t*@*h*o*s*t*.*e*x*a*m*p*l*e*" };
+        var host = "bot@" + new string('h', 120) + "host." + new string('e', 100) + "example";
+        var rejected = 0;
+        Parallel.For(0, Environment.ProcessorCount * 400, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount * 4 },
+            _ => { if (!SitebotEventParser.IsTrusted(config, "bot", host)) Interlocked.Increment(ref rejected); });
+        Assert.Equal(0, rejected);
+    }
+
     [Fact]
     public void Trusted_envelope_is_channel_bound_and_default_is_inert()
     {

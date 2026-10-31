@@ -66,9 +66,23 @@ public static class SitebotEventParser
             config.BotNick.Length > 128 || !string.Equals(config.BotNick, nick, StringComparison.OrdinalIgnoreCase)) return false;
         if (string.IsNullOrEmpty(config.UserHostPattern)) return true;
         if (config.UserHostPattern.Length > 256 || string.IsNullOrEmpty(userHost) || userHost.Length > 256) return false;
-        var escaped = Regex.Escape(config.UserHostPattern).Replace(@"\*", ".*").Replace(@"\?", ".");
-        try { return Pattern(@"\A" + escaped + @"\z").IsMatch(userHost); }
-        catch (RegexMatchTimeoutException) { return false; }
+        return WildcardMatch(config.UserHostPattern, userHost);
+    }
+
+    // Matched directly rather than by regex: a cold regex under load blew its 50 ms timeout,
+    // and the timeout was answered as "untrusted". Both inputs are bounded at 256 chars.
+    private static bool WildcardMatch(string mask, string host)
+    {
+        int m = 0, h = 0, star = -1, resume = 0;
+        while (h < host.Length)
+        {
+            if (m < mask.Length && mask[m] == '*') { star = m++; resume = h; }
+            else if (m < mask.Length && (mask[m] == '?' || char.ToUpperInvariant(mask[m]) == char.ToUpperInvariant(host[h]))) { m++; h++; }
+            else if (star >= 0) { m = star + 1; h = ++resume; }
+            else return false;
+        }
+        while (m < mask.Length && mask[m] == '*') m++;
+        return m == mask.Length;
     }
 
     /// <summary>Keep explicit non-NEW labels away from legacy catch-all new-release rules, even if malformed.</summary>
