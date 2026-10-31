@@ -31,6 +31,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
     private readonly SectionBlacklistStore _blacklist;
     private readonly MetadataFilterService _metadataFilter;
     private readonly Lock _lock = new();
+    private readonly AutoRaceSkipNotice _autoRaceSkipNotice = new();
     private readonly SpreadPoolRecoveryLoop _poolRecovery = new();
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _poolInitGates = new();
     private volatile bool _disposed;
@@ -1212,16 +1213,28 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             // Visibility: this was the silent killer — when spread pools fail to
             // initialize (login-cap starvation), _spreadPools is empty, every
             // auto-race lands here, and NOTHING was logged. Surface it so "review
-            // logs" actually shows why racing is dead.
+            // logs" actually shows why racing is dead — but name the missing sites,
+            // and only warn when that set changes: a peer outage skips every announce.
             int livePools;
             lock (_lock) livePools = _spreadPools.Count;
-            Log.Warning("Auto-race skipped for {Release} [{Section}]: only {Count} connected spread pool(s) " +
-                        "(need 2). Live FXP pools={Live} — if 0, spread pool init failed (check login cap).",
-                releaseName, category, serverIds.Count, livePools);
+            var unavailable = _config.Servers
+                .Where(s => s.Enabled && s.SpreadSite.Sections.Count > 0 && !connectedIds.Contains(s.Id))
+                .Select(s => s.Name)
+                .ToArray();
+            var unavailableText = unavailable.Length > 0 ? string.Join(", ", unavailable) : "none";
+            var hint = livePools == 0 ? " No FXP pool is live — if sites are mounted, spread pool init failed (check login cap)." : "";
+            if (_autoRaceSkipNotice.Record(unavailable, DateTime.UtcNow) is { } suppressed)
+                Log.Warning("Auto-race skipped for {Release} [{Section}]: {Count} of 2 required race sites connected; " +
+                            "unavailable: {Unavailable}.{Hint} Repeats log at Debug until this changes ({Suppressed} suppressed).",
+                    releaseName, category, serverIds.Count, unavailableText, hint, suppressed);
+            else
+                Log.Debug("Auto-race skipped for {Release} [{Section}]: {Count} of 2 required race sites connected; unavailable: {Unavailable}",
+                    releaseName, category, serverIds.Count, unavailableText);
             AutoRaceAttempted?.Invoke(category, releaseName,
-                $"Skipped — only {serverIds.Count} connected server(s) with FXP pool (live pools={livePools})");
+                $"Skipped — only {serverIds.Count} connected race site(s); unavailable: {unavailableText}");
             return;
         }
+        _autoRaceSkipNotice.Reset();
 
         // Structural feasibility short-circuit (FTP-free). If fewer than 2 connected
         // servers can structurally host this section (not blacklisted AND section-
