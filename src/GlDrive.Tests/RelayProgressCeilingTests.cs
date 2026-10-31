@@ -77,17 +77,19 @@ public sealed class RelayProgressCeilingTests
     }
 
     [Fact]
-    public async Task Steady_progress_outlives_the_window_and_a_stall_does_not()
+    public void Steady_progress_outlives_the_window_and_a_stall_does_not()
     {
         // The production wiring in miniature: ceiling armed once, re-armed on each progress tick.
+        // Manual time: the wall-clock version flaked twice under CI load (one 100 ms delay
+        // stalling past the 1 s window cancels the token), even after its margins were widened.
+        var clock = new ManualClock();
         var window = TimeSpan.FromMilliseconds(1000);
-        using var cts = new CancellationTokenSource();
-        cts.CancelAfter(window);
-        var last = DateTime.UtcNow - FxpFailurePolicy.ProgressRearmInterval;
+        using var cts = new CancellationTokenSource(window, clock);
+        var last = clock.GetUtcNow().UtcDateTime - FxpFailurePolicy.ProgressRearmInterval;
         for (var i = 0; i < 20; i++)
         {
-            await Task.Delay(100);
-            var now = DateTime.UtcNow;
+            clock.Advance(TimeSpan.FromMilliseconds(100));
+            var now = clock.GetUtcNow().UtcDateTime;
             // Throttle bypassed (interval is 1s) by stamping last far enough back each tick.
             if (FxpFailurePolicy.ShouldRearmOnProgress(last, now))
             {
@@ -96,7 +98,48 @@ public sealed class RelayProgressCeilingTests
             }
         }
         Assert.False(cts.IsCancellationRequested, "2s of steady progress must not hit a 1s no-progress window");
-        await Task.Delay(2500);
+        clock.Advance(TimeSpan.FromMilliseconds(999));
+        Assert.False(cts.IsCancellationRequested, "the window must not fire early");
+        clock.Advance(TimeSpan.FromMilliseconds(1));
         Assert.True(cts.IsCancellationRequested, "a stall must still fire the window");
+    }
+
+    private sealed class ManualClock : TimeProvider
+    {
+        private readonly List<Timer> _timers = [];
+        private DateTimeOffset _utc = new(2026, 10, 31, 0, 0, 0, TimeSpan.Zero);
+        public override DateTimeOffset GetUtcNow() => _utc;
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = new Timer(this, callback, state);
+            timer.Change(dueTime, period);
+            _timers.Add(timer);
+            return timer;
+        }
+
+        internal void Advance(TimeSpan interval)
+        {
+            _utc += interval;
+            foreach (var timer in _timers.ToArray()) timer.FireIfDue(_utc);
+        }
+
+        private sealed class Timer(ManualClock clock, TimerCallback callback, object? state) : ITimer
+        {
+            private DateTimeOffset? _due;
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+            {
+                _due = dueTime == Timeout.InfiniteTimeSpan ? null : clock._utc + dueTime;
+                return true;
+            }
+            internal void FireIfDue(DateTimeOffset now)
+            {
+                if (_due is not { } due || due > now) return;
+                _due = null;
+                callback(state);
+            }
+            public void Dispose() => _due = null;
+            public ValueTask DisposeAsync() { Dispose(); return default; }
+        }
     }
 }
