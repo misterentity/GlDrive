@@ -26,15 +26,16 @@ public class RaceHistoryItem
     public List<SkiplistTraceEntry>? SkiplistTrace { get; set; }
 
     // PRD R1 — race outcome metrics. FilesTotal is the release's file count;
-    // FilesDelivered is how many reached at least one viable destination;
-    // CleanComplete is true when every non-source/non-download-only dest got
-    // the full set (0 undelivered).
+    // FilesDelivered is the best participating receiver's inventory count,
+    // including pre-existing files; BytesTransferred measures this attempt's uploads.
+    // CleanComplete is true when every participating receiving site got the
+    // full set and met the configured completion policy (0 undelivered).
     public int FilesTotal { get; set; }
     public int FilesDelivered { get; set; }
     public bool CleanComplete { get; set; }
 
-    // Final 0-65535 race score (points) captured at completion — same value shown on the
-    // retained race card. Persisted so a finished race's points survive a restart.
+    // Final 0-65535 race score. Verified clean completion earns full points even
+    // when a receiving source's display role excluded it from the live score.
     public int Score { get; set; }
 
     // PRD O3 — failure taxonomy. One of: "", "config", "upload-denied",

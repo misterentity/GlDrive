@@ -13,8 +13,7 @@ public partial class SpreadJob
         List<(string Id, string User, bool Complete, int Owned, DateTime? ListingAt)> destinations;
         lock (_ownershipLock)
         {
-            var participants = _sitePathsRef?.Keys ?? (IEnumerable<string>)_siteProgress.Keys;
-            destinations = participants.Where(id => IsReceivingSite(id) && !IsUnopenedFillOnlyNoLock(id))
+            destinations = ParticipatingReceiversNoLock()
                 .Select(id => (id, _serverConfigs.GetValueOrDefault(id)?.Connection.Username ?? "",
                     _destStates.GetValueOrDefault(id) == DestState.Complete && _serverFileCount.GetValueOrDefault(id) > 0
                     && HasExpectedFilesNoLock(id) && !_destHasMissingStub.GetValueOrDefault(id),

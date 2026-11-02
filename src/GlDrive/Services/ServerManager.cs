@@ -485,7 +485,7 @@ public partial class ServerManager : IDisposable
             }
         }
 
-        // Mount new enabled servers that aren't mounted yet
+        // Mount enabled servers without a service, including existing sites awaiting retry.
         foreach (var server in _config.Servers.Where(s => s.Enabled))
         {
             if (_disposed) return;
@@ -493,12 +493,16 @@ public partial class ServerManager : IDisposable
             {
                 try
                 {
-                    Log.Information("New server {ServerName} detected, mounting", server.Name);
+                    Log.Information("Configured server {ServerName} is not mounted, attempting connection", server.Name);
                     await MountServer(server.Id);
+                }
+                catch (SiteRetryDeferredException deferred)
+                {
+                    Log.Information("FTP retry for {Name} remains deferred until {RetryAt}", server.Name, deferred.RetryAtUtc);
                 }
                 catch (Exception ex)
                 {
-                    Log.Warning(ex, "Failed to mount new server {ServerName}", server.Name);
+                    Log.Warning(ex, "Failed to mount configured server {ServerName}", server.Name);
                 }
             }
             else
@@ -516,6 +520,10 @@ public partial class ServerManager : IDisposable
                     try
                     {
                         await MountServer(server.Id);
+                    }
+                    catch (SiteRetryDeferredException deferred)
+                    {
+                        Log.Information("FTP retry for {Name} remains deferred until {RetryAt}", server.Name, deferred.RetryAtUtc);
                     }
                     catch (Exception ex)
                     {

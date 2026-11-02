@@ -12,6 +12,12 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.19.5 — accurate retry and race-completion diagnostics (2026-11-02)
+
+- Configuration refreshes distinguish scheduled retry deferrals from genuine mount failures and stop calling existing unavailable sites new servers.
+- Race completion history includes sites that both supply and receive files, correcting false partial outcomes for initially incomplete sources. Historical records are retained.
+- See [release notes](releases/v3.19.5.md) and [deployment evidence](releases/v3.19.5-deployment.md).
+
 ## v3.19.3 — defer scans and race starts during login holds (2026-10-30)
 
 - Scans honor login-admission deadlines for empty pools, retain usable authenticated sessions,

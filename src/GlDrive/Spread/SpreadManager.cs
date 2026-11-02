@@ -836,22 +836,10 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             var totalFiles = job.Sites.Values.Any() ? job.Sites.Values.Max(s => s.FilesOwned) : 0;
             var siteNames = string.Join(", ", job.Sites.Values.Select(s => s.ServerName));
 
-            // PRD R1 — outcome metrics. FilesTotal = release file count (max across
-            // sites). Destinations = non-source sites, excluding fill-only dests
-            // whose dir never appeared (they never participated — counting them
-            // kept CleanComplete permanently false while the real dest finished).
-            // FilesDelivered = best dest's owned count. CleanComplete = every
-            // participating dest got the full set.
-            var filesTotal = job.Sites.Values.Any() ? job.Sites.Values.Max(s => s.FilesTotal) : 0;
-            var unopened = job.UnopenedFillOnlyDests;
-            var dests = job.Sites.Values
-                .Where(s => !s.IsSource && !unopened.Contains(s.ServerId))
-                .ToList();
-            var filesDelivered = dests.Count > 0 ? dests.Max(s => s.FilesOwned) : 0;
-            var cleanComplete = job.State == SpreadJobState.Completed
-                && filesTotal > 0
-                && dests.Count > 0
-                && dests.All(s => s.FilesOwned >= filesTotal);
+            // Use the engine's participating receivers and authoritative inventory.
+            // The first announcing site can be a partial source that receives files;
+            // its src display label must not zero delivery or mark a completed fill partial.
+            var (filesTotal, filesDelivered, cleanComplete) = job.DeliveryOutcome();
 
             // Persist only the matched (denying) skiplist rule. The full per-rule
             // trace was 98% of race-history.json (9.9MB / 500 entries, ~10MB held
@@ -878,7 +866,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
                 FilesTotal = filesTotal,
                 FilesDelivered = filesDelivered,
                 CleanComplete = cleanComplete,
-                Score = job.Score,
+                Score = cleanComplete ? 65535 : job.Score,
                 FailureCategory = job.State == SpreadJobState.Failed
                     ? SpreadJob.ClassifyFailure(job.LastError)
                     : "",

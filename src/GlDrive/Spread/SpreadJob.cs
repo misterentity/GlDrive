@@ -469,6 +469,28 @@ public partial class SpreadJob : IDisposable
         _serverConfigs.TryGetValue(serverId, out var config)
         && !config.SpreadSite.DownloadOnly && !LiveSpreadPolicy.IsAffiliated(config, ReleaseName);
 
+    // Caller holds _ownershipLock. A source can also receive missing files, so
+    // its display role must not exclude it from delivery/outcome accounting.
+    private IEnumerable<string> ParticipatingReceiversNoLock() =>
+        (_sitePathsRef?.Keys ?? (IEnumerable<string>)_siteProgress.Keys)
+        .Where(id => IsReceivingSite(id) && !IsUnopenedFillOnlyNoLock(id));
+
+    internal (int FilesTotal, int FilesDelivered, bool CleanComplete) DeliveryOutcome()
+    {
+        lock (_ownershipLock)
+        {
+            var total = ExpectedTotalNoLock();
+            var receivers = ParticipatingReceiversNoLock().ToList();
+            var delivered = receivers.Count > 0 ? receivers.Max(id => _serverFileCount.GetValueOrDefault(id)) : 0;
+            var clean = State == SpreadJobState.Completed && total > 0 && receivers.Count > 0
+                && receivers.All(id => _serverFileCount.GetValueOrDefault(id) >= total
+                    && HasExpectedFilesNoLock(id) && !_destHasMissingStub.GetValueOrDefault(id)
+                    && (!_spreadConfig.WaitForDestinationComplete
+                        || _destStates.GetValueOrDefault(id) == DestState.Complete));
+            return (total, delivered, clean);
+        }
+    }
+
     /// <summary>Set by SpreadManager: search connected sites (excluding given ids) for
     /// an alternate source of this release. Returns (serverId, path, category) or null.</summary>
     public Func<string, IReadOnlyCollection<string>, CancellationToken, CancellationToken, Task<(string serverId, string path, string category)?>>? SourceSearch { get; set; }
