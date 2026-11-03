@@ -2821,15 +2821,19 @@
                                         </ItemsControl.ItemsPanel>
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
-                                                <Border Width="280" Height="320" Margin="0,0,12,0"
+                                                <Border Width="280" Height="340" Margin="0,0,12,0"
                                                         Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1">
                                                     <Grid>
                                                         <DockPanel Margin="16">
                                                             <!-- Title -->
-                                                            <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
+                                                            <!-- Fixed height keeps every card's disc on the same baseline. -->
+                                                            <StackPanel DockPanel.Dock="Top" Margin="0,0,0,8" Height="92">
                                                                 <TextBlock Text="{Binding Name}" Style="{DynamicResource DisplayTextStyle}" FontSize="15"/>
                                                                 <TextBlock Text="{Binding Host}" Style="{DynamicResource MicroTextStyle}" Margin="0,2,0,0"/>
-                                                                <TextBlock Text="{Binding HealthLine}" Style="{DynamicResource MicroTextStyle}" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                                                                <!-- Capped at 3 lines so a long health line can't squeeze the disc; full text in the tooltip. -->
+                                                                <TextBlock Text="{Binding HealthLine}" Style="{DynamicResource MicroTextStyle}" Margin="0,4,0,0"
+                                                                           TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="48"
+                                                                           ToolTip="{Binding HealthLine}"/>
                                                             </StackPanel>
                                                             <!-- Action buttons -->
                                                             <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,8,0,0">
@@ -2879,11 +2883,14 @@
                                                                 <TextBlock Text="{Binding StatusLine}" Style="{DynamicResource ServerStatusTextStyle}"/>
                                                             </Border>
                                                             <!-- Big disc (Stroke + glow recoloring driven by SiteTag) -->
-                                                            <Grid VerticalAlignment="Center" HorizontalAlignment="Center">
+                                                            <!-- Viewbox scales the disc down instead of letting layout clip it when space is short. -->
+                                                            <Viewbox StretchDirection="DownOnly" VerticalAlignment="Center" HorizontalAlignment="Center">
+                                                            <Grid Width="130" Height="130">
                                                                 <Ellipse Width="130" Height="130" Stroke="{DynamicResource LineDimBrush}" StrokeThickness="2"/>
+                                                                <!-- Dash period tiles the 127px-diameter stroke path exactly 40 times, so no seam rotates around. -->
                                                                 <Ellipse Width="130" Height="130" StrokeThickness="3"
                                                                         Style="{DynamicResource ServerStatusRingStyle}"
-                                                                        StrokeDashArray="2,1.2" RenderTransformOrigin="0.5,0.5">
+                                                                        StrokeDashArray="2,1.3249" RenderTransformOrigin="0.5,0.5">
                                                                     <Ellipse.RenderTransform>
                                                                         <RotateTransform Angle="0"/>
                                                                     </Ellipse.RenderTransform>
@@ -2898,16 +2905,19 @@
                                                                         </EventTrigger>
                                                                     </Ellipse.Triggers>
                                                                 </Ellipse>
-                                                                <Ellipse Width="92" Height="92" Stroke="{DynamicResource LineDimBrush}" StrokeThickness="1"/>
-                                                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                                                <Ellipse Width="100" Height="100" Stroke="{DynamicResource LineDimBrush}" StrokeThickness="1"/>
+                                                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" ToolTip="{Binding LoginUsageLine}">
                                                                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                                                                        <TextBlock Text="{Binding CapacityPercent, StringFormat=N0}" Style="{DynamicResource DisplayTextStyle}" FontSize="28" HorizontalAlignment="Center"/>
-                                                                        <TextBlock Text="%" Style="{DynamicResource DisplayTextStyle}" FontSize="18" VerticalAlignment="Bottom" Margin="3,0,0,4"/>
+                                                                        <TextBlock Text="{Binding CapacityPercent, StringFormat=N0}" Style="{DynamicResource DisplayTextStyle}" FontSize="26" HorizontalAlignment="Center"/>
+                                                                        <TextBlock Text="%" Style="{DynamicResource DisplayTextStyle}" FontSize="15" VerticalAlignment="Bottom" Margin="2,0,0,4"/>
                                                                     </StackPanel>
-                                                                    <TextBlock Text="{Binding CapacityUsedDisplay}" Style="{DynamicResource MicroTextStyle}" HorizontalAlignment="Center"/>
-                                                                    <TextBlock Text="POOL SLOTS" Style="{DynamicResource MicroTextStyle}" HorizontalAlignment="Center" FontSize="12" ToolTip="{Binding LoginUsageLine}"/>
+                                                                    <TextBlock Style="{DynamicResource MicroTextStyle}" FontSize="11" HorizontalAlignment="Center">
+                                                                        <Run Text="{Binding CapacityUsedDisplay, Mode=OneWay}"/><Run Text=" / "/><Run Text="{Binding CapacityTotalDisplay, Mode=OneWay}"/>
+                                                                    </TextBlock>
+                                                                    <TextBlock Text="POOL SLOTS" Style="{DynamicResource MicroTextStyle}" FontSize="10" HorizontalAlignment="Center" Margin="0,1,0,0"/>
                                                                 </StackPanel>
                                                             </Grid>
+                                                            </Viewbox>
                                                         </DockPanel>
                                                     </Grid>
                                                 </Border>
