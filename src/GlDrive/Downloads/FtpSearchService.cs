@@ -126,11 +126,19 @@ public class FtpSearchService : IDisposable
         return true;
     }
 
+    private sealed record SearchOptions(SearchMethod Method, string[] Paths, int MaxDepth);
+
+    // Config publication replaces changed path lists. Capture the list and scalar
+    // settings before awaiting so one operation never changes roots/depth mid-crawl.
+    private SearchOptions CaptureSearchOptions() =>
+        new(_searchConfig.Method, _searchConfig.SearchPaths.ToArray(), _searchConfig.MaxDepth);
+
     private sealed class SearchRun
     {
         // Ending a race stops traversal/borrowing, but must not tear an FTP
         // command already on the wire. Caller cancellation and deadlines still do.
         public CancellationToken OperationToken;
+        public required SearchOptions Options;
         public readonly List<SearchResult> Results = [];
         public string Method = "Search";
         public DateTime? IndexBuiltAtUtc;
@@ -172,7 +180,7 @@ public class FtpSearchService : IDisposable
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(_searchDeadline);
         using var traversal = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token, stopToken);
-        var run = new SearchRun { OperationToken = deadline.Token };
+        var run = new SearchRun { OperationToken = deadline.Token, Options = CaptureSearchOptions() };
         try
         {
             await SearchOnce(keyword, progress, run, traversal.Token);
@@ -201,7 +209,7 @@ public class FtpSearchService : IDisposable
 
     private async Task SearchOnce(string keyword, IProgress<string>? progress, SearchRun run, CancellationToken ct)
     {
-        var method = _searchConfig.Method;
+        var method = run.Options.Method;
 
         if (method == SearchMethod.SiteSearch)
         {
@@ -479,15 +487,16 @@ public class FtpSearchService : IDisposable
     /// </summary>
     public async Task RefreshIndex(IProgress<string>? progress = null, CancellationToken ct = default)
     {
+        var options = CaptureSearchOptions();
         var entries = new List<IndexEntry>();
         var report = new IndexCrawlReport();
         progress?.Report("Building search index...");
 
-        foreach (var searchPath in _searchConfig.SearchPaths)
+        foreach (var searchPath in options.Paths)
         {
             if (report.Aborted) break;
             var root = NormalizeSearchRoot(searchPath);
-            await CrawlForIndex(ListViaPool, root, root, 0, _searchConfig.MaxDepth, entries, report, ct);
+            await CrawlForIndex(ListViaPool, root, root, 0, options.MaxDepth, entries, report, ct);
         }
 
         List<IndexEntry> previous;
@@ -758,6 +767,7 @@ public class FtpSearchService : IDisposable
 
     private async Task RunLiveCrawl(string keyword, IProgress<string>? progress, SearchRun run, CancellationToken ct)
     {
+        var options = run.Options;
         run.Method = run.Results.Count > 0 ? "SITE SEARCH + Live crawl" : "Live crawl";
         var results = run.Results;
         var report = new IndexCrawlReport();
@@ -768,17 +778,17 @@ public class FtpSearchService : IDisposable
         try
         {
             // Search paths sequentially to avoid borrowing multiple connections at once
-            for (var rootIndex = 0; rootIndex < _searchConfig.SearchPaths.Count; rootIndex++)
+            for (var rootIndex = 0; rootIndex < options.Paths.Length; rootIndex++)
             {
-                var path = _searchConfig.SearchPaths[rootIndex];
+                var path = options.Paths[rootIndex];
                 ct.ThrowIfCancellationRequested();
                 if (results.Count >= MaxResults) { report.Truncated = true; break; }
                 await SearchRecursive((listingPath, token) => ListForLiveSearch(listingPath, token, run.OperationToken),
                     NormalizeSearchRoot(path), keyword,
-                    0, _searchConfig.MaxDepth, results, progress, ct, report, queryTerms: terms);
+                    0, options.MaxDepth, results, progress, ct, report, queryTerms: terms);
                 if (results.Count >= MaxResults || report.Aborted)
                 {
-                    if (rootIndex + 1 < _searchConfig.SearchPaths.Count) report.Truncated = true;
+                    if (rootIndex + 1 < options.Paths.Length) report.Truncated = true;
                     break;
                 }
             }

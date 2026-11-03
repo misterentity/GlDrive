@@ -430,39 +430,9 @@ public sealed class ConfigurationAutomation : IAutomationModule, IAutomationAppr
         return false;
     }
 
-    // Preserve objects held by running managers, including server identity across reorders.
-    internal static void Reconcile(object destination, object source)
-    {
-        foreach (var property in Properties(source.GetType()))
-        {
-            var value = property.GetValue(source);
-            var existing = property.GetValue(destination);
-            // Hook definitions are restart-only snapshots, including retained raw JSON.
-            // Recursive POCO reconciliation would lose their private parse state.
-            if (property.PropertyType == typeof(HookConfig) || property.PropertyType == typeof(IrcAttentionConfig) || property.PropertyType == typeof(DataStewardshipConfig) || property.PropertyType == typeof(AutomationSecurityConfig) || property.PropertyType == typeof(RecoveryConfig)) property.SetValue(destination, value);
-            else if (value is IList sourceList && existing is IList targetList && !property.PropertyType.IsArray)
-            {
-                var previous = targetList.Cast<object>().ToList();
-                var replacements = new List<object?>();
-                foreach (var item in sourceList)
-                {
-                    if (item is ServerConfig server && previous.OfType<ServerConfig>().FirstOrDefault(s => s.Id == server.Id) is { } retained)
-                    { Reconcile(retained, server); replacements.Add(retained); }
-                    else replacements.Add(item);
-                }
-                targetList.Clear();
-                foreach (var item in replacements) targetList.Add(item);
-            }
-            else if (value is IDictionary sourceDictionary && existing is IDictionary targetDictionary)
-            {
-                targetDictionary.Clear();
-                foreach (DictionaryEntry entry in sourceDictionary) targetDictionary.Add(entry.Key, entry.Value);
-            }
-            else if (value != null && existing != null && property.PropertyType.Namespace == typeof(AppConfig).Namespace && !property.PropertyType.IsEnum)
-                Reconcile(existing, value);
-            else property.SetValue(destination, value);
-        }
-    }
+    // Use the same publication boundary as Settings and agent edits: retain live
+    // objects, leave unchanged collections alone and replace changed collections.
+    internal static void Reconcile(object destination, object source) => ConfigReconciler.Apply(destination, source);
 
     private static IEnumerable<PropertyInfo> Properties(Type type) => type.GetProperties().Where(p => p.CanRead && p.CanWrite && p.GetCustomAttribute<JsonIgnoreAttribute>() == null);
 

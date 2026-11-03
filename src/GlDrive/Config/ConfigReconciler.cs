@@ -17,7 +17,9 @@ internal static class ConfigReconciler
         {
             var value = property.GetValue(source);
             var existing = property.GetValue(destination);
-            if (property.PropertyType == typeof(IrcAttentionConfig) || property.PropertyType == typeof(DataStewardshipConfig) || property.PropertyType == typeof(AutomationSecurityConfig) || property.PropertyType == typeof(RecoveryConfig)) property.SetValue(destination, value);
+            // These settings are owned snapshots. In particular, HookConfig carries
+            // private raw-JSON parse state that recursive POCO copying would lose.
+            if (property.PropertyType == typeof(HookConfig) || property.PropertyType == typeof(IrcAttentionConfig) || property.PropertyType == typeof(DataStewardshipConfig) || property.PropertyType == typeof(AutomationSecurityConfig) || property.PropertyType == typeof(RecoveryConfig)) property.SetValue(destination, value);
             else if (value is IList sourceList && existing is IList targetList && !property.PropertyType.IsArray)
             {
                 if (SameContents(sourceList, targetList)) continue;
