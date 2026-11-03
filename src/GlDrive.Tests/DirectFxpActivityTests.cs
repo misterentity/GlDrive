@@ -29,7 +29,7 @@ public sealed class DirectFxpActivityTests : IDisposable
             var pool = new FtpConnectionPool(null!, 1);
             typeof(FtpConnectionPool).GetField("_created", BindingFlags.Instance | BindingFlags.NonPublic)!
                 .SetValue(pool, 1);
-            typeof(FtpConnectionPool).GetProperty(nameof(FtpConnectionPool.UseCpsv))!.SetValue(pool, true);
+            typeof(FtpConnectionPool).GetField("_cpsvAdvertised", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(pool, true);
             pools.Add(site, pool);
         }
         return manager;

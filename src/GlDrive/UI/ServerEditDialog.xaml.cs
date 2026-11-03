@@ -585,7 +585,7 @@ public partial class ServerEditDialog : Window
 
             async Task<FtpListItem[]> ListDir(string path)
             {
-                if (useCpsv)
+                if (useCpsv && !CpsvDataHelper.IsCpsvUnusable(controlHost))
                     return await CpsvDataHelper.ListDirectory(client, path, controlHost);
                 return await client.GetListing(path, FtpListOption.AllFiles);
             }
@@ -1184,7 +1184,7 @@ public partial class ServerEditDialog : Window
 
             async Task<FtpListItem[]> ListDir(string path)
             {
-                if (useCpsv)
+                if (useCpsv && !CpsvDataHelper.IsCpsvUnusable(controlHost))
                     return await CpsvDataHelper.ListDirectory(client, path, controlHost);
                 return await client.GetListing(path, FtpListOption.AllFiles);
             }

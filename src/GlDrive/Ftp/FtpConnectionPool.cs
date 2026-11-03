@@ -560,7 +560,10 @@ public class FtpConnectionPool : IAsyncDisposable
     public bool IsConnected { get; private set; }
     /// <summary>True when all connections have been discarded and the pool can't serve requests.</summary>
     public bool IsExhausted => IsConnected && _created <= 0 && _active <= 0;
-    public bool UseCpsv { get; private set; }
+    private bool _cpsvAdvertised;
+    // FEAT advertising CPSV is necessary but not sufficient: a daemon whose CPSV data channel
+    // stays TLS server (ioFTPD) is switched to standard PASV by CpsvDataHelper.
+    public bool UseCpsv => _cpsvAdvertised && !CpsvDataHelper.IsCpsvUnusable(ControlHost);
     public string ControlHost { get; private set; } = "";
 
     public Task Initialize(CancellationToken ct = default)
@@ -603,7 +606,7 @@ public class FtpConnectionPool : IAsyncDisposable
                 ControlHost = _factory.Host;
                 if (client.Capabilities.Contains(FtpCapability.CPSV))
                 {
-                    UseCpsv = true;
+                    _cpsvAdvertised = true;
                     if (!recovery)
                         Log.Information("Server supports CPSV — using BNC-compatible data connections");
                 }

@@ -195,13 +195,24 @@ public static class CpsvDataHelper
         // localBind pins the DATA socket to one network adapter (multi-network downloads). The
         // control channel stays on the default route; glftpd already accepts data from an IP
         // other than the control one, because behind a BNC the control IP is the BNC's.
+        return await ConnectDataSocket(client.Host, cpsvIp, port, localBind, ct);
+    }
+
+    /// <summary>
+    /// Connects the data socket and records which control host it belongs to, so the TLS
+    /// handshake can attribute what it observes about the peer to the right site.
+    /// </summary>
+    internal static async Task<TcpClient> ConnectDataSocket(string controlHost, string dataIp, int port,
+        System.Net.IPAddress? localBind, CancellationToken ct)
+    {
         var tcp = localBind == null
             ? new TcpClient()
             : new TcpClient(new System.Net.IPEndPoint(localBind, 0));
         try
         {
-            await WithDataDeadline(async t => { await tcp.ConnectAsync(cpsvIp, port, t); return true; },
+            await WithDataDeadline(async t => { await tcp.ConnectAsync(dataIp, port, t); return true; },
                 "data connection", DataSetupDeadline, ct);
+            AttributeDataSocket(tcp.Client, controlHost);
             Log.Debug("Data connection established");
             return tcp;
         }
@@ -247,16 +258,44 @@ public static class CpsvDataHelper
     // so we SSL_accept. ioFTPD also advertises CPSV in FEAT but stays the TLS SERVER on
     // the data channel; with both ends waiting for the other's ClientHello every transfer
     // hung for the full deadline (sitea, 2026-11-02: 0 of 35+ LISTs succeeded).
-    // The role is a property of the PEER, so it is learned per data IP rather than
-    // inferred from FEAT or a banner: a peer that speaks first is a client, a peer that
-    // stays silent through the probe window is a server. A learned role that later fails
-    // is forgotten so the next transfer probes again.
+    //
+    // Answering such a peer as TLS client from here is not an option: v3.19.7 tried it and
+    // ioFTPD reset every SChannel ClientHello (3 of 3) while accepting OpenSSL's and GnuTLS's.
+    // CPSV buys nothing on a daemon that stays server anyway, so the control HOST is marked
+    // and FtpConnectionPool.UseCpsv turns false for it: the next transfer uses FluentFTP's
+    // standard PASV path, where GnuTLS is the TLS client (the stack the control channel
+    // already proves works). FXP mode detection follows the same flag.
+    //
+    // The role is a property of the PEER, so it is observed rather than inferred from FEAT
+    // or a banner: a peer that speaks first is a client, a peer that stays silent through the
+    // probe window is a server. Misreading a stalled glftpd backend as a TLS server would
+    // move a working site off CPSV, so the evidence is graded:
+    //   * a data IP or control host that has ever completed a glftpd-style handshake is never
+    //     guessed about again - it waits the full deadline as before (a learned IP is
+    //     forgotten if a handshake in that role fails);
+    //   * an unproven host needs SilentStrikesToSwitch consecutive silent data channels;
+    //   * a switch expires after CpsvSwitchLifetime, so a wrong one cannot become permanent.
     internal enum DataTlsPeerRole { Unknown, Client, Server }
 
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<System.Net.IPAddress, DataTlsPeerRole>
         LearnedRoles = new();
 
-    /// <summary>How long a peer of unknown role gets to start the handshake before we start it.</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime>
+        TlsServerCpsvHosts = new(StringComparer.OrdinalIgnoreCase);
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte>
+        ProvenClientHosts = new(StringComparer.OrdinalIgnoreCase);
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, int>
+        SilentStrikes = new(StringComparer.OrdinalIgnoreCase);
+
+    internal const int SilentStrikesToSwitch = 2;
+    internal static readonly TimeSpan CpsvSwitchLifetime = TimeSpan.FromHours(6);
+
+    // Data socket -> control host, so the handshake can attribute what it observes.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Socket, string> DataSocketHosts = new();
+
+    /// <summary>How long a peer of unknown role gets to start the handshake.</summary>
     internal static readonly TimeSpan DataTlsRoleProbeWindow = TimeSpan.FromSeconds(3);
 
     internal static DataTlsPeerRole LearnedDataTlsRole(System.Net.IPAddress ip) =>
@@ -264,84 +303,105 @@ public static class CpsvDataHelper
 
     internal static void ForgetDataTlsRole(System.Net.IPAddress ip) => LearnedRoles.TryRemove(RoleKey(ip), out _);
 
+    /// <summary>True once this host's CPSV data peer was observed to stay TLS server.</summary>
+    internal static bool IsCpsvUnusable(string? controlHost) => IsCpsvUnusable(controlHost, DateTime.UtcNow);
+
+    internal static bool IsCpsvUnusable(string? controlHost, DateTime nowUtc)
+    {
+        if (string.IsNullOrEmpty(controlHost) || !TlsServerCpsvHosts.TryGetValue(controlHost, out var since))
+            return false;
+        if (nowUtc - since < CpsvSwitchLifetime) return true;
+        if (TlsServerCpsvHosts.TryRemove(new KeyValuePair<string, DateTime>(controlHost, since)))
+            Log.Information("CPSV: re-trying CPSV data connections on {Host} after {Hours}h on standard PASV",
+                controlHost, CpsvSwitchLifetime.TotalHours);
+        return false;
+    }
+
+    /// <summary>Test hook: clears everything learned about one host or data IP.</summary>
+    internal static void ForgetHost(string controlHost)
+    {
+        TlsServerCpsvHosts.TryRemove(controlHost, out _);
+        ProvenClientHosts.TryRemove(controlHost, out _);
+        SilentStrikes.TryRemove(controlHost, out _);
+    }
+
+    internal static void MarkCpsvUnusableAt(string controlHost, DateTime sinceUtc) =>
+        TlsServerCpsvHosts[controlHost] = sinceUtc;
+
+    internal static void AttributeDataSocket(Socket socket, string controlHost) =>
+        DataSocketHosts.AddOrUpdate(socket, controlHost);
+
     // Data sockets are dual-mode, so an IPv4 peer reports as ::ffff:a.b.c.d.
     private static System.Net.IPAddress RoleKey(System.Net.IPAddress ip) =>
         ip.IsIPv4MappedToIPv6 ? ip.MapToIPv4() : ip;
 
     /// <summary>
     /// Negotiates TLS on the data stream after the data command was sent. glftpd (and BNCs
-    /// in front of it) SSL_connect to us, so we act as TLS server; a peer that never sends
-    /// a ClientHello (ioFTPD) is a TLS server, so we act as TLS client.
+    /// in front of it) SSL_connect to us, so we act as TLS server. A peer that never sends a
+    /// ClientHello is a TLS server: its control host is marked CPSV-unusable and this throws
+    /// <see cref="CpsvPeerIsTlsServerException"/> so the caller's next transfer uses PASV.
     /// </summary>
     internal static async Task<SslStream> NegotiateDataTls(NetworkStream networkStream, CancellationToken ct,
         TimeSpan? deadline = null, TimeSpan? roleProbeWindow = null)
     {
         System.Net.IPAddress? peerIp = null;
+        string? controlHost = null;
         try
         {
             if (networkStream.Socket.RemoteEndPoint is System.Net.IPEndPoint ep) peerIp = RoleKey(ep.Address);
+            DataSocketHosts.TryGetValue(networkStream.Socket, out controlHost);
         }
         catch (ObjectDisposedException) { }
         catch (SocketException) { }
 
-        var learned = peerIp is null ? DataTlsPeerRole.Unknown : LearnedDataTlsRole(peerIp);
-        var actedAs = DataTlsPeerRole.Unknown;
+        var provenClient = peerIp is not null && LearnedDataTlsRole(peerIp) == DataTlsPeerRole.Client;
+        var provenHost = controlHost is not null && ProvenClientHosts.ContainsKey(controlHost);
 
-        // Remote cert is not verified on the data channel in either role: the control
-        // channel is the authenticated trust anchor, and the server role never asked for one.
+        // We are the TLS server; ClientCertificateRequired is false, so the remote
+        // cert callback is not security-relevant here.
         var ssl = new SslStream(networkStream, true, (_, _, _, _) => true);
         try
         {
             await WithDataDeadline(async t =>
             {
-                var peerIsServer = learned switch
+                if (!provenClient && !provenHost
+                    && !await PeerSpeaksFirst(networkStream.Socket, roleProbeWindow ?? DataTlsRoleProbeWindow, t))
                 {
-                    DataTlsPeerRole.Server => true,
-                    DataTlsPeerRole.Client => false,
-                    _ => !await PeerSpeaksFirst(networkStream.Socket, roleProbeWindow ?? DataTlsRoleProbeWindow, t)
-                };
-                actedAs = peerIsServer ? DataTlsPeerRole.Server : DataTlsPeerRole.Client;
+                    var strikes = controlHost is null ? 0 : SilentStrikes.AddOrUpdate(controlHost, 1, (_, n) => n + 1);
+                    var switched = strikes >= SilentStrikesToSwitch
+                                   && TlsServerCpsvHosts.TryAdd(controlHost!, DateTime.UtcNow);
+                    if (switched)
+                        Log.Warning("CPSV unusable on {Host}: {Strikes} consecutive data channels stayed silent as TLS server " +
+                                    "(not glftpd, e.g. ioFTPD) — using standard PASV data connections for {Hours}h",
+                            controlHost, strikes, CpsvSwitchLifetime.TotalHours);
+                    throw new CpsvPeerIsTlsServerException(controlHost, peerIp, switched);
+                }
 
-                if (peerIsServer)
+                await ssl.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
                 {
-                    await ssl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
-                    {
-                        TargetHost = peerIp?.ToString() ?? "",
-                        EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13
-                    }, t);
-                }
-                else
-                {
-                    await ssl.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
-                    {
-                        ServerCertificate = SelfSignedCert.Value,
-                        ClientCertificateRequired = false,
-                        EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13
-                    }, t);
-                }
+                    ServerCertificate = SelfSignedCert.Value,
+                    ClientCertificateRequired = false,
+                    EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13
+                }, t);
                 return true;
             }, "data channel TLS handshake", deadline ?? DataSetupDeadline, ct);
         }
-        catch
+        catch (Exception ex)
         {
             ssl.Dispose();
-            // Only a role we had already committed to is evidence against itself; a probe
-            // that failed proves nothing about which side the peer plays.
-            if (peerIp is not null && learned != DataTlsPeerRole.Unknown && LearnedRoles.TryRemove(peerIp, out _))
-                Log.Information("Data TLS: handshake with {Peer} failed in learned {Role} role — re-probing its role next time",
-                    peerIp, learned == DataTlsPeerRole.Server ? "client" : "server");
+            // Only the remembered role is evidence against itself; a probe that failed
+            // proves nothing about which side the peer plays.
+            if (provenClient && ex is not OperationCanceledException && peerIp is not null
+                && LearnedRoles.TryRemove(peerIp, out _))
+                Log.Information("Data TLS: handshake with {Peer} failed in its learned client role — re-probing next time",
+                    peerIp);
             throw;
         }
 
-        if (peerIp is not null && learned == DataTlsPeerRole.Unknown)
-        {
-            LearnedRoles[peerIp] = actedAs;
-            if (actedAs == DataTlsPeerRole.Server)
-                Log.Information("Data TLS: {Peer} stays TLS server on CPSV data channels (not glftpd, e.g. ioFTPD) — connecting as TLS client",
-                    peerIp);
-        }
-        Log.Debug("Data TLS: {Mode} mode ({Protocol}, {Cipher})",
-            actedAs == DataTlsPeerRole.Server ? "client" : "server", ssl.SslProtocol, ssl.NegotiatedCipherSuite);
+        if (peerIp is not null && !provenClient) LearnedRoles[peerIp] = DataTlsPeerRole.Client;
+        // A proven host never accrues strikes again, so its count needs no reset.
+        if (controlHost is not null) ProvenClientHosts.TryAdd(controlHost, 0);
+        Log.Debug("Data TLS: server mode ({Protocol}, {Cipher})", ssl.SslProtocol, ssl.NegotiatedCipherSuite);
         return ssl;
     }
 
