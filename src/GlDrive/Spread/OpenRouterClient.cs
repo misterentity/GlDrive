@@ -85,6 +85,7 @@ public class OpenRouterClient : IDisposable
 {
     private readonly HttpClient _http;
     private readonly string _model;
+    private readonly Func<string, string?> _preparePayload;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -177,10 +178,21 @@ public class OpenRouterClient : IDisposable
           with !request or similar commands. Leave null otherwise.
         """;
 
-    public OpenRouterClient(string apiKey, string model = "openai/gpt-oss-120b:free")
+    public OpenRouterClient(string apiKey, string model = "openai/gpt-oss-120b")
+        : this(apiKey, model, handler: null) { }
+
+    internal OpenRouterClient(string apiKey, string model, HttpMessageHandler? handler,
+        Func<string, string?>? preparePayload = null)
     {
-        _model = model;
-        _http = new HttpClient
+        _preparePayload = preparePayload ?? (json =>
+            GlDrive.AiAgent.OutboundPayloadRedactor.TryPrepare(json, out var safe) ? safe : null);
+        // Same retired-slug table as AgentClient: OpenRouter retires ":free" variants and the
+        // configured slug then 404s on every call.
+        _model = GlDrive.AiAgent.AgentClient.ResolveKnownModelMigration(model);
+        if (!_model.Equals(model, StringComparison.OrdinalIgnoreCase))
+            Log.Information("OpenRouter: using known replacement {Replacement} for retired model {Configured}",
+                _model, model);
+        _http = new HttpClient(handler ?? new HttpClientHandler())
         {
             BaseAddress = new Uri("https://openrouter.ai/api/v1/"),
             Timeout = TimeSpan.FromSeconds(180)
@@ -270,68 +282,96 @@ public class OpenRouterClient : IDisposable
 
         try
         {
-            var request = new
+            var model = _model;
+            var (response, body) = await PostChatAsync(model, userPrompt, ct);
+            if (response is null) return null;
+
+            // A retired slug's 404 names its successor; use it once rather than giving up.
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound
+                && GlDrive.AiAgent.AgentClient.TryParseSuggestedModel(body) is { } suggested
+                && !suggested.Equals(model, StringComparison.OrdinalIgnoreCase))
             {
-                model = _model,
-                messages = new[]
-                {
-                    new { role = "system", content = SystemPrompt },
-                    new { role = "user", content = userPrompt }
-                },
-                temperature = 0.1,
-                max_tokens = 8000
-            };
-
-            var json = JsonSerializer.Serialize(request, JsonOptions);
-            if (!GlDrive.AiAgent.OutboundPayloadRedactor.TryPrepare(json, out var safeJson)) return null;
-            using var content = new StringContent(safeJson, Encoding.UTF8, "application/json");
-
-            var response = await _http.PostAsync("chat/completions", content, ct);
-            var responseBody = await response.Content.ReadAsStringAsync(ct);
-
-            if (!response.IsSuccessStatusCode)
-            {
-                Log.Warning("OpenRouter API error: {Status} {Body}", response.StatusCode, responseBody);
-                return null;
+                Log.Warning("OpenRouter: {Model} is retired ({Error}) — retrying with suggested {Suggested}",
+                    model, GlDrive.AiAgent.AgentClient.SummarizeErrorBodyForLog(body), suggested);
+                response.Dispose();
+                model = suggested;
+                (response, body) = await PostChatAsync(model, userPrompt, ct);
+                if (response is null) return null;
             }
 
-            // Parse the response
-            using var doc = JsonDocument.Parse(responseBody);
-            var messageContent = doc.RootElement
-                .GetProperty("choices")[0]
-                .GetProperty("message")
-                .GetProperty("content")
-                .GetString() ?? "";
-
-            Log.Information("OpenRouter AI response ({Model}): {Length} chars", _model, messageContent.Length);
-
-            // Extract JSON from response (AI might wrap it in markdown code fences)
-            var jsonStart = messageContent.IndexOf('{');
-            var jsonEnd = messageContent.LastIndexOf('}');
-            if (jsonStart >= 0 && jsonEnd > jsonStart)
-            {
-                var resultJson = messageContent[jsonStart..(jsonEnd + 1)];
-                try
-                {
-                    return JsonSerializer.Deserialize<AiSetupResult>(resultJson, JsonOptions);
-                }
-                catch (JsonException ex)
-                {
-                    Log.Warning("AI JSON parse failed, attempting repair: {Error}", ex.Message);
-                    var repaired = RepairTruncatedJson(resultJson);
-                    if (repaired != null)
-                        return JsonSerializer.Deserialize<AiSetupResult>(repaired, JsonOptions);
-                }
-            }
-
-            Log.Warning("AI response did not contain valid JSON: {Response}", messageContent[..Math.Min(200, messageContent.Length)]);
-            return null;
+            using (response)
+                return ParseResponse(response, body, model);
         }
         catch (Exception ex)
         {
             Log.Warning(ex, "OpenRouter API call failed");
             return null;
         }
+    }
+
+    private async Task<(HttpResponseMessage? Response, string Body)> PostChatAsync(
+        string model, string userPrompt, CancellationToken ct)
+    {
+        var request = new
+        {
+            model,
+            messages = new[]
+            {
+                new { role = "system", content = SystemPrompt },
+                new { role = "user", content = userPrompt }
+            },
+            temperature = 0.1,
+            max_tokens = 8000
+        };
+
+        var json = JsonSerializer.Serialize(request, JsonOptions);
+        if (_preparePayload(json) is not { } safeJson) return (null, "");
+        using var content = new StringContent(safeJson, Encoding.UTF8, "application/json");
+
+        var response = await _http.PostAsync("chat/completions", content, ct);
+        return (response, await response.Content.ReadAsStringAsync(ct));
+    }
+
+    private static AiSetupResult? ParseResponse(HttpResponseMessage response, string responseBody, string model)
+    {
+        if (!response.IsSuccessStatusCode)
+        {
+            // Summarized: the raw provider envelope carries the OpenRouter user_id.
+            Log.Warning("OpenRouter API error ({Model}): {Status} {Error}", model, response.StatusCode,
+                GlDrive.AiAgent.AgentClient.SummarizeErrorBodyForLog(responseBody));
+            return null;
+        }
+
+        using var doc = JsonDocument.Parse(responseBody);
+        var messageContent = doc.RootElement
+            .GetProperty("choices")[0]
+            .GetProperty("message")
+            .GetProperty("content")
+            .GetString() ?? "";
+
+        Log.Information("OpenRouter AI response ({Model}): {Length} chars", model, messageContent.Length);
+
+        // Extract JSON from response (AI might wrap it in markdown code fences)
+        var jsonStart = messageContent.IndexOf('{');
+        var jsonEnd = messageContent.LastIndexOf('}');
+        if (jsonStart >= 0 && jsonEnd > jsonStart)
+        {
+            var resultJson = messageContent[jsonStart..(jsonEnd + 1)];
+            try
+            {
+                return JsonSerializer.Deserialize<AiSetupResult>(resultJson, JsonOptions);
+            }
+            catch (JsonException ex)
+            {
+                Log.Warning("AI JSON parse failed, attempting repair: {Error}", ex.Message);
+                var repaired = RepairTruncatedJson(resultJson);
+                if (repaired != null)
+                    return JsonSerializer.Deserialize<AiSetupResult>(repaired, JsonOptions);
+            }
+        }
+
+        Log.Warning("AI response did not contain valid JSON: {Response}", messageContent[..Math.Min(200, messageContent.Length)]);
+        return null;
     }
 
     /// <summary>

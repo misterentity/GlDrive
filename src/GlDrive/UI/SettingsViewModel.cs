@@ -134,7 +134,7 @@ public class SettingsViewModel : INotifyPropertyChanged
     public string TmdbApiKey { get => _tmdbApiKey; set { _tmdbApiKey = value; OnPropertyChanged(); } }
     public string OpenRouterApiKey { get => _openRouterApiKey; set { _openRouterApiKey = value; OnPropertyChanged(); } }
     public string OpenRouterModel { get => _openRouterModel; set { _openRouterModel = value; OnPropertyChanged(); } }
-    public string[] OpenRouterModels { get; } = ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4", "google/gemini-2.5-pro", "deepseek/deepseek-r1", "qwen/qwen3-235b-a22b:free", "deepseek/deepseek-r1:free", "openai/gpt-oss-120b:free"];
+    public string[] OpenRouterModels { get; } = ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4", "google/gemini-2.5-pro", "deepseek/deepseek-r1", "qwen/qwen3-235b-a22b:free", "deepseek/deepseek-r1:free", "openai/gpt-oss-120b"];
     public bool AutoDownloadWishlist { get => _autoDownloadWishlist; set { _autoDownloadWishlist = value; OnPropertyChanged(); } }
     public bool PlexWatchlistSyncEnabled { get => _plexWatchlistSyncEnabled; set { _plexWatchlistSyncEnabled = value; OnPropertyChanged(); } }
     public bool NukeWatchEnabled { get => _nukeWatchEnabled; set { _nukeWatchEnabled = value; OnPropertyChanged(); } }
