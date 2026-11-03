@@ -4,6 +4,7 @@ using System.Text.Json;
 using GlDrive.Config;
 using GlDrive.Ftp;
 using GlDrive.Spread;
+using GlDrive.Util;
 using Xunit;
 
 namespace GlDrive.Tests;
@@ -50,8 +51,63 @@ public sealed class RaceAdmissionTests : IDisposable
         return manager;
     }
 
-    private List<PersistedRace> ReadQueue() =>
-        JsonSerializer.Deserialize<List<PersistedRace>>(File.ReadAllText(QueuePath))!;
+    private List<PersistedRace> ReadQueue()
+    {
+        List<PersistedRace>? races = null;
+        // Coordinate this live test observer with the real queue publisher. Even
+        // permissive sharing cannot guarantee Windows replacement while open.
+        SecureFile.WithPathLock(QueuePath, () =>
+        {
+            using var snapshot = new FileStream(QueuePath, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            races = JsonSerializer.Deserialize<List<PersistedRace>>(snapshot)!;
+        });
+        return races!;
+    }
+
+    [Fact]
+    public async Task Queue_snapshot_waits_for_inflight_publication_and_reads_committed_generation()
+    {
+        var store = new RaceQueueStore(QueuePath);
+        Assert.True(store.Save(() => [Request("Original.Release")]));
+        var publicationStarted = Entered();
+        using var releasePublication = new ManualResetEventSlim();
+        var publication = Task.Run(() => store.Save(() =>
+        {
+            publicationStarted.TrySetResult();
+            if (!releasePublication.Wait(TimeSpan.FromSeconds(10)))
+                throw new TimeoutException("Test publication was not released");
+            return [Request("Replacement.Release")];
+        }));
+        var observation = new TaskCompletionSource<List<PersistedRace>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var observer = new Thread(() =>
+        {
+            try { observation.TrySetResult(ReadQueue()); }
+            catch (Exception ex) { observation.TrySetException(ex); }
+        });
+        try
+        {
+            await publicationStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            observer.Start();
+            // The dedicated reader either waits on the publisher's monitor or
+            // completes an uncoordinated read. No timing delay or read retry.
+            Assert.True(SpinWait.SpinUntil(() => observation.Task.IsCompleted ||
+                (observer.ThreadState & ThreadState.WaitSleepJoin) != 0, TimeSpan.FromSeconds(5)));
+            Assert.False(observation.Task.IsCompleted);
+        }
+        finally
+        {
+            releasePublication.Set();
+            try { Assert.True(await publication.WaitAsync(TimeSpan.FromSeconds(5))); }
+            finally
+            {
+                if ((observer.ThreadState & ThreadState.Unstarted) == 0)
+                    Assert.True(observer.Join(TimeSpan.FromSeconds(5)));
+            }
+        }
+
+        Assert.Equal("Replacement.Release", Assert.Single(await observation.Task.WaitAsync(TimeSpan.FromSeconds(5))).ReleaseName);
+    }
 
     private static void Invoke(SpreadManager manager, string method) =>
         typeof(SpreadManager).GetMethod(method, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(manager, null);
