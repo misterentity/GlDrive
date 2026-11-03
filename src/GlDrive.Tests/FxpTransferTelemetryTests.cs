@@ -25,7 +25,7 @@ public sealed class FxpTransferTelemetryTests
     [InlineData(FxpMode.PasvCpsv, FxpMode.PasvCpsv, true)]
     public async Task RealExecutionReportsActualDirectProtocolAndDuplicateOutcome(FxpMode requested, FxpMode expected, bool duplicate)
     {
-        await using var sourceServer = new ControlServer();
+        await using var sourceServer = new ControlServer(cpsvAvailable: requested == FxpMode.Relay);
         await using var destinationServer = new ControlServer(duplicate: duplicate);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         using var sourceClient = Client(sourceServer.Port);
@@ -74,10 +74,57 @@ public sealed class FxpTransferTelemetryTests
         Assert.Equal("Relay", observed.TransferMode);
         Assert.False(observed.DuplicateSkipped);
         Assert.NotEmpty(observed.AbortReason!);
-        Assert.Contains("PASV", destinationServer.Commands);
         Assert.Contains("CPSV", sourceServer.Commands);
+        Assert.DoesNotContain(destinationServer.Commands, command => command.StartsWith("STOR ", StringComparison.Ordinal));
         Assert.True(source.Poisoned);
         Assert.True(destination.Poisoned);
+    }
+
+    [Fact]
+    public async Task RelayProbeUsesSourceCpsvAndDestinationPortAsTlsServer()
+    {
+        await using var sourceServer = new ControlServer(cpsvAvailable: true);
+        await using var destinationServer = new ControlServer();
+        var (ok, _) = await RunRelayProbe(sourceServer, destinationServer);
+
+        Assert.True(ok);
+        Assert.Contains("CPSV", sourceServer.Commands);
+        Assert.DoesNotContain("SSCN ON", sourceServer.Commands);
+        Assert.Contains("SSCN OFF", destinationServer.Commands);
+        Assert.DoesNotContain("SSCN ON", destinationServer.Commands);
+        Assert.Contains("PORT 127,0,0,1,8,2", destinationServer.Commands);
+        Assert.DoesNotContain("PASV", destinationServer.Commands);
+    }
+
+    [Fact]
+    public async Task RelayProbeSendsRetrWhileDestinationWithholdsStorPreliminary()
+    {
+        // glftpd as an active destination may not answer STOR until data flows, and the
+        // source only opens its side once it has RETR. Waiting for STOR's 150 deadlocked
+        // the old probe into STOR 425 on every attempt.
+        var retrSeen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var sourceServer = new ControlServer(cpsvAvailable: true, onRetr: retrSeen);
+        await using var destinationServer = new ControlServer(storGate: retrSeen.Task);
+        var (ok, transfer) = await RunRelayProbe(sourceServer, destinationServer);
+
+        Assert.True(ok);
+        Assert.False(transfer.WasDupe);
+        Assert.Contains(sourceServer.Commands, command => command.StartsWith("RETR ", StringComparison.Ordinal));
+    }
+
+    private static async Task<(bool Ok, FxpTransfer Transfer)> RunRelayProbe(ControlServer sourceServer, ControlServer destinationServer)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        // Above FxpTransfer.StorHeadStart, as production's 15 s read timeout is.
+        using var sourceClient = Client(sourceServer.Port, 8000);
+        using var destinationClient = Client(destinationServer.Port, 8000);
+        await sourceClient.Connect(timeout.Token);
+        await destinationClient.Connect(timeout.Token);
+        var transfer = new FxpTransfer(_ => { });
+        var ok = await transfer.ExecuteAsync(new PooledConnection(sourceClient, null!), new PooledConnection(destinationClient, null!),
+            "/fixture/file.bin", "/target/file.bin", FxpMode.Relay, 10, timeout.Token,
+            "race-fixture", Guid.NewGuid().ToString("N"), Guid.NewGuid().ToString("N"), 4096);
+        return (ok, transfer);
     }
 
     [Fact]
@@ -91,7 +138,7 @@ public sealed class FxpTransferTelemetryTests
         Assert.Equal("Relay", known.GetProperty("transferMode").GetString());
     }
 
-    private static AsyncFtpClient Client(int port)
+    private static AsyncFtpClient Client(int port, int readTimeoutMs = 2000)
     {
         var client = new AsyncFtpClient("127.0.0.1", "fixture", "fixture", port);
         client.Config.EncryptionMode = FtpEncryptionMode.None;
@@ -99,7 +146,7 @@ public sealed class FxpTransferTelemetryTests
         client.Config.SelfConnectMode = FtpSelfConnectMode.Never;
         client.Config.DisconnectWithQuit = false;
         client.Config.ConnectTimeout = 2000;
-        client.Config.ReadTimeout = 2000;
+        client.Config.ReadTimeout = readTimeoutMs;
         return client;
     }
 
@@ -112,8 +159,16 @@ public sealed class FxpTransferTelemetryTests
         public ConcurrentQueue<string> Commands { get; } = new();
         public int Port => ((IPEndPoint)_listener.LocalEndpoint).Port;
 
-        public ControlServer(bool duplicate = false, bool rejectPassive = false)
+        private readonly bool _cpsvAvailable;
+        private readonly Task? _storGate;
+        private readonly TaskCompletionSource? _onRetr;
+
+        public ControlServer(bool duplicate = false, bool rejectPassive = false, bool cpsvAvailable = false,
+            Task? storGate = null, TaskCompletionSource? onRetr = null)
         {
+            _cpsvAvailable = cpsvAvailable;
+            _storGate = storGate;
+            _onRetr = onRetr;
             _listener.Start();
             _worker = Serve(duplicate, rejectPassive);
         }
@@ -131,6 +186,8 @@ public sealed class FxpTransferTelemetryTests
                 {
                     Commands.Enqueue(command);
                     var verb = command.Split(' ', 2)[0];
+                    if (verb == "RETR") _onRetr?.TrySetResult();
+                    if (verb == "STOR" && _storGate is not null) await _storGate.WaitAsync(_stop.Token);
                     var reply = verb switch
                     {
                         "USER" => "331 Password required",
@@ -139,6 +196,7 @@ public sealed class FxpTransferTelemetryTests
                         "FEAT" => "500 Features unavailable",
                         "PWD" => "257 \"/\" is current directory",
                         "PASV" => rejectPassive ? "425 Passive unavailable" : "227 Entering Passive Mode (127,0,0,1,8,1)",
+                        "CPSV" when _cpsvAvailable => "227 Entering Passive Mode (127,0,0,1,8,2)",
                         "CPSV" => "500 Synthetic fixture has no data channel",
                         "STOR" when duplicate => "553 File already exists",
                         "STOR" or "RETR" => "150 Opening synthetic transfer",

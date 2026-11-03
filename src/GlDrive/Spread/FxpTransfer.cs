@@ -256,7 +256,9 @@ public class FxpTransfer
                     try
                     {
                         actualMode = FxpMode.CpsvPasv;
-                        ok = await ExecuteCpsvPasv(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct, pasvSw);
+                        ok = await ExecuteSourceCpsvDirect(source.Client, dest.Client, srcPath, dstPath, transferTimeoutSeconds, ct, pasvSw);
+                        if (_sourceOwesRetrReply)
+                            source.Poison("direct FXP dupe-skip left RETR pending on source");
                         if (ok)
                             RecordDirectSuccess(srcServerId, dstServerId);
                         else
@@ -282,7 +284,7 @@ public class FxpTransfer
                         switch (RecordDirectFailure(srcServerId, dstServerId, DateTime.UtcNow))
                         {
                             case DirectProbeFailure.First:
-                                Log.Information("FXP route {Src}->{Dst}: direct CPSV-PASV failed ({Error}) — " +
+                                Log.Information("FXP route {Src}->{Dst}: direct source-CPSV FXP failed ({Error}) — " +
                                     "using Relay for this route for the next {Hours}h (a failed direct attempt " +
                                     "poisons both connections, costing two fresh logins per file)",
                                     srcServerId, dstServerId, ex.Message, RelayRouteRetry.TotalHours);
@@ -290,7 +292,7 @@ public class FxpTransfer
                             case DirectProbeFailure.Reprobe:
                                 // The two poisoned-discards that follow this file's `FXP complete`
                                 // are THIS probe, not a transfer fault — name it on the same sink.
-                                Log.Information("FXP route {Src}->{Dst}: direct CPSV-PASV re-probe failed again ({Error}) — " +
+                                Log.Information("FXP route {Src}->{Dst}: direct source-CPSV FXP re-probe failed again ({Error}) — " +
                                     "staying on Relay for another {Hours}h; both connections poisoned (two logins)",
                                     srcServerId, dstServerId, ex.Message, RelayRouteRetry.TotalHours);
                                 break;
@@ -573,6 +575,120 @@ public class FxpTransfer
         pasvSw.Stop(); // negotiation complete — data is now flowing
         SetState(TransferState.Transferring);
         return await WaitForTransferComplete(src, dst, timeoutSec, ct);
+    }
+
+    // How long STOR gets to answer on its own before RETR is sent anyway. glftpd's
+    // dupe/pre_check rejections arrive well inside this, so a dupe never costs a RETR;
+    // a destination that withholds 150 until data flows gets RETR after this delay.
+    internal static readonly TimeSpan StorHeadStart = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan DirectPreliminaryTimeout = TimeSpan.FromSeconds(30);
+
+    // Set when RETR went out but STOR then answered with a dupe: the source still owes
+    // a reply for a transfer that will never connect, so its session can't be reused.
+    private bool _sourceOwesRetrReply;
+
+    /// <summary>
+    /// Direct FXP for a Relay-mode pair (both sides need CPSV for local data): the
+    /// source CPSVs, so it listens and is the data TLS client; the destination PORTs to
+    /// it with SSCN OFF, so it connects out and is the data TLS server. This is the
+    /// only orientation that works when the destination sits behind NAT (sited is on a
+    /// LAN): it dials out to the same CPSV address this PC already reaches for relay.
+    /// The old probe (dest PASV, source PORT, SSCN ON on both, RETR only after STOR's
+    /// reply) failed 14/14 with STOR 425 — two TLS clients, and a 150 that never comes.
+    /// </summary>
+    private async Task<bool> ExecuteSourceCpsvDirect(
+        AsyncFtpClient src, AsyncFtpClient dst,
+        string srcPath, string dstPath,
+        int timeoutSec, CancellationToken ct,
+        Stopwatch pasvSw)
+    {
+        SetState(TransferState.NegotiatingPassive);
+
+        await SendTypeI(src, "source", ct);
+        await SendTypeI(dst, "dest", ct);
+        // Pooled sessions may carry SSCN ON from earlier transfers; exactly one side may be TLS client.
+        await SetSscn(dst, on: false, "dest-active", ct);
+
+        await BestEffortPret(src, "RETR", srcPath, ct);
+
+        var cpsvReply = await src.Execute("CPSV", ct);
+        if (!cpsvReply.Success)
+            throw Fault(FxpFaultSide.Source, $"CPSV failed on source: {cpsvReply.Code} {cpsvReply.Message}");
+        var addr = ExtractPasvAddress(cpsvReply.Message);
+
+        SetState(TransferState.NegotiatingActive);
+
+        var portReply = await dst.Execute($"PORT {addr}", ct);
+        if (!portReply.Success)
+            throw Fault(FxpFaultSide.Dest, $"PORT failed on dest: {portReply.Code} {portReply.Message}");
+
+        if (BeforeStore != null) await BeforeStore(ct);
+
+        var storTask = dst.Execute($"STOR {Ftp.CpsvDataHelper.SanitizeFtpPath(dstPath)}", CancellationToken.None);
+        await Task.WhenAny(storTask, Task.Delay(StorHeadStart, ct));
+        ct.ThrowIfCancellationRequested();
+
+        Task<FtpReply>? retrTask = null;
+        if (storTask.IsCompleted)
+        {
+            var early = await storTask;
+            if (IsDupeRejection(early)) return DupeSkip(dstPath, early, pasvSw);
+            if (early.Code != "150" && early.Code != "125")
+                throw Fault(FxpFaultSide.Dest, $"STOR failed: {early.Code} {early.Message}");
+        }
+
+        retrTask = src.Execute($"RETR {Ftp.CpsvDataHelper.SanitizeFtpPath(srcPath)}", CancellationToken.None);
+
+        var storReply = await AwaitPreliminary(storTask, ct)
+            ?? throw new DirectFxpCompletionException("STOR got no preliminary reply (direct data connection never opened)");
+        if (IsDupeRejection(storReply))
+        {
+            _sourceOwesRetrReply = true;
+            Observe(retrTask);
+            return DupeSkip(dstPath, storReply, pasvSw);
+        }
+        if (storReply.Code != "150" && storReply.Code != "125")
+        {
+            Observe(retrTask);
+            throw new DirectFxpCompletionException($"STOR failed: {storReply.Code} {storReply.Message}");
+        }
+
+        var retrReply = await AwaitPreliminary(retrTask, ct)
+            ?? throw new DirectFxpCompletionException("RETR got no preliminary reply (direct data connection never opened)");
+        if (retrReply.Code != "150" && retrReply.Code != "125")
+            throw new DirectFxpCompletionException($"RETR failed: {retrReply.Code} {retrReply.Message}");
+
+        pasvSw.Stop();
+        SetState(TransferState.Transferring);
+        return await WaitForTransferComplete(src, dst, timeoutSec, ct);
+    }
+
+    private bool DupeSkip(string dstPath, FtpReply reply, Stopwatch pasvSw)
+    {
+        WasDupe = true;
+        pasvSw.Stop();
+        SetState(TransferState.Complete);
+        Log.Information("FXP dupe-skip (direct): {Path} already on dest — {Msg}", dstPath, reply.Message);
+        return true;
+    }
+
+    /// <summary>Managed-timeout await of an in-flight Execute; never cancels the native read.</summary>
+    private static async Task<FtpReply?> AwaitPreliminary(Task<FtpReply> task, CancellationToken ct)
+    {
+        var winner = await Task.WhenAny(task, Task.Delay(DirectPreliminaryTimeout, ct));
+        if (winner == task) return await task;
+        Observe(task);
+        ct.ThrowIfCancellationRequested();
+        return null;
+    }
+
+    private static void Observe(Task task) =>
+        _ = task.ContinueWith(t => { _ = t.Exception; }, TaskScheduler.Default);
+
+    private static async Task SetSscn(AsyncFtpClient client, bool on, string label, CancellationToken ct)
+    {
+        var reply = await client.Execute(on ? "SSCN ON" : "SSCN OFF", ct);
+        Log.Debug("SSCN {Mode} on {Label}: {Code} {Msg}", on ? "ON" : "OFF", label, reply.Code, reply.Message);
     }
 
     private async Task<bool> ExecutePasvCpsv(

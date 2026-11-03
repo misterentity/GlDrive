@@ -224,7 +224,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
     {
         // Process-wide route memory; only the live manager may own its file.
         if (!ConfigManager.ReadOnly)
-            FxpTransfer.EnableRelayRoutePersistence(Path.Combine(ConfigManager.AppDataPath, "fxp-relay-routes.json"));
+            FxpTransfer.EnableRelayRoutePersistence(Path.Combine(ConfigManager.AppDataPath, "fxp-relay-routes-srccpsv.json"));  // v3.19.10: new probe orientation — verdicts from the old (broken) probe don't carry over
     }
 
     // The state-directory seam keeps lifecycle regression tests away from live stores.
