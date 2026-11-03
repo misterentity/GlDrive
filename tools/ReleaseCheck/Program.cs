@@ -102,6 +102,12 @@ await pool.Initialize(deadline.Token);
 var ftp = new FtpOperations(pool);
 var remoteRoot = "/check-" + Guid.NewGuid().ToString("N");
 await ftp.CreateDirectory(remoteRoot, deadline.Token);
+await NativePasvFallbackCheck.Run(ftp, config.Connection.Host, root, remoteRoot, deadline.Token);
+if (args.Contains("--pasv-fallback-only", StringComparer.Ordinal))
+{
+    Console.WriteLine("PASS: native standard-data fallback verification complete");
+    return;
+}
 if (args.Contains("--search-only", StringComparer.Ordinal))
 {
     await CheckSearchRecovery(factory, root, remoteRoot, deadline.Token);

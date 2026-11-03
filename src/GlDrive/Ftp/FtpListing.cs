@@ -25,6 +25,9 @@ internal static class FtpListing
         }
         ct.ThrowIfCancellationRequested();
         ValidateReply(LatestListingReply(client.LastReplies, previousReply), path);
+        // A fresh positive completion is evidence even for an empty directory.
+        // Failed, cancelled and absorbed LIST errors must not extend the fallback.
+        CpsvDataHelper.RecordStandardListingSuccess(client.Host);
         return items;
     }
 

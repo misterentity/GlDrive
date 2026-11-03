@@ -27,7 +27,7 @@ namespace GlDrive.Tests;
 /// server, so the site is switched to standard PASV (GnuTLS client, like the control
 /// channel). Misreading a stalled glftpd backend as ioFTPD would knock a working site off
 /// CPSV, so: proven hosts/IPs are never guessed about, an unproven host needs two
-/// consecutive silent channels, and the switch expires.
+/// consecutive silent channels, and the switch expires without successful standard listings.
 /// Each test uses its own loopback address and host name because state is keyed by both.
 /// </summary>
 public sealed class CpsvDataTlsRoleTests
@@ -231,6 +231,130 @@ public sealed class CpsvDataTlsRoleTests
         CpsvDataHelper.MarkCpsvUnusableAt(host, now - CpsvDataHelper.CpsvSwitchLifetime - TimeSpan.FromMinutes(1));
         Assert.False(CpsvDataHelper.IsCpsvUnusable(host, now));
         Assert.False(CpsvDataHelper.IsCpsvUnusable(host, now - CpsvDataHelper.CpsvSwitchLifetime));
+    }
+
+    [Fact]
+    public void Successful_standard_listings_keep_a_working_fallback_then_idle_expiry_allows_reprobe()
+    {
+        const string host = "active-pasv.test";
+        CpsvDataHelper.ForgetHost(host);
+        var start = new DateTime(2030, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        CpsvDataHelper.MarkCpsvUnusableAt(host, start);
+
+        // Exercise several original six-hour boundaries without resetting the
+        // classification or manufacturing another deliberately failed CPSV LIST.
+        for (var hour = 1; hour <= 24; hour++)
+        {
+            var completed = start.AddHours(hour);
+            Assert.True(CpsvDataHelper.IsCpsvUnusable(host, completed));
+            CpsvDataHelper.RecordStandardListingSuccess(host, completed);
+        }
+
+        var lastSuccess = start.AddHours(24);
+        Assert.True(CpsvDataHelper.IsCpsvUnusable(host,
+            lastSuccess + CpsvDataHelper.CpsvSwitchLifetime - TimeSpan.FromTicks(1)));
+        Assert.False(CpsvDataHelper.IsCpsvUnusable(host,
+            lastSuccess + CpsvDataHelper.CpsvSwitchLifetime));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("unclassified-pasv.test")]
+    public void Standard_listing_success_does_not_classify_an_unknown_host(string? host)
+    {
+        if (host is not null) CpsvDataHelper.ForgetHost(host);
+        var now = new DateTime(2030, 1, 2, 0, 0, 0, DateTimeKind.Utc);
+        CpsvDataHelper.RecordStandardListingSuccess(host, now);
+        Assert.False(CpsvDataHelper.IsCpsvUnusable(host, now));
+    }
+
+    [Fact]
+    public void Standard_listing_success_renews_the_case_insensitive_host()
+    {
+        const string host = "case-pasv.test";
+        CpsvDataHelper.ForgetHost(host);
+        var start = new DateTime(2030, 1, 3, 0, 0, 0, DateTimeKind.Utc);
+        CpsvDataHelper.MarkCpsvUnusableAt(host, start);
+        CpsvDataHelper.RecordStandardListingSuccess(host.ToUpperInvariant(), start.AddHours(5));
+
+        Assert.True(CpsvDataHelper.IsCpsvUnusable(host, start.AddHours(7)));
+        Assert.False(CpsvDataHelper.IsCpsvUnusable(host, start.AddHours(11)));
+    }
+
+    [Fact]
+    public void An_older_completion_cannot_shorten_a_newer_fallback_renewal()
+    {
+        const string host = "out-of-order-pasv.test";
+        CpsvDataHelper.ForgetHost(host);
+        var start = new DateTime(2030, 1, 4, 0, 0, 0, DateTimeKind.Utc);
+        CpsvDataHelper.MarkCpsvUnusableAt(host, start);
+        CpsvDataHelper.RecordStandardListingSuccess(host, start.AddHours(5));
+        CpsvDataHelper.RecordStandardListingSuccess(host, start.AddHours(2));
+
+        Assert.True(CpsvDataHelper.IsCpsvUnusable(host, start.AddHours(9)));
+        Assert.False(CpsvDataHelper.IsCpsvUnusable(host, start.AddHours(11)));
+    }
+
+    [Fact]
+    public void A_completed_standard_listing_can_renew_an_existing_entry_past_its_old_deadline()
+    {
+        const string host = "completed-late-pasv.test";
+        CpsvDataHelper.ForgetHost(host);
+        var start = new DateTime(2030, 1, 5, 0, 0, 0, DateTimeKind.Utc);
+        CpsvDataHelper.MarkCpsvUnusableAt(host, start);
+        // A listing selected PASV before the deadline and finished just after it.
+        // Successful data is still evidence while that same fallback entry exists.
+        CpsvDataHelper.RecordStandardListingSuccess(host, start.AddHours(7));
+
+        Assert.True(CpsvDataHelper.IsCpsvUnusable(host, start.AddHours(8)));
+        Assert.False(CpsvDataHelper.IsCpsvUnusable(host, start.AddHours(13)));
+    }
+
+    [Fact]
+    public void A_completed_standard_listing_does_not_resurrect_an_expired_removed_entry()
+    {
+        const string host = "removed-pasv.test";
+        CpsvDataHelper.ForgetHost(host);
+        var start = new DateTime(2030, 1, 6, 0, 0, 0, DateTimeKind.Utc);
+        CpsvDataHelper.MarkCpsvUnusableAt(host, start);
+        Assert.False(CpsvDataHelper.IsCpsvUnusable(host, start + CpsvDataHelper.CpsvSwitchLifetime));
+        CpsvDataHelper.RecordStandardListingSuccess(host, start.AddHours(7));
+
+        Assert.False(CpsvDataHelper.IsCpsvUnusable(host, start.AddHours(7)));
+    }
+
+    [Fact]
+    public async Task Expiry_racing_a_successful_listing_agrees_with_the_surviving_lease()
+    {
+        const string host = "concurrent-pasv.test";
+        var start = new DateTime(2030, 1, 7, 0, 0, 0, DateTimeKind.Utc);
+        var observedAt = start.AddHours(7);
+        try
+        {
+            for (var attempt = 0; attempt < 1000; attempt++)
+            {
+                CpsvDataHelper.MarkCpsvUnusableAt(host, start);
+                var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var check = Task.Run(async () =>
+                {
+                    await ready.Task;
+                    return CpsvDataHelper.IsCpsvUnusable(host, observedAt);
+                });
+                var renewal = Task.Run(async () =>
+                {
+                    await ready.Task;
+                    CpsvDataHelper.RecordStandardListingSuccess(host, start.AddHours(5));
+                });
+                ready.SetResult();
+                await Task.WhenAll(check, renewal);
+
+                // Expiry may win and remove the entry, or renewal may win and keep
+                // it. Reporting CPSV while the renewed lease survives is never valid.
+                Assert.Equal(CpsvDataHelper.IsCpsvUnusable(host, observedAt), await check);
+            }
+        }
+        finally { CpsvDataHelper.ForgetHost(host); }
     }
 
     [Fact]

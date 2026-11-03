@@ -274,7 +274,9 @@ public static class CpsvDataHelper
     //     guessed about again - it waits the full deadline as before (a learned IP is
     //     forgotten if a handshake in that role fails);
     //   * an unproven host needs SilentStrikesToSwitch consecutive silent data channels;
-    //   * a switch expires after CpsvSwitchLifetime, so a wrong one cannot become permanent.
+    //   * a switch expires after CpsvSwitchLifetime without a validated standard listing.
+    //     Successful PASV use renews it so healthy ioFTPD sites do not deliberately fail
+    //     another CPSV transfer every six hours merely to rediscover the same TLS role.
     internal enum DataTlsPeerRole { Unknown, Client, Server }
 
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<System.Net.IPAddress, DataTlsPeerRole>
@@ -308,12 +310,18 @@ public static class CpsvDataHelper
 
     internal static bool IsCpsvUnusable(string? controlHost, DateTime nowUtc)
     {
-        if (string.IsNullOrEmpty(controlHost) || !TlsServerCpsvHosts.TryGetValue(controlHost, out var since))
-            return false;
-        if (nowUtc - since < CpsvSwitchLifetime) return true;
-        if (TlsServerCpsvHosts.TryRemove(new KeyValuePair<string, DateTime>(controlHost, since)))
-            Log.Information("CPSV: re-trying CPSV data connections on {Host} after {Hours}h on standard PASV",
+        if (string.IsNullOrEmpty(controlHost)) return false;
+        while (TlsServerCpsvHosts.TryGetValue(controlHost, out var since))
+        {
+            if (nowUtc - since < CpsvSwitchLifetime) return true;
+            // A listing can renew the lease between the read and removal. Re-read
+            // after a lost compare/remove so a fresh lease still selects PASV.
+            if (!TlsServerCpsvHosts.TryRemove(new KeyValuePair<string, DateTime>(controlHost, since)))
+                continue;
+            Log.Information("CPSV: re-trying CPSV data connections on {Host} after {Hours}h without a successful standard listing",
                 controlHost, CpsvSwitchLifetime.TotalHours);
+            return false;
+        }
         return false;
     }
 
@@ -327,6 +335,24 @@ public static class CpsvDataHelper
 
     internal static void MarkCpsvUnusableAt(string controlHost, DateTime sinceUtc) =>
         TlsServerCpsvHosts[controlHost] = sinceUtc;
+
+    /// <summary>
+    /// Retain an existing fallback while validated standard data transfers keep working.
+    /// This never classifies a host or recreates an entry removed by an expiry check.
+    /// </summary>
+    internal static void RecordStandardListingSuccess(string? controlHost) =>
+        RecordStandardListingSuccess(controlHost, DateTime.UtcNow);
+
+    internal static void RecordStandardListingSuccess(string? controlHost, DateTime completedUtc)
+    {
+        if (string.IsNullOrEmpty(controlHost)) return;
+        while (TlsServerCpsvHosts.TryGetValue(controlHost, out var previous) && completedUtc > previous)
+        {
+            // A slower completion or a backwards wall-clock adjustment must not
+            // shorten newer evidence. Compare/update also cannot resurrect a removed entry.
+            if (TlsServerCpsvHosts.TryUpdate(controlHost, completedUtc, previous)) return;
+        }
+    }
 
     internal static void AttributeDataSocket(Socket socket, string controlHost) =>
         DataSocketHosts.AddOrUpdate(socket, controlHost);
@@ -372,7 +398,7 @@ public static class CpsvDataHelper
                                    && TlsServerCpsvHosts.TryAdd(controlHost!, DateTime.UtcNow);
                     if (switched)
                         Log.Warning("CPSV unusable on {Host}: {Strikes} consecutive data channels stayed silent as TLS server " +
-                                    "(not glftpd, e.g. ioFTPD) — using standard PASV data connections for {Hours}h",
+                                    "(not glftpd, e.g. ioFTPD) — using standard PASV; CPSV retries after {Hours}h without a successful standard listing",
                             controlHost, strikes, CpsvSwitchLifetime.TotalHours);
                     throw new CpsvPeerIsTlsServerException(controlHost, peerIp, switched);
                 }

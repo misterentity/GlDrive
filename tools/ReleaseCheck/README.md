@@ -44,6 +44,12 @@ Run on Windows with .NET 10, installed WinFsp, Python, pyftpdlib and pyOpenSSL. 
 2. Run `dotnet run --project tools/ReleaseCheck -c Release -- <temporary-state-json-path>`.
 3. Stop the fixture process and remove its directory (the `root` in the state JSON) after verifying that it is under the system temporary directory.
 
+The standard-data fallback check uses real GnuTLS listings to verify that a successful
+empty listing renews an existing CPSV compatibility fallback beyond its original expiry.
+Ordinary PASV sites never acquire a fallback, and neither LIST 550 nor a refused data
+endpoint renews it using an older successful reply. `--pasv-fallback-only` runs this check
+after the certificate and initialization checks. The fixture never contacts a production site.
+
 The harness first checks source relocation through real FTPS scans, directory probes and downloads. It establishes ownership, physically moves a payload while retaining the old release directory, and checks both a rejected RETR and an empty LIST. The watch path must win over a populated section decoy; the next scan must restore ownership and a file observed before the move must download intact from its new path. Missing watch and section candidates must preserve the same reusable pooled connection without a new login. To run just these checks, append `--relocation-only` to the harness command.
 
 Before other pools start, initialization checks hold the disposable fixture's first USER response while native TLS login is in flight. For both initial connection and reinitialization, a competing borrow cancels without losing the reserved pool slot or account permit; another waiting borrower receives the successfully published session. A synthetic mount must withhold its pool before and during initialization, expose it after that native login succeeds, and hide it after disposal. A real NOOP and subsequent reuse must succeed with exactly one authentication and no leaked permit, lease, quarantine or cooldown. Append `--initialization-only` to run certificate rejection and these publication checks alone. The fixture pause has a 15-second deadline and only affects this isolated server.
