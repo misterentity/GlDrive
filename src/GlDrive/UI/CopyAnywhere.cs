@@ -59,7 +59,8 @@ public static class CopyAnywhere
     // An existing menu is opening over text: prepend Copy items for what was right-clicked.
     private static void OnMenuOpened(object sender, RoutedEventArgs e)
     {
-        if (sender is not ContextMenu menu || menu.ItemsSource != null) return;
+        // A menu tagged NoCopyAnywhere already offers its own copy items.
+        if (sender is not ContextMenu menu || menu.ItemsSource != null || Equals(menu.Tag, "NoCopyAnywhere")) return;
         if (menu.Items.OfType<FrameworkElement>().Any(i => Equals(i.Tag, InjectedTag))) return;
         if (menu.PlacementTarget is not DependencyObject target || target is TextBoxBase or PasswordBox) return;
         if (Environment.TickCount64 - _lastTextTicks > 2000) return;

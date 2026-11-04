@@ -263,42 +263,93 @@ public partial class DashboardWindow : Window
         return tab.Header?.ToString();
     }
 
-    // The transcript only lays out once its tab is shown, so a scroll while another tab is
-    // active is a no-op and the hydrated backlog would open at the TOP. Defer until layout.
-    // Respects the reader: no jump while scrolled up or holding a selection.
+    // The IRC message ListBox only realizes its items once its tab is shown, so the
+    // VM's ctor-time scroll (and any scroll while another tab is active) is a no-op —
+    // the hydrated backlog would open scrolled to the TOP. Scroll to the newest line
+    // once when the tab becomes active, deferred until the list has laid out.
+    // Holds position while the reader has scrolled up (e.g. selecting lines to copy).
+    private bool _ircFollowBottom = true;
+
     private void ScrollIrcToBottom()
     {
         Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
-            IrcTranscript.ScrollToEndIfFollowing(IrcTranscriptBox)));
+        {
+            if (_ircFollowBottom && IrcMessageList.Items.Count > 0)
+                IrcMessageList.ScrollIntoView(IrcMessageList.Items[^1]);
+        }));
     }
 
-    private (string Line, string? Release)? _ircMenuHit;
-
-    private void IrcTranscript_ContextMenuOpening(object sender, ContextMenuEventArgs e)
+    private void IrcMessages_ScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        _ircMenuHit = IrcTranscript.HitTest(IrcTranscriptBox, Mouse.GetPosition(IrcTranscriptBox));
-        IrcCopyMenuItem.IsEnabled = !IrcTranscriptBox.Selection.IsEmpty;
-        IrcCopyLineMenuItem.IsEnabled = _ircMenuHit != null;
+        // Only user scrolling (no content/viewport change) decides whether to follow.
+        if (e.ExtentHeightChange == 0 && e.ViewportHeightChange == 0)
+            _ircFollowBottom = e.VerticalOffset >= e.ExtentHeight - e.ViewportHeight - 24;
+    }
 
-        var release = _ircMenuHit?.Release;
-        IrcCopyReleaseMenuItem.Visibility = release != null ? Visibility.Visible : Visibility.Collapsed;
-        IrcCopyReleaseMenuItem.Header = new TextBlock { Text = release != null ? $"Copy \"{release}\"" : "" };
+    private IrcMessageVm? _ircMenuMessage;
+    private string? _ircMenuRelease;
+
+    private List<IrcMessageVm> SelectedIrcMessages() =>
+        IrcMessageList.SelectedItems.OfType<IrcMessageVm>()
+            .OrderBy(m => IrcMessageList.Items.IndexOf(m))
+            .ToList();
+
+    private void IrcMessages_ContextMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        var source = e.OriginalSource as DependencyObject;
+        _ircMenuMessage = (FindAncestorOrSelf<ListBoxItem>(source)?.DataContext as IrcMessageVm)
+                          ?? SelectedIrcMessages().LastOrDefault();
+        _ircMenuRelease = null;
+        for (var d = source; d != null; d = d is FrameworkContentElement fce ? fce.Parent : null)
+            if (d is System.Windows.Documents.Hyperlink { Tag: string name }) { _ircMenuRelease = name; break; }
+
+        var count = Math.Max(SelectedIrcMessages().Count, _ircMenuMessage != null ? 1 : 0);
+        IrcCopyMenuItem.Header = count > 1 ? $"Copy {count} lines" : "Copy line";
+        IrcCopyMenuItem.IsEnabled = IrcCopyTextMenuItem.IsEnabled = count > 0;
+        IrcCopyReleaseMenuItem.Visibility = _ircMenuRelease != null ? Visibility.Visible : Visibility.Collapsed;
+        IrcCopyReleaseMenuItem.Header = new TextBlock { Text = _ircMenuRelease != null ? $"Copy \"{_ircMenuRelease}\"" : "" };
 
         var pm = DataContext is DashboardViewModel { Irc.SelectedChannel: { IsPrivate: true } channel } ? channel : null;
         IrcShareSeparator.Visibility = IrcShareMenuItem.Visibility = pm != null ? Visibility.Visible : Visibility.Collapsed;
         IrcShareMenuItem.Header = new TextBlock { Text = pm != null ? $"Send server info to {pm.Name}…" : "" };
     }
 
-    private void IrcCopy_Click(object sender, RoutedEventArgs e) => ClipboardHelper.TrySetText(IrcTranscriptBox.Selection.Text);
+    private List<IrcMessageVm> IrcCopyTargets()
+    {
+        var selected = SelectedIrcMessages();
+        if (_ircMenuMessage != null && !selected.Contains(_ircMenuMessage)) return [_ircMenuMessage];
+        return selected;
+    }
 
-    private void IrcCopyLine_Click(object sender, RoutedEventArgs e) => ClipboardHelper.TrySetText(_ircMenuHit?.Line.TrimEnd());
+    private void IrcCopySelection(object sender, ExecutedRoutedEventArgs e) =>
+        ClipboardHelper.TrySetText(string.Join(Environment.NewLine, SelectedIrcMessages().Select(m => $"{m.Timestamp} {m.FormattedLine}")));
 
-    private void IrcCopyRelease_Click(object sender, RoutedEventArgs e) => ClipboardHelper.TrySetText(_ircMenuHit?.Release);
+    private void IrcCopy_Click(object sender, RoutedEventArgs e)
+    {
+        var lines = IrcCopyTargets().Select(m => $"{m.Timestamp} {m.FormattedLine}");
+        ClipboardHelper.TrySetText(string.Join(Environment.NewLine, lines));
+        _ircMenuMessage = null;
+    }
+
+    private void IrcCopyText_Click(object sender, RoutedEventArgs e)
+    {
+        ClipboardHelper.TrySetText(string.Join(Environment.NewLine, IrcCopyTargets().Select(m => m.Text)));
+        _ircMenuMessage = null;
+    }
+
+    private void IrcCopyRelease_Click(object sender, RoutedEventArgs e) => ClipboardHelper.TrySetText(_ircMenuRelease);
 
     private void IrcSelectAll_Click(object sender, RoutedEventArgs e)
     {
-        IrcTranscriptBox.Focus();
-        IrcTranscriptBox.SelectAll();
+        IrcMessageList.Focus();
+        IrcMessageList.SelectAll();
+    }
+
+    private static T? FindAncestorOrSelf<T>(DependencyObject? d) where T : DependencyObject
+    {
+        while (d != null && d is not T)
+            d = d is System.Windows.Media.Visual ? System.Windows.Media.VisualTreeHelper.GetParent(d) : LogicalTreeHelper.GetParent(d);
+        return d as T;
     }
 
     private void IrcShareServerInfo_Click(object sender, RoutedEventArgs e)
