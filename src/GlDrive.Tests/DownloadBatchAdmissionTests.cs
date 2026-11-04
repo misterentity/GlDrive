@@ -125,7 +125,17 @@ public sealed class DownloadBatchAdmissionTests : IDisposable
         await requeued.Task.WaitAsync(TimeSpan.FromSeconds(10));
         var state = DownloadWaiting.Describe(retry)!;
         Assert.Equal("download-queue", state.ReasonCode); Assert.Null(state.NextCheckAtUtc);
-        Assert.Equal([first.Id, retry.Id], Field<List<DownloadItem>>(manager, "_pendingQueue").Select(item => item.Id));
+        // The status event fires before the retry thread adds the item under _queueLock;
+        // read the queue under that lock (an unlocked read threw "Collection was modified").
+        var queue = Field<List<DownloadItem>>(manager, "_pendingQueue");
+        var queueLock = Field<object>(manager, "_queueLock");
+        string[] ids = [];
+        for (var deadline = DateTime.UtcNow.AddSeconds(10); DateTime.UtcNow < deadline; await Task.Delay(10))
+        {
+            lock (queueLock) ids = queue.Select(item => item.Id).ToArray();
+            if (ids.Contains(retry.Id)) break;
+        }
+        Assert.Equal([first.Id, retry.Id], ids);
     }
 
     private static T Field<T>(object target, string name) => (T)target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(target)!;
