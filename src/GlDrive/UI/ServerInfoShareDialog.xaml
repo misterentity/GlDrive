@@ -1,0 +1,63 @@
+<Window x:Class="GlDrive.UI.ServerInfoShareDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Send server info" Width="620" Height="560"
+        MinWidth="480" MinHeight="420"
+        ResizeMode="CanResize"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource BackgroundBrush}"
+        Foreground="{DynamicResource ForegroundBrush}">
+    <Border Margin="14" Style="{DynamicResource HudPanelStyle}">
+        <DockPanel>
+            <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                <TextBlock x:Name="HeaderText" Text="&gt;&gt; SEND SERVER INFO" Style="{DynamicResource SectionHeaderTextStyle}"/>
+            </Border>
+            <Grid Margin="12">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <DockPanel Grid.Row="0" Margin="0,0,0,10">
+                    <TextBlock Text="Site:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <ComboBox x:Name="ServerPicker" DisplayMemberPath="Name" SelectionChanged="Options_Changed"
+                              AutomationProperties.Name="Site to share"/>
+                </DockPanel>
+
+                <WrapPanel Grid.Row="1" Margin="0,0,0,8">
+                    <CheckBox x:Name="BncBox" Content="BNC address" IsChecked="True" Margin="0,0,16,6" Click="Options_Changed"/>
+                    <CheckBox x:Name="IrcdBox" Content="IRC server" IsChecked="True" Margin="0,0,16,6" Click="Options_Changed"/>
+                    <CheckBox x:Name="IrcPassBox" Content="IRC password" IsChecked="True" Margin="0,0,16,6" Click="Options_Changed"/>
+                    <CheckBox x:Name="ChannelsBox" Content="Channels + keys" IsChecked="True" Margin="0,0,16,6" Click="Options_Changed"/>
+                    <CheckBox x:Name="FishBox" Content="Channel blowfish keys" IsChecked="True" Margin="0,0,16,6" Click="Options_Changed"/>
+                    <CheckBox x:Name="FtpLoginBox" Content="FTP login (user + password)" Margin="0,0,16,6" Click="Options_Changed"/>
+                </WrapPanel>
+
+                <TextBlock Grid.Row="2" Text="Message (edit before sending; each line is sent as one message):"
+                           Style="{DynamicResource DimTextStyle}" Margin="0,0,0,4"/>
+
+                <TextBox Grid.Row="3" x:Name="PreviewBox"
+                         AutomationProperties.Name="Message to send"
+                         FontFamily="Consolas" FontSize="12.5"
+                         AcceptsReturn="True" TextWrapping="NoWrap"
+                         VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                         Background="{DynamicResource SurfaceBrush}"/>
+
+                <TextBlock Grid.Row="4" x:Name="EncryptionText" TextWrapping="Wrap" Margin="0,10,0,0"/>
+
+                <DockPanel Grid.Row="5" Margin="0,12,0,0" LastChildFill="False">
+                    <TextBlock x:Name="StatusText" DockPanel.Dock="Left" VerticalAlignment="Center"
+                               Style="{DynamicResource DimTextStyle}"/>
+                    <Button DockPanel.Dock="Right" x:Name="SendButton" Content="Send" Click="Send_Click" IsDefault="True"
+                            Padding="20,6" Margin="8,0,0,0" Style="{StaticResource PrimaryButton}"/>
+                    <Button DockPanel.Dock="Right" Content="Cancel" Click="Cancel_Click" IsCancel="True"
+                            Padding="20,6" Style="{StaticResource SecondaryButton}"/>
+                </DockPanel>
+            </Grid>
+        </DockPanel>
+    </Border>
+</Window>

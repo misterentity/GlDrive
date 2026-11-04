@@ -195,7 +195,7 @@ public class IrcClient : IDisposable
     /// </summary>
     private readonly SemaphoreSlim _sendLock = new(1, 1);
 
-    public async Task SendRawAsync(string line)
+    public async Task SendRawAsync(string line, bool sensitive = false)
     {
         // Capture once: DisconnectAsync nulls and disposes _writer concurrently, so re-reading
         // the field after the check could hand the write a disposed or null writer.
@@ -209,7 +209,9 @@ public class IrcClient : IDisposable
         {
             // Redact credential parameters (channel keys, services passwords) — NOT just
             // PASS, which is what this used to check. See IrcLineRedactor.
-            Log.Verbose("[IRC >] {Line}", IrcLineRedactor.Redact(line));
+            // Sensitive payloads (shared credentials) never reach the log, even at Verbose.
+            if (sensitive) Log.Verbose("[IRC >] {Line}", RedactPayload(line));
+            else Log.Verbose("[IRC >] {Line}", IrcLineRedactor.Redact(line));
             await writer.WriteLineAsync(line);
         }
         catch (Exception ex)
@@ -229,7 +231,14 @@ public class IrcClient : IDisposable
         key != null ? SendRawAsync($"JOIN {channel} {key}") : SendRawAsync($"JOIN {channel}");
     public Task PartAsync(string channel, string? message = null) =>
         message != null ? SendRawAsync($"PART {channel} :{message}") : SendRawAsync($"PART {channel}");
-    public Task PrivmsgAsync(string target, string text) => SendRawAsync($"PRIVMSG {target} :{text}");
+    public Task PrivmsgAsync(string target, string text, bool sensitive = false) =>
+        SendRawAsync($"PRIVMSG {target} :{text}", sensitive);
+
+    internal static string RedactPayload(string line)
+    {
+        var colon = line.IndexOf(" :", StringComparison.Ordinal);
+        return colon < 0 ? "<redacted>" : $"{line[..colon]} :<redacted {line.Length - colon - 2} chars>";
+    }
     public Task NoticeAsync(string target, string text) => SendRawAsync($"NOTICE {target} :{text}");
     public Task QuitAsync(string? message = null) =>
         SendRawAsync(message != null ? $"QUIT :{message}" : "QUIT :GlDrive");

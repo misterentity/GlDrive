@@ -445,6 +445,7 @@ public partial class App
         // StripeRect element (Dark/Light) just no-op.
         try { WireProgressBarStripeAnimation(); }
         catch (Exception ex) { Log.Debug(ex, "WireProgressBarStripeAnimation failed"); }
+        GlDrive.UI.CopyAnywhere.Register();
 
         // Init services — certificates auto-trusted on first connect (TOFU model)
         // Users can clear per-server certs in Settings > Servers > Edit > Clear Certificate

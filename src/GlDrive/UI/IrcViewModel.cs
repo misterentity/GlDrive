@@ -21,6 +21,7 @@ public class IrcChannelVm : INotifyPropertyChanged
     public string Name { get; set; } = "";
     public bool IsChannel => Name.Length > 0 &&
         (Name[0] == '#' || Name[0] == '&' || Name[0] == '!' || Name[0] == '+');
+    public bool IsPrivate => !IsChannel && Name.Length > 0 && Name != "*";
     private bool _hasFishKey;
     public bool HasFishKey
     {
@@ -230,8 +231,11 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
     public ICommand PrivateMessageNickCommand { get; }
     public ICommand KeyExchangeNickCommand { get; }
     public ICommand ReleaseLinkClickedCommand { get; }
+    public ICommand ShareServerInfoCommand { get; }
 
     public event Action<string>? ReleaseLinkClicked;
+    /// <summary>(serverId, nick): open the "send server info" dialog for a PM target.</summary>
+    public event Action<string, string>? ShareServerInfoRequested;
     public event Action? ScrollToBottom;
     public event Action? FocusInput;
 
@@ -287,6 +291,19 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
             var irc = _serverManager.GetIrcService(_selectedChannel.ServerId);
             if (irc != null)
                 await irc.InitiateKeyExchange(cleanNick);
+        });
+        // Parameter: a nick from the user list (current server), or a PM entry from the sidebar.
+        ShareServerInfoCommand = new RelayCommand<object>(target =>
+        {
+            switch (target)
+            {
+                case IrcChannelVm { IsChannel: false } pm when pm.Name != "*":
+                    ShareServerInfoRequested?.Invoke(pm.ServerId, pm.Name);
+                    break;
+                case string nick when !string.IsNullOrWhiteSpace(nick) && _selectedChannel != null:
+                    ShareServerInfoRequested?.Invoke(_selectedChannel.ServerId, nick.TrimStart('@', '+', '%', '~', '&'));
+                    break;
+            }
         });
         ReleaseLinkClickedCommand = new RelayCommand<string>(releaseName =>
         {

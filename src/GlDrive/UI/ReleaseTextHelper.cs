@@ -35,37 +35,41 @@ public static partial class ReleaseTextHelper
         if (msg == null) { tb.Inlines.Clear(); return; }
 
         tb.Inlines.Clear();
+        AppendInlines(tb.Inlines, msg, () => GetClickCommand(tb));
+    }
 
+    /// <summary>Appends the message line as runs, with release names as clickable links.</summary>
+    internal static void AppendInlines(InlineCollection inlines, IrcMessageVm msg, Func<ICommand?> clickCommand)
+    {
         var text = msg.FormattedLine;
 
         // System messages don't have releases
         if (msg.IsSystemMessage)
         {
-            tb.Inlines.Add(new Run(text));
+            inlines.Add(new Run(text));
             return;
         }
 
         var matches = MergeMatches(DotReleaseRegex.Matches(text), MusicReleaseRegex.Matches(text));
         if (matches.Count == 0)
         {
-            tb.Inlines.Add(new Run(text));
+            inlines.Add(new Run(text));
             return;
         }
 
         var lastIndex = 0;
         foreach (Match match in matches)
         {
-            // Add text before match
             if (match.Index > lastIndex)
-                tb.Inlines.Add(new Run(text[lastIndex..match.Index]));
+                inlines.Add(new Run(text[lastIndex..match.Index]));
 
             var releaseName = match.Value;
             var link = new Hyperlink(new Run(releaseName))
             {
                 TextDecorations = null,
-                Cursor = Cursors.Hand
+                Cursor = Cursors.Hand,
+                Tag = releaseName
             };
-            // Use accent-ish color for links
             link.SetResourceReference(TextElement.ForegroundProperty, "AccentBrush");
             link.MouseEnter += (s, _) =>
             {
@@ -77,18 +81,17 @@ public static partial class ReleaseTextHelper
             };
             link.Click += (_, _) =>
             {
-                var cmd = GetClickCommand(tb);
+                var cmd = clickCommand();
                 if (cmd?.CanExecute(releaseName) == true)
                     cmd.Execute(releaseName);
             };
 
-            tb.Inlines.Add(link);
+            inlines.Add(link);
             lastIndex = match.Index + match.Length;
         }
 
-        // Add remaining text after last match
         if (lastIndex < text.Length)
-            tb.Inlines.Add(new Run(text[lastIndex..]));
+            inlines.Add(new Run(text[lastIndex..]));
     }
 
     // Merge matches from both regexes, deduplicating overlapping spans

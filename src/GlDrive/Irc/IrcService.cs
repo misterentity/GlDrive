@@ -1336,7 +1336,11 @@ public class IrcService : IDisposable
     /// PM typed into the UI simply evaporated with no error anywhere. The caller now learns
     /// that nothing was sent and can say so.
     /// </summary>
-    public async Task<bool> SendMessage(string target, string text)
+    /// <summary>True when a message to this target goes out FiSH-encrypted.</summary>
+    public bool WillEncrypt(string target) => _serverConfig.Irc.FishEnabled && _fishKeyStore.GetKey(target) != null;
+
+    /// <param name="sensitive">Payload carries secrets: keep it out of the raw-line log.</param>
+    public async Task<bool> SendMessage(string target, string text, bool sensitive = false)
     {
         if (_client == null || !_client.IsConnected)
         {
@@ -1353,13 +1357,13 @@ public class IrcService : IDisposable
             if (keyEntry != null)
             {
                 var encrypted = FishCipher.Encrypt(text, keyEntry.Key, keyEntry.Mode);
-                await _client.PrivmsgAsync(target, encrypted);
+                await _client.PrivmsgAsync(target, encrypted, sensitive);
                 AddMessage(target, new IrcMessageItem { Nick = _currentNick, Text = text, WasEncrypted = true });
                 return true;
             }
         }
 
-        await _client.PrivmsgAsync(target, text);
+        await _client.PrivmsgAsync(target, text, sensitive);
         AddMessage(target, new IrcMessageItem { Nick = _currentNick, Text = text });
         return true;
     }

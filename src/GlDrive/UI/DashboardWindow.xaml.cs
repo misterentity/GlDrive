@@ -110,6 +110,7 @@ public partial class DashboardWindow : Window
 
         // Auto-scroll IRC messages
         vm.Irc.ScrollToBottom += ScrollIrcToBottom;
+        vm.Irc.ShareServerInfoRequested += OpenServerInfoShare;
 
         // Re-focus input after sending
         vm.Irc.FocusInput += () => IrcInputBox.Focus();
@@ -262,17 +263,59 @@ public partial class DashboardWindow : Window
         return tab.Header?.ToString();
     }
 
-    // The IRC message ListBox only realizes its items once its tab is shown, so the
-    // VM's ctor-time scroll (and any scroll while another tab is active) is a no-op —
-    // the hydrated backlog would open scrolled to the TOP. Scroll to the newest line
-    // once when the tab becomes active, deferred until the list has laid out.
+    // The transcript only lays out once its tab is shown, so a scroll while another tab is
+    // active is a no-op and the hydrated backlog would open at the TOP. Defer until layout.
+    // Respects the reader: no jump while scrolled up or holding a selection.
     private void ScrollIrcToBottom()
     {
         Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+            IrcTranscript.ScrollToEndIfFollowing(IrcTranscriptBox)));
+    }
+
+    private (string Line, string? Release)? _ircMenuHit;
+
+    private void IrcTranscript_ContextMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        _ircMenuHit = IrcTranscript.HitTest(IrcTranscriptBox, Mouse.GetPosition(IrcTranscriptBox));
+        IrcCopyMenuItem.IsEnabled = !IrcTranscriptBox.Selection.IsEmpty;
+        IrcCopyLineMenuItem.IsEnabled = _ircMenuHit != null;
+
+        var release = _ircMenuHit?.Release;
+        IrcCopyReleaseMenuItem.Visibility = release != null ? Visibility.Visible : Visibility.Collapsed;
+        IrcCopyReleaseMenuItem.Header = new TextBlock { Text = release != null ? $"Copy \"{release}\"" : "" };
+
+        var pm = DataContext is DashboardViewModel { Irc.SelectedChannel: { IsPrivate: true } channel } ? channel : null;
+        IrcShareSeparator.Visibility = IrcShareMenuItem.Visibility = pm != null ? Visibility.Visible : Visibility.Collapsed;
+        IrcShareMenuItem.Header = new TextBlock { Text = pm != null ? $"Send server info to {pm.Name}…" : "" };
+    }
+
+    private void IrcCopy_Click(object sender, RoutedEventArgs e) => ClipboardHelper.TrySetText(IrcTranscriptBox.Selection.Text);
+
+    private void IrcCopyLine_Click(object sender, RoutedEventArgs e) => ClipboardHelper.TrySetText(_ircMenuHit?.Line.TrimEnd());
+
+    private void IrcCopyRelease_Click(object sender, RoutedEventArgs e) => ClipboardHelper.TrySetText(_ircMenuHit?.Release);
+
+    private void IrcSelectAll_Click(object sender, RoutedEventArgs e)
+    {
+        IrcTranscriptBox.Focus();
+        IrcTranscriptBox.SelectAll();
+    }
+
+    private void IrcShareServerInfo_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is DashboardViewModel { Irc.SelectedChannel: { IsPrivate: true } pm } vm)
+            vm.Irc.ShareServerInfoCommand.Execute(pm);
+    }
+
+    private void OpenServerInfoShare(string serverId, string nick)
+    {
+        if (_demoMode) return;
+        if (_serverManager.GetIrcService(serverId) is not { } irc)
         {
-            if (IrcMessageList.Items.Count > 0)
-                IrcMessageList.ScrollIntoView(IrcMessageList.Items[^1]);
-        }));
+            MessageBox.Show(this, "That site's IRC isn't running.", "Send server info", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        new ServerInfoShareDialog(_serverManager, _config, irc, nick) { Owner = this }.ShowDialog();
     }
 
     private async void TabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)

@@ -1898,7 +1898,16 @@
                                                              Background="Transparent" BorderThickness="0">
                                                         <ListBox.ItemTemplate>
                                                             <DataTemplate>
-                                                                <StackPanel Orientation="Horizontal">
+                                                                <StackPanel Orientation="Horizontal" Background="Transparent"
+                                                                            ContextMenuService.IsEnabled="{Binding IsPrivate}"
+                                                                            Tag="{Binding RelativeSource={RelativeSource AncestorType=Window}}">
+                                                                    <StackPanel.ContextMenu>
+                                                                        <ContextMenu>
+                                                                            <MenuItem Header="Send server info…"
+                                                                                      Command="{Binding PlacementTarget.Tag.DataContext.Irc.ShareServerInfoCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                                                      CommandParameter="{Binding}"/>
+                                                                        </ContextMenu>
+                                                                    </StackPanel.ContextMenu>
                                                                     <TextBlock Text="&#x1F512;" FontSize="12" Margin="0,0,4,0"
                                                                                Visibility="{Binding HasFishKey, Converter={StaticResource BoolToVisibility}}"/>
                                                                     <TextBlock Text="{Binding SidebarDisplay}" Foreground="{DynamicResource ForegroundBrush}"/>
@@ -1919,42 +1928,31 @@
                                                     <TextBlock Text="MESSAGES" Style="{DynamicResource SectionHeaderTextStyle}"/>
                                                 </Border>
                                                 <Grid>
-                                                    <ListBox ItemsSource="{Binding Irc.Messages}"
-                                                             x:Name="IrcMessageList" HorizontalContentAlignment="Stretch"
-                                                             Background="Transparent" BorderThickness="0"
-                                                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                                                             VirtualizingPanel.ScrollUnit="Pixel">
-                                                        <ListBox.ItemTemplate>
-                                                            <DataTemplate>
-                                                                <DockPanel Margin="4,3" LastChildFill="True">
-                                                                    <TextBlock Text="{Binding Timestamp}" Foreground="{DynamicResource ForegroundDimBrush}"
-                                                                               FontSize="12" Margin="0,0,6,0" FontFamily="Consolas"/>
-                                                                    <TextBlock Text="&#x1F512;" FontSize="12" Margin="0,0,3,0"
-                                                                               Visibility="{Binding WasEncrypted, Converter={StaticResource BoolToVisibility}}"/>
-                                                                    <TextBlock ui:ReleaseTextHelper.Message="{Binding}"
-                                                                               ui:ReleaseTextHelper.ClickCommand="{Binding DataContext.Irc.ReleaseLinkClickedCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                                               TextWrapping="Wrap"
-                                                                               FontFamily="Consolas" FontSize="12.5">
-                                                                        <TextBlock.Style>
-                                                                            <Style TargetType="TextBlock">
-                                                                                <Setter Property="Foreground" Value="{Binding NickColor}"/>
-                                                                                <Style.Triggers>
-                                                                                    <DataTrigger Binding="{Binding IsHighlight}" Value="True">
-                                                                                        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
-                                                                                        <Setter Property="FontWeight" Value="Bold"/>
-                                                                                    </DataTrigger>
-                                                                                    <DataTrigger Binding="{Binding IsSystemMessage}" Value="True">
-                                                                                        <Setter Property="Foreground" Value="{DynamicResource ForegroundDimBrush}"/>
-                                                                                        <Setter Property="FontStyle" Value="Italic"/>
-                                                                                    </DataTrigger>
-                                                                                </Style.Triggers>
-                                                                            </Style>
-                                                                        </TextBlock.Style>
-                                                                    </TextBlock>
-                                                                </DockPanel>
-                                                            </DataTemplate>
-                                                        </ListBox.ItemTemplate>
-                                                    </ListBox>
+                                                    <!-- Read-only rich text (not a ListBox) so lines can be
+                                                         drag-selected and copied like a normal IRC client. -->
+                                                    <RichTextBox x:Name="IrcTranscriptBox"
+                                                                 AutomationProperties.Name="IRC messages"
+                                                                 ui:IrcTranscript.Messages="{Binding Irc.Messages}"
+                                                                 ui:IrcTranscript.LinkCommand="{Binding Irc.ReleaseLinkClickedCommand}"
+                                                                 IsReadOnly="True" IsReadOnlyCaretVisible="False" IsDocumentEnabled="True"
+                                                                 AutoWordSelection="False"
+                                                                 Background="Transparent" BorderThickness="0" Padding="0"
+                                                                 Foreground="{DynamicResource ForegroundBrush}"
+                                                                 SelectionBrush="{DynamicResource AccentBrush}" SelectionOpacity="0.35"
+                                                                 FontFamily="Consolas" FontSize="12.5"
+                                                                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                                                                 ContextMenuOpening="IrcTranscript_ContextMenuOpening">
+                                                        <RichTextBox.ContextMenu>
+                                                            <ContextMenu>
+                                                                <MenuItem x:Name="IrcCopyMenuItem" Header="Copy" InputGestureText="Ctrl+C" Click="IrcCopy_Click"/>
+                                                                <MenuItem x:Name="IrcCopyLineMenuItem" Header="Copy line" Click="IrcCopyLine_Click"/>
+                                                                <MenuItem x:Name="IrcCopyReleaseMenuItem" Click="IrcCopyRelease_Click"/>
+                                                                <MenuItem Header="Select all" InputGestureText="Ctrl+A" Click="IrcSelectAll_Click"/>
+                                                                <Separator x:Name="IrcShareSeparator"/>
+                                                                <MenuItem x:Name="IrcShareMenuItem" Click="IrcShareServerInfo_Click"/>
+                                                            </ContextMenu>
+                                                        </RichTextBox.ContextMenu>
+                                                    </RichTextBox>
                                                 </Grid>
                                             </DockPanel>
                                         </Border>
@@ -1983,6 +1981,9 @@
                                                                                       CommandParameter="{Binding}"/>
                                                                             <MenuItem Header="FiSH Key Exchange"
                                                                                       Command="{Binding PlacementTarget.Tag.DataContext.Irc.KeyExchangeNickCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                                                      CommandParameter="{Binding}"/>
+                                                                            <MenuItem Header="Send server info…"
+                                                                                      Command="{Binding PlacementTarget.Tag.DataContext.Irc.ShareServerInfoCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                                                                                       CommandParameter="{Binding}"/>
                                                                         </ContextMenu>
                                                                     </TextBlock.ContextMenu>
