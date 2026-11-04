@@ -623,6 +623,7 @@ public class FxpTransfer
     // a destination that withholds 150 until data flows gets RETR after this delay.
     internal static readonly TimeSpan StorHeadStart = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan DirectPreliminaryTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan CompletionReadMargin = TimeSpan.FromSeconds(5);
 
     // Set when RETR went out but STOR then answered with a dupe: the source still owes
     // a reply for a transfer that will never connect, so its session can't be reused.
@@ -1083,14 +1084,27 @@ public class FxpTransfer
     private static async Task<FtpReply?> ReadReplyManagedTimeout(
         AsyncFtpClient client, TimeSpan timeout, CancellationToken ct)
     {
+        // GetReply enforces Config.ReadTimeout itself (re-read on every call), and the control
+        // channel is silent for the whole server-to-server transfer. At the production 30 s,
+        // every direct file slower than 30 s threw TimeoutException long before this managed
+        // deadline (2026-11-03 19:33/19:43: failures exactly 30 s after the file started).
+        // Widen it just past the deadline for this read so the managed wait stays in charge.
+        var configured = client.Config.ReadTimeout;
+        var widened = (int)Math.Min(int.MaxValue, (timeout + CompletionReadMargin).TotalMilliseconds);
+        if (widened > configured) client.Config.ReadTimeout = widened;
         var readTask = client.GetReply(CancellationToken.None);
         var winner = await Task.WhenAny(readTask, Task.Delay(timeout, ct));
         if (winner == readTask)
+        {
+            client.Config.ReadTimeout = configured;
             return await readTask;
+        }
 
         // Timed out or outer-cancelled: never cancel the in-flight read — observe its
-        // eventual exception so it isn't an unobserved-task fault, and let it drain.
-        _ = readTask.ContinueWith(t => { _ = t.Exception; }, TaskScheduler.Default);
+        // eventual exception so it isn't an unobserved-task fault, and let it drain. The
+        // caller poisons this connection, so the widened timeout is restored only once the
+        // read is done with it.
+        _ = readTask.ContinueWith(t => { _ = t.Exception; client.Config.ReadTimeout = configured; }, TaskScheduler.Default);
         ct.ThrowIfCancellationRequested(); // propagate a genuine job cancel
         return null;                        // pure transfer timeout
     }

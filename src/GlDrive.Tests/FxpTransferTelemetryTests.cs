@@ -143,6 +143,40 @@ public sealed class FxpTransferTelemetryTests
         Assert.True(destination.Poisoned);
     }
 
+    /// <summary>
+    /// 2026-11-03 19:33 and 19:43 (v3.19.11): direct FXP files failed "Timed out trying to read
+    /// data from the socket stream!" exactly 30 s after they started. The control channel is
+    /// silent for the whole server-to-server transfer, and FluentFTP's GetReply enforces
+    /// Config.ReadTimeout (30 s in production) beneath the managed per-file deadline, so any
+    /// direct file slower than 30 s failed regardless of its transfer ceiling.
+    /// </summary>
+    [Theory]
+    [InlineData(FxpMode.PasvPasv)]
+    [InlineData(FxpMode.Relay)]
+    public async Task DirectCompletionWaitsForTheTransferCeilingNotTheReadTimeout(FxpMode mode)
+    {
+        var slow = TimeSpan.FromMilliseconds(4500);
+        await using var sourceServer = new ControlServer(cpsvAvailable: mode == FxpMode.Relay, completionDelay: slow);
+        await using var destinationServer = new ControlServer(completionDelay: slow);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        // Above StorHeadStart so the probe's STOR preliminary isn't what times out.
+        using var sourceClient = Client(sourceServer.Port, 3500);
+        using var destinationClient = Client(destinationServer.Port, 3500);
+        await sourceClient.Connect(timeout.Token);
+        await destinationClient.Connect(timeout.Token);
+        var source = new PooledConnection(sourceClient, null!);
+        var destination = new PooledConnection(destinationClient, null!);
+        var transfer = new FxpTransfer(_ => { });
+
+        Assert.True(await transfer.ExecuteAsync(source, destination, "/fixture/file.bin", "/target/file.bin",
+            mode, 20, timeout.Token, "race-fixture", Guid.NewGuid().ToString("N"), Guid.NewGuid().ToString("N"), 4096),
+            transfer.ErrorMessage);
+        Assert.Equal(3500, sourceClient.Config.ReadTimeout);
+        Assert.Equal(3500, destinationClient.Config.ReadTimeout);
+        Assert.False(source.Poisoned);
+        Assert.False(destination.Poisoned);
+    }
+
     [Theory]
     [InlineData("550", "System Error- blue.lights.s04e06.1080p.hdtv.h264-organic.r42: File exists.", true)]
     [InlineData("553", "File is being uploaded by altruist", true)]
@@ -205,10 +239,12 @@ public sealed class FxpTransferTelemetryTests
         private readonly bool _cpsvAvailable;
         private readonly Task? _storGate;
         private readonly TaskCompletionSource? _onRetr;
+        private readonly TimeSpan _completionDelay;
 
         public ControlServer(bool duplicate = false, bool rejectPassive = false, bool cpsvAvailable = false,
-            Task? storGate = null, TaskCompletionSource? onRetr = null)
+            Task? storGate = null, TaskCompletionSource? onRetr = null, TimeSpan completionDelay = default)
         {
+            _completionDelay = completionDelay;
             _cpsvAvailable = cpsvAvailable;
             _storGate = storGate;
             _onRetr = onRetr;
@@ -248,7 +284,10 @@ public sealed class FxpTransferTelemetryTests
                     };
                     await writer.WriteLineAsync(reply);
                     if (verb is "RETR" || verb == "STOR" && !duplicate)
+                    {
+                        if (_completionDelay > TimeSpan.Zero) await Task.Delay(_completionDelay, _stop.Token);
                         await writer.WriteLineAsync("226 Synthetic transfer complete");
+                    }
                     if (verb == "QUIT") break;
                 }
             }
