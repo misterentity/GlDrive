@@ -239,8 +239,12 @@ public static class Program
             var completionPath = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
                 "GlDrive", $"update-complete-{targetPid}.signal");
-            var deadline = DateTime.UtcNow + TimeSpan.FromMinutes(3);
-            while (!File.Exists(completionPath) && DateTime.UtcNow < deadline)
+            // A slow disk (or AV scanning the new files) can stretch an install past 3 minutes;
+            // relaunching then starts the app while files are mid-rename. Keep waiting while the
+            // SYSTEM updater (another GlDrive process) is still alive, up to a hard cap.
+            var waitStarted = DateTime.UtcNow;
+            while (UpdateWatchdogWait.ShouldKeepWaiting(DateTime.UtcNow - waitStarted,
+                       File.Exists(completionPath), () => UpdateWatchdogWait.OtherGlDriveProcessAlive(targetPid)))
                 Thread.Sleep(500);
 
             var completed = File.Exists(completionPath);

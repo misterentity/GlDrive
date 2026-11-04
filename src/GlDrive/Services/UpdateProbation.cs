@@ -271,7 +271,11 @@ internal sealed class UpdateProbationStore
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var receipt in receipts)
             {
-                if (receipt.CreatedUtc > now || now - receipt.CreatedUtc < UpdateProbation.Retention) continue;
+                // Rollback only ever uses the receipt for the installed version, so a generation
+                // that a newer install superseded is dead weight: without this, a day of frequent
+                // releases kept every generation (7 x 1,339 files, 3.5 GB) and each later install
+                // enumerated and hashed through all of them.
+                if (!IsSuperseded(receipt) && (receipt.CreatedUtc > now || now - receipt.CreatedUtc < UpdateProbation.Retention)) continue;
                 foreach (var payload in receipt.PreviousFiles)
                 {
                     var backup = Resolve(payload.Path + "." + receipt.Generation + ".old");
@@ -678,6 +682,8 @@ internal sealed class UpdateProbationStore
             if ((File.GetAttributes(cursor) & FileAttributes.ReparsePoint) != 0) throw new IOException("Recovery path contains a link");
     }
 
+    private bool IsSuperseded(Receipt receipt) =>
+        Version.TryParse(receipt.CurrentVersion, out var version) && UpdateChecker.Normalize(version) < _current;
     private bool IsCurrent(Receipt receipt) => UpdateChecker.Normalize(Version.Parse(receipt.CurrentVersion)) == _current;
     private static bool IsWithinProbation(Receipt receipt, DateTime now) => receipt.CreatedUtc <= now && now - receipt.CreatedUtc < UpdateProbation.Retention;
     private static UpdateProbationStatus Status(Receipt receipt, bool available, string message) =>

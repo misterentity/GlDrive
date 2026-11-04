@@ -347,6 +347,25 @@ public sealed class UpdateProbationTests : IDisposable
         Assert.Equal(_backups.Count, _backups.Count(backup => File.Exists(backup.Backup)));
     }
 
+    [Fact]
+    public void Superseded_generation_is_cleaned_before_retention_but_the_current_rollback_is_kept()
+    {
+        Assert.True(Store().RecordInstallation(_backups, _now));
+        var hotfixBackups = new List<(string Original, string Backup)>();
+        UpdateChecker.BackUpInstalledFiles(_root, hotfixBackups);
+        WriteBuild("hotfix");
+        var hotfix = new UpdateProbationStore(_root, new Version(3, 19, 1), _ => true,
+            path => File.ReadAllText(path).StartsWith("hotfix", StringComparison.Ordinal) ? new Version(3, 19, 1) : _current);
+        Assert.True(hotfix.RecordInstallation(hotfixBackups, _now.AddMinutes(10)));
+
+        // An hour later (well inside 24 h) the 3.18 -> 3.19 backups can never be rolled back to.
+        hotfix.Cleanup(_now.AddHours(1));
+
+        Assert.All(_backups, backup => Assert.False(File.Exists(backup.Backup)));
+        Assert.All(hotfixBackups, backup => Assert.True(File.Exists(backup.Backup)));
+        Assert.True(hotfix.GetStatus(_now.AddHours(1)).RollbackAvailable);
+    }
+
     [Theory]
     [InlineData("O:BAG:BAD:(A;;FA;;;BA)(A;;FA;;;SY)(A;;FR;;;BU)", true)]
     [InlineData("O:BAG:BAD:(A;;FA;;;BA)(A;OICIIO;GA;;;CO)(A;;FR;;;BU)", true)]
