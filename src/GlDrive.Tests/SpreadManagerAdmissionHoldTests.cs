@@ -39,6 +39,75 @@ public sealed class SpreadManagerAdmissionHoldTests : IDisposable
     private PersistedRace Request(string release = "Held.Release-GRP") => new("TV", release, ["src", "dst"], SpreadMode.Race, "src", "/TV/" + release, _now);
     private int[] Eligible(SpreadManager manager) => ((IEnumerable<int>)Invoke(manager, "EligibleQueueIndicesNoLock", _now)!).ToArray();
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task First_reinit_transport_failure_retains_the_original_race_before_running_it(bool thirdHealthyPeer)
+    {
+        var (manager, _, gate) = Fixture();
+        using (manager)
+        {
+            gate.Failure = new TimeoutException("The operation has timed out.");
+            var config = Field<AppConfig>(manager, "_config");
+            // A sentinel makes an incorrectly admitted worker finish without FTP.
+            config.Spread.GlobalSkiplist.Add(new() { Pattern = "*", Action = SkiplistAction.Deny });
+            var serverIds = new List<string> { "src", "dst" };
+            if (thirdHealthyPeer)
+            {
+                config.Servers.Add(new() { Id = "third" });
+                Pools(manager).Add("third", new FtpConnectionPool(null!, 3));
+                serverIds.Add("third");
+            }
+            PersistedRace? original = null;
+            manager.JobStarted += job => original = Field<Dictionary<SpreadJob, PersistedRace>>(manager, "_activeRequests")[job];
+            var ended = 0;
+            manager.JobEnded += _ => Interlocked.Increment(ref ended);
+
+            var result = manager.StartRaceDetailed("TV", "Fresh.Timeout-GRP", serverIds, SpreadMode.Race,
+                "dst", "/TV/Fresh.Timeout-GRP");
+            Assert.Equal(RaceStartOutcome.Started, result.Outcome);
+            Assert.NotNull(original);
+            for (var i = 0; i < 500 && manager.ActiveJobs.Count != 0; i++) await Task.Delay(10);
+            Assert.Empty(manager.ActiveJobs);
+
+            var saved = Assert.Single(manager.QueuedRaces);
+            Assert.Equal(original.RequestId, saved.RequestId);
+            Assert.Equal(original.QueuedAtUtc, saved.QueuedAtUtc);
+            Assert.Equal(original.KnownSourceServerId, saved.KnownSourceServerId);
+            Assert.Equal(original.KnownSourcePath, saved.KnownSourcePath);
+            Assert.Equal(original.Resumes, saved.Resumes);
+            Assert.Null(result.Job!.LastError);
+            Assert.Empty(manager.History.Items);
+            Assert.Equal(0, ended);
+            Assert.Equal(1, gate.Attempts);
+            Assert.Empty(Eligible(manager));
+            Invoke(manager, "PersistQueue");
+            Assert.Equal(original.RequestId, Assert.Single(new RaceQueueStore(Path.Combine(_root, "race-queue.json")).Load()).RequestId);
+            Assert.NotNull(Field<Timer?>(manager, "_queueWakeTimer"));
+            _now = _now.AddSeconds(30);
+            Assert.Equal([0], Eligible(manager));
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Reinit_transport_failure_waits_before_another_login(bool timeout)
+    {
+        var (manager, pool, gate) = Fixture();
+        using (manager)
+        {
+            gate.Failure = timeout ? new TimeoutException("The operation has timed out.") : new IOException("Connection reset");
+            await Reinit(manager);
+            for (var i = 0; i < 20; i++) await Reinit(manager);
+            Assert.Equal(1, gate.Attempts);
+            Assert.Equal(0, pool.TotalCreated);
+            _now = _now.AddSeconds(30);
+            await Reinit(manager);
+            Assert.Equal(2, gate.Attempts);
+        }
+    }
+
     [Fact]
     public async Task Reinit_honors_site_hold_until_deadline_then_retries()
     {
@@ -229,6 +298,7 @@ public sealed class SpreadManagerAdmissionHoldTests : IDisposable
     private sealed class HeldGate(DateTime retryAtUtc) : IAccountLoginGate
     {
         public DateTime RetryAtUtc { get; } = retryAtUtc;
+        public Exception? Failure { get; set; }
         public int Attempts { get; private set; }
         public int Held => 0;
         public int Limit => 3;
@@ -238,6 +308,7 @@ public sealed class SpreadManagerAdmissionHoldTests : IDisposable
         public Task<bool> TryAcquireAsync(CancellationToken ct, TimeSpan? timeout = null, bool priority = false)
         {
             Attempts++;
+            if (Failure != null) throw Failure;
             throw new FtpLoginHeldException("Fixture site-health deferral", false, RetryAtUtc, loginRateHold: true, siteHealthHold: true);
         }
         public void Release(bool priority = false) => throw new InvalidOperationException("No permit was acquired");

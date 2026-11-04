@@ -382,7 +382,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
         }
         catch (FtpLoginHeldException ex)
         {
-            RecordPoolAdmissionHold(serverId, factory, ex);
+            RecordPoolAdmissionHold(serverId, factory, ex.RetryAtUtc);
             await DisposeFailedPool(pool, serverId);
             return false;
         }
@@ -968,12 +968,20 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             }
             catch (FtpLoginHeldException ex)
             {
-                RecordPoolAdmissionHold(id, pool, ex);
+                RecordPoolAdmissionHold(id, pool, ex.RetryAtUtc);
             }
             catch (Exception ex)
             {
                 if (pool.IsTrustParked) Log.Information("Spread pool parked for a local certificate decision: {Server}", serverName);
-                else Log.Warning(ex, "Failed to reinitialize spread pool for {Server}", serverName);
+                else
+                {
+                    // The first transport failure precedes the login supervisor's
+                    // FtpLoginHeldException. Defer this exhausted pool immediately:
+                    // otherwise discovery probes it anyway and drops a fresh race
+                    // as inconclusive before the next request sees the account hold.
+                    RecordPoolAdmissionHold(id, pool, null);
+                    Log.Warning(ex, "Failed to reinitialize spread pool for {Server}", serverName);
+                }
             }
         }
     }
@@ -1004,15 +1012,18 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             && !sources.Any(id => CanUsePoolNoLock(id, now));
     }
 
-    private void RecordPoolAdmissionHold(string id, object owner, FtpLoginHeldException error)
+    private void RecordPoolAdmissionHold(string id, object owner, DateTime? requestedRetryAtUtc)
     {
         DateTime retryAt;
         lock (_lock)
         {
             if (_disposed || !(_spreadPools.TryGetValue(id, out var currentPool) && ReferenceEquals(currentPool, owner))
                 && !(_factories.TryGetValue(id, out var currentFactory) && ReferenceEquals(currentFactory, owner))) return;
+            // Recovery or replacement can win while the failed login unwinds.
+            // A local trust decision has its own parking/recovery policy.
+            if (owner is FtpConnectionPool pool && (!pool.IsExhausted || pool.IsDisposed || pool.IsTrustParked)) return;
             var now = AdmissionUtcNow();
-            retryAt = error.RetryAtUtc is { } deadline && deadline > now ? deadline : now.AddSeconds(30);
+            retryAt = requestedRetryAtUtc is { } deadline && deadline > now ? deadline : now.AddSeconds(30);
             _poolAdmissionHolds[id] = (owner, retryAt);
             ScheduleQueueWakeupNoLock();
         }

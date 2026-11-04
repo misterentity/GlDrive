@@ -815,13 +815,8 @@ public class UpdateChecker : IDisposable
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
-        using var proc = Process.Start(psi);
-        if (proc == null) return -1;
-        proc.StandardOutput.ReadToEnd();
-        proc.StandardError.ReadToEnd();
         // Bounded: schtasks /query and /run both return promptly; /run does NOT wait for the task.
-        if (!proc.WaitForExit(30_000)) { try { proc.Kill(true); } catch { } return -1; }
-        return proc.ExitCode;
+        return UpdateProcessRunner.Run(psi, TimeSpan.FromSeconds(30)).ExitCode;
     }
 
     /// <summary>
@@ -836,6 +831,9 @@ public class UpdateChecker : IDisposable
     /// and the fallback path still works.
     /// </summary>
     internal static void TryRegisterUpdateTask(string installDir, Action<string> log)
+        => TryRegisterUpdateTask(installDir, log, TimeSpan.FromSeconds(60));
+
+    internal static void TryRegisterUpdateTask(string installDir, Action<string> log, TimeSpan timeout)
     {
         try
         {
@@ -863,17 +861,13 @@ public class UpdateChecker : IDisposable
             psi.ArgumentList.Add("-InstallDir");
             psi.ArgumentList.Add(installDir);
 
-            using var proc = Process.Start(psi);
-            if (proc == null) { log("Update task registration could not start powershell.exe"); return; }
-            var stdout = proc.StandardOutput.ReadToEnd();
-            var stderr = proc.StandardError.ReadToEnd();
-            if (!proc.WaitForExit(60_000))
+            var result = UpdateProcessRunner.Run(psi, timeout);
+            if (result.TimedOut)
             {
-                try { proc.Kill(true); } catch { }
                 log("Update task registration timed out");
                 return;
             }
-            log($"Update task registration exit={proc.ExitCode} {stdout.Trim()} {stderr.Trim()}".Trim());
+            log($"Update task registration exit={result.ExitCode} {result.StandardOutput.Trim()} {result.StandardError.Trim()}".Trim());
         }
         catch (Exception ex)
         {
@@ -1486,6 +1480,7 @@ public class UpdateChecker : IDisposable
 
             // The current binary is still the old updater. The receipt records versions from
             // the protected files, not this process's assembly version. Failure keeps backups.
+            LogUpdate("Recording update recovery receipt");
             UpdateProbation.ForInstalledRoot(installDir).RecordInstallation(backups, DateTime.UtcNow, mutationLockHeld: recoveryMutation != null);
 
             // Clean up the update marker so the watchdog doesn't interfere on next run
@@ -1498,6 +1493,7 @@ public class UpdateChecker : IDisposable
             // update task here so a box updated from the release zip (which never runs the Inno
             // installer) still gets it — otherwise this whole feature only ever reaches machines
             // that happen to run the full installer, and everything else keeps prompting for UAC.
+            LogUpdate("Registering update tasks");
             TryRegisterUpdateTask(installDir, LogUpdate);
 
             LogUpdate($"Update complete, launching {newExe}");
