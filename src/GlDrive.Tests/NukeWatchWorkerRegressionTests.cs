@@ -80,13 +80,18 @@ public sealed class NukeWatchWorkerRegressionTests : IDisposable
         {
             Flag(watch);
             Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
-            await Task.Run(watch.Dispose).WaitAsync(TimeSpan.FromSeconds(1));
+            // A dedicated thread, not Task.Run: the blocked callback holds a pool thread, and on a
+            // 2-core CI runner queued pool work started past a 1 s budget. 4 s is still well
+            // under the callback's 8 s block, so a Dispose that waited would fail here.
+            using var disposed = new ManualResetEventSlim();
+            new Thread(() => { watch.Dispose(); disposed.Set(); }) { IsBackground = true }.Start();
+            Assert.True(disposed.Wait(TimeSpan.FromSeconds(4)), "Dispose waited for the in-flight enqueue callback");
         }
         finally
         {
             release.Set();
             watch.Dispose();
-            await watch.DrainAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            await watch.DrainAsync().WaitAsync(TimeSpan.FromSeconds(10));
         }
     }
 
