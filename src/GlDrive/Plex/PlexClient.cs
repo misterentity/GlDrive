@@ -459,9 +459,14 @@ public sealed partial class PlexClient : IDisposable, IPlexWatchlistReader
                     Username = (string?)ss.Attribute("username") ?? "",
                     Email = (string?)ss.Attribute("email") ?? "",
                     UserId = (string?)ss.Attribute("userID") ?? "",
-                    Accepted = ((string?)ss.Attribute("accepted") ?? "0") is "1" or "true",
+                    // plex.tv sends acceptedAt/invitedAt (unix seconds), not an "accepted" flag;
+                    // reading only "accepted" showed every active share as Pending.
+                    AcceptedAtUtc = UnixSeconds((string?)ss.Attribute("acceptedAt")),
+                    InvitedAtUtc = UnixSeconds((string?)ss.Attribute("invitedAt")),
                     AllowSync = ((string?)ss.Attribute("allowSync") ?? "0") is "1" or "true",
+                    AllLibraries = ((string?)ss.Attribute("allLibraries") ?? "0") is "1" or "true",
                 };
+                user.Accepted = ((string?)ss.Attribute("accepted") ?? "0") is "1" or "true" || user.AcceptedAtUtc != null;
                 foreach (var sec in ss.Elements("Section"))
                 {
                     user.Sections.Add(new PlexSharedSection
@@ -482,6 +487,9 @@ public sealed partial class PlexClient : IDisposable, IPlexWatchlistReader
         }
         return result;
     }
+
+    private static DateTimeOffset? UnixSeconds(string? value) =>
+        long.TryParse(value, out var seconds) && seconds > 0 ? DateTimeOffset.FromUnixTimeSeconds(seconds) : null;
 
     /// <summary>Best-guess connection ordering (no probing): direct before relay,
     /// local before remote, https first. Used as a last-resort fallback and in tests;

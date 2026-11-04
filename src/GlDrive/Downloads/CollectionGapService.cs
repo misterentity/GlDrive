@@ -152,6 +152,22 @@ public sealed class CollectionGapService
         catch { return LibraryIndexSnapshot.Empty; }
     }
 
+    /// <summary>Turn a typed title / IMDb id / TMDB id or link into movie candidates, best first.
+    /// A TMDB id needs no request; a title is one or two TMDB searches.</summary>
+    public async Task<IReadOnlyList<TmdbSearchResult>> ResolveMovieAsync(CollectionQuery query, CancellationToken ct = default)
+    {
+        if (query.TmdbId is { } id) return [new TmdbSearchResult { Id = id, MediaType = "movie" }];
+        using var client = new TmdbClient(_config.Downloads.ResolveTmdbKey());
+        if (!client.HasApiKey) throw new InvalidOperationException("No TMDB API key is configured.");
+        if (query.ImdbId != null)
+            return await client.FindMovieByImdbId(query.ImdbId, ct).ConfigureAwait(false) is { } found
+                ? [new TmdbSearchResult { Id = found, MediaType = "movie" }] : [];
+        var results = new List<TmdbSearchResult>();
+        foreach (var text in query.SearchTexts())
+            results.AddRange(await client.SearchMulti(text, ct).ConfigureAwait(false));
+        return query.Rank(results);
+    }
+
     private async Task<TmdbCollectionResult> FetchCollectionAsync(int movieTmdbId, CancellationToken ct)
     {
         using var client = new TmdbClient(_config.Downloads.ResolveTmdbKey());

@@ -12,43 +12,111 @@ public partial class CollectionGapsWindow : Window
     private int? _displayedMovieId;
     private bool _closed;
 
-    public CollectionGapsWindow(CollectionGapService service, int? movieTmdbId = null)
+    private sealed record MatchRow(int Id, string Label);
+    private bool _showingMatches;
+
+    /// <param name="initialQuery">A TMDB id, IMDb id or "Title Year" (from the selected wishlist
+    /// movie); when given, the lookup runs as soon as the window opens.</param>
+    public CollectionGapsWindow(CollectionGapService service, string? initialQuery = null)
     {
         InitializeComponent();
         _service = service;
         ShowLibraryStatus();
-        if (movieTmdbId is > 0) MovieIdBox.Text = movieTmdbId.Value.ToString(CultureInfo.InvariantCulture);
+        if (!string.IsNullOrWhiteSpace(initialQuery)) MovieIdBox.Text = initialQuery;
         Closed += (_, _) => { _closed = true; _operation?.Cancel(); FilmsGrid.ItemsSource = null; };
+        Loaded += async (_, _) =>
+        {
+            // The index lives in memory: after a restart it is empty and every film reads
+            // "Unknown". Opening the window is the request to read it.
+            if (_service.LibraryStatus.RefreshedAtUtc == null) await RefreshLibraryAsync();
+            if (!_closed && !string.IsNullOrWhiteSpace(MovieIdBox.Text)) await FindAsync();
+            if (!_closed) MovieIdBox.Focus();
+        };
     }
 
-    private async void RefreshLibrary_Click(object sender, RoutedEventArgs e)
+    private async void RefreshLibrary_Click(object sender, RoutedEventArgs e) => await RefreshLibraryAsync();
+
+    private async Task RefreshLibraryAsync()
     {
         if (_operation != null) return;
         using var cancellation = new CancellationTokenSource();
         _operation = cancellation; SetBusy(true);
-        StatusLabel.Text = "Reading configured library folders and Plex…";
+        StatusLabel.Text = "Reading your Plex servers and library folders...";
+        LibraryLabel.Text = "Library index: reading...";
         try
         {
             await Task.Run(() => _service.RefreshLibraryAsync(cancellation.Token), cancellation.Token);
             if (_closed) return;
             if (_displayedMovieId != null) ShowSnapshot(_service.Snapshot);
-            else StatusLabel.Text = "Library index refreshed. Choose Refresh collection to compare a movie.";
+            else StatusLabel.Text = "Library index read. Type a movie and choose Find collection.";
             ShowLibraryStatus();
         }
-        catch (OperationCanceledException) { if (!_closed) StatusLabel.Text = "Library refresh cancelled. No films were added."; }
-        catch { if (!_closed) StatusLabel.Text = "Library refresh is unavailable. Unknown films cannot be added."; }
+        catch (OperationCanceledException) { if (!_closed) { StatusLabel.Text = "Library refresh cancelled. No films were added."; ShowLibraryStatus(); } }
+        catch { if (!_closed) { StatusLabel.Text = "Library refresh is unavailable. Unknown films cannot be added."; ShowLibraryStatus(); } }
         finally { _operation = null; if (!_closed) SetBusy(false); }
     }
 
-    private async void Refresh_Click(object sender, RoutedEventArgs e)
+    private async void Refresh_Click(object sender, RoutedEventArgs e) => await FindAsync();
+
+    private async void MatchesBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_showingMatches || MatchesBox.SelectedItem is not MatchRow match) return;
+        await LookupAsync(match.Id);
+    }
+
+    /// <summary>Resolve what was typed to a movie, then look up its collection.</summary>
+    private async Task FindAsync()
     {
         if (_operation != null) return;
-        if (!int.TryParse(MovieIdBox.Text, NumberStyles.None, CultureInfo.InvariantCulture, out var movieId) || movieId <= 0)
-        { StatusLabel.Text = "Enter a positive movie TMDB ID."; return; }
+        var query = CollectionQuery.Parse(MovieIdBox.Text);
+        if (query == null) { StatusLabel.Text = "Type a movie title, a TMDB ID or an IMDb ID."; return; }
+        if (query.TmdbId is { } direct) { HideMatches(); await LookupAsync(direct); return; }
+
+        using var cancellation = new CancellationTokenSource();
+        _operation = cancellation; SetBusy(true);
+        StatusLabel.Text = query.ImdbId != null ? "Finding the IMDb title on TMDB..." : $"Searching TMDB for \"{query.Title}\"...";
+        IReadOnlyList<TmdbSearchResult> matches;
+        try { matches = await Task.Run(() => _service.ResolveMovieAsync(query, cancellation.Token), cancellation.Token); }
+        catch (OperationCanceledException) { if (!_closed) StatusLabel.Text = "Search cancelled."; return; }
+        catch (InvalidOperationException ex) { if (!_closed) StatusLabel.Text = ex.Message + " Add one in Settings."; return; }
+        catch { if (!_closed) StatusLabel.Text = "TMDB search is unavailable right now."; return; }
+        finally { _operation = null; if (!_closed) SetBusy(false); }
+        if (_closed) return;
+        if (matches.Count == 0)
+        {
+            HideMatches();
+            FilmsGrid.ItemsSource = null; CollectionLabel.Text = ""; _displayedMovieId = null;
+            StatusLabel.Text = "TMDB found no movie for that. Try the exact title, add the year, or paste a TMDB/IMDb link.";
+            return;
+        }
+        if (matches.Count > 1)
+        {
+            _showingMatches = true;
+            MatchesBox.ItemsSource = matches.Select(m => new MatchRow(m.Id,
+                m.YearParsed is { } y ? $"{m.DisplayTitle} ({y})" : m.DisplayTitle)).ToArray();
+            MatchesBox.SelectedIndex = 0;
+            MatchesPanel.Visibility = Visibility.Visible;
+            _showingMatches = false;
+        }
+        else HideMatches();
+        await LookupAsync(matches[0].Id);
+    }
+
+    private void HideMatches()
+    {
+        _showingMatches = true;
+        MatchesBox.ItemsSource = null;
+        MatchesPanel.Visibility = Visibility.Collapsed;
+        _showingMatches = false;
+    }
+
+    private async Task LookupAsync(int movieId)
+    {
+        if (_operation != null) return;
         using var cancellation = new CancellationTokenSource();
         _operation = cancellation;
         SetBusy(true); FilmsGrid.ItemsSource = null; _displayedMovieId = null;
-        CollectionLabel.Text = ""; StatusLabel.Text = "Checking collection…";
+        CollectionLabel.Text = ""; StatusLabel.Text = "Checking collection...";
         try
         {
             var result = await Task.Run(() => _service.RefreshAsync(movieId, cancellation.Token), cancellation.Token);
@@ -99,11 +167,13 @@ public partial class CollectionGapsWindow : Window
         ShowLibraryStatus();
         StatusLabel.Text = snapshot.Status switch
         {
-            "available" => "Owned copies, current downloads and wishlist entries are compared locally. Only missing films with a known release year can be added. Refresh the library index to resolve unknown ownership.",
+            "available" => snapshot.Films.Any(f => f.Status == "unknown")
+                ? "Some films are Unknown: the library index is missing or incomplete. Refresh it, then find the collection again."
+                : "Compared with your Plex servers, library folders, downloads and wishlist. Missing films with a known year can be added.",
             "partial" => "Only part of this collection could be read. Only missing films with a known release year can be added; this is not a complete collection inventory.",
-            "no-collection" => "TMDB reports no collection for this film.",
+            "no-collection" => "TMDB doesn't list this film as part of a collection.",
             "busy" => "Another collection refresh is already running. Try again when it finishes.",
-            "not-refreshed" => "Choose Refresh collection to look up this movie.",
+            "not-refreshed" => "Choose Find collection to look up this movie.",
             _ => "Collection information is unknown or unavailable. No additions are offered from this response."
         };
     }
@@ -127,7 +197,7 @@ public partial class CollectionGapsWindow : Window
     {
         RefreshButton.IsEnabled = !busy; CancelButton.IsEnabled = busy;
         RefreshLibraryButton.IsEnabled = !busy;
-        MovieIdBox.IsEnabled = !busy; FilmsGrid.IsEnabled = !busy;
+        MovieIdBox.IsEnabled = !busy; FilmsGrid.IsEnabled = !busy; MatchesBox.IsEnabled = !busy;
     }
     private void Cancel_Click(object sender, RoutedEventArgs e) => _operation?.Cancel();
 }

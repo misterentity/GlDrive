@@ -93,6 +93,27 @@ public class PlexClientTests
     }
 
     [Fact]
+    public void ParseSharedUsers_reads_plex_tv_acceptedAt_as_active()
+    {
+        // Shape of the live plex.tv shared_servers response: no "accepted" attribute.
+        const string xml = """
+        <MediaContainer>
+          <SharedServer id="1" username="active" email="a@example.com" userID="11" acceptedAt="1739423089" invitedAt="1739423000" allowSync="1" allLibraries="1"/>
+          <SharedServer id="2" username="pending" email="p@example.com" userID="12" acceptedAt="0" invitedAt="1742443680" allowSync="0" allLibraries="0"/>
+        </MediaContainer>
+        """;
+        var users = PlexClient.ParseSharedUsers(xml);
+        Assert.True(users[0].Accepted);
+        Assert.Equal("Active", users[0].StatusDisplay);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1739423089), users[0].AcceptedAtUtc);
+        Assert.Equal("All libraries", users[0].LibrariesDisplay);
+        Assert.False(users[1].Accepted);
+        Assert.Equal("Pending", users[1].StatusDisplay);
+        Assert.Null(users[1].AcceptedAtUtc);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1742443680).ToLocalTime().ToString("yyyy-MM-dd"), users[1].SinceDisplay);
+    }
+
+    [Fact]
     public void ParseSharedUsers_reads_users_and_their_sections()
     {
         const string xml = """

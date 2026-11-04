@@ -617,6 +617,14 @@ public partial class DashboardViewModel : INotifyPropertyChanged, IDisposable
     public bool HasWishlistSelection => _selectedWishlistItem != null;
     public int? SelectedWishlistMovieTmdbId => _selectedWishlistItem != null &&
         _wishlistStore.GetById(_selectedWishlistItem.Id) is { Type: MediaType.Movie, TmdbId: > 0 } movie ? movie.TmdbId : null;
+    /// <summary>How Collection gaps should find the selected wishlist movie: its TMDB id, else
+    /// its IMDb id, else "Title Year". Null when no movie is selected.</summary>
+    public string? SelectedWishlistMovieQuery => _selectedWishlistItem != null &&
+        _wishlistStore.GetById(_selectedWishlistItem.Id) is { Type: MediaType.Movie } movie
+            ? movie.TmdbId is > 0 ? movie.TmdbId.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : !string.IsNullOrWhiteSpace(movie.ImdbId) ? movie.ImdbId
+            : movie.Year is { } year ? $"{movie.Title} {year}" : movie.Title
+            : null;
     public bool? SelectedWishlistAllowsLowSources
     {
         get => _selectedWishlistItem == null ? null : _wishlistStore.GetById(_selectedWishlistItem.Id)?.AllowLowQualitySources;

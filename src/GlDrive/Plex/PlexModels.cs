@@ -64,11 +64,17 @@ public sealed class PlexSharedUser
     public string Email { get; set; } = "";
     public string UserId { get; set; } = "";
     public bool Accepted { get; set; }
+    public DateTimeOffset? AcceptedAtUtc { get; set; }
+    public DateTimeOffset? InvitedAtUtc { get; set; }
     public bool AllowSync { get; set; }
+    public bool AllLibraries { get; set; }
     public List<PlexSharedSection> Sections { get; set; } = new();
 
-    public string LibrariesDisplay => Sections.Count == 0 ? "—"
+    public string LibrariesDisplay => AllLibraries ? "All libraries"
+        : Sections.Count == 0 ? "—"
         : string.Join(", ", Sections.Where(s => s.Shared).Select(s => s.Title));
+    /// <summary>Accepted date for an active share, invited date for a pending one.</summary>
+    public string SinceDisplay => (Accepted ? AcceptedAtUtc ?? InvitedAtUtc : InvitedAtUtc)?.ToLocalTime().ToString("yyyy-MM-dd") ?? "";
     public string StatusDisplay => Accepted ? "Active" : "Pending";
     public string DownloadsDisplay => AllowSync ? "Yes" : "No";
 }

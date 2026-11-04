@@ -1,28 +1,35 @@
 <Window x:Class="GlDrive.UI.CollectionGapsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Collection gaps" Width="850" Height="570" MinWidth="620" MinHeight="360"
+        Title="Collection gaps" Width="850" Height="600" MinWidth="620" MinHeight="380"
         WindowStartupLocation="CenterOwner" Background="{DynamicResource BackgroundBrush}"
         Foreground="{DynamicResource ForegroundBrush}">
     <DockPanel Margin="16">
         <StackPanel DockPanel.Dock="Top">
-            <TextBlock Text="Compare a TMDB collection with your library and downloads" FontWeight="Bold" FontSize="15" Margin="0,0,0,10"/>
-            <TextBlock Text="Refresh runs only when requested. Unknown ownership means local evidence is incomplete or unavailable." TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,10"/>
-            <DockPanel Margin="0,0,0,10">
-                <Button x:Name="RefreshButton" DockPanel.Dock="Right" Content="Refresh collection" Click="Refresh_Click" IsDefault="True"
+            <TextBlock Text="Compare a movie's TMDB collection with your library and downloads" FontWeight="Bold" FontSize="15" Margin="0,0,0,10"/>
+            <TextBlock Text="Owned = on any of your Plex servers, in your library folders, or already downloaded. Unknown means the library index couldn't be fully read."
+                       TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,10"/>
+            <DockPanel Margin="0,0,0,6">
+                <Button x:Name="RefreshButton" DockPanel.Dock="Right" Content="Find collection" Click="Refresh_Click" IsDefault="True"
                         Style="{DynamicResource PrimaryButton}" Margin="8,0,0,0"/>
                 <Button x:Name="CancelButton" DockPanel.Dock="Right" Content="Cancel" Click="Cancel_Click" IsEnabled="False"
                         Style="{DynamicResource SecondaryButton}" Margin="8,0,0,0"/>
-                <TextBlock DockPanel.Dock="Left" Text="Movie TMDB ID" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                <TextBox x:Name="MovieIdBox" MaxLength="10" AutomationProperties.Name="Movie TMDB ID"/>
+                <TextBlock DockPanel.Dock="Left" Text="Movie" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <TextBox x:Name="MovieIdBox" MaxLength="300" AutomationProperties.Name="Movie title, year, TMDB ID or IMDb ID"
+                         ToolTip="A title (optionally with its year), a TMDB ID, an IMDb ID (tt…), or a TMDB/IMDb link"/>
             </DockPanel>
-            <DockPanel Margin="0,0,0,10">
+            <DockPanel x:Name="MatchesPanel" Margin="0,0,0,10" Visibility="Collapsed">
+                <TextBlock DockPanel.Dock="Left" Text="Match" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <ComboBox x:Name="MatchesBox" DisplayMemberPath="Label" SelectionChanged="MatchesBox_SelectionChanged"
+                          AutomationProperties.Name="Matching movies"/>
+            </DockPanel>
+            <DockPanel Margin="0,4,0,10">
                 <Button x:Name="RefreshLibraryButton" DockPanel.Dock="Right" Content="Refresh library index" Click="RefreshLibrary_Click"
                         Style="{DynamicResource SecondaryButton}" Margin="8,0,0,0"/>
                 <TextBlock x:Name="LibraryLabel" VerticalAlignment="Center" TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}"/>
             </DockPanel>
             <TextBlock x:Name="CollectionLabel" FontWeight="Bold" Margin="0,0,0,8"/>
-            <TextBlock x:Name="StatusLabel" Text="Enter a movie TMDB ID and choose Refresh collection. Opening this window makes no requests."
+            <TextBlock x:Name="StatusLabel" Text="Type a movie title (or a TMDB/IMDb ID) and choose Find collection."
                        TextWrapping="Wrap" Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,12"/>
         </StackPanel>
         <DataGrid x:Name="FilmsGrid" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False"

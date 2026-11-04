@@ -64,7 +64,7 @@ public partial class DashboardWindow : Window
     private void CollectionGaps_Click(object sender, RoutedEventArgs e)
     {
         if (_demoMode || DataContext is not DashboardViewModel vm) return;
-        new CollectionGapsWindow(_serverManager.Collections, vm.SelectedWishlistMovieTmdbId) { Owner = this }.Show();
+        new CollectionGapsWindow(_serverManager.Collections, vm.SelectedWishlistMovieQuery) { Owner = this }.Show();
     }
 
     private void UpdateIrcReading()

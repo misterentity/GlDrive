@@ -38,7 +38,7 @@ public sealed class LibraryAutomation : IAutomationModule
             FileArguments, readOnly: true),
         AutomationToolDefinition.Create("library.import", "Import one explicitly selected staged video. Disabled by default; first enable forces dry-run. Live imports never replace destinations and remove the staged source only through verified rename/copy handling. Does not download or change wishlist ownership.",
             FileArguments, destructive: true),
-        AutomationToolDefinition.Create("library.index_refresh", "Explicitly refresh an inventory of configured movie/TV folders and the selected Plex server. No periodic polling or Plex writes. Positive local ownership can complete Plex Watchlist imports only when watchlist sync is explicitly enabled; unavailable evidence leaves items open.",
+        AutomationToolDefinition.Create("library.index_refresh", "Explicitly refresh an inventory of configured movie/TV folders and every Plex server owned by the linked account. No periodic polling or Plex writes. Positive local ownership can complete Plex Watchlist imports only when watchlist sync is explicitly enabled; unavailable evidence leaves items open.",
             new { type = "object", properties = new { }, additionalProperties = false }),
         AutomationToolDefinition.Create("library.index", "Read a page of the last local library inventory. Call library.index_refresh first; no file or network work.",
             new { type = "object", properties = new { offset = new { type = "integer", minimum = 0 }, limit = new { type = "integer", minimum = 1, maximum = 500 } }, additionalProperties = false }, readOnly: true),

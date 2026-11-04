@@ -1830,6 +1830,7 @@
                                                     <DataGridTextColumn Header="Libraries" Binding="{Binding LibrariesDisplay}" Width="*"/>
                                                     <DataGridTextColumn Header="Sync" Binding="{Binding DownloadsDisplay}" Width="50"/>
                                                     <DataGridTextColumn Header="Status" Binding="{Binding StatusDisplay}" Width="70"/>
+                                                    <DataGridTextColumn Header="Since" Binding="{Binding SinceDisplay}" Width="90"/>
                                                     <DataGridTemplateColumn Header="" Width="130">
                                                         <DataGridTemplateColumn.CellTemplate>
                                                             <DataTemplate>
