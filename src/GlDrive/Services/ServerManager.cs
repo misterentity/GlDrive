@@ -54,6 +54,9 @@ public partial class ServerManager : IDisposable
         _config = config;
         _certManager = certManager;
         _notificationStore = notificationStore;
+        // Process-wide, loaded before any mount lists; only the live instance may own its file.
+        if (!ConfigManager.ReadOnly)
+            CpsvDataHelper.EnableCpsvVerdictPersistence(System.IO.Path.Combine(ConfigManager.AppDataPath, "cpsv-verdicts.json"));
         Hooks = new(config, () => GetDownloadManagers().SelectMany(manager => manager.Store.Items).Select(item => item.LocalPath));
         _spreadManager = new SpreadManager(config);
         _spreadManager.JobEnded += job => Hooks.Publish(new("race.finished", job.ReleaseName, job.Section,

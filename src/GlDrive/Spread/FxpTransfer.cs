@@ -29,8 +29,9 @@ public enum TransferState { Idle, NegotiatingPassive, NegotiatingActive, Transfe
 /// </summary>
 public enum FxpFaultSide { None, Source, Dest, Both, Neither }
 
-/// <summary>Outcome of <see cref="FxpTransfer.RecordDirectFailure"/>.</summary>
-internal enum DirectProbeFailure { NotCached, First, Reprobe }
+/// <summary>Outcome of <see cref="FxpTransfer.RecordDirectFailure"/>. <see cref="Tolerated"/> is a
+/// route that worked direct this session failing once: it stays direct.</summary>
+internal enum DirectProbeFailure { NotCached, First, Reprobe, Tolerated }
 
 internal sealed class DirectFxpCompletionException(string message) : IOException(message);
 
@@ -60,6 +61,14 @@ public class FxpTransfer
     // auto-update restart, on a route that has never succeeded direct since 2026-07-01.
     private static readonly ConcurrentDictionary<(string Src, string Dst), DateTime> _relayOnlyRoutes = new();
     internal static readonly TimeSpan RelayRouteRetry = TimeSpan.FromHours(6);
+
+    // Routes that completed a direct transfer this session, with the number of consecutive
+    // direct failures since (0 or 1). On 2026-11-03 siteb->sited ran direct 21 for 21 at
+    // ~20 MB/s, then ONE timed-out file put it on Relay (~10 MB/s) for 6 h. A topological
+    // failure repeats on every file, so a proven route keeps one failure of slack and switches
+    // on the second consecutive one. Memory-only on purpose: a restart must re-earn the slack,
+    // so a route that has never worked still switches on its first failure.
+    private static readonly ConcurrentDictionary<(string Src, string Dst), int> _provenDirectRoutes = new();
     private static readonly object _relayRouteFileLock = new();
     private static string? _relayRouteFile;
 
@@ -133,15 +142,52 @@ public class FxpTransfer
     {
         if (string.IsNullOrEmpty(srcServerId) || string.IsNullOrEmpty(dstServerId)) return DirectProbeFailure.NotCached;
         var key = (srcServerId, dstServerId);
+        if (_provenDirectRoutes.TryGetValue(key, out var strikes) && strikes == 0
+            && _provenDirectRoutes.TryUpdate(key, 1, 0))
+            return DirectProbeFailure.Tolerated;
         var first = !_relayOnlyRoutes.ContainsKey(key);
         _relayOnlyRoutes[key] = nowUtc;
         SaveRelayRoutes();
         return first ? DirectProbeFailure.First : DirectProbeFailure.Reprobe;
     }
 
+    /// <summary>
+    /// Records a failed direct attempt and names its consequence on the Information sink. All
+    /// three failure paths report here: before v3.19.11 only one logged, so a route demoted by a
+    /// completion failure switched to Relay for 6 h without a line saying so.
+    /// </summary>
+    private static void ReportDirectFailure(string srcServerId, string dstServerId, string error)
+    {
+        switch (RecordDirectFailure(srcServerId, dstServerId, DateTime.UtcNow))
+        {
+            case DirectProbeFailure.First:
+                Log.Information("FXP route {Src}->{Dst}: direct source-CPSV FXP failed ({Error}) — " +
+                    "using Relay for this route for the next {Hours}h (a failed direct attempt " +
+                    "poisons both connections, costing two fresh logins per file)",
+                    srcServerId, dstServerId, error, RelayRouteRetry.TotalHours);
+                break;
+            case DirectProbeFailure.Tolerated:
+                Log.Information("FXP route {Src}->{Dst}: direct source-CPSV FXP failed ({Error}) on a route that has worked " +
+                    "direct — staying direct; a second consecutive failure switches it to Relay for {Hours}h",
+                    srcServerId, dstServerId, error, RelayRouteRetry.TotalHours);
+                break;
+            case DirectProbeFailure.Reprobe:
+                // The two poisoned-discards that follow this file's `FXP complete`
+                // are THIS probe, not a transfer fault — name it on the same sink.
+                Log.Information("FXP route {Src}->{Dst}: direct source-CPSV FXP re-probe failed again ({Error}) — " +
+                    "staying on Relay for another {Hours}h; both connections poisoned (two logins)",
+                    srcServerId, dstServerId, error, RelayRouteRetry.TotalHours);
+                break;
+            default:
+                Log.Debug("Direct source-CPSV FXP failed ({Error}) — connections will be poisoned", error);
+                break;
+        }
+    }
+
     internal static void RecordDirectSuccess(string srcServerId, string dstServerId)
     {
         if (string.IsNullOrEmpty(srcServerId) || string.IsNullOrEmpty(dstServerId)) return;
+        _provenDirectRoutes[(srcServerId, dstServerId)] = 0;
         if (_relayOnlyRoutes.TryRemove((srcServerId, dstServerId), out _))
             SaveRelayRoutes();
     }
@@ -150,6 +196,7 @@ public class FxpTransfer
     {
         lock (_relayRouteFileLock) _relayRouteFile = null;
         _relayOnlyRoutes.Clear();
+        _provenDirectRoutes.Clear();
     }
 
     public event Action<TransferState>? StateChanged;
@@ -200,9 +247,13 @@ public class FxpTransfer
     ///   553 file.r01: File already exists.
     ///   553-X-DUPE: file.r01
     /// </summary>
-    private static bool IsDupeRejection(FtpReply reply)
+    internal static bool IsDupeRejection(FtpReply reply)
     {
-        if (reply.Code != "553") return false;
+        // glftpd's dupescript answers 553, but a STOR racing another uploader's open of the
+        // same file fails in the filesystem: "550 System Error- <file>: File exists." (sited,
+        // 2026-11-03 15:07, beside 553 "File is being uploaded by" for its siblings). The
+        // wording, not the code, is what marks a dupe.
+        if (reply.Code is not ("553" or "550")) return false;
         var msg = reply.Message ?? "";
         return msg.Contains("uploaded by", StringComparison.OrdinalIgnoreCase)
             || msg.Contains("dupescript", StringComparison.OrdinalIgnoreCase)
@@ -265,43 +316,33 @@ public class FxpTransfer
                         {
                             // A timed-out native reply may still be draining. Remember the
                             // failed route, but let the next attempt obtain fresh sessions.
-                            RecordDirectFailure(srcServerId, dstServerId, DateTime.UtcNow);
+                            ReportDirectFailure(srcServerId, dstServerId, ErrorMessage ?? "completion timed out");
                             source.Poison("direct FXP completion timed out");
                             dest.Poison("direct FXP completion timed out");
                         }
                     }
-                    catch (DirectFxpCompletionException)
+                    catch (DirectFxpCompletionException ex)
                     {
                         // A preliminary or session-closing reply may leave transfer state
                         // unresolved. Never send relay commands on these same sessions.
-                        RecordDirectFailure(srcServerId, dstServerId, DateTime.UtcNow);
+                        ReportDirectFailure(srcServerId, dstServerId, ex.Message);
                         source.Poison("direct FXP completion rejected");
                         dest.Poison("direct FXP completion rejected");
                         throw;
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
-                        switch (RecordDirectFailure(srcServerId, dstServerId, DateTime.UtcNow))
-                        {
-                            case DirectProbeFailure.First:
-                                Log.Information("FXP route {Src}->{Dst}: direct source-CPSV FXP failed ({Error}) — " +
-                                    "using Relay for this route for the next {Hours}h (a failed direct attempt " +
-                                    "poisons both connections, costing two fresh logins per file)",
-                                    srcServerId, dstServerId, ex.Message, RelayRouteRetry.TotalHours);
-                                break;
-                            case DirectProbeFailure.Reprobe:
-                                // The two poisoned-discards that follow this file's `FXP complete`
-                                // are THIS probe, not a transfer fault — name it on the same sink.
-                                Log.Information("FXP route {Src}->{Dst}: direct source-CPSV FXP re-probe failed again ({Error}) — " +
-                                    "staying on Relay for another {Hours}h; both connections poisoned (two logins)",
-                                    srcServerId, dstServerId, ex.Message, RelayRouteRetry.TotalHours);
-                                break;
-                            default:
-                                Log.Debug("CpsvPasv failed ({Error}), trying Relay mode — connections will be poisoned", ex.Message);
-                                break;
-                        }
+                        // Only a clean negotiation rejection (Fault: CPSV/PORT/STOR answered with a
+                        // final reply) proves both control channels are in sync. Anything else - a
+                        // FluentFTP read timeout above all - leaves a command without its reply, and
+                        // Relay's first TYPE I then fails with "Reconnect needed but forbidden by the
+                        // client config (SelfConnectMode)" (2026-11-03 18:16: the STOR preliminary's
+                        // 30 s ReadTimeout fired before the equal 30 s managed wait).
+                        var sessionsInSync = FaultSide is FxpFaultSide.Source or FxpFaultSide.Dest;
+                        ReportDirectFailure(srcServerId, dstServerId, ex.Message);
                         source.Poison("direct CPSV-PASV probe failed");
                         dest.Poison("direct CPSV-PASV probe failed");
+                        if (!sessionsInSync) throw;
                         // Both are already poisoned (floor); clear the CpsvPasv attribution
                         // so any subsequent Relay failure attributes to the Relay outcome.
                         FaultSide = FxpFaultSide.None;

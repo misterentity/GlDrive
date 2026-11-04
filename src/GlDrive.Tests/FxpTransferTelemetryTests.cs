@@ -112,6 +112,49 @@ public sealed class FxpTransferTelemetryTests
         Assert.Contains(sourceServer.Commands, command => command.StartsWith("RETR ", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// 2026-11-03 18:16: a direct probe's STOR/RETR preliminary hit FluentFTP's 30 s ReadTimeout
+    /// before the equal 30 s managed timeout, so a plain timeout escaped into the Relay fallback,
+    /// which sent TYPE I on a session that still owed a reply: "Reconnect needed but forbidden
+    /// by the client config (SelfConnectMode)". Only a clean rejection proves both control
+    /// channels are in sync; anything else must not be reused for Relay.
+    /// </summary>
+    [Fact]
+    public async Task DirectProbeTransportTimeoutNeverFallsBackToRelayOnTheSameSessions()
+    {
+        var never = new TaskCompletionSource();
+        await using var sourceServer = new ControlServer(cpsvAvailable: true);
+        await using var destinationServer = new ControlServer(storGate: never.Task);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        using var sourceClient = Client(sourceServer.Port, 4000);
+        using var destinationClient = Client(destinationServer.Port, 4000);
+        await sourceClient.Connect(timeout.Token);
+        await destinationClient.Connect(timeout.Token);
+        var source = new PooledConnection(sourceClient, null!);
+        var destination = new PooledConnection(destinationClient, null!);
+        var transfer = new FxpTransfer(_ => { });
+
+        Assert.False(await transfer.ExecuteAsync(source, destination, "/fixture/file.bin", "/target/file.bin",
+            FxpMode.Relay, 10, timeout.Token, "race-fixture", Guid.NewGuid().ToString("N"), Guid.NewGuid().ToString("N"), 4096));
+
+        Assert.Single(sourceServer.Commands, command => command == "TYPE I");
+        Assert.DoesNotContain("Reconnect", transfer.ErrorMessage);
+        Assert.True(source.Poisoned);
+        Assert.True(destination.Poisoned);
+    }
+
+    [Theory]
+    [InlineData("550", "System Error- blue.lights.s04e06.1080p.hdtv.h264-organic.r42: File exists.", true)]
+    [InlineData("553", "File is being uploaded by altruist", true)]
+    [InlineData("553", "file.r01: It was uploaded by someone ( 0m  2s ago).", true)]
+    [InlineData("550", "/incoming/x/file.r06: No such file or directory.", false)]
+    [InlineData("550", "Permission denied.", false)]
+    [InlineData("425", "File exists.", false)]
+    public void DupeRejectionIsRecognizedByItsWordingOnEitherRejectionCode(string code, string message, bool dupe)
+    {
+        Assert.Equal(dupe, FxpTransfer.IsDupeRejection(new FtpReply { Code = code, Message = message }));
+    }
+
     private static async Task<(bool Ok, FxpTransfer Transfer)> RunRelayProbe(ControlServer sourceServer, ControlServer destinationServer)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));

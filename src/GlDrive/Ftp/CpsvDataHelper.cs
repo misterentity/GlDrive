@@ -294,6 +294,90 @@ public static class CpsvDataHelper
     internal const int SilentStrikesToSwitch = 2;
     internal static readonly TimeSpan CpsvSwitchLifetime = TimeSpan.FromHours(6);
 
+    // The switch is persisted. Held only in memory, every restart re-learned it by failing
+    // SilentStrikesToSwitch listings: on 2026-11-03 the 11:04 and 16:06 startups each poisoned
+    // two sitea logins (an ioFTPD that flood-bans), built an empty search index for it and failed
+    // its stats refresh. Renewals are written at most every RenewalSaveInterval per host.
+    private static readonly object CpsvVerdictFileLock = new();
+    private static string? _cpsvVerdictFile;
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime>
+        PersistedSwitches = new(StringComparer.OrdinalIgnoreCase);
+    internal static readonly TimeSpan RenewalSaveInterval = TimeSpan.FromMinutes(30);
+
+    private sealed record CpsvVerdictEntry(string Host, DateTime SinceUtc);
+
+    /// <summary>
+    /// Loads unexpired CPSV-unusable verdicts from <paramref name="path"/> and saves every later
+    /// change there. An unreadable file starts empty: the cost is re-learning, never a lockout.
+    /// </summary>
+    internal static void EnableCpsvVerdictPersistence(string path)
+    {
+        lock (CpsvVerdictFileLock)
+        {
+            _cpsvVerdictFile = path;
+            PersistedSwitches.Clear();
+            try
+            {
+                if (!File.Exists(path)) return;
+                var now = DateTime.UtcNow;
+                var entries = System.Text.Json.JsonSerializer.Deserialize<List<CpsvVerdictEntry>>(File.ReadAllText(path));
+                foreach (var e in entries ?? [])
+                {
+                    if (string.IsNullOrEmpty(e.Host)) continue;
+                    var since = DateTime.SpecifyKind(e.SinceUtc, DateTimeKind.Utc);
+                    if (now - since >= CpsvSwitchLifetime) continue;
+                    TlsServerCpsvHosts.AddOrUpdate(e.Host, since, (_, current) => current > since ? current : since);
+                    PersistedSwitches[e.Host] = since;
+                    Log.Information("CPSV: {Host} restored to standard PASV data connections (CPSV data peer stays TLS server, seen {Since:u})",
+                        e.Host, since);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "CPSV verdict memory unreadable at {Path} — hosts will be re-learned", path);
+            }
+        }
+    }
+
+    internal static void DisableCpsvVerdictPersistenceForTests()
+    {
+        lock (CpsvVerdictFileLock)
+        {
+            _cpsvVerdictFile = null;
+            PersistedSwitches.Clear();
+        }
+    }
+
+    private static void SaveCpsvVerdicts()
+    {
+        lock (CpsvVerdictFileLock)
+        {
+            if (_cpsvVerdictFile is not { } path) return;
+            try
+            {
+                var entries = TlsServerCpsvHosts.Select(kv => new CpsvVerdictEntry(kv.Key, kv.Value)).ToList();
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                var temp = path + ".tmp";
+                File.WriteAllText(temp, System.Text.Json.JsonSerializer.Serialize(entries));
+                File.Move(temp, path, overwrite: true);
+                PersistedSwitches.Clear();
+                foreach (var e in entries) PersistedSwitches[e.Host] = e.SinceUtc;
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "CPSV verdict memory could not be saved to {Path}", path);
+            }
+        }
+    }
+
+    /// <summary>Records a switch to standard PASV; false when the host was already switched.</summary>
+    internal static bool RecordCpsvSwitch(string controlHost, DateTime sinceUtc)
+    {
+        if (!TlsServerCpsvHosts.TryAdd(controlHost, sinceUtc)) return false;
+        SaveCpsvVerdicts();
+        return true;
+    }
+
     // Data socket -> control host, so the handshake can attribute what it observes.
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Socket, string> DataSocketHosts = new();
 
@@ -318,6 +402,7 @@ public static class CpsvDataHelper
             // after a lost compare/remove so a fresh lease still selects PASV.
             if (!TlsServerCpsvHosts.TryRemove(new KeyValuePair<string, DateTime>(controlHost, since)))
                 continue;
+            SaveCpsvVerdicts();
             Log.Information("CPSV: re-trying CPSV data connections on {Host} after {Hours}h without a successful standard listing",
                 controlHost, CpsvSwitchLifetime.TotalHours);
             return false;
@@ -350,7 +435,13 @@ public static class CpsvDataHelper
         {
             // A slower completion or a backwards wall-clock adjustment must not
             // shorten newer evidence. Compare/update also cannot resurrect a removed entry.
-            if (TlsServerCpsvHosts.TryUpdate(controlHost, completedUtc, previous)) return;
+            if (TlsServerCpsvHosts.TryUpdate(controlHost, completedUtc, previous))
+            {
+                if (!PersistedSwitches.TryGetValue(controlHost, out var persisted)
+                    || completedUtc - persisted >= RenewalSaveInterval)
+                    SaveCpsvVerdicts();
+                return;
+            }
         }
     }
 
@@ -395,7 +486,7 @@ public static class CpsvDataHelper
                 {
                     var strikes = controlHost is null ? 0 : SilentStrikes.AddOrUpdate(controlHost, 1, (_, n) => n + 1);
                     var switched = strikes >= SilentStrikesToSwitch
-                                   && TlsServerCpsvHosts.TryAdd(controlHost!, DateTime.UtcNow);
+                                   && RecordCpsvSwitch(controlHost!, DateTime.UtcNow);
                     if (switched)
                         Log.Warning("CPSV unusable on {Host}: {Strikes} consecutive data channels stayed silent as TLS server " +
                                     "(not glftpd, e.g. ioFTPD) — using standard PASV; CPSV retries after {Hours}h without a successful standard listing",

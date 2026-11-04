@@ -86,6 +86,48 @@ public class FxpRelayRouteMemoryTests : IDisposable
         Assert.NotEqual(DirectProbeFailure.NotCached, FxpTransfer.RecordDirectFailure("src", "dst", Now.AddHours(7)));
     }
 
+    /// <summary>
+    /// 2026-11-03: siteb->sited ran direct 21 for 21 at ~20 MB/s, then one timed-out file
+    /// moved the route to Relay (~10 MB/s) for 6 h. A route that has worked direct this session
+    /// keeps one failure of slack; a second consecutive failure is a pattern.
+    /// </summary>
+    [Fact]
+    public void Proven_route_tolerates_one_failure_then_switches_to_relay()
+    {
+        FxpTransfer.RecordDirectSuccess("src", "dst");
+        Assert.Equal(DirectProbeFailure.Tolerated, FxpTransfer.RecordDirectFailure("src", "dst", Now));
+        Assert.True(FxpTransfer.ShouldAttemptDirect("src", "dst", Now));
+        Assert.Equal(DirectProbeFailure.First, FxpTransfer.RecordDirectFailure("src", "dst", Now));
+        Assert.False(FxpTransfer.ShouldAttemptDirect("src", "dst", Now));
+    }
+
+    [Fact]
+    public void A_success_between_failures_rearms_the_slack()
+    {
+        FxpTransfer.RecordDirectSuccess("src", "dst");
+        Assert.Equal(DirectProbeFailure.Tolerated, FxpTransfer.RecordDirectFailure("src", "dst", Now));
+        FxpTransfer.RecordDirectSuccess("src", "dst");
+        Assert.Equal(DirectProbeFailure.Tolerated, FxpTransfer.RecordDirectFailure("src", "dst", Now));
+    }
+
+    [Fact]
+    public void A_demoted_route_must_succeed_again_before_it_earns_slack()
+    {
+        FxpTransfer.RecordDirectSuccess("src", "dst");
+        FxpTransfer.RecordDirectFailure("src", "dst", Now);
+        FxpTransfer.RecordDirectFailure("src", "dst", Now);
+        var later = Now + FxpTransfer.RelayRouteRetry;
+        Assert.True(FxpTransfer.ShouldAttemptDirect("src", "dst", later));
+        Assert.Equal(DirectProbeFailure.Reprobe, FxpTransfer.RecordDirectFailure("src", "dst", later));
+    }
+
+    [Fact]
+    public void An_unproven_route_switches_on_its_first_failure()
+    {
+        Assert.Equal(DirectProbeFailure.First, FxpTransfer.RecordDirectFailure("src", "dst", Now));
+        Assert.False(FxpTransfer.ShouldAttemptDirect("src", "dst", Now));
+    }
+
     [Fact]
     public void Missing_server_ids_never_cache()
     {
