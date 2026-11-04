@@ -55,15 +55,17 @@ public sealed class UpdateProbationTests : IDisposable
     }
 
     [Fact]
-    public async Task Eligible_expired_generation_retries_a_temporary_file_lock()
+    public void Eligible_expired_generation_retries_a_temporary_file_lock()
     {
         var store = Store();
         Assert.True(store.RecordInstallation(_backups, _now));
         using var retained = new FileStream(_backups[0].Backup, FileMode.Open, FileAccess.Read, FileShare.Read);
-        var release = Task.Run(async () => { await Task.Delay(100); retained.Dispose(); });
-        var result = store.CleanupWithRetry(TimeSpan.Zero, TimeSpan.FromSeconds(2),
-            TimeSpan.FromMilliseconds(20), () => _now.AddHours(24));
-        await release;
+        // Release the lock from the retry wait itself: a thread-pool timer could start after
+        // the whole retry window on a loaded CI runner (CI saw 4 deleted, 1 retained).
+        var waits = 0;
+        var result = store.CleanupWithRetry(TimeSpan.Zero, TimeSpan.FromSeconds(30),
+            TimeSpan.FromMilliseconds(20), () => _now.AddHours(24), _ => { waits++; retained.Dispose(); });
+        Assert.True(waits >= 1);
         Assert.Equal((_backups.Count, 0), result);
         Assert.All(_backups, backup => Assert.False(File.Exists(backup.Backup)));
     }
