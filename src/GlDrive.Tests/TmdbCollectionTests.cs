@@ -143,7 +143,9 @@ public sealed class TmdbCollectionTests
             await Task.Delay(Timeout.Infinite, ct);
             throw new InvalidOperationException();
         });
-        wholeClient.CollectionLookupTimeout = TimeSpan.FromMilliseconds(50);
+        // Wide enough that the first (instant) call always finishes under a loaded test run;
+        // the hanging second call is what the whole-lookup deadline must cut off.
+        wholeClient.CollectionLookupTimeout = TimeSpan.FromMilliseconds(500);
         wholeClient.CollectionRequestTimeout = TimeSpan.FromSeconds(5);
         Assert.Equal("unknown", (await wholeClient.GetMovieCollection(42).WaitAsync(TimeSpan.FromSeconds(5))).Status);
         Assert.Equal(2, calls);
