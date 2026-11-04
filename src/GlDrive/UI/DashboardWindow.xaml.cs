@@ -111,6 +111,7 @@ public partial class DashboardWindow : Window
         // Auto-scroll IRC messages
         vm.Irc.ScrollToBottom += ScrollIrcToBottom;
         vm.Irc.ShareServerInfoRequested += OpenServerInfoShare;
+        vm.Irc.SendAddlineRequested += OpenSendAddline;
 
         // Re-focus input after sending
         vm.Irc.FocusInput += () => IrcInputBox.Focus();
@@ -328,6 +329,25 @@ public partial class DashboardWindow : Window
         var pm = DataContext is DashboardViewModel { Irc.SelectedChannel: { IsPrivate: true } channel } ? channel : null;
         IrcShareSeparator.Visibility = IrcShareMenuItem.Visibility = pm != null ? Visibility.Visible : Visibility.Collapsed;
         IrcShareMenuItem.Header = new TextBlock { Text = pm != null ? $"Send server info to {pm.Name}…" : "" };
+        IrcSendMyAddlineMenuItem.Visibility = IrcShareMenuItem.Visibility;
+        IrcSendMyAddlineMenuItem.Header = new TextBlock { Text = pm != null ? $"Send my addline to {pm.Name}…" : "" };
+
+        // "Add server" appears when the targeted lines hold a site address, or in a PM with
+        // someone you sent an addline to (their reply may come in a later message).
+        _ircMenuInvite = null;
+        var inviteLines = IrcInviteLines();
+        if (inviteLines.Nick is { } fromNick && DataContext is DashboardViewModel { Irc.SelectedChannel: { } current }
+            && (current.IsPrivate || _addlineOffers.Find(current.ServerId, fromNick) != null))
+        {
+            var info = GlDrive.Irc.SiteInviteParser.Parse(inviteLines.Lines);
+            if (info.HasFtp) _ircMenuInvite = (current.ServerId, fromNick, info);
+        }
+        IrcAddServerFromMenuItem.Visibility = _ircMenuInvite != null ? Visibility.Visible : Visibility.Collapsed;
+        IrcAddServerFromMenuItem.Header = new TextBlock
+        {
+            Text = _ircMenuInvite is { } invite ? $"Add server from {invite.Nick}'s info ({invite.Info.FtpHost}:{invite.Info.FtpPort})…" : ""
+        };
+        IrcShareSeparator.Visibility = pm != null || _ircMenuInvite != null ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private List<IrcMessageVm> IrcCopyTargets()
@@ -388,6 +408,88 @@ public partial class DashboardWindow : Window
     {
         if (DataContext is DashboardViewModel { Irc.SelectedChannel: { IsPrivate: true } pm } vm)
             vm.Irc.ShareServerInfoCommand.Execute(pm);
+    }
+
+    private (string ServerId, string Nick, GlDrive.Irc.SiteInviteInfo Info)? _ircMenuInvite;
+    private readonly GlDrive.Irc.AddlineOfferStore _addlineOffers = new();
+
+    /// <summary>
+    /// The lines to read a site's details from: the selected lines, or — when one line is
+    /// right-clicked — the run of consecutive messages from the same nick around it (a siteop's
+    /// reply usually spans several lines).
+    /// </summary>
+    private (string? Nick, IReadOnlyList<string> Lines) IrcInviteLines()
+    {
+        var targets = IrcCopyTargets().Where(m => !m.IsSystemMessage).ToList();
+        if (targets.Count == 0) return (null, []);
+        var nick = targets.GroupBy(m => m.Nick).OrderByDescending(g => g.Count()).First().Key;
+        if (targets.Count > 1) return (nick, targets.Where(m => m.Nick == nick).Select(m => m.Text).ToList());
+        var items = IrcMessageList.Items.OfType<IrcMessageVm>().ToList();
+        var index = items.IndexOf(targets[0]);
+        if (index < 0) return (nick, [targets[0].Text]);
+        int start = index, end = index;
+        while (start > 0 && index - start < 40 && items[start - 1].Nick == nick && !items[start - 1].IsSystemMessage) start--;
+        while (end < items.Count - 1 && end - index < 40 && items[end + 1].Nick == nick && !items[end + 1].IsSystemMessage) end++;
+        return (nick, items.Skip(start).Take(end - start + 1).Select(m => m.Text).ToList());
+    }
+
+    private void IrcSendMyAddline_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is DashboardViewModel { Irc.SelectedChannel: { IsPrivate: true } pm })
+            OpenSendAddline(pm.ServerId, pm.Name);
+    }
+
+    private void OpenSendAddline(string serverId, string nick)
+    {
+        if (_demoMode) return;
+        if (_serverManager.GetIrcService(serverId) is not { } irc)
+        {
+            MessageBox.Show(this, "That network's IRC isn't running.", "Send my addline", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        new SendAddlineDialog(irc, _config, _addlineOffers, nick) { Owner = this }.ShowDialog();
+    }
+
+    private async void IrcAddServerFrom_Click(object sender, RoutedEventArgs e)
+    {
+        if (_demoMode || _ircMenuInvite is not { } invite) return;
+        _ircMenuMessage = null;
+        var offer = _addlineOffers.Find(invite.ServerId, invite.Nick);
+        var draft = GlDrive.Irc.SiteInviteServer.Build(invite.Info, offer, invite.Nick, offer?.Username);
+
+        var duplicate = _config.Servers.FirstOrDefault(s =>
+            s.Connection.Host.Equals(draft.Server.Connection.Host, StringComparison.OrdinalIgnoreCase) &&
+            s.Connection.Port == draft.Server.Connection.Port);
+        if (duplicate != null && MessageBox.Show(this,
+                $"{duplicate.Name} already uses {duplicate.Connection.Host}:{duplicate.Connection.Port}. Add another server anyway?",
+                "Add server", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+            return;
+
+        if (draft.Notes.Count > 0)
+            MessageBox.Show(this, string.Join("\n\n", draft.Notes) + "\n\nReview everything in the next window before saving.",
+                $"Add server from {invite.Nick}", MessageBoxButton.OK, MessageBoxImage.Information);
+
+        var dialog = new ServerEditDialog(draft.Server, _serverManager, draft.Password, invite.Info.IrcPassword) { Owner = this };
+        if (dialog.ShowDialog() != true) return;
+        var added = dialog.Result;
+        try
+        {
+            GlDrive.Services.McpSettingsPersistence.SaveAll(_config, candidate => candidate.Servers.Add(
+                System.Text.Json.JsonSerializer.Deserialize<GlDrive.Config.ServerConfig>(System.Text.Json.JsonSerializer.Serialize(added))!));
+            // Keys for channels that also have a join key; set before the IRC client starts.
+            if (draft.FishKeys.Count > 0)
+            {
+                var keys = new GlDrive.Irc.FishKeyStore(added.Id);
+                foreach (var (channel, key, mode) in draft.FishKeys) keys.SetKey(channel, key, mode);
+            }
+            Log.Information("Added server {Name} ({Host}:{Port}) from {Nick}'s IRC info", added.Name, added.Connection.Host, added.Connection.Port, invite.Nick);
+            await _serverManager.SyncAfterConfigChange();
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Adding server from IRC info failed");
+            MessageBox.Show(this, "The server could not be saved: " + ex.Message, "Add server", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private void OpenServerInfoShare(string serverId, string nick)

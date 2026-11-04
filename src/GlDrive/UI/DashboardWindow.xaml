@@ -1949,6 +1949,9 @@
                                                                             <MenuItem Header="Send server info…"
                                                                                       Command="{Binding PlacementTarget.Tag.DataContext.Irc.ShareServerInfoCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                                                                                       CommandParameter="{Binding}"/>
+                                                                            <MenuItem Header="Send my addline…"
+                                                                                      Command="{Binding PlacementTarget.Tag.DataContext.Irc.SendAddlineCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                                                      CommandParameter="{Binding}"/>
                                                                         </ContextMenu>
                                                                     </StackPanel.ContextMenu>
                                                                     <TextBlock Text="&#x1F512;" FontSize="12" Margin="0,0,4,0"
@@ -1998,6 +2001,8 @@
                                                                 <MenuItem x:Name="IrcAddlineMenuItem" Click="IrcAddline_Click"/>
                                                                 <Separator x:Name="IrcShareSeparator"/>
                                                                 <MenuItem x:Name="IrcShareMenuItem" Click="IrcShareServerInfo_Click"/>
+                                                                <MenuItem x:Name="IrcSendMyAddlineMenuItem" Click="IrcSendMyAddline_Click"/>
+                                                                <MenuItem x:Name="IrcAddServerFromMenuItem" Click="IrcAddServerFrom_Click"/>
                                                             </ContextMenu>
                                                         </ListBox.ContextMenu>
                                                         <ListBox.ItemTemplate>
@@ -2062,6 +2067,9 @@
                                                                                       CommandParameter="{Binding}"/>
                                                                             <MenuItem Header="Send server info…"
                                                                                       Command="{Binding PlacementTarget.Tag.DataContext.Irc.ShareServerInfoCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                                                      CommandParameter="{Binding}"/>
+                                                                            <MenuItem Header="Send my addline…"
+                                                                                      Command="{Binding PlacementTarget.Tag.DataContext.Irc.SendAddlineCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                                                                                       CommandParameter="{Binding}"/>
                                                                         </ContextMenu>
                                                                     </TextBlock.ContextMenu>

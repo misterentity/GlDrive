@@ -133,7 +133,7 @@ public class MountConfig
     public string DriveLetter { get; set; } = "G";
     public string VolumeLabel { get; set; } = "glFTPd";
     public bool AutoMountOnStart { get; set; } = true;
-    public bool MountDrive { get; set; } = true;
+    public bool MountDrive { get; set; }
 }
 
 public class TlsConfig

@@ -36,7 +36,10 @@ public partial class ServerEditDialog : Window
     public string AnnounceRulesFreezePath        => $"/servers/{ServerId}/irc/announceRules";
     public string ExcludedCategoriesFreezePath   => $"/servers/{ServerId}/notifications/excludedCategories";
 
-    public ServerEditDialog(ServerConfig? existing = null, Services.ServerManager? serverManager = null)
+    /// <param name="initialPassword">Prefill for a new server built from an IRC invite; the
+    /// stored credential (none yet) would otherwise leave the box empty.</param>
+    public ServerEditDialog(ServerConfig? existing = null, Services.ServerManager? serverManager = null,
+        string? initialPassword = null, string? initialIrcPassword = null)
     {
         _serverManager = serverManager;
         InitializeComponent();
@@ -199,6 +202,9 @@ public partial class ServerEditDialog : Window
             if (DriveLetterBox.Items.Contains("G")) DriveLetterBox.SelectedItem = "G";
             else if (DriveLetterBox.Items.Count > 0) DriveLetterBox.SelectedIndex = 0;
         }
+
+        if (!string.IsNullOrEmpty(initialPassword)) PasswordBox.Password = initialPassword;
+        if (!string.IsNullOrEmpty(initialIrcPassword)) IrcPasswordBox.Password = initialIrcPassword;
     }
 
     private void ClearCert_Click(object sender, RoutedEventArgs e)

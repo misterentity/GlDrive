@@ -106,7 +106,7 @@
                 <TextBlock Text="Volume Label:" Margin="0,0,0,4"/>
                 <TextBox x:Name="VolumeLabelBox" Text="glFTPd" Margin="0,0,0,8"/>
 
-                <CheckBox x:Name="MountDriveBox" Content="Mount as drive letter" IsChecked="True" Margin="0,8,0,4"/>
+                <CheckBox x:Name="MountDriveBox" Content="Mount as drive letter" IsChecked="False" Margin="0,8,0,4"/>
                 <CheckBox x:Name="AutoMountBox" Content="Auto-connect on start" IsChecked="True" Margin="0,0,0,8"/>
                 <CheckBox x:Name="PreferTls12Box" Content="Prefer TLS 1.2 (recommended for glftpd)" IsChecked="True" Margin="0,0,0,8"/>
 

@@ -192,7 +192,7 @@ public class HealthDoctorTests
     public void DuplicateLettersExcludeNonMountingAndDisabledServers()
     {
         var config = Config();
-        config.Servers.Add(new() { Id = "server-b", Mount = new() { DriveLetter = "g:" } });
+        config.Servers.Add(new() { Id = "server-b", Mount = new() { DriveLetter = "g:", MountDrive = true } });
         Assert.Empty(Check(Context(config)));
         config.Servers[0].Mount.MountDrive = true;
         Assert.Single(Check(Context(config)));
