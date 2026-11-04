@@ -103,7 +103,7 @@ public static class WishlistOwnership
         return MeetsReleaseCutoff(item, Path.GetFileNameWithoutExtension(entry.Path), config);
     }
 
-    private static bool MatchesMovie(WishlistItem item, LibraryIndexEntry entry)
+    internal static bool MatchesMovie(WishlistItem item, LibraryIndexEntry entry)
     {
         var expected = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
         { ["imdb"] = item.ImdbId, ["tmdb"] = item.TmdbId?.ToString() };

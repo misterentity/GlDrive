@@ -6,7 +6,11 @@ namespace GlDrive.Downloads;
 public sealed record CollectionGapSnapshot(int MovieTmdbId, string Status, int? CollectionId,
     string? CollectionName, IReadOnlyList<CollectionGapFilm> Films, DateTimeOffset? CheckedAtUtc);
 public sealed record CollectionGapAddResult(string Status, string? WishlistId);
-public sealed record CollectionLibraryState(DateTime? RefreshedAtUtc, bool Complete, int ScannedRoots, int ScanIssues);
+public sealed record CollectionLibraryState(DateTime? RefreshedAtUtc, bool Complete, int ScannedRoots, int ScanIssues)
+{
+    public IReadOnlyList<string> PlexServers { get; init; } = [];
+    public bool PlexComplete { get; init; }
+}
 
 /// <summary>
 /// One explicit TMDB collection lookup shared by the UI and automation. Local
@@ -46,7 +50,8 @@ public sealed class CollectionGapService
         {
             var index = ReadIndex();
             return new(index.RefreshedAtUtc == DateTime.MinValue ? null : index.RefreshedAtUtc,
-                index.Complete, index.ScannedRoots, index.ScanIssues);
+                index.Complete, index.ScannedRoots, index.ScanIssues)
+            { PlexServers = index.PlexServers, PlexComplete = index.PlexComplete };
         }
     }
 

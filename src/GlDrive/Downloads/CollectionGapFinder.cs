@@ -8,7 +8,9 @@ public sealed record CollectionGapFilm(int TmdbId, string Title, int? Year, stri
 /// <summary>
 /// Read-only collection completeness: any good movie copy counts, independent of the
 /// default quality for a new wish. Low source copies remain outside C4's completion floor.
-/// Missing is proven only by a complete local inventory; absent evidence is unknown.
+/// A film in any linked Plex server's catalog is owned here even without a local file — the
+/// servers live on other machines. Missing is proven only by a complete inventory (the disk
+/// scan, or every Plex server read with no disk-scan issues); absent evidence is unknown.
 /// </summary>
 public static class CollectionGapFinder
 {
@@ -20,16 +22,20 @@ public static class CollectionGapFinder
         var completed = WishlistOwnership.PrepareDownloads(downloadRows);
         var pending = downloadRows.Where(d => d.Status is DownloadStatus.Queued or DownloadStatus.Downloading or
             DownloadStatus.Extracting or DownloadStatus.Paused).Select(d => (Item: d, Parsed: SceneNameParser.Parse(d.ReleaseName))).ToArray();
+        var plexMovies = index.Entries.Where(e => e.Identity.Kind == "movie" && e.PlexRatingKey != null &&
+            !WishlistSourceFloor.IsLowQualityLibrary(e)).ToArray();
+        var absenceProven = index.Complete || index.PlexComplete && index.ScanIssues == 0;
         return collection.Films.Select(film =>
         {
             var candidate = new WishlistItem { Type = MediaType.Movie, Title = film.Title, Year = film.Year,
                 TmdbId = film.TmdbId, Quality = QualityProfile.Any };
             var identifiedWish = wanted.FirstOrDefault(w => w.Type == MediaType.Movie && w.TmdbId == film.TmdbId);
             if (identifiedWish != null) candidate.Id = identifiedWish.Id;
-            var status = WishlistOwnership.IsOwnedPrepared(candidate, config, index, completed, DateTimeOffset.UtcNow) ? "owned"
+            var status = WishlistOwnership.IsOwnedPrepared(candidate, config, index, completed, DateTimeOffset.UtcNow)
+                    || plexMovies.Any(e => WishlistOwnership.MatchesMovie(candidate, e)) ? "owned"
                 : pending.Any(d => MatchesPending(candidate, d.Item, d.Parsed, wanted, config)) ? "downloading"
                 : wanted.Any(w => MatchesWishlist(film, w)) ? "wanted"
-                : index.Complete && film.Year.HasValue ? "missing" : "unknown";
+                : absenceProven && film.Year.HasValue ? "missing" : "unknown";
             return new CollectionGapFilm(film.TmdbId, film.Title, film.Year, status);
         }).ToArray();
     }

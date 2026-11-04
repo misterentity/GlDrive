@@ -288,6 +288,7 @@ public partial class DashboardWindow : Window
 
     private IrcMessageVm? _ircMenuMessage;
     private string? _ircMenuRelease;
+    private IReadOnlyList<GlDrive.Irc.SiteAddlineCommand> _ircMenuAddlines = [];
 
     private List<IrcMessageVm> SelectedIrcMessages() =>
         IrcMessageList.SelectedItems.OfType<IrcMessageVm>()
@@ -308,6 +309,21 @@ public partial class DashboardWindow : Window
         IrcCopyMenuItem.IsEnabled = IrcCopyTextMenuItem.IsEnabled = count > 0;
         IrcCopyReleaseMenuItem.Visibility = _ircMenuRelease != null ? Visibility.Visible : Visibility.Collapsed;
         IrcCopyReleaseMenuItem.Header = new TextBlock { Text = _ircMenuRelease != null ? $"Copy \"{_ircMenuRelease}\"" : "" };
+        IrcReleaseInfoMenuItem.Visibility = IrcCopyReleaseMenuItem.Visibility;
+        IrcReleaseInfoMenuItem.Header = new TextBlock { Text = _ircMenuRelease != null ? "Get release info…" : "" };
+
+        _ircMenuAddlines = GlDrive.Irc.SiteAddline.Extract(IrcCopyTargets().Select(m => m.Text));
+        IrcAddlineSeparator.Visibility = IrcAddlineMenuItem.Visibility =
+            _ircMenuAddlines.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        IrcAddlineMenuItem.Header = new TextBlock
+        {
+            Text = _ircMenuAddlines.Count switch
+            {
+                0 => "",
+                1 => $"Send addline for {_ircMenuAddlines[0].User} to site…",
+                var n => $"Send {n} addlines to site…"
+            }
+        };
 
         var pm = DataContext is DashboardViewModel { Irc.SelectedChannel: { IsPrivate: true } channel } ? channel : null;
         IrcShareSeparator.Visibility = IrcShareMenuItem.Visibility = pm != null ? Visibility.Visible : Visibility.Collapsed;
@@ -338,6 +354,22 @@ public partial class DashboardWindow : Window
     }
 
     private void IrcCopyRelease_Click(object sender, RoutedEventArgs e) => ClipboardHelper.TrySetText(_ircMenuRelease);
+
+    private void IrcReleaseInfo_Click(object sender, RoutedEventArgs e)
+    {
+        if (_demoMode || _ircMenuRelease is not { } release) return;
+        new ReleaseInfoWindow(release, _config, () => _serverManager.CurrentLibraryIndex) { Owner = this }.Show();
+    }
+
+    private void IrcAddline_Click(object sender, RoutedEventArgs e)
+    {
+        var addlines = _ircMenuAddlines;
+        var from = _ircMenuMessage?.Nick;
+        _ircMenuMessage = null;
+        if (_demoMode || addlines.Count == 0) return;
+        var serverId = (DataContext as DashboardViewModel)?.Irc.SelectedChannel?.ServerId;
+        new SiteAddlineDialog(_serverManager, _config, addlines, from, serverId) { Owner = this }.ShowDialog();
+    }
 
     private void IrcSelectAll_Click(object sender, RoutedEventArgs e)
     {

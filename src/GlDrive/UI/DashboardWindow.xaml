@@ -1949,7 +1949,10 @@
                                                                 <MenuItem x:Name="IrcCopyMenuItem" InputGestureText="Ctrl+C" Click="IrcCopy_Click"/>
                                                                 <MenuItem x:Name="IrcCopyTextMenuItem" Header="Copy message text" Click="IrcCopyText_Click"/>
                                                                 <MenuItem x:Name="IrcCopyReleaseMenuItem" Click="IrcCopyRelease_Click"/>
+                                                                <MenuItem x:Name="IrcReleaseInfoMenuItem" Click="IrcReleaseInfo_Click"/>
                                                                 <MenuItem Header="Select all" InputGestureText="Ctrl+A" Click="IrcSelectAll_Click"/>
+                                                                <Separator x:Name="IrcAddlineSeparator"/>
+                                                                <MenuItem x:Name="IrcAddlineMenuItem" Click="IrcAddline_Click"/>
                                                                 <Separator x:Name="IrcShareSeparator"/>
                                                                 <MenuItem x:Name="IrcShareMenuItem" Click="IrcShareServerInfo_Click"/>
                                                             </ContextMenu>

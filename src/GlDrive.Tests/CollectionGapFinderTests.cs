@@ -48,6 +48,29 @@ public sealed class CollectionGapFinderTests
         Assert.Equal("missing", Status(Index(true, Library(guids: ["tmdb://99"]))));
     }
 
+    private static LibraryIndexEntry PlexMovie(string path = "/media/movies/Example.Movie.2024.1080p.BluRay-GRP.mkv", params string[] guids) =>
+        new(new("Example Movie", 2024, null, null, QualityProfile.Q1080p), path, "plex", false, "machine/123", guids);
+
+    [Fact]
+    public void A_film_on_any_linked_Plex_server_is_owned_without_a_local_file()
+    {
+        Assert.Equal("owned", Status(Index(false, PlexMovie(guids: ["tmdb://42"]))));
+        Assert.Equal("owned", Status(Index(false, PlexMovie())));
+        // A different TMDB id on the Plex item is a different film of the same name.
+        Assert.Equal("unknown", Status(Index(false, PlexMovie(guids: ["tmdb://99"]))));
+        // A CAM in Plex is not a good copy.
+        Assert.Equal("unknown", Status(Index(false, PlexMovie("/media/movies/Example.Movie.2024.CAM-GRP.mkv"))));
+    }
+
+    [Fact]
+    public void Every_Plex_server_read_proves_absence_only_when_the_disk_scan_had_no_issues()
+    {
+        var plexOnly = new LibraryIndexSnapshot(DateTime.UtcNow, [], 0, 0, 0, false) { PlexComplete = true, PlexServers = ["A", "B"] };
+        Assert.Equal("missing", Status(plexOnly));
+        Assert.Equal("unknown", Status(plexOnly with { ScanIssues = 1 }));
+        Assert.Equal("unknown", Status(plexOnly with { PlexComplete = false }));
+    }
+
     [Theory]
     [InlineData(DownloadStatus.Queued)]
     [InlineData(DownloadStatus.Downloading)]

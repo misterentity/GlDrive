@@ -1,0 +1,52 @@
+<Window x:Class="GlDrive.UI.ReleaseInfoWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Release info" Width="700" Height="500"
+        MinWidth="520" MinHeight="360"
+        ResizeMode="CanResize"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource BackgroundBrush}"
+        Foreground="{DynamicResource ForegroundBrush}">
+    <Border Margin="14" Style="{DynamicResource HudPanelStyle}">
+        <DockPanel>
+            <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
+                <TextBlock x:Name="ReleaseText" Text="&gt;&gt; RELEASE INFO" TextTrimming="CharacterEllipsis"
+                           Style="{DynamicResource SectionHeaderTextStyle}"/>
+            </Border>
+            <DockPanel DockPanel.Dock="Bottom" Margin="12,0,12,12" LastChildFill="False">
+                <TextBlock x:Name="StatusText" DockPanel.Dock="Left" VerticalAlignment="Center"
+                           Style="{DynamicResource DimTextStyle}"/>
+                <Button DockPanel.Dock="Right" Content="Close" Click="Close_Click" IsCancel="True"
+                        Padding="20,6" Margin="8,0,0,0" Style="{StaticResource SecondaryButton}"/>
+                <Button DockPanel.Dock="Right" x:Name="ImdbButton" Content="IMDb" Click="Imdb_Click" Visibility="Collapsed"
+                        Padding="14,6" Margin="8,0,0,0" Style="{StaticResource SecondaryButton}"/>
+                <Button DockPanel.Dock="Right" x:Name="TmdbButton" Content="TMDB" Click="Tmdb_Click" Visibility="Collapsed"
+                        Padding="14,6" Margin="8,0,0,0" Style="{StaticResource SecondaryButton}"/>
+                <Button DockPanel.Dock="Right" Content="Copy name" Click="CopyName_Click"
+                        Padding="14,6" Style="{StaticResource SecondaryButton}"/>
+            </DockPanel>
+            <Grid Margin="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Border Grid.Column="0" Width="160" Margin="0,0,14,0" VerticalAlignment="Top"
+                        Background="{DynamicResource SurfaceBrush}" MinHeight="240">
+                    <Image x:Name="PosterImage" Stretch="Uniform" AutomationProperties.Name="Poster"/>
+                </Border>
+                <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <TextBlock x:Name="TitleText" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap" Text="Looking up…"/>
+                        <TextBlock x:Name="MetaText" Margin="0,4,0,0" TextWrapping="Wrap" Style="{DynamicResource DimTextStyle}"/>
+                        <TextBlock x:Name="EpisodeText" Margin="0,10,0,0" TextWrapping="Wrap" FontWeight="SemiBold" Visibility="Collapsed"/>
+                        <TextBlock x:Name="OverviewText" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                        <TextBlock Text="RELEASE" Margin="0,14,0,2" Style="{DynamicResource DimTextStyle}"/>
+                        <TextBlock x:Name="ReleaseDetailText" TextWrapping="Wrap"/>
+                        <TextBlock Text="LIBRARY" Margin="0,12,0,2" Style="{DynamicResource DimTextStyle}"/>
+                        <TextBlock x:Name="LibraryText" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </ScrollViewer>
+            </Grid>
+        </DockPanel>
+    </Border>
+</Window>

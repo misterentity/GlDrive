@@ -11,6 +11,13 @@ public sealed record LibraryIndexSnapshot(DateTime RefreshedAtUtc, IReadOnlyList
     int ScannedRoots, int VideoFiles, int ScanIssues, bool Complete)
 {
     public static LibraryIndexSnapshot Empty { get; } = new(DateTime.MinValue, [], 0, 0, 0, false);
+
+    /// <summary>Names of the linked-account Plex servers whose whole catalog was read.</summary>
+    public IReadOnlyList<string> PlexServers { get; init; } = [];
+
+    /// <summary>Every owned server on the linked Plex account was discovered and fully read.
+    /// Separate from <see cref="Complete"/>, which still means the local disk scan is complete.</summary>
+    public bool PlexComplete { get; init; }
 }
 public sealed record LibraryOwnershipComparison(string Status, QualityProfile? BestObservedQuality,
     bool VerifiedOnDisk, bool MeetsCutoff, bool CandidateIsUpgrade, bool CompleteEvidence,

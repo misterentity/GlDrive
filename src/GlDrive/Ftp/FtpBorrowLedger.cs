@@ -4,7 +4,7 @@ namespace GlDrive.Ftp;
 public enum FtpBorrowPurpose
 {
     Unspecified, Filesystem, Download, Search, Race, Cleanup, NukePoll, SiteStats,
-    ConnectionMonitor, IrcInvite, Automation, Browse, Player
+    ConnectionMonitor, IrcInvite, Automation, Browse, Player, SiteCommand
 }
 
 public sealed record FtpBorrowSnapshot(long LeaseId, FtpBorrowPurpose Purpose, DateTimeOffset BorrowedAtUtc);

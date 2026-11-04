@@ -149,7 +149,8 @@ public sealed class LibraryAutomation : IAutomationModule
     private async Task<string> Scan(PlexConfig config, string importedFolder, string mediaKind, CancellationToken ct)
     {
         using var client = _plex(config);
-        if (client == null) return "unconfigured";
+        // The client needs only the account token now; a scan still targets the selected server.
+        if (client == null || string.IsNullOrWhiteSpace(config.ServerUri)) return "unconfigured";
         var sections = await client.GetLibrarySectionsAsync(config.ServerUri, ct);
         var target = PlexClient.FindImportedFolderTarget(sections, importedFolder, mediaKind);
         if (target == null) return "unmapped-or-ambiguous";

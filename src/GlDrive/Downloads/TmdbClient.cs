@@ -365,6 +365,10 @@ public class TmdbTvDetail
     public string? Overview { get; set; }
     [JsonPropertyName("vote_average")]
     public double VoteAverage { get; set; }
+    [JsonPropertyName("first_air_date")]
+    public string? FirstAirDate { get; set; }
+    public string? Status { get; set; }
+    public TmdbGenre[]? Genres { get; set; }
 }
 
 public class TmdbSeasonSummary

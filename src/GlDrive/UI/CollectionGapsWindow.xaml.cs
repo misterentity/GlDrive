@@ -117,8 +117,11 @@ public partial class CollectionGapsWindow : Window
         }
         var age = Math.Max(0, (DateTime.UtcNow - refreshed.ToUniversalTime()).TotalMinutes);
         var ageText = age < 1 ? "just now" : $"{(int)age} min ago";
-        LibraryLabel.Text = $"Library index: {(status.Complete ? "complete" : "incomplete")}, {ageText} ({refreshed.ToLocalTime():g}). " +
-            $"{status.ScannedRoots} folders scanned; {status.ScanIssues} scan issues.";
+        var complete = status.Complete || status.PlexComplete && status.ScanIssues == 0;
+        var plex = status.PlexServers.Count == 0 ? "no Plex servers read"
+            : $"Plex: {string.Join(", ", status.PlexServers)}{(status.PlexComplete ? "" : " (some servers unreachable)")}";
+        LibraryLabel.Text = $"Library index: {(complete ? "complete" : "incomplete")}, {ageText} ({refreshed.ToLocalTime():g}). " +
+            $"{plex}; {status.ScannedRoots} folders scanned; {status.ScanIssues} scan issues.";
     }
     private void SetBusy(bool busy)
     {
