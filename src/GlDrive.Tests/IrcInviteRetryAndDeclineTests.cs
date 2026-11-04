@@ -129,15 +129,24 @@ public class IrcInviteRetryAndDeclineTests
     {
         var src = ReadSource(UpdateChecker);
 
-        var start = src.IndexOf("Process.Start(psi);", StringComparison.Ordinal);
-        var clear = src.IndexOf("ClearDeclinedUpdate();", StringComparison.Ordinal);
+        // The scheduled-task path has its own successful-launch marker cleanup.
+        // Inspect only the interactive elevation branch; unrelated helper launches
+        // earlier in the file must not make this ordering check pass or fail.
+        var methodStart = src.IndexOf("private void LaunchUpdater(", StringComparison.Ordinal);
+        Assert.True(methodStart >= 0, "the updater launch method must exist");
+        var elevationStart = src.IndexOf("var elevationStarted =", methodStart, StringComparison.Ordinal);
+        Assert.True(elevationStart > methodStart, "the interactive elevation branch must exist");
+        var elevation = src[elevationStart..];
+        var start = elevation.IndexOf("Process.Start(psi);", StringComparison.Ordinal);
+        var clear = elevation.IndexOf("ClearDeclinedUpdate();", StringComparison.Ordinal);
+        var failure = elevation.IndexOf("catch (Exception ex)", StringComparison.Ordinal);
 
-        Assert.True(start > 0 && clear > start,
+        Assert.True(start > 0 && clear > start && clear < failure,
             "the marker must be cleared after the elevated process actually starts");
 
         // It must NOT be cleared on the declined branch — that is where it gets written.
-        var declineBranch = src.IndexOf("RecordDeclinedUpdate(tagName)", StringComparison.Ordinal);
-        Assert.True(clear < declineBranch,
+        var declineBranch = elevation.IndexOf("RecordDeclinedUpdate(tagName)", StringComparison.Ordinal);
+        Assert.True(failure < declineBranch,
             "clearing must happen on the success path, above the decline handler");
     }
 
