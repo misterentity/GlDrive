@@ -1695,41 +1695,63 @@
                     <Border Style="{DynamicResource HudPanelStyle}">
                         <DockPanel>
                             <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                <TextBlock Text="PLEX INVITE MANAGER" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                <TextBlock Text="PLEX" Style="{DynamicResource SectionHeaderTextStyle}"/>
                             </Border>
 
                             <!-- Toolbar: connection + server picker -->
                             <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
                                     BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
                                     Padding="8,6" Margin="0,0,0,6">
-                                <DockPanel>
-                                    <Button DockPanel.Dock="Right" Content="Login to Plex" Command="{Binding LoginCommand}"
-                                            Padding="14,4" Margin="6,0,0,0" Style="{DynamicResource PrimaryButton}"
-                                            Visibility="{Binding IsLoggedOut, Converter={StaticResource BoolToVisibility}}"/>
-                                    <Button DockPanel.Dock="Right" Content="Logout" Command="{Binding LogoutCommand}"
-                                            Padding="10,4" Margin="6,0,0,0" Style="{DynamicResource SecondaryButton}" FontSize="12"
-                                            Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVisibility}}"/>
-                                    <Button DockPanel.Dock="Right" Content="Test" Command="{Binding TestConnectionCommand}"
-                                            Padding="10,4" Margin="6,0,0,0" Style="{DynamicResource SecondaryButton}" FontSize="12"
-                                            Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVisibility}}"/>
-                                    <Button DockPanel.Dock="Right" Content="Refresh" Command="{Binding RefreshCommand}"
-                                            Padding="10,4" Margin="6,0,0,0" Style="{DynamicResource SecondaryButton}" FontSize="12"
-                                            Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVisibility}}"/>
-                                    <ComboBox DockPanel.Dock="Right" Width="200" Margin="6,0,0,0"
-                                              ItemsSource="{Binding Servers}" SelectedItem="{Binding SelectedServer}"
-                                              DisplayMemberPath="Name"
-                                              Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVisibility}}"/>
-                                    <Button DockPanel.Dock="Right" Content="Load Servers" Command="{Binding RefreshServersCommand}"
-                                            Padding="10,4" Margin="6,0,0,0" Style="{DynamicResource SecondaryButton}" FontSize="12"
-                                            Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVisibility}}"/>
-                                    <Button DockPanel.Dock="Right" Content="Use" Command="{Binding SelectServerCommand}"
-                                            CommandParameter="{Binding SelectedServer}"
-                                            Padding="10,4" Margin="6,0,0,0" Style="{DynamicResource SecondaryButton}" FontSize="12"
-                                            Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVisibility}}"/>
-                                    <TextBlock Text="{Binding StatusMessage}" TextTrimming="CharacterEllipsis"
-                                               Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"
-                                               VerticalAlignment="Center"/>
-                                </DockPanel>
+                                <StackPanel>
+                                    <DockPanel>
+                                        <Button DockPanel.Dock="Right" Content="Login to Plex" Command="{Binding LoginCommand}"
+                                                IsEnabled="{Binding IsNotBusy}"
+                                                Padding="14,4" Margin="6,0,0,0" Style="{DynamicResource PrimaryButton}"
+                                                Visibility="{Binding IsLoggedOut, Converter={StaticResource BoolToVisibility}}"/>
+                                        <Button DockPanel.Dock="Right" Content="Logout" Command="{Binding LogoutCommand}"
+                                                Padding="10,4" Margin="6,0,0,0" Style="{DynamicResource SecondaryButton}" FontSize="12"
+                                                Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVisibility}}"/>
+                                        <StackPanel Orientation="Horizontal"
+                                                    Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVisibility}}">
+                                            <TextBlock Text="Server:" VerticalAlignment="Center" Margin="0,0,6,0"
+                                                       Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"/>
+                                            <ComboBox Width="220" ItemsSource="{Binding Servers}" SelectedItem="{Binding SelectedServer}"
+                                                      DisplayMemberPath="Name" IsEnabled="{Binding IsNotBusy}"
+                                                      AutomationProperties.Name="Plex server"
+                                                      ToolTip="Invites, libraries and shared users are for this server. Pick another to switch."/>
+                                            <Button Content="Refresh" Command="{Binding RefreshCommand}" IsEnabled="{Binding IsNotBusy}"
+                                                    Padding="10,4" Margin="6,0,0,0" Style="{DynamicResource SecondaryButton}" FontSize="12"
+                                                    ToolTip="Reload servers, libraries and shared users from Plex"/>
+                                            <Button Content="Test" Command="{Binding TestConnectionCommand}" IsEnabled="{Binding IsNotBusy}"
+                                                    Padding="10,4" Margin="6,0,0,0" Style="{DynamicResource SecondaryButton}" FontSize="12"/>
+                                        </StackPanel>
+                                    </DockPanel>
+                                    <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" Margin="0,6,0,0"
+                                               Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Plex-backed background features -->
+                            <Border DockPanel.Dock="Bottom" Background="{DynamicResource SurfaceBrush}"
+                                    BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0"
+                                    Padding="8,6" Margin="0,6,0,0"
+                                    Visibility="{Binding CanRefreshLibraryIndex, Converter={StaticResource BoolToVisibility}}">
+                                <StackPanel>
+                                    <DockPanel Margin="0,0,0,4">
+                                        <Button DockPanel.Dock="Right" Content="Refresh library index" Command="{Binding RefreshLibraryIndexCommand}"
+                                                Padding="10,3" Margin="6,0,0,0" Style="{DynamicResource SecondaryButton}" FontSize="12"
+                                                ToolTip="Read every Plex server on this account plus your library folders"/>
+                                        <TextBlock Text="{Binding LibraryIndexStatus}" TextWrapping="Wrap" VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"/>
+                                    </DockPanel>
+                                    <DockPanel>
+                                        <Button DockPanel.Dock="Right" Content="Sync watchlist now" Command="{Binding SyncWatchlistCommand}"
+                                                IsEnabled="{Binding CanSyncWatchlist}"
+                                                Padding="10,3" Margin="6,0,0,0" Style="{DynamicResource SecondaryButton}" FontSize="12"/>
+                                        <TextBlock Text="{Binding WatchlistStatus}" TextWrapping="Wrap" VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"/>
+                                    </DockPanel>
+                                </StackPanel>
                             </Border>
 
                             <Grid>
@@ -1739,27 +1761,40 @@
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
 
-                                    <!-- Invite panel -->
+                                    <!-- Invite / edit panel -->
                                     <Border Grid.Column="0" Margin="0,0,6,0" Style="{DynamicResource HudPanelStyle}">
                                         <DockPanel>
                                             <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
-                                                <TextBlock Text="INVITE USER" Style="{DynamicResource SectionHeaderTextStyle}"/>
+                                                <TextBlock Text="{Binding InviteHeader}" TextTrimming="CharacterEllipsis"
+                                                           Style="{DynamicResource SectionHeaderTextStyle}"/>
                                             </Border>
                                             <StackPanel DockPanel.Dock="Top" Margin="8">
                                                 <TextBlock Text="Plex username or email" FontSize="12"
                                                            Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,2"/>
                                                 <TextBox Text="{Binding InviteTarget, UpdateSourceTrigger=PropertyChanged}"
+                                                         IsReadOnly="{Binding IsEditing}"
                                                          AutomationProperties.Name="Plex username or email"
                                                          VerticalContentAlignment="Center" Margin="0,0,0,8"/>
                                                 <CheckBox Content="Allow downloads / sync" IsChecked="{Binding AllowDownloads}"
                                                           Foreground="{DynamicResource ForegroundBrush}" Margin="0,0,0,8"/>
-                                                <TextBlock Text="Libraries (none = all)" FontSize="12"
-                                                           Foreground="{DynamicResource ForegroundDimBrush}" Margin="0,0,0,2"/>
+                                                <DockPanel Margin="0,0,0,2">
+                                                    <Button DockPanel.Dock="Right" Content="None" Command="{Binding SelectNoLibrariesCommand}"
+                                                            Padding="6,0" Margin="4,0,0,0" FontSize="11" Style="{DynamicResource SecondaryButton}"/>
+                                                    <Button DockPanel.Dock="Right" Content="All" Command="{Binding SelectAllLibrariesCommand}"
+                                                            Padding="6,0" FontSize="11" Style="{DynamicResource SecondaryButton}"/>
+                                                    <TextBlock Text="Libraries (none ticked = all)" FontSize="12" VerticalAlignment="Center"
+                                                               Foreground="{DynamicResource ForegroundDimBrush}"/>
+                                                </DockPanel>
                                             </StackPanel>
-                                            <Button DockPanel.Dock="Bottom" Content="Send Invite" Command="{Binding InviteCommand}"
-                                                    IsEnabled="{Binding IsNotBusy}" Margin="8" Padding="0,8"
-                                                    Style="{DynamicResource PrimaryButton}"/>
-                                            <Border Margin="8,0,8,8" Style="{DynamicResource HudPanelStyle}">
+                                            <StackPanel DockPanel.Dock="Bottom" Margin="8">
+                                                <Button Content="{Binding InviteButtonText}" Command="{Binding InviteCommand}"
+                                                        IsEnabled="{Binding IsNotBusy}" Padding="0,8"
+                                                        Style="{DynamicResource PrimaryButton}"/>
+                                                <Button Content="Cancel edit" Command="{Binding CancelEditCommand}" Margin="0,6,0,0" Padding="0,4"
+                                                        Style="{DynamicResource SecondaryButton}"
+                                                        Visibility="{Binding IsEditing, Converter={StaticResource BoolToVisibility}}"/>
+                                            </StackPanel>
+                                            <Border Margin="8,0,8,0" Style="{DynamicResource HudPanelStyle}">
                                                 <ListBox ItemsSource="{Binding Libraries}" Background="Transparent" BorderThickness="0">
                                                     <ListBox.ItemTemplate>
                                                         <DataTemplate>
@@ -1767,7 +1802,7 @@
                                                                       Foreground="{DynamicResource ForegroundBrush}">
                                                                 <StackPanel Orientation="Horizontal">
                                                                     <TextBlock Text="{Binding Title}"/>
-                                                                    <TextBlock Text="{Binding Type}" Margin="6,0,0,0"
+                                                                    <TextBlock Text="{Binding TypeDisplay}" Margin="6,0,0,0"
                                                                                Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"
                                                                                VerticalAlignment="Center"/>
                                                                 </StackPanel>
@@ -1795,13 +1830,20 @@
                                                     <DataGridTextColumn Header="Libraries" Binding="{Binding LibrariesDisplay}" Width="*"/>
                                                     <DataGridTextColumn Header="Sync" Binding="{Binding DownloadsDisplay}" Width="50"/>
                                                     <DataGridTextColumn Header="Status" Binding="{Binding StatusDisplay}" Width="70"/>
-                                                    <DataGridTemplateColumn Header="" Width="80">
+                                                    <DataGridTemplateColumn Header="" Width="130">
                                                         <DataGridTemplateColumn.CellTemplate>
                                                             <DataTemplate>
-                                                                <Button Content="Revoke" Padding="8,2" FontSize="12"
-                                                                        Style="{DynamicResource SecondaryButton}"
-                                                                        Command="{Binding DataContext.Plex.RevokeCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                                        CommandParameter="{Binding}"/>
+                                                                <StackPanel Orientation="Horizontal">
+                                                                    <Button Content="Edit" Padding="8,2" FontSize="12"
+                                                                            Style="{DynamicResource SecondaryButton}"
+                                                                            ToolTip="Change this user's libraries or sync permission"
+                                                                            Command="{Binding DataContext.Plex.EditAccessCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                            CommandParameter="{Binding}"/>
+                                                                    <Button Content="Revoke" Padding="8,2" Margin="4,0,0,0" FontSize="12"
+                                                                            Style="{DynamicResource SecondaryButton}"
+                                                                            Command="{Binding DataContext.Plex.RevokeCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                            CommandParameter="{Binding}"/>
+                                                                </StackPanel>
                                                             </DataTemplate>
                                                         </DataGridTemplateColumn.CellTemplate>
                                                     </DataGridTemplateColumn>

@@ -995,7 +995,7 @@ public partial class DashboardViewModel : INotifyPropertyChanged, IDisposable
         _wishlistStore.Load();
 
         _ircViewModel = new IrcViewModel(serverManager, config);
-        _plexViewModel = new PlexViewModel(config);
+        _plexViewModel = new PlexViewModel(config, serverManager);
 
         // Mounts-tab actions.
         OpenMountCommand = new RelayCommand<string>(serverId =>
