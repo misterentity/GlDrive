@@ -111,21 +111,13 @@ public sealed class ExtractSpaceParkingTests
         Assert.False(ExtractSpaceParking.IsDiskFull(new IOException("UnRAR.exe failed (exit 50)")));
     }
 
-    // ── Structural wiring (the extractor is a WPF window and cannot be built under xUnit) ──
+    // ── Structural wiring of the extraction engine (Downloads/ArchiveExtraction) ──
 
     private static string ExtractorCode()
     {
-        for (var dir = new DirectoryInfo(Directory.GetCurrentDirectory()); dir != null; dir = dir.Parent)
-        {
-            var candidate = Path.Combine(dir.FullName, "src", "GlDrive", "UI", "ExtractorWindow.xaml.cs");
-            if (File.Exists(candidate))
-            {
-                var s = File.ReadAllText(candidate);
-                s = Regex.Replace(s, @"/\*[\s\S]*?\*/", "");
-                return Regex.Replace(s, @"//[^\n]*", "");
-            }
-        }
-        throw new FileNotFoundException("ExtractorWindow.xaml.cs not found");
+        var s = ExtractorEngineSource.ReadAll();
+        s = Regex.Replace(s, @"/\*[\s\S]*?\*/", "");
+        return Regex.Replace(s, @"//[^\n]*", "");
     }
 
     private static string MethodBody(string code, string name)

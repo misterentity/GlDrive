@@ -30,18 +30,7 @@ namespace GlDrive.Tests;
 /// </summary>
 public sealed class VolumeSetGateCoverageTests
 {
-    private static string ExtractorCode()
-    {
-        var dir = new DirectoryInfo(Directory.GetCurrentDirectory());
-        for (; dir != null; dir = dir.Parent)
-        {
-            var candidate = Path.Combine(dir.FullName, "src", "GlDrive", "UI", "ExtractorWindow.xaml.cs");
-            if (File.Exists(candidate)) return StripComments(File.ReadAllText(candidate));
-        }
-
-        throw new FileNotFoundException(
-            "ExtractorWindow.xaml.cs not found walking up from " + Directory.GetCurrentDirectory());
-    }
+    private static string ExtractorCode() => StripComments(ExtractorEngineSource.ReadAll());
 
     /// <summary>
     /// Comments stripped. The gate's name appears in explanatory comments around

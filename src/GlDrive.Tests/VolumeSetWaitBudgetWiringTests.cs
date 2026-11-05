@@ -12,7 +12,7 @@ namespace GlDrive.Tests;
 /// <c>WaitForVolumeSetReady</c> incremented a counter with it and then fell out of the loop on
 /// wall clock anyway.
 ///
-/// The extractor lives in a WPF window that cannot be constructed under xUnit, so the wiring is
+/// The wiring is a property of the extraction engine source (Downloads/ArchiveExtraction), so it is
 /// pinned in the source — the same approach, and the same comment-stripping precaution, as
 /// <see cref="ExtractAbandonGateCoverageTests"/>. A future edit that reintroduces a duration
 /// bound on the set-wide loop fails here.
@@ -25,21 +25,11 @@ public sealed class VolumeSetWaitBudgetWiringTests
     /// </summary>
     private static string StrippedSource()
     {
-        var dir = new DirectoryInfo(Directory.GetCurrentDirectory());
-        for (; dir != null; dir = dir.Parent)
-        {
-            var candidate = Path.Combine(dir.FullName, "src", "GlDrive", "UI", "ExtractorWindow.xaml.cs");
-            if (!File.Exists(candidate)) continue;
-
-            var code = File.ReadAllText(candidate);
-            code = Regex.Replace(code, @"/\*[\s\S]*?\*/", "");
-            code = Regex.Replace(code, @"//[^\n]*", "");
-            code = Regex.Replace(code, @"^\s*///[^\n]*$", "", RegexOptions.Multiline);
-            return code;
-        }
-
-        throw new FileNotFoundException(
-            "ExtractorWindow.xaml.cs not found walking up from " + Directory.GetCurrentDirectory());
+        var code = ExtractorEngineSource.ReadAll();
+        code = Regex.Replace(code, @"/\*[\s\S]*?\*/", "");
+        code = Regex.Replace(code, @"//[^\n]*", "");
+        code = Regex.Replace(code, @"^\s*///[^\n]*$", "", RegexOptions.Multiline);
+        return code;
     }
 
     private static string WaitBody() => MethodBody(StrippedSource(), "WaitForVolumeSetReady");

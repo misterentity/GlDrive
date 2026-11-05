@@ -5,6 +5,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using GlDrive.Config;
 using GlDrive.Downloads;
+using GlDrive.Downloads.ArchiveExtraction;
 using GlDrive.Services;
 using GlDrive.Tls;
 

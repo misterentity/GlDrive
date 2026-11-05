@@ -6,7 +6,7 @@ namespace GlDrive.Downloads;
 ///
 /// It lives in its own type because it has TWO consumers that must never drift apart:
 ///   * <see cref="GlDrive.Player.TorrentContentPolicy"/> — screens torrent contents.
-///   * <see cref="ArchiveExtractor"/> and ExtractorWindow — unpack archives from watch folders.
+///   * <see cref="ArchiveExtractor"/> and the extraction engine (ArchiveUnpacker) — unpack archives from watch folders.
 ///
 /// Keeping the list in the torrent policy alone would have left an end-to-end bypass, and it
 /// is not hypothetical on this machine: the extractor's watch folders include E:\movies and

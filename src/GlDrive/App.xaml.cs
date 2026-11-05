@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using GlDrive.Config;
 using GlDrive.Downloads;
+using GlDrive.Downloads.ArchiveExtraction;
 using GlDrive.Logging;
 using GlDrive.Services;
 using GlDrive.Services.Automation;
@@ -580,7 +581,7 @@ public partial class App
             }), System.Windows.Threading.DispatcherPriority.Background);
         }
 
-        // Auto-start extractor watch folders if enabled (hidden window)
+        // Auto-start extractor watch folders if enabled (headless extraction engine)
         AutoStartExtractorWatch();
 
         // Auto-mount all enabled servers in background — don't block the UI
@@ -612,8 +613,8 @@ public partial class App
     }
 
     /// <summary>
-    /// If extractor watch folders are enabled in settings, open the ExtractorWindow
-    /// hidden so the FileSystemWatchers start monitoring immediately on app launch.
+    /// If extractor watch folders are enabled in settings, start the shared extraction
+    /// engine so the FileSystemWatchers start monitoring immediately on app launch.
     /// </summary>
     private void AutoStartExtractorWatch()
     {
@@ -657,18 +658,12 @@ public partial class App
                 "Auto-starting extractor watch folders ({Count} folders)",
                 settings.WatchFolders.Count);
 
-            // Create the ExtractorWindow hidden. Its constructor calls LoadSettings(),
-            // which starts the FileSystemWatchers when WatchEnabled is true. The window
-            // stays alive (referenced by Application.Current.Windows) even after Hide()
-            // because WPF tracks visible and hidden windows the same way.
-            var win = new ExtractorWindow
-            {
-                ShowInTaskbar = false,
-                WindowState = WindowState.Minimized
-            };
-            win.Show();
-            win.Hide();
-            Log.Information("AutoStartExtractorWatch: hidden ExtractorWindow created and watchers started");
+            // Create the shared extraction engine. Its constructor loads the settings and
+            // starts the FileSystemWatchers when WatchEnabled is true. No window is needed:
+            // the extractor window, when opened, attaches to this same engine.
+            ExtractorEngineHost.Acquire(
+                new System.Windows.Threading.DispatcherSynchronizationContext(Dispatcher), startWatchers: true);
+            Log.Information("AutoStartExtractorWatch: extraction engine created and watchers started");
         }
         catch (Exception ex)
         {
@@ -833,6 +828,10 @@ public partial class App
         TelemetryRetention?.Dispose();
         TelemetryRetention = null;
         _automation?.Dispose();
+        // A headless extraction engine (startup auto-watch or automation) has no window whose
+        // close would save and stop it — end it here, as shutdown closing its window used to.
+        try { if (ExtractorEngineHost.Current is { } extractor) ExtractorEngineHost.Release(extractor); }
+        catch (Exception ex) { Log.Debug(ex, "Extractor engine shutdown failed"); }
         _controlApi?.Dispose();
         _controlApi = null;
         _serverManager?.Dispose();

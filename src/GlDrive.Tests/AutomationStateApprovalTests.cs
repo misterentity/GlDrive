@@ -72,11 +72,14 @@ public sealed class AutomationStateApprovalTests
     public void Extractor_state_and_binding_initialize_without_starting_saved_watchers()
     {
         var adapter = Read("Services/Automation", "ExtractorAutomation.cs");
-        Assert.Contains("new ExtractorWindow(demoMode: false, startWatchers: false)", adapter);
+        // Automation drives the shared engine directly — no hidden window — and an engine it
+        // creates must load saved settings without starting the saved watchers.
+        Assert.DoesNotContain("new ExtractorWindow", adapter);
+        Assert.Contains("ExtractorEngineHost.Acquire(new DispatcherSynchronizationContext(dispatcher), startWatchers: false)", adapter);
         var execute = LifecycleSourceGuard.BlockAfter(adapter, "private async Task<object?> ExecuteCoreAsync");
-        Assert.True(execute.IndexOf("ValidateAutomationApproval(approval)", StringComparison.Ordinal) < execute.IndexOf("AutomationExecute(operation", StringComparison.Ordinal));
-        var source = Read("UI", "ExtractorWindow.xaml.cs");
-        Assert.Contains("LoadSettings(startWatchers);", source);
+        Assert.True(execute.IndexOf("ValidateApproval(engine, approval)", StringComparison.Ordinal) < execute.IndexOf("Execute(engine, dispatcher, operation", StringComparison.Ordinal));
+        var source = ExtractorEngineSource.ReadAll();
+        Assert.Contains("LoadSettings(options.StartWatchers);", source);
         Assert.Contains("_watchEnabled = startWatchers && s.WatchEnabled", source);
         Assert.Contains("WatchEnabled = _watchEnabled || _watchResumeDeferred", source);
     }
@@ -84,8 +87,8 @@ public sealed class AutomationStateApprovalTests
     [Fact]
     public void Extractor_batch_captures_output_targets_before_the_first_await()
     {
-        var source = Read("UI", "ExtractorWindow.xaml.cs");
-        var body = LifecycleSourceGuard.BlockAfter(source, "private async Task ExtractAllAsync()");
+        var source = ExtractorEngineSource.ReadAll();
+        var body = LifecycleSourceGuard.BlockAfter(source, "internal async Task ExtractAllAsync()");
         Assert.Contains("var outputDirectories = toExtract.ToDictionary(item => item, GetOutputDir);", body[..body.IndexOf("await", StringComparison.Ordinal)]);
         Assert.Contains("var outputDir = outputDirectories[item];", body);
     }
@@ -93,14 +96,14 @@ public sealed class AutomationStateApprovalTests
     [Fact]
     public void Automation_enabled_watchers_and_recurring_work_do_not_capture_call_attribution()
     {
-        var source = Read("UI", "ExtractorWindow.xaml.cs");
+        var source = ExtractorEngineSource.ReadAll();
         var sweep = LifecycleSourceGuard.BlockAfter(source, "private void StartAbandonSweep()");
         Assert.Contains("ExecutionContext.SuppressFlow()", sweep);
         Assert.True(sweep.IndexOf("ExecutionContext.SuppressFlow()", StringComparison.Ordinal) < sweep.IndexOf("SweepAbandonedAsync()", StringComparison.Ordinal));
         var watcher = LifecycleSourceGuard.BlockAfter(source, "private void StartWatcherFor(string folder)");
         Assert.Contains("ExecutionContext.SuppressFlow()", watcher);
         Assert.True(watcher.IndexOf("ExecutionContext.SuppressFlow()", StringComparison.Ordinal) < watcher.IndexOf("watcher.EnableRaisingEvents = true", StringComparison.Ordinal));
-        var toggle = LifecycleSourceGuard.BlockAfter(source, "private void WatchToggle_Click");
+        var toggle = LifecycleSourceGuard.BlockAfter(source, "internal bool ToggleWatch()");
         Assert.Contains("using (ExecutionContext.IsFlowSuppressed() ? default : ExecutionContext.SuppressFlow())", toggle);
         var detached = LifecycleSourceGuard.BlockAfter(toggle, "using (ExecutionContext.IsFlowSuppressed() ? default : ExecutionContext.SuppressFlow())");
         Assert.Contains("ScanAndAutoExtractAsync(folder)", detached);

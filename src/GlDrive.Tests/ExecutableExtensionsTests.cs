@@ -51,13 +51,13 @@ public sealed class ExecutableExtensionsTests
     }
 
     /// <summary>
-    /// ExtractorWindow has TWO independent extraction loops — the archive-mode one and the
-    /// reader-mode one for zip/7z/tar. Both must check.
+    /// The extractor (ArchiveUnpacker) has TWO independent extraction loops — the archive-mode
+    /// one and the reader-mode one for zip/7z/tar. Both must check.
     /// </summary>
     [Fact]
-    public void BothExtractorWindowLoops_skip_executable_entries()
+    public void BothExtractorLoops_skip_executable_entries()
     {
-        var code = Source("src", "GlDrive", "UI", "ExtractorWindow.xaml.cs");
+        var code = Source("src", "GlDrive", "Downloads", "ArchiveExtraction", "ArchiveUnpacker.cs");
         var hits = Regex.Matches(code, @"ExecutableExtensions\.IsExecutable").Count;
 
         Assert.True(hits >= 2,

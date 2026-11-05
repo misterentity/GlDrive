@@ -18,8 +18,8 @@ namespace GlDrive.Tests;
 /// other borrowers went unguarded: an invariant about a resource must sit where every caller
 /// reaches it. Both routes now go through <c>SkipIfAbandoned</c>.
 ///
-/// The extractor lives in a WPF window that cannot be constructed under xUnit, so this pins
-/// the invariant structurally — the guarantee is "every route into extraction consults the
+/// This pins the invariant structurally (ArchiveExtractionEngineTests drives the engine
+/// itself) — the guarantee is "every route into extraction consults the
 /// store", and that is a property of the source, not of a runtime value. A future third
 /// route that forgets the check fails here.
 /// </summary>
@@ -31,18 +31,7 @@ public sealed class ExtractAbandonGateCoverageTests
     /// comments that explain the ordering, and reported the call order backwards. A test
     /// that reads prose is not testing the code.
     /// </summary>
-    private static string ExtractorCode()
-    {
-        var dir = new DirectoryInfo(Directory.GetCurrentDirectory());
-        for (; dir != null; dir = dir.Parent)
-        {
-            var candidate = Path.Combine(dir.FullName, "src", "GlDrive", "UI", "ExtractorWindow.xaml.cs");
-            if (File.Exists(candidate)) return StripComments(File.ReadAllText(candidate));
-        }
-
-        throw new FileNotFoundException(
-            "ExtractorWindow.xaml.cs not found walking up from " + Directory.GetCurrentDirectory());
-    }
+    private static string ExtractorCode() => StripComments(ExtractorEngineSource.ReadAll());
 
     private static string StripComments(string source)
     {

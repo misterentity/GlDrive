@@ -199,17 +199,8 @@ public sealed class VolumeSetCompletenessTests
 
     private static string ExtractorCode()
     {
-        for (var dir = new DirectoryInfo(Directory.GetCurrentDirectory()); dir != null; dir = dir.Parent)
-        {
-            var candidate = Path.Combine(dir.FullName, "src", "GlDrive", "UI", "ExtractorWindow.xaml.cs");
-            if (File.Exists(candidate))
-            {
-                var source = File.ReadAllText(candidate);
-                source = Regex.Replace(source, @"/\*[\s\S]*?\*/", "");
-                return Regex.Replace(source, @"//[^\n]*", "");
-            }
-        }
-
-        throw new FileNotFoundException("ExtractorWindow.xaml.cs not found");
+        var source = ExtractorEngineSource.ReadAll();
+        source = Regex.Replace(source, @"/\*[\s\S]*?\*/", "");
+        return Regex.Replace(source, @"//[^\n]*", "");
     }
 }
