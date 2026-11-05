@@ -1,4 +1,5 @@
 using GlDrive.Config;
+using GlDrive.Downloads;
 using GlDrive.Irc;
 using Serilog;
 
@@ -30,9 +31,6 @@ public class IrcAnnounceListener : IDisposable
 
     /// <summary>Passive source-health annotation; does not change announce matching or admission.</summary>
     public Func<bool>? SourceDown { get; set; }
-
-    internal static bool IsPlausibleReleaseName(string? candidate) =>
-        AnnounceMatcher.IsPlausibleReleaseName(candidate);
 
     public event Action<string, string, string, bool>? ReleaseAnnounced; // serverId, section, releaseName, autoRace
     public event Action<SitebotEvent>? SitebotEventReceived;
@@ -93,7 +91,7 @@ public class IrcAnnounceListener : IDisposable
                 message.Text, sitebot, message.Timestamp.ToUniversalTime());
             if (observation != null)
             {
-                if (IsPlausibleReleaseName(observation.Release))
+                if (ReleaseArtifactNames.IsPlausibleReleaseName(observation.Release))
                     ObserveChannelActivity(target, observation.Kind.ToString(), observation.Section, observation.Release, observation.ObservedAtUtc);
                 try { SitebotEventReceived?.Invoke(observation); }
                 catch (Exception ex) { Log.Warning(ex, "Sitebot event consumer failed for {Server}", _serverId); }
@@ -214,7 +212,7 @@ public class IrcAnnounceListener : IDisposable
         // Final validation gate — covers both the built-in verbose pattern and custom rules.
         // Rejects junk like "brings", "leads", "racing" that loose regexes capture out of
         // racing-chatter messages (e.g. "TeRRaNoVA brings the goods @ 8.39MB/s").
-        if (!IsPlausibleReleaseName(release))
+        if (!ReleaseArtifactNames.IsPlausibleReleaseName(release))
         {
             Log.Debug("IRC announce: rejecting implausible release name '{Release}' from {Channel}: {Msg}",
                 release, channel, msgText);

@@ -1,4 +1,4 @@
-using GlDrive.Spread;
+using GlDrive.Downloads;
 using Xunit;
 
 namespace GlDrive.Tests;
@@ -25,7 +25,7 @@ public class AnnouncePlausibilityTests
     [InlineData("state-of-the-art")]
     [InlineData("well-known-fact")]
     public void Hyphenated_lowercase_prose_is_rejected(string candidate)
-        => Assert.False(IrcAnnounceListener.IsPlausibleReleaseName(candidate));
+        => Assert.False(ReleaseArtifactNames.IsPlausibleReleaseName(candidate));
 
     [Theory]
     [InlineData("Unrailed-RUNE")]                 // no dot / digit; uppercase group tag
@@ -35,14 +35,14 @@ public class AnnouncePlausibilityTests
     [InlineData("VA-Underground_Raw_Techno_Vol._4-16BIT-WEB-FLAC-2026-ROSiN")]
     [InlineData("Sangokushi_14_with_Power_Up_Kit_Complete_Edition_CHT_NSW-HR")]
     public void Real_scene_names_are_accepted(string candidate)
-        => Assert.True(IrcAnnounceListener.IsPlausibleReleaseName(candidate));
+        => Assert.True(ReleaseArtifactNames.IsPlausibleReleaseName(candidate));
 
     [Theory]
     [InlineData("brings")]
     [InlineData("short")]
     [InlineData("")]
     public void Existing_rejections_still_hold(string candidate)
-        => Assert.False(IrcAnnounceListener.IsPlausibleReleaseName(candidate));
+        => Assert.False(ReleaseArtifactNames.IsPlausibleReleaseName(candidate));
 
     // v3.19.2: sited #chan1 "AUTONUKE: TV/Nocturne...-CAKES created by altruist is still empty"
     // matched the user's "(?<section>\w[\w-]*)\s*:\s*(?<release>\S+)" rule as release
@@ -61,7 +61,7 @@ public class AnnouncePlausibilityTests
     [InlineData("Eyewitness.2026.S01E03.1080p.WEB.H264-AFO.")]
     [InlineData("Eyewitness.2026.S01E03.1080p.WEB.H264-AFO;")]
     public void Paths_and_prose_tails_are_rejected(string candidate)
-        => Assert.False(IrcAnnounceListener.IsPlausibleReleaseName(candidate));
+        => Assert.False(ReleaseArtifactNames.IsPlausibleReleaseName(candidate));
 
     [Theory]
     [InlineData("Human_Rebellion-Terror_Machine-(HRRDN)-WEB-2026-TR")]
@@ -70,5 +70,17 @@ public class AnnouncePlausibilityTests
     [InlineData("Some.Show.S01E01.1080p.WEB-DL[rartv]")]
     [InlineData("1000-lb.Sisters.S09E09.1080p.WEB.h264-EDITH")]
     public void Real_names_with_brackets_and_leading_digits_are_accepted(string candidate)
-        => Assert.True(IrcAnnounceListener.IsPlausibleReleaseName(candidate));
+        => Assert.True(ReleaseArtifactNames.IsPlausibleReleaseName(candidate));
+
+    // The invalid set is Windows' file-name set on every OS, so the Linux CI job judges
+    // "TV\Name" (a Windows path) the same way the app does.
+    [Fact]
+    public void Invalid_characters_are_the_windows_file_name_set_on_every_os()
+    {
+        var invalid = new HashSet<char>("\"<>|:*?\\/");
+        for (var c = (char)0; c < 32; c++) invalid.Add(c);
+        if (OperatingSystem.IsWindows()) Assert.True(invalid.SetEquals(Path.GetInvalidFileNameChars()));
+        for (var c = (char)0; c < 128; c++)
+            Assert.Equal(!invalid.Contains(c), ReleaseArtifactNames.IsPlausibleReleaseName($"Some.Show.S01E01{c}1080p-GRP"));
+    }
 }

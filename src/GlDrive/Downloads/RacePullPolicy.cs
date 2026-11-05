@@ -10,7 +10,7 @@ public static class RacePullPolicy
 {
     public static IReadOnlyList<RacePullCandidate> Find(RaceDetail race, IEnumerable<WishlistItem> followed)
     {
-        if (!IrcAnnounceListener.IsPlausibleReleaseName(race.Release)) return [];
+        if (!ReleaseArtifactNames.IsPlausibleReleaseName(race.Release)) return [];
         var items = followed.Where(item => item.Type == MediaType.TvShow && !item.Dead &&
                 item.Status == WishlistStatus.Watching && WishlistAcquisition.MatchesTitle(item, race.Release) &&
                 WishlistAcquisition.Keys(item, race.Release).Count > 0)

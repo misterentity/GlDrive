@@ -277,7 +277,7 @@ public sealed class WantedAcquisitionCoordinator
 
     private static bool SafeCandidate(string release, string path) => !string.IsNullOrWhiteSpace(release) &&
         !string.IsNullOrWhiteSpace(path) && release.Length <= 1024 &&
-        IrcAnnounceListener.IsPlausibleReleaseName(release) && !release.StartsWith('.') &&
+        ReleaseArtifactNames.IsPlausibleReleaseName(release) && !release.StartsWith('.') &&
         !release.Any(c => c is '/' or '\\' || char.IsControl(c)) &&
         path.StartsWith('/') && path.Length <= 4096 && !path.Any(char.IsControl) &&
         !path.Split('/').Any(segment => segment is "." or "..");

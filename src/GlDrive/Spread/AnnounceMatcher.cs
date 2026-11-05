@@ -1,6 +1,6 @@
-using System.IO;
 using System.Text.RegularExpressions;
 using GlDrive.Config;
+using GlDrive.Downloads;
 using GlDrive.Irc;
 
 namespace GlDrive.Spread;
@@ -25,15 +25,6 @@ internal sealed class AnnounceMatcher
         @"^\s*(?:\[\s*(?:DELETE|DELETED|DELDIR|RMDIR|DELPRE|NUKE|NUKED)\s*\]|(?:DELETE|DELETED|DELDIR|RMDIR|DELPRE|NUKE|NUKED)\s*:)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.NonBacktracking,
         TimeSpan.FromMilliseconds(200));
-    private static readonly HashSet<string> KnownVerbs = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "brings", "leads", "racing", "wins", "complete", "completed", "incomplete",
-        "pred", "nuke", "nuked", "unnuke", "unnuked", "delpre", "request", "filled",
-        "the", "from", "for", "with", "and", "now", "new"
-    };
-
-    private static readonly char[] InvalidReleaseNameChars = Path.GetInvalidFileNameChars();
-
     internal AnnounceMatcher(IEnumerable<IrcAnnounceRule> rules, bool defaultAutoRace, CancellationToken cancellationToken = default)
     {
         _rules = rules as IReadOnlyList<IrcAnnounceRule> ?? rules.ToArray();
@@ -51,18 +42,6 @@ internal sealed class AnnounceMatcher
     }
 
     internal static bool IsRemoval(string text) => RemovalPattern.IsMatch(text);
-
-    internal static bool IsPlausibleReleaseName(string? candidate)
-    {
-        if (string.IsNullOrWhiteSpace(candidate)) return false;
-        var value = candidate.Trim();
-        if (value.Length < 10 || KnownVerbs.Contains(value)) return false;
-        // A release is a single directory name ending in its group tag: a path ("TV/Name" from
-        // an AUTONUKE notice) or a word glued to prose punctuation ("Frankenstein,") is not.
-        if (value.IndexOfAny(InvalidReleaseNameChars) >= 0) return false;
-        if (!(char.IsAsciiLetterOrDigit(value[^1]) || value[^1] is ')' or ']')) return false;
-        return value.Any(c => c is '.' or '_' or >= '0' and <= '9' or >= 'A' and <= 'Z');
-    }
 
     // Replay can inspect all captures, including implausible names, for rule breadth.
     internal IReadOnlyList<AnnouncePatternMatch> Match(string channel, string text, CancellationToken cancellationToken = default)
@@ -82,7 +61,7 @@ internal sealed class AnnounceMatcher
                 (string.IsNullOrEmpty(r.Channel) || channel.Equals(r.Channel, StringComparison.OrdinalIgnoreCase)));
             if (release.Length > 0)
                 yield return new(builtin.Groups["section"].Value.Trim(), release,
-                    matchingRule?.AutoRace ?? _defaultAutoRace, "builtin", IsPlausibleReleaseName(release));
+                    matchingRule?.AutoRace ?? _defaultAutoRace, "builtin", ReleaseArtifactNames.IsPlausibleReleaseName(release));
         }
         foreach (var rule in _rules)
         {
@@ -97,7 +76,7 @@ internal sealed class AnnounceMatcher
             var release = match.Groups["release"].Value;
             if (release.Length == 0) continue;
             yield return new(match.Groups["section"].Success ? match.Groups["section"].Value.Trim() : "",
-                release, rule.AutoRace, "custom", IsPlausibleReleaseName(release));
+                release, rule.AutoRace, "custom", ReleaseArtifactNames.IsPlausibleReleaseName(release));
         }
     }
 }

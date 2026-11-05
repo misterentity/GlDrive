@@ -109,7 +109,7 @@ public static class WantedIndexSweep
     private static bool SafeEntry(SearchIndexEntry entry) => entry.ReleaseName.Length <= 1024
         && !entry.ReleaseName.StartsWith('.') && !entry.ReleaseName.StartsWith("-MISSING-", StringComparison.OrdinalIgnoreCase)
         && !entry.ReleaseName.Any(c => char.IsControl(c) || c is '/' or '\\')
-        && IrcAnnounceListener.IsPlausibleReleaseName(entry.ReleaseName)
+        && ReleaseArtifactNames.IsPlausibleReleaseName(entry.ReleaseName)
         && FtpSearchService.IsReleaseDirectory(entry.ReleaseName)
         && !FtpSearchService.SkipDirectory(entry.ReleaseName)
         && entry.RemotePath.StartsWith('/') && !entry.RemotePath.Any(c => char.IsControl(c) || c == '\\')
