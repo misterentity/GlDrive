@@ -14,8 +14,6 @@ public class SettingsViewModel : INotifyPropertyChanged
     private AppConfig _config;
     private string _logLevel;
     public McpSettingsViewModel Mcp { get; }
-    public bool ControlApiEnabled { get => Mcp.Enabled; set => Mcp.Enabled = value; }
-    public string ControlApiPort { get => Mcp.Port; set => Mcp.Port = value; }
     private string _trustedCertsInfo;
     private string _downloadLocalPath;
     private string _maxConcurrentDownloads;

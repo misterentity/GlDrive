@@ -23,7 +23,7 @@ public partial class RecoveryCenterWindow : Window
     {
         InitializeComponent();
         _config = config; _offline = offline; _liveKeys = liveKeys;
-        _backups = new(config, new ConfigurationAutomation(config), () => _offline,
+        _backups = new(new ConfigurationAutomation(config), () => _offline,
             liveKeys == null ? null : id => liveKeys(id) is { } store
                 ? store.PersistenceHealthy ? store.GetAllKeys() : throw new InvalidOperationException("FiSH storage requires recovery")
                 : PortableBackupService.ReadFishFile(id));
@@ -128,7 +128,7 @@ public partial class RecoveryCenterWindow : Window
             if (MessageBox.Show(this, $"Import settings from {summary.CreatedUtc:u} for {summary.Servers} server(s)?\n\n" +
                     (replace ? "You selected replacement of existing secrets, including newer local values." : "Existing local secrets will be preserved.") +
                     "\n\nA normal restart is required afterward.", "Import validated backup", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
-            var importer = new PortableBackupService(_config, recovery.Configuration, () => _offline);
+            var importer = new PortableBackupService(recovery.Configuration, () => _offline);
             var result = await importer.ImportAsync(picker.FileName, passphrase, replace, expectedDigest: summary.Digest);
             StatusText.Text = $"Settings imported. Secrets: {result.ImportedSecrets} imported, {result.PreservedSecrets} preserved, {result.FailedSecrets} failed. Restart normally when ready.";
             await RefreshInventory();

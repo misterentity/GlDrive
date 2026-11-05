@@ -168,7 +168,7 @@ public sealed class AgentAccountabilityIntegrationTests : IDisposable
         audit.Append(row);
         var path = Path.Combine(_root, "ai-audit.jsonl");
         File.AppendAllText(path, "{torn-verbatim\n{\"Id\":\"other\",\"UnknownFutureField\":true}\n");
-        audit.RecordOutcome(row.Id!, Regressed().Outcome!);
+        audit.RecordOutcomes(new Dictionary<string, AgentOutcome> { [row.Id!] = Regressed().Outcome! });
         var text = File.ReadAllText(path);
         Assert.Contains("{torn-verbatim\n", text);
         Assert.Contains("{\"Id\":\"other\",\"UnknownFutureField\":true}\n", text);
@@ -183,7 +183,7 @@ public sealed class AgentAccountabilityIntegrationTests : IDisposable
         row.Outcome = null;
         audit.Append(row);
         using var held = File.Open(Path.Combine(_root, "ai-audit.jsonl"), FileMode.Open, FileAccess.Read, FileShare.Read);
-        audit.RecordOutcome(row.Id!, Regressed().Outcome!);
+        audit.RecordOutcomes(new Dictionary<string, AgentOutcome> { [row.Id!] = Regressed().Outcome! });
         Assert.Equal("regressed", Assert.Single(audit.ReadAll()).Outcome?.Status);
     }
 

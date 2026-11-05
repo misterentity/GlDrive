@@ -71,14 +71,4 @@ public class IrcMessage
 
         return msg;
     }
-
-    public string ToRaw()
-    {
-        var parts = new List<string>();
-        if (Prefix != null) parts.Add($":{Prefix}");
-        parts.Add(Command);
-        parts.AddRange(Params);
-        if (Trailing != null) parts.Add($":{Trailing}");
-        return string.Join(" ", parts);
-    }
 }

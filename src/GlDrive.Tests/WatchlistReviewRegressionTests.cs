@@ -1,6 +1,5 @@
 using System.IO;
 using System.Text.Json;
-using GlDrive.Config;
 using GlDrive.Downloads;
 using GlDrive.Library;
 using GlDrive.Plex;
@@ -126,17 +125,23 @@ public sealed class WatchlistReviewRegressionTests
     }
 
     [Theory]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    public void A_running_or_inventoryless_series_does_not_enumerate_downloads(bool ended, bool inventory)
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, true)]
+    public void A_running_or_inventoryless_series_never_completes_even_with_every_episode_downloaded(
+        bool ended, bool inventory, bool expected)
     {
         var item = Imported(MediaType.TvShow);
         item.WatchlistSeriesEnded = ended;
         item.SeriesInventoryUpdatedAtUtc = Now;
         if (inventory) item.SeriesInventory = [new() { Season = 1, Number = 1, AirDate = new(2025, 1, 1) }];
-        var downloads = new DownloadItem[] { new() }.Select<DownloadItem, DownloadItem>(_ =>
-            throw new InvalidOperationException("Downloads must not be enumerated."));
-        Assert.False(WishlistOwnership.IsOwned(item, new(), LibraryIndexSnapshot.Empty, downloads, Now));
+        var download = new DownloadItem
+        {
+            ReleaseName = "Synthetic.Title.S01E01.1080p.WEB-GROUP", Status = DownloadStatus.Completed,
+            WishlistItemId = item.Id
+        };
+        Assert.Equal(expected, WishlistOwnership.IsOwnedPrepared(item, new(), LibraryIndexSnapshot.Empty,
+            WishlistOwnership.PrepareDownloads([download]), Now));
     }
 
     [Fact]
@@ -180,7 +185,7 @@ public sealed class WatchlistReviewRegressionTests
             ReleaseName = "Synthetic.Title.1990.1080p.WEB-GROUP", Status = DownloadStatus.Completed,
             WishlistItemId = wishlistId
         };
-        Assert.Equal(expected, WishlistOwnership.IsOwned(item, new(), LibraryIndexSnapshot.Empty, [download], Now));
+        Assert.Equal(expected, WishlistOwnership.IsOwnedPrepared(item, new(), LibraryIndexSnapshot.Empty, WishlistOwnership.PrepareDownloads([download]), Now));
     }
 
     [Fact]
@@ -192,6 +197,6 @@ public sealed class WatchlistReviewRegressionTests
             ReleaseName = "Synthetic.Title.1080p.WEB-GROUP", Status = DownloadStatus.Completed,
             WishlistItemId = item.Id
         };
-        Assert.False(WishlistOwnership.IsOwned(item, new(), LibraryIndexSnapshot.Empty, [download], Now));
+        Assert.False(WishlistOwnership.IsOwnedPrepared(item, new(), LibraryIndexSnapshot.Empty, WishlistOwnership.PrepareDownloads([download]), Now));
     }
 }

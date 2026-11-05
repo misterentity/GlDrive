@@ -77,8 +77,6 @@ public sealed class RangeScheduler
         _maxTakeBytes = Math.Max(0, maxTakeBytes);
     }
 
-    public int FileCount => _sizes.Length;
-
     public long DoneBytes { get { lock (_lock) return _doneBytes; } }
 
     public bool AllComplete

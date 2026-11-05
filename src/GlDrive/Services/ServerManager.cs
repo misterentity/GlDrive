@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using GlDrive.Config;
 using GlDrive.Downloads;
 using GlDrive.Ftp;
@@ -607,9 +606,6 @@ public partial class ServerManager : IDisposable
     /// <summary>Returns all currently mounted/active MountService instances. Used by HealthRollup.</summary>
     public IEnumerable<MountService> GetAllMountServices() => _servers.Values;
 
-    /// <summary>IDs of currently mounted/connected servers.</summary>
-    public IReadOnlyList<string> ConnectedServerIds => _servers.Keys.ToList();
-
     public IrcService? GetIrcService(string serverId)
     {
         _ircServices.TryGetValue(serverId, out var service);
@@ -780,7 +776,7 @@ public partial class ServerManager : IDisposable
         if (serverConfig.Irc.RequestFiller.Enabled && _spreadManager != null)
         {
             var filler = new RequestFiller(serverConfig.Id, ircService,
-                serverConfig.Irc.RequestFiller, this, _spreadManager);
+                serverConfig.Irc.RequestFiller, _spreadManager);
             _requestFillers.TryAdd(serverConfig.Id, filler);
         }
     }

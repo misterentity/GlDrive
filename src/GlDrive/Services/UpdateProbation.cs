@@ -166,18 +166,6 @@ internal sealed class UpdateProbationStore
         }
     }
 
-    // Positive, persisted evidence only. Read failures must not indefinitely pin a release.
-    internal DateTime? HoldUntil(DateTime now)
-    {
-        try
-        {
-            RequireTrusted(_root);
-            return ReadReceipts().Where(r => IsCurrent(r) && !r.Consumed && IsWithinProbation(r, now))
-                .Select(r => (DateTime?)r.CreatedUtc.Add(UpdateProbation.Retention)).Max();
-        }
-        catch (Exception error) { UpdateProbation.WarnOnce(error); return null; }
-    }
-
     internal bool HasPreviousFiles()
     {
         try
@@ -205,18 +193,6 @@ internal sealed class UpdateProbationStore
             return true;
         }
         catch (Exception error) { UpdateProbation.WarnOnce(error); return false; }
-    }
-
-    /// <summary>Adopts a legacy generation once; missing or malformed evidence only preserves files.</summary>
-    internal void ObserveLegacy(DateTime now)
-    {
-        try
-        {
-            RequireTrusted(_root);
-            using var operationLock = AcquireMutationLock();
-            ObserveLegacyUnderLock(now);
-        }
-        catch (Exception error) { UpdateProbation.WarnOnce(error); }
     }
 
     private void ObserveLegacyUnderLock(DateTime now)

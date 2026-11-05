@@ -25,7 +25,7 @@ public sealed class Dh1080TrailingZeroTests
             BigInteger.ModPow(2, new BigInteger(peerPrivate) * 4001, Dh1080.PrimeForTests)
                 .ToByteArray(isUnsigned: true, isBigEndian: true))).TrimEnd('=');
         foreach (var wire in new[] { standard, unpadded, fish })
-            Assert.Equal(expected, receiver.ComputeSharedSecret(wire));
+            Assert.Equal(expected, receiver.ComputeAllKeyVariantsWithSecret(wire).Standard);
     }
 
     [Theory]
@@ -38,8 +38,8 @@ public sealed class Dh1080TrailingZeroTests
         var alice = new Dh1080(new BigInteger(6402));
         var bob = new Dh1080(new BigInteger(4001));
         Assert.EndsWith("AAA", alice.GetPublicKeyBase64());
-        var aliceKey = alice.ComputeSharedSecret(bob.GetPublicKeyBase64());
-        var bobKey = bob.ComputeSharedSecret(alice.GetPublicKeyBase64());
+        var aliceKey = alice.ComputeAllKeyVariantsWithSecret(bob.GetPublicKeyBase64()).Standard;
+        var bobKey = bob.ComputeAllKeyVariantsWithSecret(alice.GetPublicKeyBase64()).Standard;
         Assert.Equal(aliceKey, bobKey);
         const string message = "a deterministic private message";
         Assert.Equal(message, FishCipher.Decrypt(FishCipher.Encrypt(message, aliceKey, mode), bobKey));
@@ -61,6 +61,6 @@ public sealed class Dh1080TrailingZeroTests
         var expectedSecret = BigInteger.ModPow(2, new BigInteger(peerPrivate) * 4001, Dh1080.PrimeForTests);
         var expectedKey = Convert.ToBase64String(SHA256.HashData(
             expectedSecret.ToByteArray(isUnsigned: true, isBigEndian: true))).TrimEnd('=');
-        Assert.Equal(expectedKey, receiver.ComputeSharedSecret(wire));
+        Assert.Equal(expectedKey, receiver.ComputeAllKeyVariantsWithSecret(wire).Standard);
     }
 }

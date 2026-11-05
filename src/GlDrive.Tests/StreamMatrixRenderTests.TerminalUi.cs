@@ -429,7 +429,7 @@ public partial class StreamMatrixRenderTests
         var spy = new ClearCommandsSpy();
         var control = new ClearDownloadsMenuButton { DataContext = spy };
         var window = OffscreenWindow(control, 300, 120);
-        var menu = control.Menu;
+        var menu = control.MenuButton.ContextMenu;
         try
         {
             window.Show();

@@ -191,7 +191,7 @@ public sealed class WantedAcquisitionCoordinatorTests
     public void DisabledSettingPreservesLegacyNewBehaviorAndIgnoresCompletion()
     {
         var f = new Fixture(); f.Config.WantedDecisionWindowEnabled = false;
-        f.A.OnIrcCompletion(new ServerConfig(), "video", Bluray);
+        f.Offer(Bluray); f.Close();
         Assert.Empty(f.Downloads);
         f.A.OnNewRelease("video", Web, "/video/" + Web, fromIrc: true);
         Assert.Equal(Web, Assert.Single(f.Downloads).ReleaseName);

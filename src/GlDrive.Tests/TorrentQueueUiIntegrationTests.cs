@@ -167,7 +167,6 @@ public sealed class TorrentQueueUiIntegrationTests
         row = Assert.Single(vm.DownloadItems);
         Assert.False(row.IsIndeterminate);
         Assert.True(row.CanResume);
-        Assert.True(row.CanCancel);
         Assert.Equal("Paused at 25%", row.ProgressText);
         Assert.Equal(25, row.ProgressPercent);
     }

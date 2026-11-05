@@ -231,7 +231,7 @@ public sealed class OwnNukePolicyTests : IDisposable
     public async Task PollerPublishesEveryObservationButWritesRelativeTelemetryOnlyOnce()
     {
         var emitted = new ConcurrentQueue<string>();
-        using var recorder = new TelemetryRecorder(_root, 64, (path, text, _) =>
+        using var recorder = new TelemetryRecorder(_root, (path, text, _) =>
         {
             if (Path.GetFileName(path).StartsWith("nukes-")) emitted.Enqueue(text);
             return Task.CompletedTask;

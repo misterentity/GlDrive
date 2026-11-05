@@ -14,13 +14,13 @@ public partial class SpreadManager
             };
             if (_disposed && _shutdownQueueSnapshot != null)
             {
-                var index = _shutdownQueueSnapshot.FindIndex(r => IsSameRace(r.Section, r.ReleaseName, job.Section, job.ReleaseName));
+                var index = _shutdownQueueSnapshot.FindIndex(r => IsSameRace(r.ReleaseName, job.ReleaseName));
                 if (index >= 0) _shutdownQueueSnapshot[index] = updated with { WasActive = true };
             }
             else if (_activeRequests.ContainsKey(job)) _activeRequests[job] = updated;
             else if (updated.HasOwnedPartial && job.State == SpreadJobState.Stopped)
             {
-                _raceQueue.RemoveAll(r => IsSameRace(r.Section, r.ReleaseName, job.Section, job.ReleaseName));
+                _raceQueue.RemoveAll(r => IsSameRace(r.ReleaseName, job.ReleaseName));
                 _raceQueue.Add(RaceLifetimePolicy.CleanupRequest(updated, DateTime.UtcNow,
                     "Stopped by user; owned partial retained until cleanup deadline",
                     RaceLifetimePolicy.Deadline(partial, _config.Spread.PartialRaceDeadlineHours)));
@@ -35,9 +35,9 @@ public partial class SpreadManager
         }
     }
 
-    private bool CancelQueuedNoLock(string section, string release)
+    private bool CancelQueuedNoLock(string release)
     {
-        var matches = _raceQueue.Where(r => IsSameRace(r.Section, r.ReleaseName, section, release) &&
+        var matches = _raceQueue.Where(r => IsSameRace(r.ReleaseName, release) &&
             !_controlRequestsInFlight.Contains(r.RequestId)).ToList();
         _raceQueue.RemoveAll(r => matches.Any(match => match.RequestId == r.RequestId));
         foreach (var request in matches.Where(r => r.HasOwnedPartial))

@@ -44,7 +44,7 @@ public sealed class NukePollerDeadlineLoggingTests : IDisposable
     [Fact]
     public async Task Poll_deadline_is_an_information_skip_not_a_stack_trace_warning()
     {
-        using var recorder = new TelemetryRecorder(_root, 64);
+        using var recorder = new TelemetryRecorder(_root);
         using var poller = new NukePoller(recorder, () => [new("busy", () => true, WaitForever)],
             new NukeCursorStore(_root), _root, 1, pollTimeout: TimeSpan.FromMilliseconds(50), startTimer: false);
 
@@ -60,7 +60,7 @@ public sealed class NukePollerDeadlineLoggingTests : IDisposable
     public async Task Command_deadlines_still_open_the_circuit_after_three_misses()
     {
         var calls = 0;
-        using var recorder = new TelemetryRecorder(_root, 64);
+        using var recorder = new TelemetryRecorder(_root);
         using var poller = new NukePoller(recorder, () => [new("busy", () => true, ct =>
             {
                 Interlocked.Increment(ref calls);
@@ -75,7 +75,7 @@ public sealed class NukePollerDeadlineLoggingTests : IDisposable
     [Fact]
     public async Task Borrow_deadlines_are_deferred_without_warning_or_breaker()
     {
-        using var recorder = new TelemetryRecorder(_root, 64);
+        using var recorder = new TelemetryRecorder(_root);
         using var poller = new NukePoller(recorder, () => [new("busy", () => true, async ct =>
             {
                 await NukePoller.BorrowForPollAsync(async token =>

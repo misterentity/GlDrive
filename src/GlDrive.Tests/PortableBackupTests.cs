@@ -90,7 +90,7 @@ public sealed class PortableBackupTests : IDisposable
         vault.Values["GlDrive:api:tmdb"] = "newer-local";
         string? actor = null; var writes = 0;
         var configuration = new ConfigurationAutomation(local, _ => { actor = ConfigWriteScope.Current.Actor; writes++; });
-        var service = Create(local, configuration, vault);
+        var service = Create(configuration, vault);
         var payload = new PortableBackupPayload { Config = Node(local), Credentials =
             [new() { Kind = "api", Service = "tmdb", Value = "old-secret" }, new() { Kind = "api", Service = "omdb", Value = "missing-secret" }] };
         payload.Config["downloads"]!["qualityDefault"] = "2160p";
@@ -112,7 +112,7 @@ public sealed class PortableBackupTests : IDisposable
     public async Task Unavailable_vault_or_invalid_payload_changes_nothing()
     {
         var local = Config(); var vault = new FakeCredentials { FailRead = true }; var saved = 0;
-        var service = Create(local, new(local, _ => saved++), vault);
+        var service = Create(new(local, _ => saved++), vault);
         var payload = new PortableBackupPayload { Config = Node(local), Credentials = [new() { Kind = "api", Service = "tmdb", Value = "secret" }] };
         await Assert.ThrowsAsync<IOException>(() => service.ImportPayloadAsync(payload, false, default));
         Assert.Equal(0, saved); Assert.Equal(0, vault.Writes);
@@ -128,10 +128,10 @@ public sealed class PortableBackupTests : IDisposable
         var local = Config(); var vault = new FakeCredentials();
         var payload = new PortableBackupPayload { Config = Node(local), Credentials = [new() { Kind = "api", Service = "tmdb", Value = "secret" }] };
         payload.Config["logging"]!["level"] = "Warning";
-        var service = Create(local, new(local, _ => throw new IOException("injected")), vault);
+        var service = Create(new(local, _ => throw new IOException("injected")), vault);
         await Assert.ThrowsAsync<IOException>(() => service.ImportPayloadAsync(payload, false, default));
         Assert.Equal(0, vault.Writes); Assert.Equal("Information", local.Logging.Level);
-        service = new(local, new(local, _ => { }), () => false, _ => new Dictionary<string, FishKeyEntry>(), _ => throw new Exception(), vault);
+        service = new(new(local, _ => { }), () => false, _ => new Dictionary<string, FishKeyEntry>(), _ => throw new Exception(), vault);
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.ImportPayloadAsync(payload, false, default));
         Assert.Equal(0, vault.Writes);
     }
@@ -142,7 +142,7 @@ public sealed class PortableBackupTests : IDisposable
         var local = Config(); var vault = new FakeCredentials();
         var fish = new FishKeyStore(Path.Combine(_root, "fish.json"), b => b, b => b);
         fish.SetKey("#existing", "current");
-        var service = new PortableBackupService(local, new(local, _ => { }), () => true, _ => fish.GetAllKeys(), _ => fish, vault);
+        var service = new PortableBackupService(new(local, _ => { }), () => true, _ => fish.GetAllKeys(), _ => fish, vault);
         var entry = new FishKeyEntry { Key = "primary", AltKey = "alternate", DhSecretHex = "abcd", Mode = FishMode.CBC, Manual = false, SetAt = new(2020, 1, 1) };
         var payload = new PortableBackupPayload { Config = Node(local), Fish =
             [new() { ServerId = "fixture", Target = "#new", Entry = entry }, new() { ServerId = "fixture", Target = "#existing", Entry = entry }] };
@@ -158,7 +158,7 @@ public sealed class PortableBackupTests : IDisposable
     public async Task Export_is_authenticated_readable_and_never_overwrites_an_existing_file()
     {
         var local = Config(); var vault = new FakeCredentials(); vault.Values["GlDrive:api:tmdb"] = "fixture-vault-secret";
-        var service = Create(local, new(local, _ => { }), vault);
+        var service = Create(new(local, _ => { }), vault);
         var path = Path.Combine(_root, "backup.gldrive");
         var summary = await service.ExportAsync(path, "fixture passphrase");
         Assert.Equal(1, summary.Credentials); Assert.Equal(1, summary.Servers);
@@ -178,7 +178,7 @@ public sealed class PortableBackupTests : IDisposable
         var local = Config(); local.Servers[0].Irc.Channels[0].Key = currentKey;
         var backup = Config(); backup.Servers[0].Irc.Channels[0].Key = "[cbc:old-backup]";
         var protectedKeys = new Dictionary<string, FishKeyEntry> { ["#one"] = new() { Key = "current-protected" } };
-        var service = new PortableBackupService(local, new(local, _ => { }), () => true, _ => protectedKeys,
+        var service = new PortableBackupService(new(local, _ => { }), () => true, _ => protectedKeys,
             _ => throw new InvalidOperationException(), new FakeCredentials());
         await service.ImportPayloadAsync(new() { Config = Node(backup) }, false, default);
         Assert.Equal(expected, local.Servers[0].Irc.Channels[0].Key);
@@ -189,7 +189,7 @@ public sealed class PortableBackupTests : IDisposable
     public async Task File_changed_after_preview_is_rejected_before_mutation()
     {
         var local = Config(); var saved = 0;
-        var service = Create(local, new(local, _ => saved++), new FakeCredentials());
+        var service = Create(new(local, _ => saved++), new FakeCredentials());
         var path = Path.Combine(_root, "first.gldbackup");
         var preview = await service.ExportAsync(path, "fixture passphrase");
         var payload = new PortableBackupPayload { Config = Node(local) };
@@ -205,7 +205,7 @@ public sealed class PortableBackupTests : IDisposable
     {
         var local = Config(); var saved = 0;
         var backup = Config(); backup.Servers.Add(new() { Id = "FIXTURE" });
-        var service = Create(local, new(local, _ => saved++), new FakeCredentials());
+        var service = Create(new(local, _ => saved++), new FakeCredentials());
         await Assert.ThrowsAsync<InvalidDataException>(() => service.ImportPayloadAsync(new() { Config = Node(backup) }, false, default));
         Assert.Equal(0, saved);
     }
@@ -218,7 +218,7 @@ public sealed class PortableBackupTests : IDisposable
         var local = Config(); var saved = 0; var vault = new FakeCredentials();
         var backup = Config();
         backup.Servers.Add(new() { Id = "second", Connection = new() { Host = "FTP.EXAMPLE.INVALID", Username = "fixture" } });
-        var service = Create(local, new(local, _ => saved++), vault);
+        var service = Create(new(local, _ => saved++), vault);
         var payload = new PortableBackupPayload { Config = Node(backup), Credentials =
             [new() { Kind = "ftp", ServerId = "fixture", Value = "same" }, new() { Kind = "ftp", ServerId = "second", Value = secondValue }] };
         if (accepted)
@@ -233,8 +233,8 @@ public sealed class PortableBackupTests : IDisposable
         }
     }
 
-    private static PortableBackupService Create(AppConfig config, ConfigurationAutomation configuration, FakeCredentials vault)
-        => new(config, configuration, () => true, _ => new Dictionary<string, FishKeyEntry>(), _ => throw new InvalidOperationException(), vault);
+    private static PortableBackupService Create(ConfigurationAutomation configuration, FakeCredentials vault)
+        => new(configuration, () => true, _ => new Dictionary<string, FishKeyEntry>(), _ => throw new InvalidOperationException(), vault);
 
     [Fact]
     public async Task ExportSkipsInvalidFishEntriesAndReportsTheirCount()
@@ -242,7 +242,7 @@ public sealed class PortableBackupTests : IDisposable
         var config = Config();
         var keys = new Dictionary<string, FishKeyEntry>
         { ["#good"] = new() { Key = "working-secret" }, [""] = new() { Key = "orphan" }, ["#bad"] = new() { Key = "" } };
-        var service = new PortableBackupService(config, new(config, _ => { }), () => true, _ => keys,
+        var service = new PortableBackupService(new(config, _ => { }), () => true, _ => keys,
             _ => throw new InvalidOperationException(), new FakeCredentials());
         var path = Path.Combine(_root, "valid-only.gldbackup");
         var exported = await service.ExportAsync(path, "fixture passphrase");
@@ -259,7 +259,7 @@ public sealed class PortableBackupTests : IDisposable
         var store = new FishKeyStore(path, b => b.ToArray(), b => b.ToArray());
         store.SetKey("#one", "newer-one"); store.SetKey("#two", "newer-two");
         var original = File.ReadAllBytes(path);
-        var service = new PortableBackupService(config, new(config, _ => { }), () => true, _ => store.GetAllKeys(), _ => store, new FakeCredentials());
+        var service = new PortableBackupService(new(config, _ => { }), () => true, _ => store.GetAllKeys(), _ => store, new FakeCredentials());
         var payload = new PortableBackupPayload { Config = Node(config), Fish = [
             new() { ServerId = "fixture", Target = "#one", Entry = new() { Key = "older-one" } },
             new() { ServerId = "fixture", Target = "#two", Entry = new() { Key = "older-two" } }] };

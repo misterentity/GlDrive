@@ -212,7 +212,6 @@ public class SpreadScoreVm : INotifyPropertyChanged
     public string SiteName { get => _siteName; set { _siteName = value; OnPropertyChanged(); } }
     public int FilesOwned { get => _filesOwned; set { _filesOwned = value; OnPropertyChanged(); } }
     public int FilesTotal { get => _filesTotal; set { _filesTotal = value; OnPropertyChanged(); } }
-    public double OwnedPercent => FilesTotal > 0 ? FilesOwned * 100.0 / FilesTotal : 0;
     public double SpeedBps { get => _speedBps; set { _speedBps = value; OnPropertyChanged(); } }
     public string Status { get => _status; set { _status = value; OnPropertyChanged(); } }
 

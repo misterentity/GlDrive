@@ -35,13 +35,6 @@ public static class WishlistOwnership
         .Select(d => new CompletedDownload(d.Id, d.WishlistItemId, d.ReleaseName, d.TotalBytes,
             (parse ?? SceneNameParser.Parse)(d.ReleaseName), WishlistSourceFloor.IsLowQuality(d.ReleaseName))).ToArray();
 
-    public static bool IsOwned(WishlistItem item, DownloadConfig config, LibraryIndexSnapshot index,
-        IEnumerable<DownloadItem> downloads, DateTimeOffset now)
-    {
-        if (!CanComplete(item, now)) return false;
-        return IsOwnedPrepared(item, config, index, PrepareDownloads(downloads), now);
-    }
-
     internal static bool IsOwnedPrepared(WishlistItem item, DownloadConfig config, LibraryIndexSnapshot index,
         IReadOnlyList<CompletedDownload> downloads, DateTimeOffset now)
     {

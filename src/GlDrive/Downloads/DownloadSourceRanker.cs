@@ -5,10 +5,7 @@ namespace GlDrive.Downloads;
 public sealed record DownloadSourceCandidate(string ServerId, string ReleaseName, string RemotePath,
     bool Available = true);
 
-public sealed record RankedDownloadSource(DownloadSourceCandidate Source, double BytesPerSecond)
-{
-    public bool HasMeasuredSpeed => BytesPerSecond > 0;
-}
+public sealed record RankedDownloadSource(DownloadSourceCandidate Source, double BytesPerSecond);
 
 /// <summary>Orders copies of the same release using observed local download routes only.</summary>
 public static class DownloadSourceRanker

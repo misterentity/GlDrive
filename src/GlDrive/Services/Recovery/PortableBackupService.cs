@@ -26,11 +26,11 @@ public sealed class PortableBackupService
     private readonly IPortableCredentialAccess _credentials;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
-    public PortableBackupService(AppConfig config, ConfigurationAutomation configuration, Func<bool> canImport,
+    public PortableBackupService(ConfigurationAutomation configuration, Func<bool> canImport,
         Func<string, IReadOnlyDictionary<string, FishKeyEntry>>? readFish = null)
-        : this(config, configuration, canImport, readFish ?? ReadFishFile, id => new FishKeyStore(id), new PortableCredentialAccess()) { }
+        : this(configuration, canImport, readFish ?? ReadFishFile, id => new FishKeyStore(id), new PortableCredentialAccess()) { }
 
-    internal PortableBackupService(AppConfig config, ConfigurationAutomation configuration, Func<bool> canImport,
+    internal PortableBackupService(ConfigurationAutomation configuration, Func<bool> canImport,
         Func<string, IReadOnlyDictionary<string, FishKeyEntry>> readFish, Func<string, FishKeyStore> fishStore,
         IPortableCredentialAccess credentials)
     { _configuration = configuration; _canImport = canImport; _readFish = readFish; _fishStore = fishStore; _credentials = credentials; }

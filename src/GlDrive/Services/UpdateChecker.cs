@@ -88,7 +88,6 @@ public class UpdateChecker : IDisposable
     // recovery forever. Ordinary update downloads retain their established timing.
     internal TimeSpan? PreparationTimeout { get; set; }
     private readonly Recovery.UpdateRecoveryAdmission _recoveryAdmission = new();
-    internal bool AutomaticInstallInProgress => _recoveryAdmission.Installing;
     internal IDisposable? TryBeginRecoveryOperation() => _recoveryAdmission.TryBeginRecovery();
     internal bool TryStopForRecoveryRestart() => _recoveryAdmission.TryStopForRestart();
     internal void RecoveryRestartFailed() => _recoveryAdmission.RestartFailed();
@@ -1632,28 +1631,6 @@ public class UpdateChecker : IDisposable
         return (deleted, oldFiles.Count(File.Exists));
     }
 
-    internal static (int Deleted, int Remaining) DeleteOldUpdateFilesWithRetry(
-        string baseDir, TimeSpan initialDelay, TimeSpan retryWindow, TimeSpan retryDelay)
-    {
-        if (initialDelay > TimeSpan.Zero)
-            Thread.Sleep(initialDelay);
-
-        var timer = Stopwatch.StartNew();
-        var totalDeleted = 0;
-        (int Deleted, int Remaining) result;
-        do
-        {
-            result = DeleteOldUpdateFiles(baseDir);
-            totalDeleted += result.Deleted;
-            if (result.Remaining == 0 || timer.Elapsed >= retryWindow)
-                break;
-            Thread.Sleep(retryDelay);
-        }
-        while (true);
-
-        return (totalDeleted, result.Remaining);
-    }
-
     public static void CleanupOldUpdateFiles()
     {
         // The ordinary process only observes. Receipts and the shared mutation lock live in
@@ -2131,25 +2108,6 @@ public static class UpdateMarkerHmac
         var parts = payload.Split('|');
         return parts.Length >= 2 && long.TryParse(parts[1], out var ts) &&
                Math.Abs(DateTimeOffset.UtcNow.ToUnixTimeSeconds() - ts) <= 300;
-    }
-
-    internal static bool IsValidForProcess(string markerPath, int processId, string processPath)
-    {
-        if (!TryReadValidPayload(markerPath, out var payload)) return false;
-        try
-        {
-            var parts = payload.Split('|');
-            return parts.Length == 3 &&
-                   int.TryParse(parts[0], out var markerPid) && markerPid == processId &&
-                   long.TryParse(parts[1], out var ts) &&
-                   Math.Abs(DateTimeOffset.UtcNow.ToUnixTimeSeconds() - ts) <= 300 &&
-                   string.Equals(Path.GetFullPath(parts[2]), Path.GetFullPath(processPath),
-                       StringComparison.OrdinalIgnoreCase);
-        }
-        catch
-        {
-            return false;
-        }
     }
 
     private static bool TryReadValidPayload(string markerPath, out string payload)

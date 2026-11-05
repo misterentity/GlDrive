@@ -60,7 +60,7 @@ public class DownloadCategoryPathTests
         Assert.Equal(@"E:\section", resolved.BasePath);
         Assert.Equal(Path.Combine(@"E:\section", "TV", "Example Show", "Season 02", Episode),
             DownloadPathResolver.ForScene(config, "tv-hd", Episode));
-        Assert.Equal(@"E:\section", config.GetPathForCategory("tv-hd"));
+        Assert.Equal(@"E:\section", DownloadPathResolver.Resolve(config, "tv-hd", null).BasePath);
     }
 
     [Fact]
@@ -138,9 +138,9 @@ public class DownloadCategoryPathTests
     {
         var config = Config();
         config.CategoryPaths["video"] = " ";
-        Assert.Equal(@"D:\Movies", config.GetPathForCategory("video", Movie));
+        Assert.Equal(@"D:\Movies", DownloadPathResolver.Resolve(config, "video", Movie).BasePath);
         config.CategoryPaths["Movies"] = "";
-        Assert.Equal(config.LocalPath, config.GetPathForCategory("video", Movie));
+        Assert.Equal(config.LocalPath, DownloadPathResolver.Resolve(config, "video", Movie).BasePath);
     }
 
     [Fact]

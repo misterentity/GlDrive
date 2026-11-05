@@ -37,7 +37,7 @@ public partial class SpreadManager
                     results.Add(duplicate);
                     continue;
                 }
-                if (IsRecentlyDeadRace(section, release, now, out var deadReason, out var remaining))
+                if (IsRecentlyDeadRace(release, now, out var deadReason, out var remaining))
                 {
                     results.Add(new(RaceStartOutcome.Suppressed, section, release, SuppressedFor: remaining, Reason: deadReason));
                     continue;
@@ -54,7 +54,7 @@ public partial class SpreadManager
             {
                 var result = results[index];
                 if (result.Outcome is not (RaceStartOutcome.Queued or RaceStartOutcome.Duplicate)) continue;
-                var request = _raceQueue.First(race => IsSameRace(race.Section, race.ReleaseName, result.Section, result.ReleaseName));
+                var request = _raceQueue.First(race => IsSameRace(race.ReleaseName, result.ReleaseName));
                 var position = positions.TryGetValue(request.RequestId, out var value) ? (int?)value : null;
                 results[index] = result with { QueuePosition = position,
                     Reason = result.Reason ?? (position == null ? "Waiting for connected spread pools" : null) };
@@ -83,8 +83,8 @@ public partial class SpreadManager
             {
                 var request = _raceQueue[index];
                 if (!selected.Contains(request.RequestId) || _controlRequestsInFlight.Contains(request.RequestId) ||
-                    _startingRequests.Any(starting => IsSameRace(starting.Section, starting.ReleaseName, request.Section, request.ReleaseName)) ||
-                    _activeJobs.Any(job => IsSameRace(job.Section, job.ReleaseName, request.Section, request.ReleaseName))) continue;
+                    _startingRequests.Any(starting => IsSameRace(starting.ReleaseName, request.ReleaseName)) ||
+                    _activeJobs.Any(job => IsSameRace(job.ReleaseName, request.ReleaseName))) continue;
                 var result = RaceControlPolicy.EditSite(request, serverId, add, available, IsNuked(serverId, request.ReleaseName), out var updated);
                 if (!result.Accepted) continue;
                 _raceQueue[index] = updated!;

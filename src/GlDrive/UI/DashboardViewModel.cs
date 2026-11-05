@@ -103,7 +103,6 @@ public partial class DashboardViewModel : INotifyPropertyChanged, IDisposable
     private double _telemetryPoolUtilization;
     private string _telemetryUptime = "0m 00s";
     private int _telemetryThreadCount;
-    private readonly Random _overviewRng = new();
 
     public IrcViewModel Irc => _ircViewModel;
     public PlexViewModel Plex => _plexViewModel;
@@ -561,8 +560,7 @@ public partial class DashboardViewModel : INotifyPropertyChanged, IDisposable
         get => _searchFilterBigSize;
         set { _searchFilterBigSize = value; OnPropertyChanged(); RefreshSearchView(); }
     }
-    public bool SearchFilterAnyActive =>
-        !string.IsNullOrEmpty(_searchFilterQuality) || !string.IsNullOrEmpty(_searchFilterSource) || _searchFilterBigSize;
+    public bool SearchFilterAnyActive => CurrentSearchFilter.AnyActive;
 
     private System.ComponentModel.ICollectionView? _searchResultsView;
     private SearchFilterToggle.State CurrentSearchFilter => new(_searchFilterQuality, _searchFilterSource, _searchFilterBigSize);
@@ -615,8 +613,6 @@ public partial class DashboardViewModel : INotifyPropertyChanged, IDisposable
     }
 
     public bool HasWishlistSelection => _selectedWishlistItem != null;
-    public int? SelectedWishlistMovieTmdbId => _selectedWishlistItem != null &&
-        _wishlistStore.GetById(_selectedWishlistItem.Id) is { Type: MediaType.Movie, TmdbId: > 0 } movie ? movie.TmdbId : null;
     /// <summary>How Collection gaps should find the selected wishlist movie: its TMDB id, else
     /// its IMDb id, else "Title Year". Null when no movie is selected.</summary>
     public string? SelectedWishlistMovieQuery => _selectedWishlistItem != null &&
@@ -2073,32 +2069,6 @@ public partial class DashboardViewModel : INotifyPropertyChanged, IDisposable
         finally { _feedAdmissionRunning = false; }
     }
 
-    /// <summary>
-    /// Normalize a section name for fuzzy matching: lowercase, strip dashes/underscores/spaces.
-    /// "TV-WEB-HD-X264" → "tvwebhdx264", "TV_HD" → "tvhd", "tv-hd" → "tvhd"
-    /// </summary>
-    private static string NormalizeSection(string s) =>
-        s.ToLowerInvariant().Replace("-", "").Replace("_", "").Replace(" ", "");
-
-    /// <summary>Find the best matching configured section key for a given hint (category name).</summary>
-    private string? FindMatchingSection(string hint, IEnumerable<string> configuredSections)
-    {
-        var normHint = NormalizeSection(hint);
-
-        // Exact match first
-        var exact = configuredSections.FirstOrDefault(k => k.Equals(hint, StringComparison.OrdinalIgnoreCase));
-        if (exact != null) return exact;
-
-        // Normalized match (tv-hd == TV_HD)
-        var normalized = configuredSections.FirstOrDefault(k => NormalizeSection(k) == normHint);
-        if (normalized != null) return normalized;
-
-        // Substring match (TV-WEB-HD-X264 contains tvhd)
-        var substring = configuredSections.FirstOrDefault(k =>
-            normHint.Contains(NormalizeSection(k)) || NormalizeSection(k).Contains(normHint));
-        return substring;
-    }
-
     /// <summary>Start a race for a release, optionally with a known source server and path.</summary>
     private RaceStartResult? RaceByName(string sectionHint, string releaseName,
         string? knownSourceServerId = null, string? knownSourcePath = null)
@@ -2672,8 +2642,6 @@ public class DownloadItemVm : INotifyPropertyChanged
     public bool CanPauseOrResume => CanPause || CanResume;
     public string PauseResumeLabel => CanResume ? "Resume" : "Pause";
     public bool CanRetry => Status is "Failed" or "Cancelled";
-    public bool CanCancel => Status is "Queued" or "Downloading" or "Extracting" or "Paused"
-        || Status == "Failed" && RequiresContentApproval;
     public string RetryLabel => RequiresContentApproval && Status == "Failed" ? "Review…" : "Retry";
     private bool _isIndeterminate;
     public bool IsIndeterminate

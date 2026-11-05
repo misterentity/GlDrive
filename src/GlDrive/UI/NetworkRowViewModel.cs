@@ -20,16 +20,6 @@ public class NetworkRowViewModel : INotifyPropertyChanged
     public string? IPv4 { get; init; }
     public bool IsConnected { get; init; }
 
-    public string AdapterDisplay
-    {
-        get
-        {
-            var name = string.IsNullOrEmpty(AdapterName) ? AdapterId : AdapterName;
-            if (!IsConnected) return $"{name} (not connected)";
-            return string.IsNullOrEmpty(IPv4) ? name : $"{name} ({IPv4})";
-        }
-    }
-
     public string NameDisplay => string.IsNullOrEmpty(AdapterName) ? AdapterId : AdapterName;
     public string AddressDisplay => IsConnected ? (string.IsNullOrEmpty(IPv4) ? "no ipv4" : IPv4) : "offline";
 

@@ -84,7 +84,7 @@ public sealed class AgentDownloadOnlyEvidenceTests : IDisposable
         var day = new DateTime(2026, 10, 4);
         File.WriteAllLines(Path.Combine(_directory, "races-20261004.jsonl"),
             new[] { Race(null), Race("destination"), Race("unknown-site") }.Select(r => JsonSerializer.Serialize(r)));
-        using var recorder = new TelemetryRecorder(_directory, 10);
+        using var recorder = new TelemetryRecorder(_directory);
         using var rollup = new SectionActivityRollup(recorder, _directory);
         rollup.RollUp(day);
         recorder.Dispose();

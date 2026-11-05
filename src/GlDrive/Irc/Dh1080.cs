@@ -90,12 +90,6 @@ public class Dh1080
     }
 
     /// <summary>
-    /// Returns both alphabet variants of the SHA-256-hashed derived FiSH key.
-    /// </summary>
-    public (string Standard, string Fish) ComputeSharedSecretBoth(string theirPubKeyBase64)
-        => ComputeAllKeyVariants(theirPubKeyBase64);
-
-    /// <summary>
     /// Returns the two Blowfish-key-string variants derived from the DH1080 shared secret.
     /// Every real FiSH client derives the key as base64(SHA256(shared)); the only ambiguity
     /// is the base64 alphabet, so we compute both and try-all-on-decrypt:
@@ -183,17 +177,6 @@ public class Dh1080
             sb.Append(FishB64Alphabet[idx]);
         }
         return sb.ToString();
-    }
-
-    public string ComputeSharedSecret(string theirPubKeyBase64)
-    {
-        var sharedBytes = ComputeSharedSecretBytes(theirPubKeyBase64);
-        var hash = SHA256.HashData(sharedBytes);
-        // fish-irssi's htob64 on 32 bytes (256 bits, not a multiple of 6) produces
-        // 43 chars with no '=' padding. Standard base64 of 32 bytes is 44 chars
-        // ending in one '='. TrimEnd('=') normalizes to the fish-irssi format so
-        // both sides derive the identical FiSH Blowfish key string.
-        return Convert.ToBase64String(hash).TrimEnd('=');
     }
 
     private byte[] ComputeSharedSecretBytes(string theirPubKeyBase64)

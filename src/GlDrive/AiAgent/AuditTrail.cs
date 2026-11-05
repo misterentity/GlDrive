@@ -74,11 +74,6 @@ public class AuditTrail
         _path = Path.Combine(aiDataRoot, "ai-audit.jsonl");
     }
 
-    // Parameterless constructor kept for compatibility with any code that still
-    // used the stub. Can be removed once all callers pass aiDataRoot explicitly.
-    public AuditTrail() : this(
-        Path.Combine(GlDrive.Config.ConfigManager.AppDataPath, "ai-data")) { }
-
     public virtual void Append(AuditRow row)
     {
         row.Id ??= Guid.NewGuid().ToString("N");
@@ -152,9 +147,6 @@ public class AuditTrail
             ? row.Id == id
             : row.Id == null && row.RunId == suggestion.RunId && row.Target == suggestion.Target
                 && row.Category == suggestion.Category && row.Ts == suggestion.Ts), reason);
-
-    public void RecordOutcome(string id, AgentOutcome outcome)
-        => RecordOutcomes(new Dictionary<string, AgentOutcome> { [id] = outcome });
 
     public virtual void RecordOutcomes(IReadOnlyDictionary<string, AgentOutcome> outcomes)
     {

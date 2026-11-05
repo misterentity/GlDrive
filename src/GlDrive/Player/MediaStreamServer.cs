@@ -2,7 +2,6 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using FluentFTP;
-using GlDrive.Config;
 using GlDrive.Downloads;
 using GlDrive.Ftp;
 using GlDrive.Services;
@@ -14,7 +13,6 @@ namespace GlDrive.Player;
 public class MediaStreamServer : IDisposable
 {
     private readonly ServerManager _serverManager;
-    private readonly AppConfig _config;
     private HttpListener? _listener;
     private CancellationTokenSource _cts = new();
     private readonly string _authToken = Guid.NewGuid().ToString("N");
@@ -35,10 +33,9 @@ public class MediaStreamServer : IDisposable
     public string LibraryPath { get; } = Path.Combine(
         GlDrive.Util.AppDataPaths.Root, "Player");
 
-    public MediaStreamServer(ServerManager serverManager, AppConfig config)
+    public MediaStreamServer(ServerManager serverManager)
     {
         _serverManager = serverManager;
-        _config = config;
     }
 
     public void Start()

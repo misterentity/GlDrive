@@ -60,8 +60,6 @@ public partial class ServerManager
         return _siteHealth.Get(serverId, server == null ? "removed" : EndpointIdentity(server));
     }
 
-    public IReadOnlyList<SiteHealthSnapshot> SiteHealthStates => _config.Servers.Select(server => GetSiteHealth(server.Id)).ToArray();
-
     private void ObserveLoginHealth(FtpLoginObservation observation)
     {
         if (_disposed || !_config.Health.Enabled || observation.Ghost ||

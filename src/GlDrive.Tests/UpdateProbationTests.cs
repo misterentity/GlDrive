@@ -45,7 +45,6 @@ public sealed class UpdateProbationTests : IDisposable
     {
         var store = Store();
         Assert.True(store.RecordInstallation(_backups, _now));
-        Assert.Equal(_now.AddHours(24), store.HoldUntil(_now));
         Assert.Equal((0, _backups.Count), store.Cleanup(_now.AddHours(23.99)));
         Assert.All(_backups, backup => Assert.True(File.Exists(backup.Backup)));
         var result = store.Cleanup(_now.AddHours(24));
@@ -90,28 +89,26 @@ public sealed class UpdateProbationTests : IDisposable
         var store = Store();
         Assert.True(store.GetStatus(_now).RollbackAvailable);
         Assert.False(Directory.Exists(Path.Combine(_root, UpdateProbation.MetadataDirectory)));
-        Assert.Null(store.HoldUntil(_now));
-        store.ObserveLegacy(_now);
-        Assert.Equal(_now.AddHours(24), store.HoldUntil(_now.AddHours(1)));
-        store.ObserveLegacy(_now.AddHours(12));
-        Assert.Equal(_now.AddHours(24), store.HoldUntil(_now.AddHours(13)));
+        // The first cleanup pass adopts the legacy generation and starts probation;
+        // a later pass must not restart it.
+        Assert.Equal((0, _backups.Count), store.Cleanup(_now));
+        Assert.Equal((0, _backups.Count), store.Cleanup(_now.AddHours(12)));
+        Assert.Equal((0, _backups.Count), store.Cleanup(_now.AddHours(23.99)));
+        Assert.Equal((_backups.Count, 0), store.Cleanup(_now.AddHours(24)));
     }
 
     [Fact]
-    public void Readback_failure_retains_every_previous_file_and_does_not_hold_updates()
+    public void Readback_failure_retains_every_previous_file()
     {
         var store = Store((_, _) => { });
         Assert.False(store.RecordInstallation(_backups, _now));
-        Assert.Null(store.HoldUntil(_now));
         Assert.All(_backups, backup => Assert.True(File.Exists(backup.Backup)));
     }
 
     [Fact]
-    public void Write_failure_retains_files_and_updates_remain_available()
+    public void Write_failure_retains_files()
     {
         var store = Store((_, _) => throw new IOException("synthetic write fault"));
-        store.ObserveLegacy(_now);
-        Assert.Null(store.HoldUntil(_now));
         Assert.Equal((0, _backups.Count), store.Cleanup(_now.AddDays(2)));
     }
 
@@ -121,9 +118,8 @@ public sealed class UpdateProbationTests : IDisposable
         var store = Store();
         Assert.True(store.RecordInstallation(_backups, _now));
         File.WriteAllText(ReceiptPath, "{ damaged receipt");
-        Assert.Null(store.HoldUntil(_now));
-        Assert.True(File.Exists(ReceiptPath + ".corrupt"));
         Assert.False(store.GetStatus(_now).RollbackAvailable);
+        Assert.True(File.Exists(ReceiptPath + ".corrupt"));
         Assert.Equal((0, _backups.Count), store.Cleanup(_now.AddDays(2)));
     }
 
@@ -152,12 +148,11 @@ public sealed class UpdateProbationTests : IDisposable
     }
 
     [Fact]
-    public void No_rollback_or_probation_hold_from_untrusted_installation()
+    public void No_rollback_from_untrusted_installation()
     {
         var store = Store(trust: _ => false);
         Assert.False(store.GetStatus(_now).RollbackAvailable);
         Assert.False(store.RecordInstallation(_backups, _now));
-        Assert.Null(store.HoldUntil(_now));
         Assert.Throws<IOException>(() => store.Rollback(Generation, _now));
         Assert.All(_backups, backup => Assert.True(File.Exists(backup.Backup)));
     }
@@ -172,7 +167,6 @@ public sealed class UpdateProbationTests : IDisposable
         Assert.Equal("old dependency", File.ReadAllText(Path.Combine(_root, "dependency.dll")));
         Assert.False(File.Exists(Path.Combine(_root, "new-only.txt")));
         Assert.False(store.GetStatus(_now.AddHours(2)).RollbackAvailable);
-        Assert.Null(store.HoldUntil(_now.AddHours(2)));
         Assert.Throws<InvalidDataException>(() => store.Rollback(Generation, _now.AddHours(2)));
         Assert.All(_backups, backup => Assert.True(File.Exists(backup.Backup)));
     }
@@ -222,11 +216,10 @@ public sealed class UpdateProbationTests : IDisposable
     }
 
     [Fact]
-    public void Future_receipt_neither_holds_updates_nor_permits_rollback()
+    public void Future_receipt_does_not_permit_rollback()
     {
         var store = Store();
         Assert.True(store.RecordInstallation(_backups, _now.AddDays(1)));
-        Assert.Null(store.HoldUntil(_now));
         Assert.False(store.GetStatus(_now).RollbackAvailable);
         Assert.Equal((0, _backups.Count), store.Cleanup(_now));
     }
@@ -247,7 +240,6 @@ public sealed class UpdateProbationTests : IDisposable
             File.WriteAllText(path, json.ToJsonString());
             File.SetLastWriteTimeUtc(path, _now.AddDays(-5).AddSeconds(i));
         }
-        Assert.Equal(_now.AddHours(24), store.HoldUntil(_now));
         Assert.True(store.GetStatus(_now).RollbackAvailable);
         store.Rollback(Generation, _now);
         Assert.False(store.GetStatus(_now).RollbackAvailable);
@@ -269,10 +261,10 @@ public sealed class UpdateProbationTests : IDisposable
     {
         var first = Store();
         var second = Store();
-        using (first.AcquireMutationLock()) second.ObserveLegacy(_now);
+        using (first.AcquireMutationLock()) second.Cleanup(_now);
         Assert.False(File.Exists(ReceiptPath));
         first.Rollback(Generation, _now);
-        second.ObserveLegacy(_now.AddMinutes(1));
+        second.Cleanup(_now.AddMinutes(1));
         Assert.True(JsonNode.Parse(File.ReadAllText(ReceiptPath))!["consumed"]!.GetValue<bool>());
         Assert.False(second.GetStatus(_now.AddMinutes(1)).RollbackAvailable);
     }

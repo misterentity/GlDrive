@@ -303,7 +303,7 @@ public class IrcPatternDetector : IDisposable
         {
             // Multiple different sections seen — the section varies
             var samplePrefix = prefixes.FirstOrDefault(p => !string.IsNullOrEmpty(p)) ?? "";
-            pattern = BuildPatternWithSection(samplePrefix, commonPrefix, commonSuffix);
+            pattern = BuildPatternWithSection(samplePrefix);
         }
         else if (!string.IsNullOrEmpty(commonPrefix))
         {
@@ -329,7 +329,7 @@ public class IrcPatternDetector : IDisposable
         };
     }
 
-    private static string BuildPatternWithSection(string samplePrefix, string commonPrefix, string commonSuffix)
+    private static string BuildPatternWithSection(string samplePrefix)
     {
         // Try common glftpd announce formats:
         // "SECTION :: release" -> "(?<section>\w+) :: (?<release>\S+)"

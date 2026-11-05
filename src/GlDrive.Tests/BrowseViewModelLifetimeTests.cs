@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using GlDrive.Config;
 using GlDrive.Services;
 using GlDrive.UI;
 using Xunit;
@@ -21,7 +20,7 @@ public sealed class BrowseViewModelLifetimeTests
 
         for (var i = 0; i < 10; i++)
         {
-            var vm = new BrowseViewModel(manager, new AppConfig());
+            var vm = new BrowseViewModel(manager);
             Assert.Single(((Delegate)eventField.GetValue(manager)!).GetInvocationList());
             vm.Dispose();
             vm.Dispose();

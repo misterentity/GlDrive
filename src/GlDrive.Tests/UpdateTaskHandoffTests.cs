@@ -1,6 +1,4 @@
-using System;
 using System.IO;
-using System.Text.Json;
 using GlDrive.Services;
 using Xunit;
 
@@ -388,27 +386,6 @@ public sealed class OldUpdateCleanupTests : IDisposable
         Assert.False(File.Exists(rootOld));
         Assert.False(File.Exists(nestedOld));
         Assert.True(File.Exists(keep));
-    }
-
-    [Fact]
-    public async Task Retries_files_that_are_temporarily_locked_by_the_exiting_updater()
-    {
-        var locked = Path.Combine(_root, "runtime.dll.old");
-        File.WriteAllText(locked, "old");
-        using var handle = new FileStream(locked, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-        var release = Task.Run(async () =>
-        {
-            await Task.Delay(100);
-            handle.Dispose();
-        });
-
-        var result = UpdateChecker.DeleteOldUpdateFilesWithRetry(
-            _root, TimeSpan.Zero, TimeSpan.FromSeconds(2), TimeSpan.FromMilliseconds(25));
-        await release;
-
-        Assert.Equal(1, result.Deleted);
-        Assert.Equal(0, result.Remaining);
-        Assert.False(File.Exists(locked));
     }
 
     [Fact]

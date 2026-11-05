@@ -69,10 +69,10 @@ public partial class SpreadManager
         lock (_lock)
         {
             if (_disposed) return new(false, "unavailable", "Spread engine is stopped");
-            if (_activeJobs.Any(j => IsSameRace(j.Section, j.ReleaseName, section, release)) ||
-                _startingRequests.Any(r => IsSameRace(r.Section, r.ReleaseName, section, release)))
+            if (_activeJobs.Any(j => IsSameRace(j.ReleaseName, release)) ||
+                _startingRequests.Any(r => IsSameRace(r.ReleaseName, release)))
                 return new(false, "active-membership-unsupported", "Site membership can only change while the request is queued");
-            var index = _raceQueue.FindIndex(r => IsSameRace(r.Section, r.ReleaseName, section, release));
+            var index = _raceQueue.FindIndex(r => IsSameRace(r.ReleaseName, release));
             if (index < 0) return new(false, "not-queued", "Queued request was not found");
             previous = _raceQueue[index];
             if (expectedRequestId != null && previous.RequestId != expectedRequestId)
@@ -103,10 +103,10 @@ public partial class SpreadManager
         lock (_lock)
         {
             if (_disposed) return new(false, "unavailable", "Spread engine is stopped");
-            if (_activeJobs.Any(j => IsSameRace(j.Section, j.ReleaseName, section, release)) ||
-                _startingRequests.Any(r => IsSameRace(r.Section, r.ReleaseName, section, release)))
+            if (_activeJobs.Any(j => IsSameRace(j.ReleaseName, release)) ||
+                _startingRequests.Any(r => IsSameRace(r.ReleaseName, release)))
                 return new(false, "stop-and-wait", "Stop the race and wait for its transfers to finish before requesting cleanup");
-            var index = _raceQueue.FindIndex(r => IsSameRace(r.Section, r.ReleaseName, section, release));
+            var index = _raceQueue.FindIndex(r => IsSameRace(r.ReleaseName, release));
             if (index < 0) return new(false, "no-owned-partial", "No retained owned partial is available for cleanup");
             previous = _raceQueue[index];
             if (_controlRequestsInFlight.Contains(previous.RequestId)) return new(false, "control-busy", "Another queue edit is being saved");

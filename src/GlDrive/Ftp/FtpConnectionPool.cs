@@ -2,7 +2,6 @@ using System.Net.Sockets;
 using System.Reflection;
 using System.Threading.Channels;
 using FluentFTP;
-using FluentFTP.Client.BaseClient;
 using FluentFTP.Streams;
 using Serilog;
 
@@ -1315,27 +1314,6 @@ public class FtpConnectionPool : IAsyncDisposable
         if (detached == null) return;
         try { detached.Dispose(); }
         catch (Exception ex) { Log.Warning(ex, "Pool: freeing detached GnuTLS session ({Reason}) threw", reason); }
-    }
-
-    /// <summary>
-    /// Disposes an FTP client safely by first neutralizing GnuTLS to prevent
-    /// native crashes, then disposing in a fire-and-forget task with timeout.
-    /// </summary>
-    private static void DisconnectAndDispose(AsyncFtpClient client)
-    {
-        var detached = NeutralizeGnuTls(client);
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-                await client.Disconnect(cts.Token).ConfigureAwait(false);
-            }
-            catch { }
-            try { client.Dispose(); }
-            catch { }
-            FreeDetachedGnuTls(detached, "disconnect");
-        });
     }
 
     /// <summary>

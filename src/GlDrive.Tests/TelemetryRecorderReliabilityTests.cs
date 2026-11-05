@@ -14,7 +14,7 @@ public class TelemetryRecorderReliabilityTests
         var root = Path.Combine(Path.GetTempPath(), "gldrive-telemetry-" + Guid.NewGuid().ToString("N"));
         try
         {
-            using var recorder = new TelemetryRecorder(root, 10);
+            using var recorder = new TelemetryRecorder(root);
             foreach (var stream in Enum.GetValues<TelemetryStream>())
                 for (var i = 0; i < 100; i++)
                     recorder.Record(stream, new RaceOutcomeEvent { RaceId = i.ToString() });
@@ -46,7 +46,7 @@ public class TelemetryRecorderReliabilityTests
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var writes = new ConcurrentQueue<string>();
-        using var recorder = new TelemetryRecorder(root, 10, async (_, text, ct) =>
+        using var recorder = new TelemetryRecorder(root, async (_, text, ct) =>
         {
             started.TrySetResult();
             await release.Task.WaitAsync(ct);
@@ -79,7 +79,7 @@ public class TelemetryRecorderReliabilityTests
         var root = Path.Combine(Path.GetTempPath(), "gldrive-telemetry-" + Guid.NewGuid().ToString("N"));
         try
         {
-            using var recorder = new TelemetryRecorder(root, 10,
+            using var recorder = new TelemetryRecorder(root,
                 (_, _, _) => Task.FromException(new IOException("Simulated unavailable disk")));
             for (var i = 0; i < 100; i++)
                 recorder.Record(TelemetryStream.Races, new RaceOutcomeEvent());

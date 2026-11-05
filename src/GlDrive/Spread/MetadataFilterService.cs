@@ -49,7 +49,7 @@ public class MetadataFilterService : IDisposable
 
         var cacheKey = $"{parsed.Title}|{parsed.Year}|{parsed.Season}";
         if (_cache.TryGetValue(cacheKey, out var cached) && cached.IsFresh)
-            return ApplyThresholds(config, cached.Metadata, releaseName);
+            return ApplyThresholds(config, cached.Metadata);
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, config.LookupTimeoutSeconds)));
@@ -67,7 +67,7 @@ public class MetadataFilterService : IDisposable
             }
 
             _cache[cacheKey] = new CacheEntry(meta, DateTime.UtcNow);
-            return ApplyThresholds(config, meta, releaseName);
+            return ApplyThresholds(config, meta);
         }
         catch (OperationCanceledException)
         {
@@ -152,11 +152,11 @@ public class MetadataFilterService : IDisposable
         if (config.SkipEndedShows && status is not ("running" or "ended" or "canceled" or "cancelled" or "in development" or "to be determined"))
             return null;
         return ApplyThresholds(config, new ReleaseMetadata(releaseName, metadata.ImdbRating, metadata.ImdbVotes,
-            genres, status is "ended" or "canceled" or "cancelled", "trusted sitebot"), releaseName);
+            genres, status is "ended" or "canceled" or "cancelled", "trusted sitebot"));
     }
 
     private static FilterVerdict ApplyThresholds(
-        MetadataFilterConfig config, ReleaseMetadata meta, string releaseName)
+        MetadataFilterConfig config, ReleaseMetadata meta)
     {
         // Rating threshold
         if (config.MinImdbRating > 0)

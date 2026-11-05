@@ -150,7 +150,7 @@ public sealed class SpreadLateReleaseTests
             names.Select(n => new SpreadFileInfo { Name = n, FullPath = Paths[id] + "/" + n, Size = 100 }).ToList(), 0L);
         public void Reconcile() => Invoke(Job, "EvaluateDestCompletion", Job.ReconcileProgressFromOwnership());
         public bool Complete() => (bool)Invoke(Job, "IsJobComplete")!;
-        public bool Terminal() => (bool)Invoke(Job, "AllDestinationsTerminal", Paths, _sources)!;
+        public bool Terminal() => (bool)Invoke(Job, "AllDestinationsTerminal", Paths)!;
         public (SpreadFileInfo file, string srcId, string dstId)? NextTransfer() =>
             ((SpreadFileInfo file, string srcId, string dstId)?)Invoke(Job, "FindBestTransfer", Paths, new SpreadScorer(_speeds));
         public async ValueTask DisposeAsync()

@@ -140,7 +140,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
         bool removed;
         lock (_lock)
         {
-            removed = CancelQueuedNoLock(section, releaseName);
+            removed = CancelQueuedNoLock(releaseName);
             ScheduleQueueWakeupNoLock();
         }
         if (removed) PersistQueue();
@@ -153,14 +153,14 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
         bool removed;
         lock (_lock)
         {
-            removed = CancelQueuedNoLock(section, releaseName);
-            foreach (var starting in _startingRequests.Where(r => IsSameRace(r.Section, r.ReleaseName, section, releaseName) && r.HasOwnedPartial))
+            removed = CancelQueuedNoLock(releaseName);
+            foreach (var starting in _startingRequests.Where(r => IsSameRace(r.ReleaseName, releaseName) && r.HasOwnedPartial))
                 _raceQueue.Add(RaceLifetimePolicy.CleanupRequest(starting, DateTime.UtcNow,
                     "Stopped by user during admission; owned partial retained until cleanup deadline",
                     RaceLifetimePolicy.Deadline(starting.Partial, _config.Spread.PartialRaceDeadlineHours))
                     with { StopReason = RaceStopReason.UserStop.ToString() });
-            removed |= _startingRequests.RemoveAll(r => IsSameRace(r.Section, r.ReleaseName, section, releaseName)) > 0;
-            foreach (var job in _activeJobs.Where(j => IsSameRace(j.Section, j.ReleaseName, section, releaseName)))
+            removed |= _startingRequests.RemoveAll(r => IsSameRace(r.ReleaseName, releaseName)) > 0;
+            foreach (var job in _activeJobs.Where(j => IsSameRace(j.ReleaseName, releaseName)))
             {
                 // Set Stopped while holding the same lock that requeues a Waiting job.
                 // A cancelled probe can neither be registered nor returned to the queue.
@@ -170,7 +170,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
                     var cancelled = active with { Partial = job.CapturePartialState(), StopReason = RaceStopReason.UserStop.ToString() };
                     if (cancelled.HasOwnedPartial)
                     {
-                        _raceQueue.RemoveAll(r => IsSameRace(r.Section, r.ReleaseName, section, releaseName));
+                        _raceQueue.RemoveAll(r => IsSameRace(r.ReleaseName, releaseName));
                         _raceQueue.Add(RaceLifetimePolicy.CleanupRequest(cancelled, DateTime.UtcNow,
                             "Stopped by user; owned partial retained until cleanup deadline",
                             RaceLifetimePolicy.Deadline(cancelled.Partial, _config.Spread.PartialRaceDeadlineHours)));
@@ -518,7 +518,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             // that recently failed with a known dead-end class (affil-blocked,
             // release-not-found, no-activity). The TTL map is populated by the
             // job.Error handler via ClassifyDeadRace.
-            if (IsRecentlyDeadRace(section, releaseName, now, out var deadReason, out var remaining))
+            if (IsRecentlyDeadRace(releaseName, now, out var deadReason, out var remaining))
             {
                 Log.Debug("Spread: skipping {Release} — recently failed: {Reason}", releaseName, deadReason);
                 return new(RaceStartOutcome.Suppressed, section, releaseName, SuppressedFor: remaining, Reason: deadReason);
@@ -712,7 +712,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             var classified = ClassifyDeadRace(msg);
             if (classified is { } c)
             {
-                var key = DeadRaceKey(j.Section, j.ReleaseName);
+                var key = DeadRaceKey(j.ReleaseName);
                 _recentlyDeadRaces[key] = (DateTime.UtcNow + c.ttl, c.reason);
                 Log.Debug("Spread: parking {Release} on dead-race TTL ({Reason}, {Minutes}min)",
                     j.ReleaseName, c.reason, (int)c.ttl.TotalMinutes);
@@ -800,7 +800,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
                         followup = NextRequest(finishedRequest, job, DateTime.UtcNow, deferredForPools, stillRequested);
                         if (followup != null)
                         {
-                            _raceQueue.RemoveAll(r => IsSameRace(r.Section, r.ReleaseName, section, releaseName));
+                            _raceQueue.RemoveAll(r => IsSameRace(r.ReleaseName, releaseName));
                             _raceQueue.Add(followup);
                         }
                     }
@@ -2004,7 +2004,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
         foreach (var job in jobs)
         {
             job.Stop(RaceStopReason.AppShutdown);
-            try { SavePartialState(job, _shutdownQueueSnapshot.FirstOrDefault(r => IsSameRace(r.Section, r.ReleaseName, job.Section, job.ReleaseName))); }
+            try { SavePartialState(job, _shutdownQueueSnapshot.FirstOrDefault(r => IsSameRace(r.ReleaseName, job.ReleaseName))); }
             catch (Exception ex) { Log.Warning(ex, "Failed to save final race ownership during shutdown"); }
         }
         var workers = _workers.StopAsync();
@@ -2046,7 +2046,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
     // MKD under a different section name ("-TV-" vs "tv-hd" self-echo loop,
     // 2026-06-08): the second race re-raced into the dirs the first had just
     // cleaned up, and the remnant got auto-nuked. Sections intentionally ignored.
-    private static bool IsSameRace(string sectionA, string releaseA, string sectionB, string releaseB) =>
+    private static bool IsSameRace(string releaseA, string releaseB) =>
         string.Equals(releaseA, releaseB, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
@@ -2054,18 +2054,18 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
     /// Mirrors IsSameRace semantics (release-only — see comment there); the
     /// section slot is kept empty for tuple-shape compatibility.
     /// </summary>
-    private static (string section, string release) DeadRaceKey(string section, string release) =>
+    private static (string section, string release) DeadRaceKey(string release) =>
         ("", release.ToLowerInvariant());
 
     /// <summary>
-    /// True iff this (section, release) was recently failed with a class we
+    /// True iff this release was recently failed with a class we
     /// suppress and the cool-down hasn't expired. Outputs the matching reason
     /// for diagnostic logging. Expired entries are evicted on read.
     /// </summary>
-    private bool IsRecentlyDeadRace(string section, string release, DateTime now, out string? reason, out TimeSpan remaining)
+    private bool IsRecentlyDeadRace(string release, DateTime now, out string? reason, out TimeSpan remaining)
     {
         remaining = TimeSpan.Zero;
-        var key = DeadRaceKey(section, release);
+        var key = DeadRaceKey(release);
         if (!_recentlyDeadRaces.TryGetValue(key, out var entry))
         {
             reason = null;

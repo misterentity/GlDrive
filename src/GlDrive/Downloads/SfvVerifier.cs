@@ -16,10 +16,6 @@ internal sealed record SfvVerificationResult(IReadOnlyList<SfvIssue> Issues, IRe
 
 public static class SfvVerifier
 {
-    public static async Task<List<string>> VerifyAsync(string dirPath, CancellationToken ct) =>
-        (await VerifyDetailedAsync(dirPath, Directory.GetFiles(dirPath, "*.sfv"), true, ct))
-        .Issues.Select(issue => issue.ToString()).ToList();
-
     internal static async Task<SfvVerificationResult> VerifyDetailedAsync(string releaseRoot,
         IReadOnlyList<string> manifests, bool verifyChecksums, CancellationToken ct)
     {

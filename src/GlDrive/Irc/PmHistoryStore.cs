@@ -82,15 +82,6 @@ public class PmHistoryStore : IDisposable
         ScheduleSave();
     }
 
-    public void RemoveTarget(string target)
-    {
-        lock (_lock)
-        {
-            if (!_history.Remove(target)) return;
-        }
-        ScheduleSave();
-    }
-
     /// <summary>Snapshot of all conversations (targets → chronological entries).</summary>
     public IReadOnlyDictionary<string, IReadOnlyList<PmHistoryEntry>> GetAll()
     {

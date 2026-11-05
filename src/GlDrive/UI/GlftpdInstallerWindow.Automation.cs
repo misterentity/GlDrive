@@ -217,7 +217,7 @@ public partial class GlftpdInstallerWindow
             if (password.Length > 0) CredentialStore.SaveSshPassword(host, port, user, password);
             ConnectionStatus.Text = $"Connected to {host}:{port}";
             StatusBar.Text = ConnectionStatus.Text;
-            AppendLog("SSH connection established", "success");
+            AppendLog("SSH connection established");
             return new { connected = true, host, port, fingerprint = presentedFingerprint };
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

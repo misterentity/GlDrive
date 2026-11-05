@@ -196,16 +196,6 @@ public class FileNode : IDisposable
         return null;
     }
 
-    /// <summary>
-    /// Gets length of the active write buffer (memory or file).
-    /// </summary>
-    public long GetWriteBufferLength()
-    {
-        if (WriteBufferFile != null) return WriteBufferFile.Length;
-        if (WriteBuffer != null) return WriteBuffer.Length;
-        return 0;
-    }
-
     public uint GetFileAttributes()
     {
         const uint FILE_ATTRIBUTE_DIRECTORY = 0x10;

@@ -98,11 +98,11 @@ public class NetworkRowMappingTests
         Assert.True(rows[0].Use);
         Assert.Equal("Home", rows[0].FriendlyName);
         Assert.Equal("500", rows[0].LimitKbps);
-        Assert.Equal("Ethernet (192.168.1.5)", rows[0].AdapterDisplay);
+        Assert.Equal(("Ethernet", "192.168.1.5"), (rows[0].NameDisplay, rows[0].AddressDisplay));
         Assert.Equal(AllowancePeriod.Monthly, rows[1].Period); // matched by name, case-insensitive
         Assert.False(rows[1].Use);
         Assert.False(rows[2].Use);
-        Assert.Equal("Tether (not connected)", rows[3].AdapterDisplay);
+        Assert.Equal(("Tether", "offline"), (rows[3].NameDisplay, rows[3].AddressDisplay));
         Assert.True(rows[3].Use);
     }
 

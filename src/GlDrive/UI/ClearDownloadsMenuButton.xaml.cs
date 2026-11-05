@@ -8,9 +8,6 @@ public partial class ClearDownloadsMenuButton : UserControl
 {
     public ClearDownloadsMenuButton() => InitializeComponent();
 
-    /// <summary>The clear menu (exposed for the render tests).</summary>
-    internal ContextMenu Menu => MenuButton.ContextMenu;
-
     private void MenuButton_Click(object sender, RoutedEventArgs e)
     {
         if (MenuButton.ContextMenu is not { } menu) return;

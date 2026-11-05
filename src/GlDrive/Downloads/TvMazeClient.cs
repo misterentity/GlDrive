@@ -51,9 +51,6 @@ public class TvMazeClient : IDisposable
     public Task<TvMazeScheduleEpisode[]?> GetEpisodes(int showId, CancellationToken ct = default) =>
         GetEpisodeList(showId, $"shows/{showId}/episodes", ct);
 
-    public Task<TvMazeScheduleEpisode[]?> GetEpisodesByDate(int showId, DateOnly date, CancellationToken ct = default) =>
-        GetEpisodeList(showId, $"shows/{showId}/episodesbydate?date={date:yyyy-MM-dd}", ct);
-
     private async Task<TvMazeScheduleEpisode[]?> GetEpisodeList(int showId, string path, CancellationToken ct)
     {
         if (showId <= 0) return null;

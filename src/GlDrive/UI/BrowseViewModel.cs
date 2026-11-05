@@ -3,7 +3,6 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
 using FluentFTP;
-using GlDrive.Config;
 using GlDrive.Services;
 using GlDrive.Spread;
 using Serilog;
@@ -13,7 +12,6 @@ namespace GlDrive.UI;
 public class BrowseViewModel : INotifyPropertyChanged, IDisposable
 {
     private readonly ServerManager _serverManager;
-    private readonly AppConfig _config;
     private readonly Action<string, string, MountState> _serverStateHandler;
     private bool _disposed;
     private string _leftServer = "";
@@ -85,10 +83,9 @@ public class BrowseViewModel : INotifyPropertyChanged, IDisposable
     public ICommand LeftDoubleClickCommand { get; }
     public ICommand RightDoubleClickCommand { get; }
 
-    public BrowseViewModel(ServerManager serverManager, AppConfig config)
+    public BrowseViewModel(ServerManager serverManager)
     {
         _serverManager = serverManager;
-        _config = config;
 
         LeftGoCommand = new RelayCommand(async () => await LoadLeftAsync());
         RightGoCommand = new RelayCommand(async () => await LoadRightAsync());

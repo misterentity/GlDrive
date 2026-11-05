@@ -65,8 +65,8 @@ public sealed class TmdbCollectionTests
     public async Task Optional_malformed_dates_and_metadata_keep_valid_members_and_invalid_members_are_partial()
     {
         const string json = """{"id":9,"name":false,"parts":[null,{"id":1,"title":"First","release_date":{}},{"id":2,"title":7,"original_name":"Second","release_date":"invalid","overview":[]},{"id":3,"name":"Third","release_date":"2025-02-30"},{"id":4,"title":false}]}""";
-        using var client = Client((_, _) => Response(json));
-        var result = await client.GetCollection(9);
+        using var client = CollectionClient(() => Response(json));
+        var result = await client.GetMovieCollection(42);
         Assert.Equal("partial", result.Status);
         Assert.Equal(new[] { "First", "Second", "Third" }, result.Collection!.Films.Select(f => f.Title));
         Assert.All(result.Collection.Films, f => Assert.Null(f.Year));
@@ -78,11 +78,11 @@ public sealed class TmdbCollectionTests
     {
         var json = JsonSerializer.Serialize(new { id = 9, name = "Large", parts = Enumerable.Range(1, 205).Select(i => new { id = i, title = "Movie " + i }) });
         var calls = 0;
-        using var client = Client((_, _) => { calls++; return Response(json); });
-        var result = await client.GetCollection(9);
+        using var client = CollectionClient(() => Response(json), () => calls++);
+        var result = await client.GetMovieCollection(42);
         Assert.Equal("partial", result.Status);
         Assert.Equal(200, result.Collection!.Films.Count);
-        Assert.Equal(1, calls);
+        Assert.Equal(2, calls);
     }
 
     [Theory]
@@ -91,8 +91,8 @@ public sealed class TmdbCollectionTests
     [InlineData("{\"id\":9}")]
     public async Task Missing_collection_identity_or_member_array_is_unknown(string json)
     {
-        using var client = Client((_, _) => Response(json));
-        Assert.Equal("unknown", (await client.GetCollection(9)).Status);
+        using var client = CollectionClient(() => Response(json));
+        Assert.Equal("unknown", (await client.GetMovieCollection(42)).Status);
     }
 
     [Theory]
@@ -103,7 +103,6 @@ public sealed class TmdbCollectionTests
     {
         using var client = Client((_, _) => Task.FromResult(new HttpResponseMessage(status)));
         Assert.Equal("unknown", (await client.GetMovieCollection(42)).Status);
-        Assert.Equal("unknown", (await client.GetCollection(9)).Status);
     }
 
     [Fact]
@@ -113,9 +112,8 @@ public sealed class TmdbCollectionTests
         using var keyless = new TmdbClient("", new Handler((_, _) => { calls++; return Response(Movie); }));
         using var keyed = Client((_, _) => { calls++; return Response(Movie); });
         Assert.Equal("unknown", (await keyless.GetMovieCollection(42)).Status);
-        Assert.Equal("unknown", (await keyless.GetCollection(9)).Status);
         Assert.Equal("unknown", (await keyed.GetMovieCollection(0)).Status);
-        Assert.Equal("unknown", (await keyed.GetCollection(-1)).Status);
+        Assert.Equal("unknown", (await keyed.GetMovieCollection(-1)).Status);
         Assert.Equal(0, calls);
     }
 
@@ -123,8 +121,8 @@ public sealed class TmdbCollectionTests
     public async Task Oversized_stream_without_length_header_is_still_bounded()
     {
         var body = new NonSeekableStream(new byte[4 * 1024 * 1024]);
-        using var client = Client((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(body) }));
-        Assert.Equal("unknown", (await client.GetCollection(9)).Status);
+        using var client = CollectionClient(() => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(body) }));
+        Assert.Equal("unknown", (await client.GetMovieCollection(42)).Status);
         Assert.True(body.ReadBytes > 2 * 1024 * 1024);
         Assert.True(body.ReadBytes <= 2 * 1024 * 1024 + 8192);
     }
@@ -132,9 +130,9 @@ public sealed class TmdbCollectionTests
     [Fact]
     public async Task Body_deadline_and_whole_lookup_deadline_degrade_to_unknown()
     {
-        using var bodyClient = Client((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new PendingStream()) }));
+        using var bodyClient = CollectionClient(() => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new PendingStream()) }));
         bodyClient.CollectionRequestTimeout = TimeSpan.FromMilliseconds(30);
-        Assert.Equal("unknown", (await bodyClient.GetCollection(9).WaitAsync(TimeSpan.FromSeconds(5))).Status);
+        Assert.Equal("unknown", (await bodyClient.GetMovieCollection(42).WaitAsync(TimeSpan.FromSeconds(5))).Status);
         var calls = 0;
         using var wholeClient = Client(async (_, ct) =>
         {
@@ -160,6 +158,12 @@ public sealed class TmdbCollectionTests
     }
 
     private static TmdbClient Client(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send) => new("synthetic", new Handler(send));
+    private static TmdbClient CollectionClient(Func<Task<HttpResponseMessage>> collection, Action? onRequest = null) =>
+        Client((request, _) =>
+        {
+            onRequest?.Invoke();
+            return request.RequestUri!.AbsolutePath == "/3/movie/42" ? Response(Movie) : collection();
+        });
     private static Task<HttpResponseMessage> Response(string json) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json) });
     private sealed class Handler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send) : HttpMessageHandler
     { protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => send(request, cancellationToken); }

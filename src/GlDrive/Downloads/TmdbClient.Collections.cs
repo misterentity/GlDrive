@@ -32,16 +32,6 @@ public partial class TmdbClient
         catch { Log.Warning("TMDB collection lookup unavailable; collection evidence remains unknown"); return new("unknown", null); }
     }
 
-    /// <summary>Read one explicitly requested collection with a bounded response and deadline.</summary>
-    public async Task<TmdbCollectionResult> GetCollection(int collectionId, CancellationToken ct = default)
-    {
-        ct.ThrowIfCancellationRequested();
-        if (!HasApiKey || collectionId <= 0) return new("unknown", null);
-        try { return await ReadCollection(collectionId, ct).ConfigureAwait(false); }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch { Log.Warning("TMDB collection lookup unavailable; collection evidence remains unknown"); return new("unknown", null); }
-    }
-
     private async Task<TmdbCollectionResult> ReadCollection(int collectionId, CancellationToken ct)
     {
         var json = await ReadCalendarJson($"3/collection/{collectionId}?api_key={Uri.EscapeDataString(_apiKey)}",

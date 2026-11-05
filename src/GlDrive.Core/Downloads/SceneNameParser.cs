@@ -86,7 +86,7 @@ public static partial class SceneNameParser
         }
 
         // Extract title: everything before the first recognized token
-        var title = ExtractTitle(name, year, season, seMatch, yearMatch);
+        var title = ExtractTitle(name, seMatch, yearMatch);
 
         return new ParsedRelease(title, year, season, episode, quality, group, isSeasonPack, source);
     }
@@ -158,7 +158,7 @@ public static partial class SceneNameParser
         return true;
     }
 
-    private static string ExtractTitle(string name, int? year, int? season, Match seMatch, Match yearMatch)
+    private static string ExtractTitle(string name, Match seMatch, Match yearMatch)
     {
         int cutoff = name.Length;
 

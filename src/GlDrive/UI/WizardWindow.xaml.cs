@@ -18,7 +18,6 @@ public partial class WizardWindow : Window
     private readonly ServerConfig _serverConfig = new() { Name = "Server 1" };
     private readonly CertificateManager _certManager = new();
     private string _password = "";
-    private string _certFingerprint = "";
     internal bool DemoMode;
 
     // Step panels
@@ -208,7 +207,6 @@ public partial class WizardWindow : Window
             await client.Disconnect();
             client.Dispose();
 
-            _certFingerprint = fingerprint;
             _certInfo.Text = $"Server certificate SHA-256 fingerprint:\n\n{FormatFingerprint(fingerprint)}\n\nDo you trust this certificate?";
             _trustCertBox.IsChecked = true;
         }

@@ -15,8 +15,6 @@ public sealed class TelemetryRecorder : IDisposable
     };
 
     private readonly string _root;
-    // Retained for forward-compat; actual enforcement lives in TelemetryRetention (not here).
-    private readonly int _maxFileMB;
     private readonly Dictionary<TelemetryStream, StreamWriterTask> _writers = new();
     private readonly Dictionary<TelemetryStream, int> _drops = new();
     private readonly object _dropLock = new();
@@ -24,18 +22,17 @@ public sealed class TelemetryRecorder : IDisposable
     private int _disposed;
     private DateTime _lastDropWarnUtc = DateTime.MinValue;
 
-    public TelemetryRecorder(string appDataRoot, int maxFileMB)
-        : this(appDataRoot, maxFileMB,
+    public TelemetryRecorder(string appDataRoot)
+        : this(appDataRoot,
             (path, text, ct) => File.AppendAllTextAsync(path, text, FileEncoding, ct))
     {
     }
 
-    internal TelemetryRecorder(string appDataRoot, int maxFileMB,
+    internal TelemetryRecorder(string appDataRoot,
         Func<string, string, CancellationToken, Task> append, int queueCapacity = 2048)
     {
         _root = Path.Combine(appDataRoot, "ai-data");
         Directory.CreateDirectory(_root);
-        _maxFileMB = maxFileMB;
         foreach (TelemetryStream s in Enum.GetValues<TelemetryStream>())
         {
             _drops[s] = 0;

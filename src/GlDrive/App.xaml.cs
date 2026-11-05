@@ -354,7 +354,7 @@ public partial class App
         _heartbeat = new GlDrive.Services.HeartbeatMonitor();
 
         // Initialize AI agent telemetry recorder
-        TelemetryRecorder = new GlDrive.AiAgent.TelemetryRecorder(ConfigManager.AppDataPath, config.Agent.TelemetryMaxFileMB);
+        TelemetryRecorder = new GlDrive.AiAgent.TelemetryRecorder(ConfigManager.AppDataPath);
         SerilogSetup.AgentSink.Recorder = TelemetryRecorder;
         FreezeStore = new GlDrive.AiAgent.FreezeStore(
             System.IO.Path.Combine(ConfigManager.AppDataPath, "ai-data"));

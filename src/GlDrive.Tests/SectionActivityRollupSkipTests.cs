@@ -1,6 +1,4 @@
-using System;
 using System.IO;
-using System.Linq;
 using GlDrive.AiAgent;
 using Xunit;
 
@@ -31,7 +29,7 @@ public sealed class SectionActivityRollupSkipTests
         $"\"participants\":[{{\"serverId\":\"{server}\",\"files\":3,\"bytes\":100}}]}}";
 
     private static SectionActivityRollup Rollup(string root) =>
-        new(new TelemetryRecorder(root, 64), root);
+        new(new TelemetryRecorder(root), root);
 
     [Fact]
     public void MalformedRaceRow_IsSkippedButCounted()

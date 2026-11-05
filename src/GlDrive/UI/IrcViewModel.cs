@@ -151,7 +151,6 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
 
     // Per-channel message buffers: key = "serverId:target"
     private readonly Dictionary<string, List<IrcMessageVm>> _messageBuffers = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, List<string>> _nickBuffers = new(StringComparer.OrdinalIgnoreCase);
     // Items shown during scrollback hydration that may still be queued for live
     // delivery (subscribe-vs-hydrate race) — consulted once each by OnIrcMessage.
     private readonly HashSet<IrcMessageItem> _hydratedRecent = new();

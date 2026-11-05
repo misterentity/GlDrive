@@ -51,7 +51,7 @@ public static class SearchFilterToggle
 {
     public readonly record struct State(string Quality, string Source, bool BigSize)
     {
-        public bool AnyActive => Quality.Length > 0 || Source.Length > 0 || BigSize;
+        public bool AnyActive => !string.IsNullOrEmpty(Quality) || !string.IsNullOrEmpty(Source) || BigSize;
     }
 
     public static State Apply(State current, string? arg)

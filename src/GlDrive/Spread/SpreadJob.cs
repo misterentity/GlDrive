@@ -127,13 +127,6 @@ public partial class SpreadJob : IDisposable
     private bool IsUnopenedFillOnlyNoLock(string id)
         => _fillOnlyDests.Contains(id) && !_destDirConfirmed.Contains(id);
 
-    /// <summary>Fill-only dests whose release dir never appeared — excluded from
-    /// history's delivered/clean-complete accounting (they never participated).</summary>
-    public IReadOnlyCollection<string> UnopenedFillOnlyDests
-    {
-        get { lock (_ownershipLock) return _fillOnlyDests.Where(id => !_destDirConfirmed.Contains(id)).ToList(); }
-    }
-
     // Per-destination zipscript signals captured on each scan (see CompletionDetector).
     // _destSawMarker[id] = a completion marker was visible in id's release dir this scan.
     // _destHasMissingStub[id] = a -MISSING- stub was visible this scan.
@@ -1126,7 +1119,7 @@ public partial class SpreadJob : IDisposable
                     // loss and reports a cause ("mkdir filter") nothing measured.
                     if (activeCount == 0 && _sourceScanSucceeded
                         && _lastPassDestsEvaluated > 0
-                        && NoViableDestinations(sitePaths, sourceServers))
+                        && NoViableDestinations(sitePaths))
                     {
                         var s = _lastSkipSummary is { } sm ? $" ({sm})" : "";
                         SetFailed($"All destinations denied this release — mkdir filter{s}");
@@ -1137,7 +1130,7 @@ public partial class SpreadJob : IDisposable
                     var waitingForAnnounce = HasUnverifiedAnnounceSources();
                     var poolsUnavailable = sitePaths.Keys.Any(id => ResolveSpreadPool(id) == null || IsScanAdmissionDeferred(id));
                     var done = !waitingForRelease && !waitingForAnnounce && !poolsUnavailable && (_spreadConfig.WaitForDestinationComplete
-                        ? AllDestinationsTerminal(sitePaths, sourceServers)
+                        ? AllDestinationsTerminal(sitePaths)
                         : IsJobComplete());
                     if (done)
                     {
@@ -2401,7 +2394,7 @@ public partial class SpreadJob : IDisposable
     private bool HasExpectedFilesNoLock(string serverId) => _expectedFiles.All(name =>
         _fileOwnership.TryGetValue(name, out var owners) && owners.Contains(serverId));
 
-    private int ExpectedTotalNoLock() => Math.Max(_expectedFileCount,
+    private int ExpectedTotalNoLock() => ResolveFileTotal(_expectedFileCount,
         _fileInfos.Count + _expectedFiles.Count(name => !_fileInfos.ContainsKey(name)));
 
     private void CreditDeliveryNoLock(string fileName, long size, string dstId, bool wasDupe)
@@ -3817,14 +3810,6 @@ public partial class SpreadJob : IDisposable
         return false;
     }
 
-    private bool IsDestDropped(string dstId)
-    {
-        lock (_ownershipLock)
-        {
-            return _destRetryAt.TryGetValue(dstId, out var until) && until == DateTime.MaxValue;
-        }
-    }
-
     // Caller must already hold _ownershipLock.
     private bool IsDestDroppedNoLock(string dstId)
         => _destRetryAt.TryGetValue(dstId, out var until) && until == DateTime.MaxValue;
@@ -3913,7 +3898,7 @@ public partial class SpreadJob : IDisposable
     /// its sweep retries (~3min) while the queue backs up. Fill-only dests are treated
     /// as pending (a peer may still create the dir), not blocked.
     /// </summary>
-    private bool NoViableDestinations(Dictionary<string, string> sitePaths, HashSet<string> sourceServers)
+    private bool NoViableDestinations(Dictionary<string, string> sitePaths)
     {
         lock (_ownershipLock)
         {
@@ -3936,7 +3921,7 @@ public partial class SpreadJob : IDisposable
     /// in a terminal state. Applies the await->TimedOut transition using the
     /// completion-wait budget. Used by the RunAsync gate when WaitForDestinationComplete.
     /// </summary>
-    private bool AllDestinationsTerminal(Dictionary<string, string> sitePaths, HashSet<string> sourceServers)
+    private bool AllDestinationsTerminal(Dictionary<string, string> sitePaths)
     {
         if (HasPendingReleaseInventory()) return false;
         lock (_ownershipLock)
@@ -4035,89 +4020,6 @@ public partial class SpreadJob : IDisposable
     }
 
     /// <summary>
-    /// Create a directory on glftpd. glftpd speaks plain RFC 959 MKD — there is
-    /// no SITE MKD command (that is a ProFTPD mod_site_misc extension and will
-    /// always return 500 "Command not understood" on glftpd, which just adds
-    /// noise and swallows the real reply). cbftp, the reference race engine,
-    /// only ever fires plain MKD against an absolute path.
-    ///
-    /// Semantics:
-    ///   CWD &lt;path&gt;          → fast path: already exists
-    ///   MKD &lt;path&gt;          → 257 = created, 2xx = OK
-    ///   reply text "File exist" / "already exist" → treat as success (cbftp)
-    ///   550 with "No such file" → parent missing, recurse once
-    ///   anything else → fail, log actual reply code + message
-    /// </summary>
-    private static async Task<bool> TryMakeDir(FluentFTP.AsyncFtpClient client, string path, CancellationToken ct)
-    {
-        var (ok, _, _) = await TryMakeDirWithResult(client, path, ct);
-        return ok;
-    }
-
-    /// <summary>
-    /// Same as <see cref="TryMakeDir"/> but returns the FTP reply code + message
-    /// on failure so the caller can classify the error (permanent vs transient)
-    /// and drive the section blacklist. Logs the failure once here so callers
-    /// don't need to.
-    /// </summary>
-    private static async Task<(bool ok, string code, string msg)> TryMakeDirWithResult(
-        FluentFTP.AsyncFtpClient client, string path, CancellationToken ct)
-    {
-        var (ok, code, msg) = await TryMakeDirCore(client, path, ct, depth: 0);
-        if (!ok)
-            Log.Warning("MKD failed for {Path}: {Code} {Msg}", path, code, msg);
-        return (ok, code, msg);
-    }
-
-    private static async Task<(bool ok, string code, string msg)> TryMakeDirCore(
-        FluentFTP.AsyncFtpClient client, string path, CancellationToken ct, int depth)
-    {
-        if (depth > 4)
-            return (false, "ERR", "parent recursion depth exceeded");
-
-        var sanitized = Ftp.CpsvDataHelper.SanitizeFtpPath(path);
-
-        // Fast path: directory already exists. CWD is cheap and idempotent on
-        // glftpd. We don't care about the resulting working-dir state since
-        // all subsequent FXP commands use absolute paths.
-        var cwdReply = await client.Execute($"CWD {sanitized}", ct);
-        if (cwdReply.Success)
-            return (true, cwdReply.Code ?? "250", "exists (CWD)");
-
-        // Create it.
-        var reply = await client.Execute($"MKD {sanitized}", ct);
-        if (IsMkdSuccess(reply))
-            return (true, reply.Code ?? "257", reply.Message ?? "created");
-
-        var mkdCode = reply.Code ?? "";
-        var mkdMsg = reply.Message ?? "";
-
-        // 550 + "no such file" style message → the parent doesn't exist yet.
-        // This is the legit recursive case — walk up one level, MKD the parent,
-        // then retry the original path. One level is usually enough since glftpd
-        // sections are shallow (/mp3/0415/Release.Name is only 2 deep), but the
-        // recursion handles deeper nesting up to depth 4.
-        if (mkdCode == "550" && LooksLikeMissingParent(mkdMsg))
-        {
-            var parent = GetParentPath(sanitized);
-            if (!string.IsNullOrEmpty(parent) && parent != "/" && parent != sanitized)
-            {
-                var parentResult = await TryMakeDirCore(client, parent, ct, depth + 1);
-                if (parentResult.ok)
-                {
-                    var retry = await client.Execute($"MKD {sanitized}", ct);
-                    if (IsMkdSuccess(retry))
-                        return (true, retry.Code ?? "257", retry.Message ?? "created after parent");
-                    return (false, retry.Code ?? "", retry.Message ?? "(no reply text)");
-                }
-                return (false, parentResult.code, $"parent MKD failed: {parentResult.msg}");
-            }
-        }
-
-        return (false, mkdCode, mkdMsg);
-    }
-
-    /// <summary>
     /// cbftp's MKD response check: accept 257 / any 2xx as success, and also
     /// accept 550 when the message body indicates the directory already exists.
     /// Different glftpd versions + themes use slightly different phrasings.
@@ -4128,18 +4030,6 @@ public partial class SpreadJob : IDisposable
         var msg = reply.Message ?? "";
         return msg.Contains("File exist", StringComparison.OrdinalIgnoreCase)
             || msg.Contains("already exist", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool LooksLikeMissingParent(string msg) =>
-        msg.Contains("No such file", StringComparison.OrdinalIgnoreCase) ||
-        msg.Contains("does not exist", StringComparison.OrdinalIgnoreCase) ||
-        msg.Contains("Not a directory", StringComparison.OrdinalIgnoreCase);
-
-    private static string? GetParentPath(string path)
-    {
-        var trimmed = path.TrimEnd('/');
-        var i = trimmed.LastIndexOf('/');
-        return i <= 0 ? null : trimmed[..i];
     }
 
     /// <summary>

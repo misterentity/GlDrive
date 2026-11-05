@@ -35,8 +35,8 @@ public partial class SpreadManager
 
     private RaceStartResult? MergeDuplicateNoLock(PersistedRace incoming, DateTime now, bool includeQueuePosition = true)
     {
-        var active = _activeJobs.FirstOrDefault(j => IsSameRace(j.Section, j.ReleaseName, incoming.Section, incoming.ReleaseName));
-        var starting = _startingRequests.FindIndex(r => IsSameRace(r.Section, r.ReleaseName, incoming.Section, incoming.ReleaseName));
+        var active = _activeJobs.FirstOrDefault(j => IsSameRace(j.ReleaseName, incoming.ReleaseName));
+        var starting = _startingRequests.FindIndex(r => IsSameRace(r.ReleaseName, incoming.ReleaseName));
         if (active != null || starting >= 0)
         {
             var changed = false;
@@ -60,7 +60,7 @@ public partial class SpreadManager
             return new(RaceStartOutcome.AlreadyActive, incoming.Section, incoming.ReleaseName, Job: active,
                 Reason: active == null ? "Race admission is already in progress" : "Release is already racing", HintsMerged: changed);
         }
-        var duplicate = _raceQueue.FindIndex(r => IsSameRace(r.Section, r.ReleaseName, incoming.Section, incoming.ReleaseName));
+        var duplicate = _raceQueue.FindIndex(r => IsSameRace(r.ReleaseName, incoming.ReleaseName));
         if (duplicate < 0) return null;
         var queued = _raceQueue[duplicate];
         var updated = _config.Spread.MergeRaceAnnounces && !queued.CleanupOnly ? MergeRaceNoLock(queued, incoming, true) : queued;

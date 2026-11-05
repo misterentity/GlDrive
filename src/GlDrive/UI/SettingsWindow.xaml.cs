@@ -1,9 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
-using System.Text;
 using System.Windows;
-using System.Xml.Linq;
 using GlDrive.Config;
 using GlDrive.Util;
 using GlDrive.Logging;
@@ -23,7 +21,6 @@ public partial class SettingsWindow : Window
 
     /// <summary>Tag of the multi-stream tab, for opening Settings straight onto it.</summary>
     public const string StreamsTab = "Streams";
-    public const string McpTab = "MCP";
 
     public SettingsWindow(AppConfig config, ServerManager serverManager, bool readLocalState = true, string? initialTab = null)
     {

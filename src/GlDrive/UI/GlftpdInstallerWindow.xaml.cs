@@ -119,13 +119,13 @@ public partial class GlftpdInstallerWindow : Window
 
             ConnectionStatus.Text = $"Connected to {host}:{port}";
             StatusBar.Text = $"Connected — {host}:{port}";
-            AppendLog("SSH connection established", "success");
+            AppendLog("SSH connection established");
         }
         catch (Exception ex)
         {
             _ssh?.Dispose(); _ssh = null;
             _sftp?.Dispose(); _sftp = null;
-            AppendLog($"Connection failed: {ex.Message}", "error");
+            AppendLog($"Connection failed: {ex.Message}");
             ShowError($"Connection failed: {ex.Message}");
         }
     }
@@ -167,7 +167,7 @@ public partial class GlftpdInstallerWindow : Window
     {
         if (_installing || _automationConnecting) { ShowError("Wait for the active installer operation or cancel it first."); return; }
         Disconnect();
-        AppendLog("Disconnected", "info");
+        AppendLog("Disconnected");
     }
 
     private void BrowseKeyFile_Click(object sender, RoutedEventArgs e)
@@ -425,7 +425,7 @@ public partial class GlftpdInstallerWindow : Window
             var installShPath = Path.Combine(InstallerRepoPath, "install.sh");
             if (!File.Exists(installShPath))
             {
-                AppendLog($"install.sh not found at {installShPath}", "error");
+                AppendLog($"install.sh not found at {installShPath}");
                 throw new FileNotFoundException("install.sh not found. Place glftpd-installer repo in Documents.");
             }
             using (var script = File.OpenRead(installShPath))
@@ -516,7 +516,7 @@ public partial class GlftpdInstallerWindow : Window
 
                 var stderr = shellCmd.Error;
                 if (!string.IsNullOrWhiteSpace(stderr))
-                    Dispatcher.Invoke(() => AppendLog($"Errors:\n{stderr}", "error"));
+                    Dispatcher.Invoke(() => AppendLog($"Errors:\n{stderr}"));
 
                 if (shellCmd.ExitStatus != 0)
                     throw new Exception($"install.sh exited with code {shellCmd.ExitStatus}");
@@ -525,7 +525,7 @@ public partial class GlftpdInstallerWindow : Window
             installOk = true;
             UpdateProgress(totalSteps, totalSteps, "COMPLETE");
             await AutomationCommand($"rm -rf '{remotePath}'", ct);
-            AppendLog("Installation completed successfully!", "success");
+            AppendLog("Installation completed successfully!");
             StatusBar.Text = "Installation completed";
             if (interactive) MessageBox.Show("Installation completed!", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
         }
@@ -533,9 +533,9 @@ public partial class GlftpdInstallerWindow : Window
         {
             StatusBar.Text = ct.IsCancellationRequested ? "Installation cancelled" : "Installation failed";
             ProgressLabel.Text = ct.IsCancellationRequested ? "CANCELLED" : "FAILED";
-            AppendLog($"Error: {ex.Message}", "error");
+            AppendLog($"Error: {ex.Message}");
             if (!installOk)
-                AppendLog($"Non-secret remote files kept at {remotePath} for debugging", "warning");
+                AppendLog($"Non-secret remote files kept at {remotePath} for debugging");
             if (interactive) MessageBox.Show($"Installation failed: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
             else throw;
         }
@@ -612,7 +612,7 @@ public partial class GlftpdInstallerWindow : Window
         });
     }
 
-    private void AppendLog(string message, string tag = "")
+    private void AppendLog(string message)
     {
         Dispatcher.Invoke(() =>
         {
@@ -635,7 +635,7 @@ public partial class GlftpdInstallerWindow : Window
         if (dlg.ShowDialog() == true)
         {
             File.WriteAllText(dlg.FileName, LogOutput.Text);
-            AppendLog($"Log exported to {dlg.FileName}", "success");
+            AppendLog($"Log exported to {dlg.FileName}");
         }
     }
 
@@ -656,7 +656,7 @@ public partial class GlftpdInstallerWindow : Window
             var data = CollectProfile();
             var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(dlg.FileName, json);
-            AppendLog($"Profile saved to {dlg.FileName}", "success");
+            AppendLog($"Profile saved to {dlg.FileName}");
         }
         catch (Exception ex)
         {
@@ -679,7 +679,7 @@ public partial class GlftpdInstallerWindow : Window
             var data = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json);
             if (data != null)
                 ApplyProfile(data);
-            AppendLog($"Profile loaded from {dlg.FileName}", "success");
+            AppendLog($"Profile loaded from {dlg.FileName}");
         }
         catch (Exception ex)
         {

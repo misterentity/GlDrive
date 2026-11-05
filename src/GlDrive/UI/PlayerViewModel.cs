@@ -52,7 +52,6 @@ public partial class PlayerViewModel : INotifyPropertyChanged, IDisposable
     private int _selectedTvId;
     private string _selectedTvName = "";
     private TmdbSeasonSummary? _selectedSeason;
-    private TmdbEpisode? _selectedEpisode;
 
     // Auto-play next episode
     private List<TmdbEpisode>? _episodePlaylist;
@@ -143,12 +142,6 @@ public partial class PlayerViewModel : INotifyPropertyChanged, IDisposable
             OnPropertyChanged();
             if (value != null) _ = LoadEpisodes(_selectedTvId, value.SeasonNumber);
         }
-    }
-
-    public TmdbEpisode? SelectedEpisode
-    {
-        get => _selectedEpisode;
-        set { _selectedEpisode = value; OnPropertyChanged(); }
     }
 
     public PlayerSearchResultVm? SelectedFtpResult
@@ -427,7 +420,7 @@ public partial class PlayerViewModel : INotifyPropertyChanged, IDisposable
                 });
             _mediaPlayer.Volume = (int)_volume;
 
-            _streamServer = new MediaStreamServer(_serverManager, _config);
+            _streamServer = new MediaStreamServer(_serverManager);
             _streamServer.Start();
             Log.Information("MediaStreamServer started on port {Port}", _streamServer.Port);
 
@@ -622,7 +615,6 @@ public partial class PlayerViewModel : INotifyPropertyChanged, IDisposable
         Seasons.Clear();
         Episodes.Clear();
         _selectedSeason = null;
-        _selectedEpisode = null;
         _episodePlaylist = null;
         _playlistIndex = -1;
         OnPropertyChanged(nameof(ShowEpisodePicker));
@@ -631,7 +623,6 @@ public partial class PlayerViewModel : INotifyPropertyChanged, IDisposable
     private async Task PlayEpisode(TmdbEpisode episode)
     {
         if (_selectedSeason == null) return;
-        _selectedEpisode = episode;
         _playlistIndex = _episodePlaylist?.IndexOf(episode) ?? -1;
 
         var query = episode.SearchQuery(_selectedTvName, _selectedSeason.SeasonNumber);
@@ -1342,12 +1333,6 @@ public partial class PlayerViewModel : INotifyPropertyChanged, IDisposable
         _mediaPlayer.Time = Math.Clamp(newTime, 0, lengthMs);
     }
 
-    public void ToggleFullscreen()
-    {
-        FullscreenRequested?.Invoke();
-    }
-
-    public event Action? FullscreenRequested;
     public event Action? SwitchToNowPlaying;
 
     private void UpdateTimeDisplay()
@@ -1517,7 +1502,6 @@ public class MediaCardVm
     public int TmdbId { get; set; }
 
     public string RatingDisplay => VoteAverage > 0 ? $"\u2605 {VoteAverage:F1}" : "";
-    public string TitleWithYear => !string.IsNullOrEmpty(Year) ? $"{Title} ({Year})" : Title;
 }
 
 public class PlayerSearchResultVm

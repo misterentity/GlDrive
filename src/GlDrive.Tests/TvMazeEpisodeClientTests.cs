@@ -27,9 +27,8 @@ public sealed class TvMazeEpisodeClientTests
         using var client = new TvMazeClient(new HttpClient(handler) { BaseAddress = new Uri("https://metadata.invalid/") },
             _ => { gated++; return Task.CompletedTask; });
         Assert.Equal(2, (await client.GetEpisodes(123))!.Length);
-        Assert.Equal(2, (await client.GetEpisodesByDate(123, new(2026, 1, 1)))!.Length);
-        Assert.Equal(["/shows/123/episodes", "/shows/123/episodesbydate?date=2026-01-01"], paths);
-        Assert.Equal(2, gated);
+        Assert.Equal(["/shows/123/episodes"], paths);
+        Assert.Equal(1, gated);
     }
 
     [Theory]

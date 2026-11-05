@@ -93,12 +93,6 @@ public class FtpOperations
         }
     }
 
-    public async Task<Stream> DownloadFileStream(string remotePath, CancellationToken ct = default)
-    {
-        var data = await DownloadFile(remotePath, ct);
-        return new MemoryStream(data, false);
-    }
-
     public async Task DownloadToStream(string remotePath, Stream destination, CancellationToken ct = default)
     {
         await using var conn = await _pool.BorrowFor(FtpBorrowPurpose.Filesystem, ct);

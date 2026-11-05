@@ -242,7 +242,6 @@ public class IrcClient : IDisposable
     public Task NoticeAsync(string target, string text) => SendRawAsync($"NOTICE {target} :{text}");
     public Task QuitAsync(string? message = null) =>
         SendRawAsync(message != null ? $"QUIT :{message}" : "QUIT :GlDrive");
-    public Task PongAsync(string token) => SendRawAsync($"PONG :{token}");
 
     /// <summary>
     /// Signals the read loop to stop by cancelling the internal CTS without

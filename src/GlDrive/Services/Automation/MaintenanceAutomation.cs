@@ -46,7 +46,7 @@ public sealed class MaintenanceAutomation : IAutomationModule
         ct.ThrowIfCancellationRequested();
         if (operation == "config_snapshot_restore" && System.Windows.Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
             return await (await dispatcher.InvokeAsync(() => ExecuteAsync(operation, arguments, ct)));
-        if (operation.StartsWith("certificates_", StringComparison.Ordinal)) return Certificates(operation, arguments);
+        if (operation.StartsWith("certificates_", StringComparison.Ordinal)) return Certificates(operation);
         lock (_gate)
         {
             _diagnostics.EnsureDirectory(_snapshots);
@@ -75,7 +75,7 @@ public sealed class MaintenanceAutomation : IAutomationModule
         }
     }
 
-    private object Certificates(string operation, JsonElement arguments)
+    private object Certificates(string operation)
     {
         if (operation != "certificates_list") CheckWritable();
         switch (operation)
@@ -156,14 +156,5 @@ public sealed class MaintenanceAutomation : IAutomationModule
     private static void CheckWritable()
     {
         if (ConfigManager.ReadOnly) throw new InvalidOperationException("Application data is read-only in this mode");
-    }
-
-    private static string HostPort(string hostPort)
-    {
-        var split = hostPort.LastIndexOf(':');
-        if (hostPort.Length > 512 || split <= 0 || hostPort.Any(char.IsWhiteSpace) || hostPort.IndexOfAny(['/', '\\', '?', '#', '@']) >= 0
-            || !int.TryParse(hostPort[(split + 1)..], out var port) || port is < 1 or > 65535)
-            throw new ArgumentException("hostPort must be a hostname/IP followed by :port");
-        return hostPort;
     }
 }

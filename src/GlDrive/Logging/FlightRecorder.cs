@@ -5,11 +5,9 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using GlDrive.Config;
 using GlDrive.Services.Automation;
-using GlDrive.Util;
 using Serilog.Core;
 using Serilog.Events;
 
@@ -389,11 +387,6 @@ public sealed class FlightRecorder : ILogEventSink, IDisposable
         return Task.Run(work);
     }
     private static Task<T> Detached<T>(Func<Task<T>> work)
-    {
-        using var flow = ExecutionContext.IsFlowSuppressed() ? default : ExecutionContext.SuppressFlow();
-        return Task.Run(work);
-    }
-    private static Task Detached(Func<Task> work)
     {
         using var flow = ExecutionContext.IsFlowSuppressed() ? default : ExecutionContext.SuppressFlow();
         return Task.Run(work);

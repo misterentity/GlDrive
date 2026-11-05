@@ -154,9 +154,4 @@ public partial class LogConsoleWindow : Window
         using var flow = ExecutionContext.IsFlowSuppressed() ? default : ExecutionContext.SuppressFlow();
         return Task.Run(action);
     }
-    private static Task BackgroundAsync(Func<Task> action)
-    {
-        using var flow = ExecutionContext.IsFlowSuppressed() ? default : ExecutionContext.SuppressFlow();
-        return Task.Run(action);
-    }
 }

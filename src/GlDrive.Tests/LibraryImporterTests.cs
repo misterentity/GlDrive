@@ -72,7 +72,7 @@ public sealed class LibraryImporterTests : IDisposable
         Assert.True(WishlistSourceFloor.IsLowQualityLibrary(entry));
         Assert.Equal("upgrade", LibraryIndex.Lookup(snapshot, plan.Identity).Status);
         var movie = new WishlistItem { Title = "Synthetic Film", Year = 2024, Quality = QualityProfile.Q1080p, AllowLowQualitySources = true };
-        Assert.False(WishlistOwnership.IsOwned(movie, new(), snapshot, [], DateTimeOffset.UtcNow));
+        Assert.False(WishlistOwnership.IsOwnedPrepared(movie, new(), snapshot, WishlistOwnership.PrepareDownloads([]), DateTimeOffset.UtcNow));
     }
 
     [Theory]

@@ -122,7 +122,7 @@ internal static class ScreenshotCapture
         if (dashboard.FindName("DownloadsGrid") is ListBox demoDownloads && demoDownloads.Items.Count > 1)
             demoDownloads.SelectedIndex = 1;
 
-        using var demoBrowse = new BrowseViewModel(serverManager, config);
+        using var demoBrowse = new BrowseViewModel(serverManager);
         ((TabItem)dashboard.FindName("BrowseTab")).DataContext = demoBrowse;
         using var demoPlayer = new PlayerViewModel(serverManager, config);
         demoPlayer.SelectedMovie = new MediaCardVm { Title = "Sample Open Film", Year = "2026" };

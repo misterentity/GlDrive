@@ -19,7 +19,7 @@ public sealed class DownloadSourceRankerTests
         var ranked = DownloadSourceRanker.Rank(Release, [Source("slow"), Source("fast")], speeds);
         Assert.Equal(new[] { "fast", "slow" }, ranked.Select(source => source.Source.ServerId));
         Assert.Equal(5000, ranked[0].BytesPerSecond);
-        Assert.All(ranked, source => Assert.True(source.HasMeasuredSpeed));
+        Assert.All(ranked, source => Assert.True(source.BytesPerSecond > 0));
     }
 
     [Fact]
@@ -32,7 +32,6 @@ public sealed class DownloadSourceRankerTests
         var ranked = DownloadSourceRanker.Rank(Release, [Source("a"), Source("b")], speeds);
         Assert.Equal("b", ranked[0].Source.ServerId);
         Assert.Equal(0, ranked[1].BytesPerSecond);
-        Assert.False(ranked[1].HasMeasuredSpeed);
     }
 
     [Fact]

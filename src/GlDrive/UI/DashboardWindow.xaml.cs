@@ -576,9 +576,6 @@ public partial class DashboardWindow : Window
                 }
             };
 
-            // Fullscreen handler
-            _playerVm.FullscreenRequested += TogglePlayerFullscreen;
-
             // Auto-switch to Now Playing when user selects a card
             _playerVm.SwitchToNowPlaying += () =>
                 Dispatcher.Invoke(() => NowPlayingMode.IsChecked = true);
@@ -630,7 +627,7 @@ public partial class DashboardWindow : Window
         if (header == "Browse" && !_browseLoaded)
         {
             _browseLoaded = true;
-            _browseVm = new BrowseViewModel(_serverManager, _config);
+            _browseVm = new BrowseViewModel(_serverManager);
             BrowseTab.DataContext = _browseVm;
         }
 

@@ -1,6 +1,4 @@
-using System;
 using System.IO;
-using System.Linq;
 using GlDrive.AiAgent;
 using Xunit;
 
@@ -84,7 +82,7 @@ public sealed class ProductionDataSmokeTests
         {
             File.Copy(src, Path.Combine(root, "races-20260825.jsonl"));
 
-            var r = new SectionActivityRollup(new TelemetryRecorder(root, 64), root);
+            var r = new SectionActivityRollup(new TelemetryRecorder(root), root);
             r.RollUp(new DateTime(2026, 8, 25));
 
             // Real telemetry must parse cleanly; a non-zero count here would mean the live

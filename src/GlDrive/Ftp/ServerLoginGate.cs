@@ -78,8 +78,6 @@ public sealed class ServerLoginGate : IAccountLoginGate
     private int _priorityLimit; // current priority sub-cap (= _limit − _mainReserved)
     private int _held;          // permits acquired by callers (not counting parked ballast)
     private int _parked;        // _sem permits permanently parked by TightenTo
-    private int _generalParked; // _general permits permanently parked by TightenTo
-    private int _priorityParked;// _priority permits permanently parked by TightenTo
     private readonly object _lock = new();
     public string Key { get; }
 
@@ -101,10 +99,8 @@ public sealed class ServerLoginGate : IAccountLoginGate
         _parked = _maxLimit - _limit;
         _generalLimit = _limit - _reserved;
         _general = new SemaphoreSlim(_generalLimit, _maxLimit);
-        _generalParked = _maxLimit - _generalLimit;
         _priorityLimit = _limit - _mainReserved;
         _priority = new SemaphoreSlim(_priorityLimit, _maxLimit);
-        _priorityParked = _maxLimit - _priorityLimit;
     }
 
     public int Held => Volatile.Read(ref _held);
@@ -185,12 +181,10 @@ public sealed class ServerLoginGate : IAccountLoginGate
             var newGeneralLimit = Math.Max(1, _limit - _reserved);
             generalToPark = _generalLimit - newGeneralLimit;
             _generalLimit = newGeneralLimit;
-            _generalParked += generalToPark;
 
             var newPriorityLimit = Math.Max(1, _limit - _mainReserved);
             priorityToPark = _priorityLimit - newPriorityLimit;
             _priorityLimit = newPriorityLimit;
-            _priorityParked += priorityToPark;
         }
         // Park permits off-thread: WaitAsync may block if all are currently held,
         // but as connections close and release, the parking absorbs the permits and

@@ -117,8 +117,6 @@ public class PreDbRelease
     public string Reason { get; set; } = "";
 
     [JsonIgnore]
-    public DateTime PreTime => DateTimeOffset.FromUnixTimeSeconds(PreAt).LocalDateTime;
-    [JsonIgnore]
     public bool IsNuked => Status == 3;
 
     public string SizeFormatted

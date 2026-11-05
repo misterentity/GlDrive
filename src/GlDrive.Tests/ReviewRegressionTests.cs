@@ -1,4 +1,3 @@
-using System;
 using System.IO;
 using GlDrive.Config;
 using GlDrive.Downloads;
@@ -76,25 +75,6 @@ public class ReviewRegressionTests
         finally
         {
             Directory.Delete(root, true);
-        }
-    }
-
-    [Fact]
-    public void Legacy_update_marker_is_bound_to_pid_and_original_process_path()
-    {
-        var marker = Path.Combine(Path.GetTempPath(), "gldrive-legacy-marker-" + Guid.NewGuid().ToString("N"));
-        try
-        {
-            UpdateMarkerHmac.Write(marker, 4242);
-
-            Assert.True(UpdateMarkerHmac.IsValidForProcess(marker, 4242, Environment.ProcessPath!));
-            Assert.False(UpdateMarkerHmac.IsValidForProcess(marker, 4243, Environment.ProcessPath!));
-            Assert.False(UpdateMarkerHmac.IsValidForProcess(marker, 4242,
-                Path.Combine(Path.GetTempPath(), "GlDrive.exe")));
-        }
-        finally
-        {
-            File.Delete(marker);
         }
     }
 

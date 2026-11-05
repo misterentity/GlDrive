@@ -33,8 +33,8 @@ public class WishlistOwnershipRegressionTests
         var entry = new LibraryIndexEntry(new("Localized Example", 2026, null, null, QualityProfile.Q1080p),
             @"C:\Library\Localized.Example.2026.1080p.WEB-GROUP.mkv", "both", true, "synthetic-id", [guid]);
         var snapshot = new LibraryIndexSnapshot(DateTime.UtcNow, [entry], 1, 1, 0, false);
-        Assert.Equal(owned, WishlistOwnership.IsOwned(item, new(), snapshot, [], DateTimeOffset.UtcNow));
-        Assert.False(WishlistOwnership.IsOwned(item, new(), snapshot with { Entries = [entry with { VerifiedOnDisk = false }] }, [], DateTimeOffset.UtcNow));
+        Assert.Equal(owned, WishlistOwnership.IsOwnedPrepared(item, new(), snapshot, WishlistOwnership.PrepareDownloads([]), DateTimeOffset.UtcNow));
+        Assert.False(WishlistOwnership.IsOwnedPrepared(item, new(), snapshot with { Entries = [entry with { VerifiedOnDisk = false }] }, WishlistOwnership.PrepareDownloads([]), DateTimeOffset.UtcNow));
     }
 
     [Theory]
@@ -51,6 +51,6 @@ public class WishlistOwnershipRegressionTests
             SeriesInventory = [new() { Season = 1, Number = 1, AirDate = new DateOnly(2020, 1, 1) }]
         };
         var download = new DownloadItem { ReleaseName = release, Status = DownloadStatus.Completed, TotalBytes = 100 };
-        Assert.Equal(owned, WishlistOwnership.IsOwned(item, new(), LibraryIndexSnapshot.Empty, [download], now));
+        Assert.Equal(owned, WishlistOwnership.IsOwnedPrepared(item, new(), LibraryIndexSnapshot.Empty, WishlistOwnership.PrepareDownloads([download]), now));
     }
 }

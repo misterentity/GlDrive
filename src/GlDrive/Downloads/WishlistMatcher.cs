@@ -1,4 +1,3 @@
-using System.IO;
 using GlDrive.AiAgent;
 using GlDrive.Config;
 using GlDrive.Ftp;
@@ -83,15 +82,6 @@ public class WishlistMatcher
             return;
         }
         ProcessRelease(category, releaseName, remotePath, fromIrc, sizeBytes);
-    }
-
-    public void OnIrcCompletion(ServerConfig server, string section, string releaseName,
-        long? sizeBytes = null, DateTimeOffset? completedAtUtc = null)
-    {
-        if (!_config.WantedDecisionWindowEnabled || !_config.AutoDownloadWishlist || !_wantedAttached || _wantedCoordinator == null) return;
-        var path = WishlistIrcRelease.ResolvePath(server, section, releaseName);
-        if (path != null) _wantedCoordinator.Offer(this, section, releaseName, path,
-            WantedReadiness.TrustedComplete, fromIrc: true, sizeBytes: sizeBytes, completeAtUtc: completedAtUtc);
     }
 
     internal bool DispatchWanted(string itemId, string category, string release, string path,

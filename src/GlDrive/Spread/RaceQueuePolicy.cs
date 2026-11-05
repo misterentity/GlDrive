@@ -3,11 +3,6 @@ namespace GlDrive.Spread;
 /// <summary>Nonpreemptive single-slot ordering; eligibility and resource admission remain with the manager.</summary>
 internal static class RaceQueuePolicy
 {
-    internal static IReadOnlyList<int> OrderIndices(IReadOnlyList<PersistedRace> queue,
-        IEnumerable<int> eligibleIndices, DateTime nowUtc, bool enabled, int maxAgeMinutes) =>
-        Order(eligibleIndices.Where(i => i >= 0 && i < queue.Count).Distinct().Select(i => (queue[i], i)),
-            nowUtc, enabled, maxAgeMinutes);
-
     internal static IReadOnlyList<int> Order(IEnumerable<(PersistedRace Request, int Index)> eligible,
         DateTime nowUtc, bool enabled, int maxAgeMinutes)
     {
@@ -17,13 +12,13 @@ internal static class RaceQueuePolicy
                 p.Index,
                 Priority = RaceLifetimePolicy.QueuePriority(p.Request),
                 Wait = WaitSeconds(p.Request.QueuedAtUtc, nowUtc),
-                Prediction = RaceWorkEstimator.ClampSeconds(p.Request.PredictedSeconds)
+                Ratio = ResponseRatio(p.Request.QueuedAtUtc, nowUtc, p.Request.PredictedSeconds)
             })
             // A5 cleanup deadlines retain priority; fresh work continues to outrank ordinary resumes.
             .OrderBy(p => p.Priority)
             .ThenByDescending(p => enabled && p.Wait >= maximumWait.TotalSeconds)
             .ThenByDescending(p => enabled && p.Wait >= maximumWait.TotalSeconds ? p.Wait : 0)
-            .ThenByDescending(p => enabled && p.Wait < maximumWait.TotalSeconds ? 1 + p.Wait / p.Prediction : 0)
+            .ThenByDescending(p => enabled && p.Wait < maximumWait.TotalSeconds ? p.Ratio : 0)
             .ThenBy(p => p.Index)
             .Select(p => p.Index).ToArray();
     }

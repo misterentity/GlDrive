@@ -1,8 +1,6 @@
 using System.Text.RegularExpressions;
 using GlDrive.Config;
-using GlDrive.Downloads;
 using GlDrive.Irc;
-using GlDrive.Services;
 using Serilog;
 
 namespace GlDrive.Spread;
@@ -20,7 +18,6 @@ public class RequestFiller : IDisposable
     private readonly string _requesterServerId;
     private readonly IrcService _ircService;
     private readonly RequestFillerConfig _config;
-    private readonly ServerManager _serverManager;
     private readonly SpreadManager _spreadManager;
     private readonly Regex? _pattern;
 
@@ -34,13 +31,11 @@ public class RequestFiller : IDisposable
         string requesterServerId,
         IrcService ircService,
         RequestFillerConfig config,
-        ServerManager serverManager,
         SpreadManager spreadManager)
     {
         _requesterServerId = requesterServerId;
         _ircService = ircService;
         _config = config;
-        _serverManager = serverManager;
         _spreadManager = spreadManager;
 
         try

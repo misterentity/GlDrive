@@ -173,7 +173,7 @@ public sealed class WishlistSourceFloorTests
         store.ObserveDownloadStatus(download, config);
         Assert.Equal(WishlistStatus.Watching, item.Status);
         Assert.False(WishlistOwnership.MeetsReleaseCutoff(item, Cam, config));
-        Assert.False(WishlistOwnership.IsOwned(item, config, LibraryIndexSnapshot.Empty, [download], DateTimeOffset.UtcNow));
+        Assert.False(WishlistOwnership.IsOwnedPrepared(item, config, LibraryIndexSnapshot.Empty, WishlistOwnership.PrepareDownloads([download]), DateTimeOffset.UtcNow));
         matcher.OnNewRelease("movies", Web, "/movies/" + Web);
         Assert.Equal(2, queued.Count);
     }
@@ -231,9 +231,9 @@ public sealed class WishlistSourceFloorTests
             @"C:\Library\Example Movie (2026)\Example Movie (2026) - 1080p.mkv", "disk", true, null, []);
         var snapshot = new LibraryIndexSnapshot(DateTime.UtcNow, [imported], 1, 1, 0, true);
         var camera = new DownloadItem { ReleaseName = Cam, Status = DownloadStatus.Completed, WishlistItemId = item.Id };
-        Assert.False(WishlistOwnership.IsOwned(item, new(), snapshot, [camera], DateTimeOffset.UtcNow));
+        Assert.False(WishlistOwnership.IsOwnedPrepared(item, new(), snapshot, WishlistOwnership.PrepareDownloads([camera]), DateTimeOffset.UtcNow));
         var web = imported with { Path = @"C:\Library\Example Movie (2026)\Example Movie (2026) - WEB - 1080p.mkv" };
-        Assert.True(WishlistOwnership.IsOwned(item, new(), snapshot with { Entries = [web] }, [camera], DateTimeOffset.UtcNow));
+        Assert.True(WishlistOwnership.IsOwnedPrepared(item, new(), snapshot with { Entries = [web] }, WishlistOwnership.PrepareDownloads([camera]), DateTimeOffset.UtcNow));
     }
 
     [Fact]

@@ -27,7 +27,7 @@ public sealed class WishlistOwnershipTests
     [InlineData(QualityProfile.Q1080p)]
     [InlineData(QualityProfile.Q2160p)]
     public void Verified_library_copy_at_or_above_default_cutoff_proves_ownership(QualityProfile quality) =>
-        Assert.True(WishlistOwnership.IsOwned(Movie(), new(), Snapshot(Entry(quality: quality)), [], Now));
+        Assert.True(WishlistOwnership.IsOwnedPrepared(Movie(), new(), Snapshot(Entry(quality: quality)), WishlistOwnership.PrepareDownloads([]), Now));
 
     [Theory]
     [InlineData("Different Film", 2024, QualityProfile.Q1080p, true)]
@@ -37,25 +37,23 @@ public sealed class WishlistOwnershipTests
     [InlineData("Synthetic Film", 2024, QualityProfile.Q2160p, false)]
     public void Approximate_missing_or_below_cutoff_library_evidence_keeps_item_open(
         string title, int year, QualityProfile quality, bool verified) =>
-        Assert.False(WishlistOwnership.IsOwned(Movie(), new(), Snapshot(Entry(title, year, quality, verified)), [], Now));
+        Assert.False(WishlistOwnership.IsOwnedPrepared(Movie(), new(), Snapshot(Entry(title, year, quality, verified)), WishlistOwnership.PrepareDownloads([]), Now));
 
     [Fact]
     public void Catalog_only_high_quality_does_not_upgrade_lower_verified_copy() =>
-        Assert.False(WishlistOwnership.IsOwned(Movie(), new(),
-            Snapshot(Entry(quality: QualityProfile.Q720p), Entry(quality: QualityProfile.Q2160p, verified: false)), [], Now));
+        Assert.False(WishlistOwnership.IsOwnedPrepared(Movie(), new(), Snapshot(Entry(quality: QualityProfile.Q720p), Entry(quality: QualityProfile.Q2160p, verified: false)), WishlistOwnership.PrepareDownloads([]), Now));
 
     [Fact]
     public void Verified_external_identity_can_match_an_alternate_library_title() =>
-        Assert.True(WishlistOwnership.IsOwned(Movie(), new(),
-            Snapshot(Entry(title: "Alternate Catalog Title", year: null, guids: ["imdb://tt1234567"])), [], Now));
+        Assert.True(WishlistOwnership.IsOwnedPrepared(Movie(), new(), Snapshot(Entry(title: "Alternate Catalog Title", year: null, guids: ["imdb://tt1234567"])), WishlistOwnership.PrepareDownloads([]), Now));
 
     [Fact]
     public void Conflicting_library_external_id_does_not_fall_back_to_title() =>
-        Assert.False(WishlistOwnership.IsOwned(Movie(), new(), Snapshot(Entry(guids: ["imdb://tt7654321"])), [], Now));
+        Assert.False(WishlistOwnership.IsOwnedPrepared(Movie(), new(), Snapshot(Entry(guids: ["imdb://tt7654321"])), WishlistOwnership.PrepareDownloads([]), Now));
 
     [Fact]
     public void Successful_matching_download_proves_ownership_without_a_library_refresh() =>
-        Assert.True(WishlistOwnership.IsOwned(Movie(), new(), LibraryIndexSnapshot.Empty, [Download()], Now));
+        Assert.True(WishlistOwnership.IsOwnedPrepared(Movie(), new(), LibraryIndexSnapshot.Empty, WishlistOwnership.PrepareDownloads([Download()]), Now));
 
     [Theory]
     [InlineData(DownloadStatus.Queued)]
@@ -64,7 +62,7 @@ public sealed class WishlistOwnershipTests
     [InlineData(DownloadStatus.Failed)]
     [InlineData(DownloadStatus.Cancelled)]
     public void Incomplete_download_never_proves_ownership(DownloadStatus status) =>
-        Assert.False(WishlistOwnership.IsOwned(Movie(), new(), LibraryIndexSnapshot.Empty, [Download(status: status)], Now));
+        Assert.False(WishlistOwnership.IsOwnedPrepared(Movie(), new(), LibraryIndexSnapshot.Empty, WishlistOwnership.PrepareDownloads([Download(status: status)]), Now));
 
     [Theory]
     [InlineData("Different.Film.2024.1080p.WEB-GROUP")]
@@ -72,7 +70,7 @@ public sealed class WishlistOwnershipTests
     [InlineData("Synthetic.Film.2024.720p.WEB-GROUP")]
     [InlineData("Synthetic.Film.2024.WEB-GROUP")]
     public void Wishlist_reference_does_not_override_download_identity_or_quality(string release) =>
-        Assert.False(WishlistOwnership.IsOwned(Movie(), new(), LibraryIndexSnapshot.Empty, [Download(release)], Now));
+        Assert.False(WishlistOwnership.IsOwnedPrepared(Movie(), new(), LibraryIndexSnapshot.Empty, WishlistOwnership.PrepareDownloads([Download(release)]), Now));
 
     [Fact]
     public void Grabbed_names_and_pending_reservations_are_not_completed_downloads()
@@ -80,7 +78,7 @@ public sealed class WishlistOwnershipTests
         var item = Movie();
         item.GrabbedReleases = ["Synthetic.Film.2024.1080p.WEB-GROUP"];
         item.PendingGrabs = [new() { ReleaseName = item.GrabbedReleases[0] }];
-        Assert.False(WishlistOwnership.IsOwned(item, new(), LibraryIndexSnapshot.Empty, [], Now));
+        Assert.False(WishlistOwnership.IsOwnedPrepared(item, new(), LibraryIndexSnapshot.Empty, WishlistOwnership.PrepareDownloads([]), Now));
     }
 
     [Fact]
@@ -88,9 +86,8 @@ public sealed class WishlistOwnershipTests
     {
         var item = Movie(); item.ProfileId = "high-cutoff";
         var config = new DownloadConfig { Profiles = [new() { Id = "high-cutoff", CutoffScore = 4300 }] };
-        Assert.False(WishlistOwnership.IsOwned(item, config, LibraryIndexSnapshot.Empty, [Download()], Now));
-        Assert.True(WishlistOwnership.IsOwned(item, config, LibraryIndexSnapshot.Empty,
-            [Download("Synthetic.Film.2024.1080p.BluRay-GROUP")], Now));
+        Assert.False(WishlistOwnership.IsOwnedPrepared(item, config, LibraryIndexSnapshot.Empty, WishlistOwnership.PrepareDownloads([Download()]), Now));
+        Assert.True(WishlistOwnership.IsOwnedPrepared(item, config, LibraryIndexSnapshot.Empty, WishlistOwnership.PrepareDownloads([Download("Synthetic.Film.2024.1080p.BluRay-GROUP")]), Now));
     }
 
     private static WishlistItem Series(bool ended = true) => new()
@@ -112,20 +109,20 @@ public sealed class WishlistOwnershipTests
     [Fact]
     public void Ended_series_requires_every_known_episode_at_cutoff()
     {
-        Assert.False(WishlistOwnership.IsOwned(Series(), new(), Snapshot(Episode(1)), [], Now));
-        Assert.False(WishlistOwnership.IsOwned(Series(), new(), Snapshot(Episode(1), Episode(2, QualityProfile.Q720p)), [], Now));
-        Assert.True(WishlistOwnership.IsOwned(Series(), new(), Snapshot(Episode(1), Episode(2)), [], Now));
+        Assert.False(WishlistOwnership.IsOwnedPrepared(Series(), new(), Snapshot(Episode(1)), WishlistOwnership.PrepareDownloads([]), Now));
+        Assert.False(WishlistOwnership.IsOwnedPrepared(Series(), new(), Snapshot(Episode(1), Episode(2, QualityProfile.Q720p)), WishlistOwnership.PrepareDownloads([]), Now));
+        Assert.True(WishlistOwnership.IsOwnedPrepared(Series(), new(), Snapshot(Episode(1), Episode(2)), WishlistOwnership.PrepareDownloads([]), Now));
     }
 
     [Fact]
     public void Ongoing_series_stays_open_even_when_current_episodes_are_owned() =>
-        Assert.False(WishlistOwnership.IsOwned(Series(ended: false), new(), Snapshot(Episode(1), Episode(2)), [], Now));
+        Assert.False(WishlistOwnership.IsOwnedPrepared(Series(ended: false), new(), Snapshot(Episode(1), Episode(2)), WishlistOwnership.PrepareDownloads([]), Now));
 
     [Fact]
     public void Ended_status_without_episode_inventory_does_not_claim_the_whole_series()
     {
         var item = Series(); item.SeriesInventory = [];
-        Assert.False(WishlistOwnership.IsOwned(item, new(), Snapshot(Episode(1), Episode(2)), [], Now));
+        Assert.False(WishlistOwnership.IsOwnedPrepared(item, new(), Snapshot(Episode(1), Episode(2)), WishlistOwnership.PrepareDownloads([]), Now));
     }
 
     [Fact]
@@ -133,6 +130,6 @@ public sealed class WishlistOwnershipTests
     {
         var download = Download("Synthetic.Series.S01E02.1080p.WEB-GROUP");
         download.WishlistItemId = "wanted-series";
-        Assert.True(WishlistOwnership.IsOwned(Series(), new(), Snapshot(Episode(1)), [download], Now));
+        Assert.True(WishlistOwnership.IsOwnedPrepared(Series(), new(), Snapshot(Episode(1)), WishlistOwnership.PrepareDownloads([download]), Now));
     }
 }

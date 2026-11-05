@@ -18,7 +18,7 @@ public sealed class NukePollerRecoveryTests : IDisposable
 
     public NukePollerRecoveryTests()
     {
-        _recorder = new TelemetryRecorder(_root, 64);
+        _recorder = new TelemetryRecorder(_root);
         _cursors = new NukeCursorStore(_root);
     }
 

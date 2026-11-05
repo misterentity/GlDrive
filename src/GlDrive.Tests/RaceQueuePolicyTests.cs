@@ -14,24 +14,24 @@ public sealed class RaceQueuePolicyTests
     public void Response_ratio_uses_wait_against_predicted_work()
     {
         var queue = new[] { Request("large", 100, 1000), Request("small", 50, 10) };
-        Assert.Equal([1, 0], RaceQueuePolicy.OrderIndices(queue, [0, 1], Now, true, 120));
+        Assert.Equal([1, 0], Ordered(queue, [0, 1], Now, true, 120));
         Assert.Equal(6, RaceQueuePolicy.ResponseRatio(Now.AddSeconds(-50), Now, 10));
-        Assert.Equal([0, 1], RaceQueuePolicy.OrderIndices(queue, [0, 1], Now, false, 120));
+        Assert.Equal([0, 1], Ordered(queue, [0, 1], Now, false, 120));
     }
 
     [Fact]
     public void Hard_age_override_prevents_large_request_starvation()
     {
         var queue = new[] { Request("large", 7200, 5400), Request("small", 30, 5) };
-        Assert.Equal([1, 0], RaceQueuePolicy.OrderIndices(queue, [0, 1], Now, true, 1440));
-        Assert.Equal([0, 1], RaceQueuePolicy.OrderIndices(queue, [0, 1], Now, true, 120));
+        Assert.Equal([1, 0], Ordered(queue, [0, 1], Now, true, 1440));
+        Assert.Equal([0, 1], Ordered(queue, [0, 1], Now, true, 120));
     }
 
     [Fact]
     public void Aged_requests_use_oldest_then_fifo_even_with_different_predictions()
     {
         var queue = new[] { Request("first", 8000, 5400), Request("second", 8000, 5), Request("oldest", 9000, 300) };
-        Assert.Equal([2, 0, 1], RaceQueuePolicy.OrderIndices(queue, [0, 1, 2], Now, true, 120));
+        Assert.Equal([2, 0, 1], Ordered(queue, [0, 1, 2], Now, true, 120));
     }
 
     [Fact]
@@ -44,8 +44,8 @@ public sealed class RaceQueuePolicyTests
             Request("cleanup", 0, 5400) with { CleanupOnly = true },
             Request("owned", 40000, 5) with { Partial = new() { Directories = [new() { ServerId = "destination" }] } }
         };
-        Assert.Equal([2, 1, 0, 3], RaceQueuePolicy.OrderIndices(queue, [0, 1, 2, 3], Now, true, 120));
-        Assert.Equal([2, 1, 0, 3], RaceQueuePolicy.OrderIndices(queue, [0, 1, 2, 3], Now, false, 120));
+        Assert.Equal([2, 1, 0, 3], Ordered(queue, [0, 1, 2, 3], Now, true, 120));
+        Assert.Equal([2, 1, 0, 3], Ordered(queue, [0, 1, 2, 3], Now, false, 120));
     }
 
     [Fact]
@@ -61,8 +61,8 @@ public sealed class RaceQueuePolicyTests
     public void Equal_ratio_and_future_timestamps_keep_fifo_and_eligibility_is_not_expanded()
     {
         var queue = new[] { Request("one", 100, 100), Request("two", 10, 10), Request("future", -50, 5) };
-        Assert.Equal([0, 1, 2], RaceQueuePolicy.OrderIndices(queue, [2, 1, 0, 0, -1, 10], Now, true, 120));
-        Assert.Equal([1], RaceQueuePolicy.OrderIndices(queue, [1], Now, true, 120));
+        Assert.Equal([0, 1, 2], Ordered(queue, [2, 1, 0], Now, true, 120));
+        Assert.Equal([1], Ordered(queue, [1], Now, true, 120));
         Assert.Equal(1, RaceQueuePolicy.ResponseRatio(Now.AddHours(1), Now, 5));
     }
 
@@ -106,7 +106,7 @@ public sealed class RaceQueuePolicyTests
         {
             var due = remaining.Where(i => trace[i].At <= now).ToArray();
             if (due.Length == 0) { now = remaining.Min(i => trace[i].At); continue; }
-            var next = RaceQueuePolicy.OrderIndices(queue, due, Now.AddSeconds(now), enabled, 120).First();
+            var next = Ordered(queue, due, Now.AddSeconds(now), enabled, 120).First();
             waits.Add(now - trace[next].At);
             remaining.Remove(next);
             // Exactly one work interval is advanced per choice: this replay has no preemption or second slot.
@@ -114,6 +114,11 @@ public sealed class RaceQueuePolicyTests
         }
         return waits;
     }
+
+    // Mirrors SpreadManager.EligibleQueueIndicesNoLock: eligible queue entries paired with their index.
+    private static IReadOnlyList<int> Ordered(IReadOnlyList<PersistedRace> queue, IEnumerable<int> indices,
+        DateTime now, bool enabled, int maxAgeMinutes) =>
+        RaceQueuePolicy.Order(indices.Select(i => (queue[i], i)), now, enabled, maxAgeMinutes);
 
     private static double Median(IEnumerable<double> values)
     {

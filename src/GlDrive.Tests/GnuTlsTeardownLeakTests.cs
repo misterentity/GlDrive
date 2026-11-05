@@ -130,8 +130,8 @@ public sealed class GnuTlsTeardownLeakTests
         var kept = Regex.Matches(source, @"= NeutralizeGnuTls\(client\)").Count;
         var freed = Regex.Matches(source, @"FreeDetachedGnuTls\(detached").Count;
 
-        Assert.True(calls >= 3, "expected the quarantine funnel and both disconnect paths to neutralize");
+        Assert.True(calls >= 3, "expected the quarantine funnel (both attempts) and the disconnect path to neutralize");
         Assert.Equal(calls, kept);     // a bare `NeutralizeGnuTls(client);` statement drops the session on the floor
-        Assert.True(freed >= 3, "each teardown path must free what it detached");
+        Assert.True(freed >= 2, "each teardown path (quarantine funnel, disconnect) must free what it detached");
     }
 }
