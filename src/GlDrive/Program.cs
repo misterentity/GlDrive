@@ -447,6 +447,9 @@ public static class Program
             while (log.ReadEvent() is { } evt)
             {
                 var msg = evt.FormatDescription() ?? "";
+                var faultingPid = evt.Id == 1000 && evt.Properties.Count > 8
+                    ? evt.Properties[8].Value?.ToString() : null;
+                if (!CrashEventBelongsTo(evt.Id, evt.ProcessId, faultingPid, msg, pid)) continue;
                 // .NET Runtime (1026) includes the exception, Application Error (1000) includes the faulting module
                 if (msg.Contains("GlDrive", StringComparison.OrdinalIgnoreCase))
                 {
@@ -497,6 +500,33 @@ public static class Program
         }
 
         return UnknownCrashReason;
+    }
+
+    /// <summary>
+    /// Whether an Application-log crash event describes process <paramref name="pid"/>. Matching
+    /// on "GlDrive" text alone blamed any crash in the 30 s window on us — ReleaseCheck.exe and
+    /// testhost 1026 events carry GlDrive frames in their stacks. .NET Runtime 1026 is written from
+    /// inside the dying process, so its System/Execution ProcessID is the crashed PID. Application
+    /// Error 1000 is written by WER (Execution ProcessID is WER's own); the faulting PID is the
+    /// EventData ProcessId (hex), also shown as "Faulting process id: 0x…" in the message.
+    /// </summary>
+    internal static bool CrashEventBelongsTo(int eventId, int? executionProcessId,
+        string? faultingProcessIdData, string message, int pid)
+    {
+        if (eventId == 1026) return executionProcessId == pid;
+        if (eventId != 1000) return false;
+        var hex = faultingProcessIdData;
+        if (string.IsNullOrWhiteSpace(hex))
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(message,
+                @"Faulting process id:\s*(0x[0-9a-fA-F]+)");
+            if (!match.Success) return false;
+            hex = match.Groups[1].Value;
+        }
+        hex = hex.Trim();
+        if (hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) hex = hex[2..];
+        return int.TryParse(hex, System.Globalization.NumberStyles.HexNumber,
+                   System.Globalization.CultureInfo.InvariantCulture, out var faulting) && faulting == pid;
     }
 
     [DllImport("kernel32.dll")]
