@@ -187,6 +187,19 @@ public class SectionMapping
     public string TriggerRegex { get; set; } = ".*"; // release-name filter for this mapping
     public List<SkiplistRule> TagRules { get; set; } = [];
     public bool Enabled { get; set; } = true;
+
+    public const string DefaultTrigger = ".*";
+
+    /// <summary>
+    /// Whether a trigger is still the untouched default (".*" or empty). Automated edits — AI
+    /// Setup's merge and the agent's SectionMappingValidator — only ever replace a default
+    /// trigger; anything else is user-edited and preserved.
+    /// </summary>
+    public static bool IsDefaultTrigger(string? trigger)
+    {
+        var t = trigger?.Trim();
+        return string.IsNullOrEmpty(t) || t == DefaultTrigger;
+    }
 }
 
 public enum SitePriority { VeryLow = 0, Low = 625, Normal = 1250, High = 1875, VeryHigh = 2500 }

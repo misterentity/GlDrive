@@ -64,7 +64,7 @@ public sealed class SectionMappingValidator : IChangeValidator
                 var s = resolver(cfg); if (s is null) return;
                 if (idx < 0 || idx >= s.SpreadSite.SectionMappings.Count) return;
                 var cur = s.SpreadSite.SectionMappings[idx];
-                if (!IsDefaultTrigger(cur.TriggerRegex)) return;  // preserve user-edited triggers
+                if (!SectionMapping.IsDefaultTrigger(cur.TriggerRegex)) return;  // preserve user-edited triggers
                 cur.TriggerRegex = after.TriggerRegex ?? ".*";
                 if (!string.IsNullOrEmpty(after.IrcSection)) cur.IrcSection = after.IrcSection;
                 if (!string.IsNullOrEmpty(after.RemoteSection)) cur.RemoteSection = after.RemoteSection;
@@ -88,7 +88,7 @@ public sealed class SectionMappingValidator : IChangeValidator
         if (site is not null)
         {
             if (idx < 0 || idx >= site.SpreadSite.SectionMappings.Count) return new(false, "index-out-of-range", null);
-            if (!IsDefaultTrigger(site.SpreadSite.SectionMappings[idx].TriggerRegex))
+            if (!SectionMapping.IsDefaultTrigger(site.SpreadSite.SectionMappings[idx].TriggerRegex))
                 return new(false, "trigger-user-edited", null);
         }
 
@@ -97,12 +97,10 @@ public sealed class SectionMappingValidator : IChangeValidator
             var s = resolver(cfg); if (s is null) return;
             if (idx < 0 || idx >= s.SpreadSite.SectionMappings.Count) return;
             var cur = s.SpreadSite.SectionMappings[idx];
-            if (!IsDefaultTrigger(cur.TriggerRegex)) return;  // preserve user-edited triggers
+            if (!SectionMapping.IsDefaultTrigger(cur.TriggerRegex)) return;  // preserve user-edited triggers
             cur.TriggerRegex = trigger;
         });
     }
-
-    private static bool IsDefaultTrigger(string? trigger) => string.IsNullOrEmpty(trigger) || trigger == ".*";
 
     // A mapping is routable only if its RemoteSection matches a configured section key
     // (case-insensitive). Sections is the authoritative folder map; SectionMapper.Resolve keys off it.

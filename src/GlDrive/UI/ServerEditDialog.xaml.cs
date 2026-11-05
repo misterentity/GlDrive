@@ -823,250 +823,10 @@ public partial class ServerEditDialog : Window
             }
 
             // Always supplement with deterministic parser to catch patterns AI may have missed
-            var fallbackRules = SiteRulesParser.ToSkiplistRules(SiteRulesParser.Parse(rulesText, currentSections.Keys));
-            var existingAiPatterns = result.SkiplistRules.Select(r => r.Pattern).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            foreach (var rule in fallbackRules)
-            {
-                if (!existingAiPatterns.Contains(rule.Pattern))
-                {
-                    result.SkiplistRules.Add(new AiSkiplistRule
-                    {
-                        Pattern = rule.Pattern, IsRegex = rule.IsRegex, Action = rule.Action.ToString(),
-                        MatchDirectories = rule.MatchDirectories, MatchFiles = rule.MatchFiles, Section = rule.Section
-                    });
-                    existingAiPatterns.Add(rule.Pattern);
-                }
-            }
-
-            // Build summary and apply
-            var changes = new List<string>();
-
-            if (result.MaxUploadSlots.HasValue)
-            {
-                SpreadMaxUpBox.Text = result.MaxUploadSlots.Value.ToString();
-                changes.Add($"Max uploads: {result.MaxUploadSlots.Value}");
-            }
-            if (result.MaxDownloadSlots.HasValue)
-            {
-                SpreadMaxDownBox.Text = result.MaxDownloadSlots.Value.ToString();
-                changes.Add($"Max downloads: {result.MaxDownloadSlots.Value}");
-            }
-
-            if (result.Affils.Count > 0)
-            {
-                var existingAffils = (SpreadAffilsBox.Text ?? "")
-                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
-                foreach (var a in result.Affils) existingAffils.Add(a);
-                SpreadAffilsBox.Text = string.Join(", ", existingAffils.OrderBy(a => a));
-                changes.Add($"Affils: {result.Affils.Count} groups");
-            }
-
-            if (result.SkiplistRules.Count > 0)
-            {
-                // Remove old AI-generated section-scoped rules (keep user's manual global rules)
-                // This prevents accumulation of garbage rules from previous AI runs
-                var toRemove = _siteSkiplist.Where(r => r.Section != null).ToList();
-                var removedCount = toRemove.Count;
-                foreach (var r in toRemove) _siteSkiplist.Remove(r);
-
-                var existingPatterns = _siteSkiplist.Select(r => r.Pattern).ToHashSet(StringComparer.OrdinalIgnoreCase);
-                var added = 0;
-                foreach (var rule in result.SkiplistRules)
-                {
-                    if (!existingPatterns.Contains(rule.Pattern))
-                    {
-                        _siteSkiplist.Add(rule.ToSkiplistRule());
-                        existingPatterns.Add(rule.Pattern);
-                        added++;
-                    }
-                }
-                if (added > 0 || removedCount > 0)
-                    changes.Add($"{added} skiplist rules (replaced {removedCount} old section rules)");
-            }
-
-            if (result.SuggestedSections.Count > 0)
-            {
-                var added = 0;
-                foreach (var (name, path) in result.SuggestedSections)
-                {
-                    var existing = _sectionMappings.FirstOrDefault(m =>
-                        m.RemoteSection.Equals(name, StringComparison.OrdinalIgnoreCase));
-                    if (existing != null)
-                    {
-                        if (string.IsNullOrEmpty(existing.Path))
-                        {
-                            existing.Path = path;
-                            added++;
-                        }
-                        continue;
-                    }
-                    _sectionMappings.Add(new SectionMapping
-                    {
-                        IrcSection = name,
-                        RemoteSection = name,
-                        Path = path,
-                        TriggerRegex = ".*",
-                        Enabled = true
-                    });
-                    added++;
-                }
-                if (added > 0)
-                    changes.Add($"{added} section mapping(s) added");
-            }
-
-            // AI-suggested IRC → internal SectionMapping entries. Add new rows AND
-            // patch existing rows whose TriggerRegex is still the default ".*"
-            // (or empty). Tag rules and any non-default user-edited trigger are
-            // preserved.
-            if (result.SectionMappings.Count > 0)
-            {
-                var added = 0;
-                var updated = 0;
-                foreach (var sm in result.SectionMappings)
-                {
-                    if (string.IsNullOrWhiteSpace(sm.IrcSection) ||
-                        string.IsNullOrWhiteSpace(sm.RemoteSection)) continue;
-
-                    var aiTrigger = string.IsNullOrWhiteSpace(sm.Trigger) ? ".*" : sm.Trigger.Trim();
-
-                    var existing = _sectionMappings.FirstOrDefault(m =>
-                        m.IrcSection.Equals(sm.IrcSection, StringComparison.OrdinalIgnoreCase) &&
-                        m.RemoteSection.Equals(sm.RemoteSection, StringComparison.OrdinalIgnoreCase));
-
-                    if (existing != null)
-                    {
-                        // Patch the trigger if the user hasn't customized it. Without
-                        // this, re-running AI Setup never refreshed triggers on
-                        // already-discovered mappings — which was the whole point of
-                        // re-scanning IRC logs.
-                        var existingTrigger = (existing.TriggerRegex ?? "").Trim();
-                        var isDefault = string.IsNullOrEmpty(existingTrigger) || existingTrigger == ".*";
-                        if (isDefault && aiTrigger != ".*")
-                        {
-                            Log.Information("AI Setup: updating trigger for mapping {Irc}→{Remote}: '{Old}' → '{New}'",
-                                existing.IrcSection, existing.RemoteSection, existingTrigger, aiTrigger);
-                            existing.TriggerRegex = aiTrigger;
-                            updated++;
-                        }
-                        else if (!isDefault)
-                        {
-                            Log.Information("AI Setup: preserving user-edited trigger for {Irc}→{Remote}: '{Existing}' (AI suggested '{Ai}')",
-                                existing.IrcSection, existing.RemoteSection, existingTrigger, aiTrigger);
-                        }
-                        else
-                        {
-                            Log.Information("AI Setup: AI suggested '.*' for {Irc}→{Remote}, nothing to update",
-                                existing.IrcSection, existing.RemoteSection);
-                        }
-                        continue;
-                    }
-
-                    // Try to pull Path from any existing mapping with same RemoteSection
-                    var pathSource = _sectionMappings.FirstOrDefault(m =>
-                        m.RemoteSection.Equals(sm.RemoteSection, StringComparison.OrdinalIgnoreCase));
-
-                    _sectionMappings.Add(new SectionMapping
-                    {
-                        IrcSection = sm.IrcSection,
-                        RemoteSection = sm.RemoteSection,
-                        Path = pathSource?.Path ?? "",
-                        TriggerRegex = aiTrigger,
-                        Enabled = true
-                    });
-                    added++;
-                }
-                if (added > 0)
-                    changes.Add($"{added} IRC section mapping(s) detected");
-                if (updated > 0)
-                    changes.Add($"{updated} mapping trigger(s) updated from IRC logs");
-                // POCO mutation doesn't fire INotifyPropertyChanged — refresh the
-                // grid so the new TriggerRegex values are visible immediately.
-                if (updated > 0)
-                    SectionMappingsGrid.Items.Refresh();
-            }
-
-            // AI-suggested IRC announce rules. Append any new rules that the
-            // user hasn't already configured.
-            if (result.AnnounceRules.Count > 0)
-            {
-                var existing = (IrcAnnounceRulesBox.Text ?? "").Trim();
-                var existingLines = existing.Split('\n', StringSplitOptions.RemoveEmptyEntries)
-                    .Select(l => l.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-                var newLines = new List<string>();
-                foreach (var ar in result.AnnounceRules)
-                {
-                    if (string.IsNullOrWhiteSpace(ar.Pattern)) continue;
-                    var line = string.IsNullOrWhiteSpace(ar.Channel) ? ar.Pattern : $"{ar.Channel} {ar.Pattern}";
-                    if (existingLines.Add(line))
-                        newLines.Add(line);
-                }
-                if (newLines.Count > 0)
-                {
-                    IrcAnnounceRulesBox.Text = string.IsNullOrEmpty(existing)
-                        ? string.Join("\n", newLines)
-                        : existing + "\n" + string.Join("\n", newLines);
-                    changes.Add($"{newLines.Count} IRC announce rule(s) detected");
-                }
-            }
-
-            // Site priority (VeryLow/Low/Normal/High/VeryHigh)
-            if (!string.IsNullOrWhiteSpace(result.Priority))
-            {
-                var idx = result.Priority.Trim().ToLowerInvariant() switch
-                {
-                    "verylow" or "very low" or "very_low" => 0,
-                    "low" => 1,
-                    "normal" => 2,
-                    "high" => 3,
-                    "veryhigh" or "very high" or "very_high" => 4,
-                    _ => -1
-                };
-                if (idx >= 0 && idx != SpreadPriorityBox.SelectedIndex)
-                {
-                    SpreadPriorityBox.SelectedIndex = idx;
-                    changes.Add($"Priority → {result.Priority}");
-                }
-            }
-
-            // Download-only flag
-            if (result.DownloadOnly.HasValue && result.DownloadOnly.Value &&
-                SpreadDownloadOnlyBox.IsChecked != true)
-            {
-                SpreadDownloadOnlyBox.IsChecked = true;
-                changes.Add("Marked as download-only");
-            }
-
-            // Excluded notification categories (merge with user's list)
-            if (result.ExcludedNotificationCategories.Count > 0)
-            {
-                var existingExcluded = (ExcludedCategoriesBox.Text ?? "")
-                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
-                var addedCats = 0;
-                foreach (var cat in result.ExcludedNotificationCategories)
-                {
-                    if (!string.IsNullOrWhiteSpace(cat) && existingExcluded.Add(cat.Trim()))
-                        addedCats++;
-                }
-                if (addedCats > 0)
-                {
-                    ExcludedCategoriesBox.Text = string.Join(", ", existingExcluded.OrderBy(c => c));
-                    changes.Add($"{addedCats} notification category exclusion(s)");
-                }
-            }
-
-            // Auto request filler — enable only if AI detected a channel pattern
-            if (!string.IsNullOrWhiteSpace(result.RequestFillerPattern) &&
-                RequestFillerEnabledBox.IsChecked != true)
-            {
-                RequestFillerPatternBox.Text = result.RequestFillerPattern;
-                if (!string.IsNullOrWhiteSpace(result.RequestFillerChannel))
-                    RequestFillerChannelBox.Text = result.RequestFillerChannel;
-                RequestFillerEnabledBox.IsChecked = true;
-                changes.Add("Auto request filler enabled");
-            }
+            var deterministicRules = SiteRulesParser.ToSkiplistRules(SiteRulesParser.Parse(rulesText, currentSections.Keys));
+            var merge = AiSetupMerger.Merge(result, deterministicRules, ReadAiSetupState());
+            ApplyAiSetupState(merge.State);
+            var changes = merge.Changes;
 
             TestResultText.Text = changes.Count > 0
                 ? $"AI applied: {string.Join(", ", changes)}"
@@ -1085,6 +845,49 @@ public partial class ServerEditDialog : Window
             TestResultText.Text = $"AI Setup failed: {ex.Message}";
             Log.Warning(ex, "AI Setup failed");
         }
+    }
+
+    private static readonly SitePriority[] PriorityByIndex =
+        [SitePriority.VeryLow, SitePriority.Low, SitePriority.Normal, SitePriority.High, SitePriority.VeryHigh];
+
+    /// <summary>Snapshot of the controls AI Setup may change; the merger works on this, not the UI.</summary>
+    private AiSetupEditState ReadAiSetupState() => new()
+    {
+        MaxUploadSlots = SpreadMaxUpBox.Text ?? "",
+        MaxDownloadSlots = SpreadMaxDownBox.Text ?? "",
+        Affils = SpreadAffilsBox.Text ?? "",
+        Skiplist = _siteSkiplist.ToList(),
+        SectionMappings = _sectionMappings.ToList(),
+        AnnounceRules = IrcAnnounceRulesBox.Text ?? "",
+        Priority = SpreadPriorityBox.SelectedIndex is var i and >= 0 and < 5 ? PriorityByIndex[i] : null,
+        DownloadOnly = SpreadDownloadOnlyBox.IsChecked == true,
+        ExcludedCategories = ExcludedCategoriesBox.Text ?? "",
+        RequestFillerEnabled = RequestFillerEnabledBox.IsChecked == true,
+        RequestFillerPattern = RequestFillerPatternBox.Text ?? "",
+        RequestFillerChannel = RequestFillerChannelBox.Text ?? "",
+    };
+
+    private void ApplyAiSetupState(AiSetupEditState state)
+    {
+        SpreadMaxUpBox.Text = state.MaxUploadSlots;
+        SpreadMaxDownBox.Text = state.MaxDownloadSlots;
+        SpreadAffilsBox.Text = state.Affils;
+        IrcAnnounceRulesBox.Text = state.AnnounceRules;
+        if (state.Priority is { } priority)
+            SpreadPriorityBox.SelectedIndex = Array.IndexOf(PriorityByIndex, priority);
+        SpreadDownloadOnlyBox.IsChecked = state.DownloadOnly;
+        ExcludedCategoriesBox.Text = state.ExcludedCategories;
+        RequestFillerEnabledBox.IsChecked = state.RequestFillerEnabled;
+        RequestFillerPatternBox.Text = state.RequestFillerPattern;
+        RequestFillerChannelBox.Text = state.RequestFillerChannel;
+
+        _siteSkiplist.Clear();
+        foreach (var rule in state.Skiplist) _siteSkiplist.Add(rule);
+        _sectionMappings.Clear();
+        foreach (var mapping in state.SectionMappings) _sectionMappings.Add(mapping);
+        // SectionMapping is a POCO without INotifyPropertyChanged — refresh so patched
+        // triggers and paths show immediately.
+        SectionMappingsGrid.Items.Refresh();
     }
 
     private async void QuickSetup_Click(object sender, RoutedEventArgs e)
