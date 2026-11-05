@@ -42,6 +42,9 @@ public sealed class OpenRouterClientModelHealingTests
         }
     }
 
+    // The real redactor still runs; only the live secret inventory (AppData + Credential Manager) is replaced.
+    private static IEnumerable<string> NoSecrets() => [];
+
     private static HttpResponseMessage Reply(HttpStatusCode code, string body) =>
         new(code) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
 
@@ -52,7 +55,7 @@ public sealed class OpenRouterClientModelHealingTests
     public async Task Known_retired_free_slug_is_migrated_before_the_first_request()
     {
         var handler = new ScriptedHandler(_ => Reply(HttpStatusCode.OK, Ok200));
-        using var client = new OpenRouterClient("key", "openai/gpt-oss-120b:free", handler, json => json);
+        using var client = new OpenRouterClient("key", "openai/gpt-oss-120b:free", handler, NoSecrets);
 
         var result = await Analyze(client);
 
@@ -66,7 +69,7 @@ public sealed class OpenRouterClientModelHealingTests
         var handler = new ScriptedHandler(m => m == "vendor/old:free"
             ? Reply(HttpStatusCode.NotFound, Retired404.Replace("openai/gpt-oss-120b", "vendor/new"))
             : Reply(HttpStatusCode.OK, Ok200));
-        using var client = new OpenRouterClient("key", "vendor/old:free", handler, json => json);
+        using var client = new OpenRouterClient("key", "vendor/old:free", handler, NoSecrets);
 
         var result = await Analyze(client);
 
@@ -79,7 +82,7 @@ public sealed class OpenRouterClientModelHealingTests
     public async Task Other_failures_are_not_retried()
     {
         var handler = new ScriptedHandler(_ => Reply(HttpStatusCode.TooManyRequests, """{"error":{"message":"rate limited","code":429}}"""));
-        using var client = new OpenRouterClient("key", "vendor/model", handler, json => json);
+        using var client = new OpenRouterClient("key", "vendor/model", handler, NoSecrets);
 
         Assert.Null(await Analyze(client));
         Assert.Single(handler.Models);
@@ -92,7 +95,7 @@ public sealed class OpenRouterClientModelHealingTests
         // a retirement notice; switching models on it would silently change provider.
         var handler = new ScriptedHandler(_ => Reply(HttpStatusCode.BadRequest,
             Retired404.Replace("\"code\":404", "\"code\":400")));
-        using var client = new OpenRouterClient("key", "vendor/model", handler, json => json);
+        using var client = new OpenRouterClient("key", "vendor/model", handler, NoSecrets);
 
         Assert.Null(await Analyze(client));
         Assert.Single(handler.Models);
@@ -102,7 +105,7 @@ public sealed class OpenRouterClientModelHealingTests
     public async Task A_404_without_a_successor_is_not_retried()
     {
         var handler = new ScriptedHandler(_ => Reply(HttpStatusCode.NotFound, """{"error":{"message":"No endpoints found","code":404}}"""));
-        using var client = new OpenRouterClient("key", "vendor/gone", handler, json => json);
+        using var client = new OpenRouterClient("key", "vendor/gone", handler, NoSecrets);
 
         Assert.Null(await Analyze(client));
         Assert.Single(handler.Models);

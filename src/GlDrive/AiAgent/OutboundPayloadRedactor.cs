@@ -27,11 +27,15 @@ public static class OutboundPayloadRedactor
             foreach (var child in array) MaskLeaves(child);
     }
 
-    public static bool TryPrepare(string payload, out string safePayload)
+    public static bool TryPrepare(string payload, out string safePayload) =>
+        TryPrepare(payload, OutboundSecretInventory.Collect, out safePayload);
+
+    /// <summary>Same as <see cref="TryPrepare(string, out string)"/> with an explicit secret source; a throwing source refuses.</summary>
+    internal static bool TryPrepare(string payload, Func<IEnumerable<string>> liveSecrets, out string safePayload)
     {
         try
         {
-            safePayload = Prepare(payload, OutboundSecretInventory.Collect());
+            safePayload = Prepare(payload, liveSecrets());
             return true;
         }
         catch

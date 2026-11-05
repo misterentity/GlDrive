@@ -2,6 +2,7 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using GlDrive.AiAgent;
 using GlDrive.Config;
 using Serilog;
 
@@ -83,9 +84,8 @@ public class AiSkiplistRule
 
 public class OpenRouterClient : IDisposable
 {
-    private readonly HttpClient _http;
+    private readonly OpenRouterChat _chat;
     private readonly string _model;
-    private readonly Func<string, string?> _preparePayload;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -182,24 +182,15 @@ public class OpenRouterClient : IDisposable
         : this(apiKey, model, handler: null) { }
 
     internal OpenRouterClient(string apiKey, string model, HttpMessageHandler? handler,
-        Func<string, string?>? preparePayload = null)
+        Func<IEnumerable<string>>? liveSecrets = null)
     {
-        _preparePayload = preparePayload ?? (json =>
-            GlDrive.AiAgent.OutboundPayloadRedactor.TryPrepare(json, out var safe) ? safe : null);
         // Same retired-slug table as AgentClient: OpenRouter retires ":free" variants and the
         // configured slug then 404s on every call.
-        _model = GlDrive.AiAgent.AgentClient.ResolveKnownModelMigration(model);
+        _model = OpenRouterChat.ResolveKnownModelMigration(model);
         if (!_model.Equals(model, StringComparison.OrdinalIgnoreCase))
             Log.Information("OpenRouter: using known replacement {Replacement} for retired model {Configured}",
                 _model, model);
-        _http = new HttpClient(handler ?? new HttpClientHandler())
-        {
-            BaseAddress = new Uri("https://openrouter.ai/api/v1/"),
-            Timeout = TimeSpan.FromSeconds(180)
-        };
-        _http.DefaultRequestHeaders.Add("Authorization", $"Bearer {apiKey}");
-        _http.DefaultRequestHeaders.Add("HTTP-Referer", "https://github.com/misterentity/GlDrive");
-        _http.DefaultRequestHeaders.Add("X-Title", "GlDrive");
+        _chat = new OpenRouterChat(apiKey, "GlDrive", TimeSpan.FromSeconds(180), handler, liveSecrets);
     }
 
     public async Task<AiSetupResult?> AnalyzeSiteRules(
@@ -283,24 +274,21 @@ public class OpenRouterClient : IDisposable
         try
         {
             var model = _model;
-            var (response, body) = await PostChatAsync(model, userPrompt, ct);
-            if (response is null) return null;
+            if (await PostChatAsync(model, userPrompt, ct) is not { } reply) return null;
 
             // A retired slug's 404 names its successor; use it once rather than giving up.
-            if (response.StatusCode == System.Net.HttpStatusCode.NotFound
-                && GlDrive.AiAgent.AgentClient.TryParseSuggestedModel(body) is { } suggested
+            if (reply.Status == System.Net.HttpStatusCode.NotFound
+                && OpenRouterChat.TryParseSuggestedModel(reply.Body) is { } suggested
                 && !suggested.Equals(model, StringComparison.OrdinalIgnoreCase))
             {
                 Log.Warning("OpenRouter: {Model} is retired ({Error}) — retrying with suggested {Suggested}",
-                    model, GlDrive.AiAgent.AgentClient.SummarizeErrorBodyForLog(body), suggested);
-                response.Dispose();
+                    model, OpenRouterChat.SummarizeErrorBodyForLog(reply.Body), suggested);
                 model = suggested;
-                (response, body) = await PostChatAsync(model, userPrompt, ct);
-                if (response is null) return null;
+                if (await PostChatAsync(model, userPrompt, ct) is not { } retried) return null;
+                reply = retried;
             }
 
-            using (response)
-                return ParseResponse(response, body, model);
+            return ParseResponse(reply, model);
         }
         catch (Exception ex)
         {
@@ -309,40 +297,20 @@ public class OpenRouterClient : IDisposable
         }
     }
 
-    private async Task<(HttpResponseMessage? Response, string Body)> PostChatAsync(
-        string model, string userPrompt, CancellationToken ct)
+    private Task<OpenRouterChat.Reply?> PostChatAsync(string model, string userPrompt, CancellationToken ct) =>
+        _chat.PostAsync(model, SystemPrompt, userPrompt, temperature: 0.1, maxTokens: 8000, jsonMode: false, ct);
+
+    private static AiSetupResult? ParseResponse(OpenRouterChat.Reply reply, string model)
     {
-        var request = new
-        {
-            model,
-            messages = new[]
-            {
-                new { role = "system", content = SystemPrompt },
-                new { role = "user", content = userPrompt }
-            },
-            temperature = 0.1,
-            max_tokens = 8000
-        };
-
-        var json = JsonSerializer.Serialize(request, JsonOptions);
-        if (_preparePayload(json) is not { } safeJson) return (null, "");
-        using var content = new StringContent(safeJson, Encoding.UTF8, "application/json");
-
-        var response = await _http.PostAsync("chat/completions", content, ct);
-        return (response, await response.Content.ReadAsStringAsync(ct));
-    }
-
-    private static AiSetupResult? ParseResponse(HttpResponseMessage response, string responseBody, string model)
-    {
-        if (!response.IsSuccessStatusCode)
+        if (!reply.IsSuccess)
         {
             // Summarized: the raw provider envelope carries the OpenRouter user_id.
-            Log.Warning("OpenRouter API error ({Model}): {Status} {Error}", model, response.StatusCode,
-                GlDrive.AiAgent.AgentClient.SummarizeErrorBodyForLog(responseBody));
+            Log.Warning("OpenRouter API error ({Model}): {Status} {Error}", model, reply.Status,
+                OpenRouterChat.SummarizeErrorBodyForLog(reply.Body));
             return null;
         }
 
-        using var doc = JsonDocument.Parse(responseBody);
+        using var doc = JsonDocument.Parse(reply.Body);
         var messageContent = doc.RootElement
             .GetProperty("choices")[0]
             .GetProperty("message")
@@ -364,7 +332,7 @@ public class OpenRouterClient : IDisposable
             catch (JsonException ex)
             {
                 Log.Warning("AI JSON parse failed, attempting repair: {Error}", ex.Message);
-                var repaired = RepairTruncatedJson(resultJson);
+                var repaired = OpenRouterChat.RepairTruncatedJson(resultJson);
                 if (repaired != null)
                     return JsonSerializer.Deserialize<AiSetupResult>(repaired, JsonOptions);
             }
@@ -372,79 +340,6 @@ public class OpenRouterClient : IDisposable
 
         Log.Warning("AI response did not contain valid JSON: {Response}", messageContent[..Math.Min(200, messageContent.Length)]);
         return null;
-    }
-
-    /// <summary>
-    /// Attempts to repair truncated JSON from LLM responses that hit the token limit.
-    /// Removes the last incomplete element and closes all open brackets/braces.
-    /// </summary>
-    private static string? RepairTruncatedJson(string json)
-    {
-        try
-        {
-            // Find the last complete object/value by looking for the last complete }, or ]
-            // then close any remaining open structures
-            var lastComplete = -1;
-            var depth = 0;
-            var inString = false;
-            var escape = false;
-
-            for (var i = 0; i < json.Length; i++)
-            {
-                var c = json[i];
-                if (escape) { escape = false; continue; }
-                if (c == '\\' && inString) { escape = true; continue; }
-                if (c == '"') { inString = !inString; continue; }
-                if (inString) continue;
-
-                if (c is '{' or '[') depth++;
-                else if (c is '}' or ']') { depth--; lastComplete = i; }
-            }
-
-            if (depth <= 0) return null; // Not truncated, parse error is something else
-
-            // Truncate at the last complete element boundary
-            // Find the last comma before the incomplete element
-            var truncateAt = json.Length;
-            for (var i = json.Length - 1; i > lastComplete; i--)
-            {
-                if (json[i] == ',') { truncateAt = i; break; }
-            }
-            if (truncateAt == json.Length) truncateAt = lastComplete + 1;
-
-            var repaired = json[..truncateAt];
-
-            // Count remaining open brackets/braces and close them
-            var openBraces = 0;
-            var openBrackets = 0;
-            inString = false;
-            escape = false;
-            for (var i = 0; i < repaired.Length; i++)
-            {
-                var c = repaired[i];
-                if (escape) { escape = false; continue; }
-                if (c == '\\' && inString) { escape = true; continue; }
-                if (c == '"') { inString = !inString; continue; }
-                if (inString) continue;
-                if (c == '{') openBraces++;
-                else if (c == '}') openBraces--;
-                else if (c == '[') openBrackets++;
-                else if (c == ']') openBrackets--;
-            }
-
-            // Close open structures
-            for (var i = 0; i < openBrackets; i++) repaired += "]";
-            for (var i = 0; i < openBraces; i++) repaired += "}";
-
-            Log.Information("Repaired truncated AI JSON: {OrigLen} -> {RepairedLen} chars, closed {Brackets} brackets + {Braces} braces",
-                json.Length, repaired.Length, openBrackets, openBraces);
-            return repaired;
-        }
-        catch (Exception ex)
-        {
-            Log.Debug(ex, "JSON repair failed");
-            return null;
-        }
     }
 
     /// <summary>
@@ -622,5 +517,5 @@ public class OpenRouterClient : IDisposable
         return null;
     }
 
-    public void Dispose() => _http.Dispose();
+    public void Dispose() => _chat.Dispose();
 }

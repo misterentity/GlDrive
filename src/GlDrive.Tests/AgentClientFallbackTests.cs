@@ -19,10 +19,10 @@ public sealed class AgentClientFallbackTests
     {
         const string replacement = "openai/gpt-oss-120b";
 
-        Assert.Equal(replacement, AgentClient.ResolveKnownModelMigration(Free));
-        Assert.Equal(replacement, AgentClient.ResolveKnownModelMigration("OPENAI/GPT-OSS-120B:FREE"));
+        Assert.Equal(replacement, OpenRouterChat.ResolveKnownModelMigration(Free));
+        Assert.Equal(replacement, OpenRouterChat.ResolveKnownModelMigration("OPENAI/GPT-OSS-120B:FREE"));
         Assert.Equal("provider/current-model",
-            AgentClient.ResolveKnownModelMigration("provider/current-model"));
+            OpenRouterChat.ResolveKnownModelMigration("provider/current-model"));
     }
 
     [Fact]
@@ -31,7 +31,7 @@ public sealed class AgentClientFallbackTests
         const string body =
             """{"error":{"message":"use this slug instead: openai/gpt-oss-120b","code":404},"user_id":"user_secret","request_id":"req_secret"}""";
 
-        var summary = AgentClient.SummarizeErrorBodyForLog(body);
+        var summary = OpenRouterChat.SummarizeErrorBodyForLog(body);
 
         Assert.Contains("404", summary);
         Assert.Contains("openai/gpt-oss-120b", summary);
@@ -43,7 +43,7 @@ public sealed class AgentClientFallbackTests
     [Fact]
     public void Unstructured_provider_error_is_not_echoed_to_the_log()
     {
-        var summary = AgentClient.SummarizeErrorBodyForLog("account=user_secret; upstream exploded");
+        var summary = OpenRouterChat.SummarizeErrorBodyForLog("account=user_secret; upstream exploded");
 
         Assert.Contains("unstructured response body", summary);
         Assert.DoesNotContain("user_secret", summary);
@@ -101,14 +101,14 @@ public sealed class AgentClientFallbackTests
 
     [Fact]
     public void SuggestedModel_IsParsedFrom404Body() =>
-        Assert.Equal("openai/gpt-oss-120b", AgentClient.TryParseSuggestedModel(Retired404));
+        Assert.Equal("openai/gpt-oss-120b", OpenRouterChat.TryParseSuggestedModel(Retired404));
 
     [Theory]
     [InlineData(null)]
     [InlineData("")]
     [InlineData("""{"error":{"message":"No endpoints found for openai/gpt-oss-120b:free","code":404}}""")]
     public void SuggestedModel_IsNullWhenBodyNamesNoReplacement(string? body) =>
-        Assert.Null(AgentClient.TryParseSuggestedModel(body));
+        Assert.Null(OpenRouterChat.TryParseSuggestedModel(body));
 
     // --- Credit-aware max_tokens downshift (2026-07-22) ---------------------------------
     // 402 did not mean "broke": the balance covered ~27k tokens while every request asked

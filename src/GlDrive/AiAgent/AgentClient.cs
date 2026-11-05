@@ -1,6 +1,5 @@
 ﻿using System.IO;
 using System.Net.Http;
-using System.Text;
 using System.Text.Json;
 using Serilog;
 
@@ -30,7 +29,7 @@ public sealed class AgentClient : IDisposable
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
     };
 
-    private readonly HttpClient _http;
+    private readonly OpenRouterChat _chat;
     private readonly string _model;
 
     // Reliable JSON-mode fallback for when a free/flaky model returns malformed JSON.
@@ -51,34 +50,20 @@ public sealed class AgentClient : IDisposable
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> HealedModels =
         new(StringComparer.OrdinalIgnoreCase);
 
-    // Known provider migrations are applied before the first network call. OpenRouter's
-    // retired-model 404 is still parsed dynamically below for future migrations, but a
-    // model we have already observed to be permanently dead must not fail once per app
-    // restart before healing to the same successor again.
-    private static readonly IReadOnlyDictionary<string, string> KnownModelMigrations =
-        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["openai/gpt-oss-120b:free"] = "openai/gpt-oss-120b"
-        };
+    public AgentClient(string apiKey, string model) : this(apiKey, model, handler: null) { }
 
-    public AgentClient(string apiKey, string model)
+    internal AgentClient(string apiKey, string model, HttpMessageHandler? handler,
+        Func<IEnumerable<string>>? liveSecrets = null)
     {
         _model = model;
-        _http = new HttpClient
-        {
-            BaseAddress = new Uri("https://openrouter.ai/api/v1/"),
-            Timeout = TimeSpan.FromMinutes(5)
-        };
-        _http.DefaultRequestHeaders.Add("Authorization", $"Bearer {apiKey}");
-        _http.DefaultRequestHeaders.Add("HTTP-Referer", "https://github.com/misterentity/GlDrive");
-        _http.DefaultRequestHeaders.Add("X-Title", "GlDrive Agent");
+        _chat = new OpenRouterChat(apiKey, "GlDrive Agent", TimeSpan.FromMinutes(5), handler, liveSecrets);
     }
 
     public async Task<AgentRunOutcome> RunAsync(string systemPrompt, string userPrompt, CancellationToken ct)
     {
         // Start from the healed slug if a previous run in this process learned one *for the
         // configured model*. If the user switches models in Settings, the new one is used as-is.
-        var configured = ResolveKnownModelMigration(_model);
+        var configured = OpenRouterChat.ResolveKnownModelMigration(_model);
         var primary = HealedModels.TryGetValue(_model, out var healedFor) ? healedFor : configured;
         if (!configured.Equals(_model, StringComparison.OrdinalIgnoreCase))
             Log.Information("AgentClient: using known replacement {Replacement} for retired model {Configured}",
@@ -94,7 +79,7 @@ public sealed class AgentClient : IDisposable
         // burned credits we didn't have and left the loop dead for days.
         if (outcome.Result is null && IsModelUnavailable(outcome.ErrorMessage))
         {
-            var suggested = TryParseSuggestedModel(outcome.ErrorBody);
+            var suggested = OpenRouterChat.TryParseSuggestedModel(outcome.ErrorBody);
             if (suggested is not null && !suggested.Equals(primary, StringComparison.OrdinalIgnoreCase))
             {
                 Log.Warning("AgentClient: {Model} is retired — OpenRouter suggests {Suggested}, retrying with it",
@@ -180,58 +165,6 @@ public sealed class AgentClient : IDisposable
         if (affordable is not int n) return null;
         var capped = n - Math.Max(500, n / 10);
         return capped >= MinUsefulOutputTokens ? capped : null;
-    }
-
-    /// <summary>Pulls the replacement slug out of a retired-model 404 body.</summary>
-    internal static string? TryParseSuggestedModel(string? body)
-    {
-        if (string.IsNullOrEmpty(body)) return null;
-        var m = System.Text.RegularExpressions.Regex.Match(
-            body, @"use this slug instead:\s*([A-Za-z0-9._\-]+/[A-Za-z0-9._:\-]+)",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        return m.Success ? m.Groups[1].Value.TrimEnd('.', ',', '"') : null;
-    }
-
-    internal static string ResolveKnownModelMigration(string model) =>
-        KnownModelMigrations.TryGetValue(model, out var replacement) ? replacement : model;
-
-    /// <summary>
-    /// Keep provider diagnostics useful without copying the complete response envelope
-    /// into a local log. Provider envelopes can contain account/user/request identifiers;
-    /// only the error code and message are needed for model healing and operator action.
-    /// The full body remains in-memory on <see cref="AgentRunOutcome.ErrorBody"/> for the
-    /// bounded retry logic.
-    /// </summary>
-    internal static string SummarizeErrorBodyForLog(string? body)
-    {
-        if (string.IsNullOrWhiteSpace(body)) return "empty response body";
-        try
-        {
-            using var doc = JsonDocument.Parse(body);
-            var root = doc.RootElement;
-            var error = root.TryGetProperty("error", out var errorEl) ? errorEl : root;
-            var message = error.ValueKind == JsonValueKind.Object &&
-                          error.TryGetProperty("message", out var messageEl)
-                ? messageEl.GetString()
-                : null;
-            var code = error.ValueKind == JsonValueKind.Object &&
-                       error.TryGetProperty("code", out var codeEl)
-                ? codeEl.ToString()
-                : null;
-            if (!string.IsNullOrWhiteSpace(message))
-            {
-                var safeMessage = message.Length > 400 ? message[..400] + "…" : message;
-                return string.IsNullOrWhiteSpace(code)
-                    ? $"message={safeMessage}"
-                    : $"code={code} message={safeMessage}";
-            }
-        }
-        catch (JsonException)
-        {
-            // Deliberately do not echo unstructured provider bodies: unlike a parsed
-            // error.message, their contents have no bounded or known-safe shape.
-        }
-        return $"unstructured response body ({Encoding.UTF8.GetByteCount(body)} bytes)";
     }
 
     /// <summary>Pulls the affordable token count out of a 402 body.</summary>
@@ -324,41 +257,25 @@ public sealed class AgentClient : IDisposable
 
     private async Task<AgentRunOutcome> RunInternalAsync(string model, string systemPrompt, string userPrompt, int maxTokens, CancellationToken ct)
     {
-        var request = new
-        {
-            model = model,
-            messages = new[]
-            {
-                new { role = "system", content = systemPrompt },
-                new { role = "user", content = userPrompt }
-            },
-            temperature = 0.2,
-            max_tokens = maxTokens,
-            response_format = new { type = "json_object" }
-        };
-
-        var body = JsonSerializer.Serialize(request, JsonOpts);
-        if (!OutboundPayloadRedactor.TryPrepare(body, out var safeBody))
-            return new AgentRunOutcome { ErrorMessage = "outbound-redaction-refused" };
-        using var content = new StringContent(safeBody, Encoding.UTF8, "application/json");
-
         try
         {
-            var resp = await _http.PostAsync("chat/completions", content, ct);
-            var responseBody = await resp.Content.ReadAsStringAsync(ct);
+            if (await _chat.PostAsync(model, systemPrompt, userPrompt, 0.2, maxTokens, jsonMode: true, ct)
+                is not { } resp)
+                return new AgentRunOutcome { ErrorMessage = "outbound-redaction-refused" };
+            var responseBody = resp.Body;
             Log.Information("AgentClient response status={Status} bytes={Bytes} model={Model}",
-                resp.StatusCode, responseBody.Length, model);
+                resp.Status, responseBody.Length, model);
 
-            if (!resp.IsSuccessStatusCode)
+            if (!resp.IsSuccess)
             {
                 // Keep the actionable provider message while excluding envelope fields such
                 // as user_id/request_id from the durable application log.
                 Log.Warning("AgentClient: {Model} returned HTTP {Status}: {Summary}",
-                    model, (int)resp.StatusCode,
-                    SummarizeErrorBodyForLog(responseBody));
+                    model, (int)resp.Status,
+                    OpenRouterChat.SummarizeErrorBodyForLog(responseBody));
                 return new AgentRunOutcome
                 {
-                    ErrorMessage = $"HTTP {(int)resp.StatusCode}",
+                    ErrorMessage = $"HTTP {(int)resp.Status}",
                     ErrorBody = responseBody
                 };
             }
@@ -398,7 +315,7 @@ public sealed class AgentClient : IDisposable
             // Extract the outermost balanced JSON object. Models sometimes wrap the
             // response in markdown fences or add prose; the prior naive IndexOf('{')
             // + LastIndexOf('}') can grab too much (spanning multiple objects).
-            var rawJson = ExtractFirstBalancedJsonObject(msg);
+            var rawJson = OpenRouterChat.ExtractLargestJsonObject(msg);
             AgentRunResult? result = null;
             if (rawJson != null)
             {
@@ -406,7 +323,7 @@ public sealed class AgentClient : IDisposable
                 catch (JsonException ex)
                 {
                     Log.Warning("AgentClient JSON parse fail, attempting repair: {Msg}", ex.Message);
-                    var repaired = RepairJson(rawJson);
+                    var repaired = OpenRouterChat.RepairTruncatedJson(rawJson);
                     if (repaired != null)
                     {
                         try { result = JsonSerializer.Deserialize<AgentRunResult>(repaired, JsonOpts); }
@@ -461,109 +378,5 @@ public sealed class AgentClient : IDisposable
         return inTok * ip + outTok * op;
     }
 
-    /// <summary>
-    /// Attempts to repair a truncated JSON response by trimming at the last complete
-    /// array/object boundary and closing any remaining open brackets/braces.
-    /// Adapted from OpenRouterClient.RepairTruncatedJson.
-    /// </summary>
-    /// <summary>
-    /// Scans the message for ALL balanced top-level JSON objects and returns the LARGEST.
-    /// Models (especially Sonnet) often emit chain-of-thought + multiple draft JSON blocks
-    /// before the real payload — taking the first yields a tiny sketch with placeholder
-    /// values, and taking "first { to last }" yields invalid concatenated objects.
-    /// Largest-by-length is a reliable heuristic since the real response dwarfs any sketch.
-    /// Falls back to "first { to last }" for truncation repair if no balanced object found.
-    /// </summary>
-    internal static string? ExtractFirstBalancedJsonObject(string msg)
-    {
-        if (string.IsNullOrEmpty(msg)) return null;
-        string? best = null;
-        int bestLen = 0;
-        int start = -1;
-        int depth = 0;
-        bool inString = false;
-        bool escape = false;
-        for (int i = 0; i < msg.Length; i++)
-        {
-            var c = msg[i];
-            if (escape) { escape = false; continue; }
-            if (c == '\\' && inString) { escape = true; continue; }
-            if (c == '"') { inString = !inString; continue; }
-            if (inString) continue;
-            if (c == '{')
-            {
-                if (depth == 0) start = i;
-                depth++;
-            }
-            else if (c == '}')
-            {
-                if (depth == 0) continue;
-                depth--;
-                if (depth == 0 && start >= 0)
-                {
-                    var candidate = msg[start..(i + 1)];
-                    if (candidate.Length > bestLen) { best = candidate; bestLen = candidate.Length; }
-                    start = -1;
-                }
-            }
-        }
-        if (best != null) return best;
-        // No balanced object completed — possibly truncated. Fall back to first { to last } so
-        // RepairJson downstream can try to close it.
-        int firstBrace = msg.IndexOf('{');
-        int lastBrace = msg.LastIndexOf('}');
-        if (firstBrace >= 0 && lastBrace > firstBrace) return msg[firstBrace..(lastBrace + 1)];
-        if (firstBrace >= 0) return msg[firstBrace..];  // totally unclosed — let RepairJson try
-        return null;
-    }
-
-    private static string? RepairJson(string json)
-    {
-        try
-        {
-            var lastComplete = -1;
-            var depth = 0;
-            var inString = false;
-            var escape = false;
-
-            for (var i = 0; i < json.Length; i++)
-            {
-                var c = json[i];
-                if (escape) { escape = false; continue; }
-                if (c == '\\' && inString) { escape = true; continue; }
-                if (c == '"') { inString = !inString; continue; }
-                if (inString) continue;
-                if (c is '{' or '[') depth++;
-                else if (c is '}' or ']') { depth--; lastComplete = i; }
-            }
-            if (depth <= 0) return null;
-
-            var truncateAt = json.Length;
-            for (var i = json.Length - 1; i > lastComplete; i--)
-                if (json[i] == ',') { truncateAt = i; break; }
-            if (truncateAt == json.Length) truncateAt = lastComplete + 1;
-
-            var repaired = json[..truncateAt];
-
-            int openBraces = 0, openBrackets = 0;
-            inString = false; escape = false;
-            foreach (var c in repaired)
-            {
-                if (escape) { escape = false; continue; }
-                if (c == '\\' && inString) { escape = true; continue; }
-                if (c == '"') { inString = !inString; continue; }
-                if (inString) continue;
-                if (c == '{') openBraces++;
-                else if (c == '}') openBraces--;
-                else if (c == '[') openBrackets++;
-                else if (c == ']') openBrackets--;
-            }
-            for (var i = 0; i < openBrackets; i++) repaired += "]";
-            for (var i = 0; i < openBraces; i++) repaired += "}";
-            return repaired;
-        }
-        catch { return null; }
-    }
-
-    public void Dispose() => _http.Dispose();
+    public void Dispose() => _chat.Dispose();
 }
