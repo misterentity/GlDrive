@@ -1129,21 +1129,6 @@ public partial class ServerEditDialog : Window
         }
     }
 
-    private static Dictionary<string, string> ParseSections(string? text)
-    {
-        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        if (string.IsNullOrEmpty(text)) return result;
-        foreach (var line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            if (!line.Contains('=')) continue;
-            var key = line[..line.IndexOf('=')].Trim();
-            var val = line[(line.IndexOf('=') + 1)..].Trim();
-            if (key.Length > 0 && val.Length > 0)
-                result[key] = val;
-        }
-        return result;
-    }
-
     private void AddSiteSkiplistRule_Click(object sender, RoutedEventArgs e)
     {
         _siteSkiplist.Add(new SkiplistRule());
