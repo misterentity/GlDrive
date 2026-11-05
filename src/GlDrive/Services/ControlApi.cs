@@ -6,7 +6,6 @@ using GlDrive.Config;
 using GlDrive.Services.Control;
 using GlDrive.Services.Control.Endpoints;
 using GlDrive.Services.Automation;
-using GlDrive.Spread;
 using Serilog;
 
 namespace GlDrive.Services;
@@ -25,25 +24,17 @@ namespace GlDrive.Services;
 ///     valid token (defence in depth against a reverse proxy or a rebinding attack);
 ///   * disabled by default; the token is generated on first enable and never logged.
 ///
-/// Endpoints
-///   GET  /                       — route index
-///   GET  /status                 — version, servers, connection state, active race count
-///   GET  /sections               — section keys usable as the `section` field of POST /race
-///   GET  /races                  — active races (summary)
-///   GET  /races/{id}             — one race, full detail (files, dests, failures)
-///   GET  /history?limit=N        — recent finished races
-///   POST /races  {section,release} — start a race; returns the new race's id
-///   POST /races/{id}/stop        — stop a race
+/// Endpoints (the MCP bridge, GlDrive.Mcp, is the client)
+///   GET  /automation/tools       — tool catalog
+///   POST /automation/call        — {name, arguments}; scope, approval and audit run in the registry
+/// The v3.10 REST routes (/status, /sections, /races, /history) were retired in favour of the
+/// equivalent app.status / spread.* tools.
 /// </summary>
 public sealed class ControlApi : IDisposable
 {
     private readonly AppConfig _config;
-    private readonly Func<SpreadManager?> _getSpread;
-    private readonly Func<IReadOnlyList<string>> _getConnectedServerIds;
     private readonly RouteTable _routes = new();
-    private readonly StatusEndpoints _statusEndpoints;
-    private readonly AutomationRegistry? _automation;
-    private readonly AutomationAccessController _access;
+    private readonly AutomationRegistry _automation;
     private HttpListener? _listener;
     private CancellationTokenSource? _cts;
     private Task? _loop;
@@ -54,22 +45,14 @@ public sealed class ControlApi : IDisposable
     internal TimeSpan RequestTimeout { get; set; } = TimeSpan.FromSeconds(15);
     internal int ActiveRequestCount => _requests.Count;
 
-    public ControlApi(AppConfig config, Func<SpreadManager?> getSpread,
-        Func<IReadOnlyList<string>> getConnectedServerIds,
-        GlDrive.Services.Automation.AutomationRegistry? automation = null)
+    public ControlApi(AppConfig config, AutomationRegistry automation)
     {
         _config = config;
-        _getSpread = getSpread;
-        _getConnectedServerIds = getConnectedServerIds;
         _automation = automation;
-        _access = automation?.Access ?? new AutomationAccessController(config.ControlApi, new AutomationApprovalBroker());
 
-        // Endpoints receive only what they need. See ControlApiBoundaryTests for why they
-        // must never take ServerManager/AppConfig-reaching handles once readers land.
-        _statusEndpoints = new StatusEndpoints(_config, _getSpread, _getConnectedServerIds);
-        _statusEndpoints.Register(_routes);
-        new SpreadEndpoints(_config, _getSpread).Register(_routes);
-        if (automation != null) new AutomationEndpoints(automation).Register(_routes);
+        // The HTTP layer reaches app state only through the registry, which owns scope,
+        // approval and audit. See ControlApiBoundaryTests.
+        new AutomationEndpoints(automation).Register(_routes);
     }
 
     /// <summary>Generates and persists a token the first time the API is switched on.</summary>
@@ -202,20 +185,15 @@ public sealed class ControlApi : IDisposable
             var method = ctx.Request.HttpMethod.ToUpperInvariant();
             auditTool = "control.http";
 
-            // Routing dispatch: this used to be a hand-written `switch (method, path)` plus
-            // two StartsWith prefix scans that sliced /races/{id} and /races/{id}/stop out
-            // by string arithmetic. It is now RouteTable.TryMatch, with {id} bound by the
-            // router. Both the loopback and token gates above still run first — the switch
-            // (now the router) only ever sees an already-authenticated, already-loopback request.
+            // Both the loopback and token gates above run first — the router only ever sees an
+            // already-authenticated, already-loopback request.
             if (_routes.TryMatch(method, path, out var handler, out var parameters))
             {
                 request = ControlRequest.FromContext(ctx, path, parameters, ct, principal);
                 if (path == "/automation/call") auditTool = null; // Registry records exact tools and eventual job outcomes.
                 else
                 {
-                    var definition = RestTool(method, path);
-                    auditTool = definition?.Name ?? "control.tools";
-                    if (definition != null) _access.Authorize(principal, definition, JsonSerializer.SerializeToElement(new { }));
+                    auditTool = "control.tools";
                     RecordAudit(callId, principal, auditTool, request.AuditArguments, "accepted", watch.ElapsedMilliseconds);
                 }
                 await handler!(request);
@@ -261,37 +239,12 @@ public sealed class ControlApi : IDisposable
         }
     }
 
-    internal static AutomationToolDefinition? RestTool(string method, string path)
-    {
-        var name = (method, path) switch
-        {
-            ("GET", "/") or ("GET", "/status") => "app.status",
-            ("GET", "/sections") => "spread.sections",
-            ("GET", "/history") => "spread.history",
-            ("GET", "/races") => "spread.status",
-            ("POST", "/races") => "spread.start",
-            _ when path.StartsWith("/races/", StringComparison.Ordinal) && method == "GET" => "spread.detail",
-            _ when path.StartsWith("/races/", StringComparison.Ordinal) && path.EndsWith("/stop", StringComparison.Ordinal) && method == "POST" => "spread.stop",
-            _ => null
-        };
-        return name == null ? null : AutomationToolDefinition.Create(name, "Authenticated control route", new { type = "object" },
-            readOnly: method == "GET", destructive: name == "spread.stop");
-    }
-
     private void RecordAudit(string callId, AutomationPrincipal? principal, string tool, JsonElement arguments, string outcome, long duration)
     {
-        try { _automation?.Audit?.Invoke(new(callId, principal?.Id ?? "unauthenticated", principal?.Name ?? "Unauthenticated",
+        try { _automation.Audit?.Invoke(new(callId, principal?.Id ?? "unauthenticated", principal?.Name ?? "Unauthenticated",
             tool, arguments, outcome, duration)); }
         catch { /* An unavailable local ledger must not alter control operation results. */ }
     }
-
-    /// <summary>
-    /// Kept so ControlApiSecurityTests' reflection lookup (GetMethod("Sections",
-    /// NonPublic|Instance) on ControlApi) still finds a target now that the handler body
-    /// lives in StatusEndpoints. Delegates to the same projection — see
-    /// StatusEndpoints.Sections() for the actual keys-only logic.
-    /// </summary>
-    private object Sections() => _statusEndpoints.Sections();
 
     private static bool FixedTimeEquals(string a, string b)
     {

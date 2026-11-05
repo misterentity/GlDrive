@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Text;
 using GlDrive.Config;
 using GlDrive.Services;
+using GlDrive.Services.Automation;
 using Xunit;
 
 namespace GlDrive.Tests;
@@ -20,7 +21,7 @@ public class ControlApiLifetimeTests
         config.ControlApi.Enabled = true;
         config.ControlApi.Port = port;
         config.ControlApi.Token = "test-only";
-        var api = new ControlApi(config, () => null, () => []) { RequestTimeout = timeout };
+        var api = new ControlApi(config, new AutomationRegistry()) { RequestTimeout = timeout };
         api.Start();
         return (api, port);
     }
@@ -29,7 +30,7 @@ public class ControlApiLifetimeTests
     {
         var client = new TcpClient();
         await client.ConnectAsync(IPAddress.Loopback, port);
-        var header = $"POST /races HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer test-only\r\nContent-Length: 100\r\n\r\n{{";
+        var header = $"POST /automation/call HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer test-only\r\nContent-Length: 100\r\n\r\n{{";
         await client.GetStream().WriteAsync(Encoding.ASCII.GetBytes(header));
         return client;
     }
@@ -51,7 +52,7 @@ public class ControlApiLifetimeTests
             await WaitFor(() => api.ActiveRequestCount == 0);
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
             http.DefaultRequestHeaders.Authorization = new("Bearer", "test-only");
-            using var response = await http.GetAsync($"http://127.0.0.1:{port}/status");
+            using var response = await http.GetAsync($"http://127.0.0.1:{port}/automation/tools");
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         }
     }
@@ -66,7 +67,7 @@ public class ControlApiLifetimeTests
             for (var i = 0; i < ControlApi.MaxConcurrentRequests; i++) clients.Add(await Stall(port));
             await WaitFor(() => api.ActiveRequestCount == ControlApi.MaxConcurrentRequests);
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
-            using var response = await http.GetAsync($"http://127.0.0.1:{port}/status");
+            using var response = await http.GetAsync($"http://127.0.0.1:{port}/automation/tools");
             Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
             api.Dispose();
             Assert.Equal(0, api.ActiveRequestCount);

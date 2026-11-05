@@ -101,7 +101,7 @@ glftpd sites have quirks that off-the-shelf FTP clients handle badly. Each of th
 ### Automation: MCP + control API
 - **MCP server** (`GlDrive.Mcp.exe`, stdio) lets Claude Code, Claude Desktop, Codex and other MCP clients read and control the running app: config and snapshots, servers, FTP files, downloads, search, wishlist, IRC, spread, player, extractor, Plex, the AI agent and diagnostics. Setup: [docs/mcp.md](docs/mcp.md)
 - **Loopback control API** on `127.0.0.1:8756`, off by default. Bearer token minted on first enable; every request re-checks the caller is loopback
-- Routes: `GET /` index, `/status`, `/sections`, `/races`, `/races/active`, `/races/{id}`, `/history`; `POST /races`, `/races/{id}/stop`; `/automation/tools` and `/automation/call` back the MCP bridge
+- Routes: `GET /automation/tools` and `POST /automation/call` (`{name, arguments}`), which back the MCP bridge. The v3.10 REST routes (`/status`, `/sections`, `/races`, `/history`) were retired; use the `app.status` and `spread.*` tools
 - Enable under **Settings → MCP**. For remote access, tunnel it (WireGuard / Tailscale / SSH) rather than binding the LAN
 
 ### Plex

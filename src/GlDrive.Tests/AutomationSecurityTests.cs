@@ -420,16 +420,6 @@ public sealed class AutomationSecurityTests : IDisposable
     }
 
     [Fact]
-    public void Rest_routes_use_the_same_scope_policy()
-    {
-        var config = Config(); using var broker = new AutomationApprovalBroker(); var access = new AutomationAccessController(config, broker);
-        Assert.NotNull(access.Authorize(Principal(config), ControlApi.RestTool("GET", "/races")!, Json()));
-        Assert.Throws<AutomationDeniedException>(() => access.Authorize(Principal(config), ControlApi.RestTool("POST", "/races")!, Json()));
-        config.Security.Clients[0].Scopes.Add("Operate");
-        Assert.False(access.Authorize(Principal(config), ControlApi.RestTool("POST", "/races/fixture/stop")!, Json()).Destructive);
-    }
-
-    [Fact]
     public void Approval_description_names_targets_without_command_secrets()
     {
         var description = AutomationApprovalDescription.Describe("ftp.command",

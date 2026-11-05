@@ -1,6 +1,12 @@
 using System;
 using System.IO;
+using System.Net;
+using System.Net.Http;
+using System.Net.Http.Json;
+using System.Net.Sockets;
+using System.Text.Json;
 using GlDrive.Config;
+using GlDrive.Services.Automation;
 using Xunit;
 
 namespace GlDrive.Tests;
@@ -103,37 +109,71 @@ public class ControlApiSecurityTests
         }
     }
 
+    private sealed class WriteModule : IAutomationModule
+    {
+        public int Calls;
+        public IReadOnlyList<AutomationToolDefinition> Tools { get; } =
+            [AutomationToolDefinition.Create("test.write", "Synthetic write", new { type = "object" })];
+        public Task<object?> ExecuteAsync(string operation, JsonElement arguments, CancellationToken ct)
+        { Interlocked.Increment(ref Calls); return Task.FromResult<object?>(new { saved = true }); }
+    }
+
     /// <summary>
-    /// GET /sections exists to tell a caller what it may pass as POST /races {"section"}.
-    /// It used to return `perServer` as the whole SpreadSite.Sections MAP, handing out every
-    /// site's real remote directory layout to anything holding the token. Keys in, paths out.
+    /// End-to-end over a real listener: the token gate, the scoped-client policy and the
+    /// router all hold on the automation routes, and the retired REST routes stay gone (a
+    /// stale script gets 404, never a race start).
     /// </summary>
     [Fact]
-    public void Sections_returns_keys_only_and_never_the_remote_paths()
+    public async Task Automation_routes_enforce_token_and_scope_and_retired_routes_are_gone()
     {
-        const string secretPath = "/site/staff-only/incoming/x265";
-
+        const string owner = "synthetic-owner-token";
+        const string observer = "synthetic-observer-token-abcdefghijklmnopqrstuvwxyz";
+        var socket = new TcpListener(IPAddress.Loopback, 0);
+        socket.Start(); var port = ((IPEndPoint)socket.LocalEndpoint).Port; socket.Stop();
         var config = new AppConfig();
-        var server = new ServerConfig { Id = "srv1", Name = "sited" };
-        server.SpreadSite.Sections["x265"] = secretPath;
-        server.SpreadSite.Sections["mp3"] = "/private/mp3-dump";
-        config.Servers.Add(server);
+        config.ControlApi.Enabled = true;
+        config.ControlApi.Port = port;
+        config.ControlApi.Token = owner;
+        config.ControlApi.Security.Clients.Add(new()
+        {
+            Id = "observer", Name = "Observer", Scopes = ["Observe"],
+            TokenHash = AutomationAccessController.HashToken(observer)
+        });
+        var module = new WriteModule();
+        using var broker = new AutomationApprovalBroker();
+        using var registry = new AutomationRegistry(module) { Access = new AutomationAccessController(config.ControlApi, broker) };
+        using var api = new GlDrive.Services.ControlApi(config, registry);
+        api.Start();
+        using var http = new HttpClient(new HttpClientHandler { UseProxy = false })
+        { BaseAddress = new Uri($"http://127.0.0.1:{port}/"), Timeout = TimeSpan.FromSeconds(10) };
+        var call = new { name = "test.write", arguments = new { } };
 
-        var api = new GlDrive.Services.ControlApi(config, () => null, () => System.Array.Empty<string>());
-        var method = typeof(GlDrive.Services.ControlApi)
-            .GetMethod("Sections", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        Assert.NotNull(method);
+        using (var none = await http.GetAsync("automation/tools"))
+            Assert.Equal(HttpStatusCode.Unauthorized, none.StatusCode);
+        http.DefaultRequestHeaders.Authorization = new("Bearer", "wrong-token");
+        using (var wrong = await http.PostAsJsonAsync("automation/call", call))
+            Assert.Equal(HttpStatusCode.Unauthorized, wrong.StatusCode);
 
-        var json = System.Text.Json.JsonSerializer.Serialize(method!.Invoke(api, null));
+        http.DefaultRequestHeaders.Authorization = new("Bearer", observer);
+        using (var catalog = await http.GetAsync("automation/tools"))
+            Assert.Equal(HttpStatusCode.OK, catalog.StatusCode);
+        using (var refused = await http.PostAsJsonAsync("automation/call", call))
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+            Assert.Equal("scope_denied", (await refused.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("code").GetString());
+        }
+        Assert.Equal(0, module.Calls);
 
-        // The keys are the whole point of the endpoint and must survive.
-        Assert.Contains("x265", json, StringComparison.Ordinal);
-        Assert.Contains("mp3", json, StringComparison.Ordinal);
-        Assert.Contains("sited", json, StringComparison.Ordinal);
-
-        // The paths are site layout and must not.
-        Assert.DoesNotContain(secretPath, json, StringComparison.Ordinal);
-        Assert.DoesNotContain("staff-only", json, StringComparison.Ordinal);
-        Assert.DoesNotContain("/private/mp3-dump", json, StringComparison.Ordinal);
+        http.DefaultRequestHeaders.Authorization = new("Bearer", owner);
+        foreach (var retired in new[] { "", "status", "sections", "races", "races/abc", "history" })
+            using (var gone = await http.GetAsync(retired))
+                Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
+        using (var start = await http.PostAsJsonAsync("races", new { section = "TV", release = "Some.Release-GRP" }))
+            Assert.Equal(HttpStatusCode.NotFound, start.StatusCode);
+        using (var wrongMethod = await http.GetAsync("automation/call"))
+            Assert.Equal(HttpStatusCode.MethodNotAllowed, wrongMethod.StatusCode);
+        using (var ok = await http.PostAsJsonAsync("automation/call", call))
+            Assert.Equal(HttpStatusCode.OK, ok.StatusCode);
+        Assert.Equal(1, module.Calls);
     }
 }

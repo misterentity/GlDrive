@@ -136,9 +136,7 @@ public partial class App
         _controlApi = null;
         if (!config.ControlApi.Enabled) return;
         if (ControlApi.EnsureToken(config)) ConfigManager.Save(config, "system:control-api-token");
-        _controlApi = new ControlApi(config,
-            () => _serverManager?.Spread,
-            () => _serverManager?.Spread?.GetConnectedServerIds() ?? [], _automation);
+        _controlApi = new ControlApi(config, _automation);
         _controlApi.Start();
     }
 

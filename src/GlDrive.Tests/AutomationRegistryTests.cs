@@ -85,7 +85,7 @@ public class AutomationRegistryTests
         var config = new AppConfig { ControlApi = new() { Enabled = true, Port = port, Token = "synthetic-test-token" } };
         var module = new Module();
         using var registry = new AutomationRegistry(module);
-        using var api = new ControlApi(config, () => null, () => [], registry);
+        using var api = new ControlApi(config, registry);
         api.Start();
         using var http = new HttpClient(new HttpClientHandler { UseProxy = false }) { BaseAddress = new Uri($"http://127.0.0.1:{port}/") };
         using var denied = await http.PostAsJsonAsync("automation/call", new { name = "test.write", arguments = new { count = 1 } });

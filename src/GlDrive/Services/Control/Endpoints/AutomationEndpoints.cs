@@ -4,7 +4,8 @@ using Serilog;
 
 namespace GlDrive.Services.Control.Endpoints;
 
-public sealed class AutomationEndpoints(AutomationRegistry registry) : IControlEndpoint
+/// <summary>The control API's only routes: the MCP bridge's catalog and call endpoints.</summary>
+public sealed class AutomationEndpoints(AutomationRegistry registry)
 {
     public void Register(RouteTable routes)
     {

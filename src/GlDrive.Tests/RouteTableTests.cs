@@ -22,8 +22,8 @@ public class RouteTableTests
     }
 
     /// <summary>
-    /// The zero-segment path. GET / is a shipped route (StatusEndpoints registers it as the
-    /// index) but was only ever traced by hand before this test existed.
+    /// The zero-segment path. GET / was a shipped route (the retired REST index) and was
+    /// only ever traced by hand before this test existed.
     /// </summary>
     [Fact]
     public void Matches_the_root_path()

@@ -21,7 +21,7 @@ public class McpAppIntegrationTests
         var config = new AppConfig { ControlApi = new() { Enabled = true, Port = port, Token = Guid.NewGuid().ToString("N") } };
         var saves = 0;
         using var registry = new AutomationRegistry(new ConfigurationAutomation(config, _ => Interlocked.Increment(ref saves)));
-        using var api = new ControlApi(config, () => null, () => [], registry);
+        using var api = new ControlApi(config, registry);
         api.Start();
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory != null && !File.Exists(Path.Combine(directory.FullName, "GlDrive.sln"))) directory = directory.Parent;
