@@ -18,6 +18,14 @@ public class WishlistAcquisitionPolicyTests
         Assert.True(WishlistAcquisition.MatchesTitle(Show(), release));
     }
 
+    // Identity strings are persisted in wishlist.json copy keys; ASCII titles must keep their key.
+    [Theory]
+    [InlineData(MediaType.TvShow, "Marvel's Agents of S.H.I.E.L.D.", null, "TvShow:marvelsagentsofshield:")]
+    [InlineData(MediaType.Movie, "The Example: Part 2", 2026, "Movie:theexamplepart2:2026")]
+    [InlineData(MediaType.Movie, "ＴＨＥ ＥＸＡＭＰＬＥ", 2026, "Movie:theexample:2026")]
+    public void Title_identity_key_is_stable_for_stored_ascii_titles(MediaType type, string title, int? year, string expected)
+        => Assert.Equal(expected, WishlistAcquisition.Identity(new WishlistItem { Type = type, Title = title, Year = year }));
+
     [Theory]
     [InlineData("S01E01E03", "01,03")]
     [InlineData("S01E01-E03", "01,02,03")]

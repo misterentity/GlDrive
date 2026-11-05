@@ -24,6 +24,20 @@ public class WishlistOwnershipRegressionTests
         Assert.False(WishlistOwnership.MeetsLibraryCutoff(item, entry, config));
     }
 
+    // Wishlist ownership used to drop NFKC while the library index applied it, so a
+    // full-width or ligature title was in the index but never "owned" by the wishlist.
+    [Theory]
+    [InlineData("ＥＸＡＭＰＬＥ", "Example")]
+    [InlineData("The ﬁnal Example", "The final Example")]
+    public void Wishlist_ownership_and_library_index_agree_on_compatibility_titles(string requested, string indexed)
+    {
+        var entry = new LibraryIndexEntry(new(indexed, 2026, null, null, QualityProfile.Q1080p),
+            @"C:\Library\Example.2026.1080p.BluRay.x264-GROUP.mkv", "disk", true, null, []);
+        Assert.True(LibraryIndex.SameIdentity(entry.Identity, new(requested, 2026, null, null, QualityProfile.Any)));
+        Assert.True(WishlistOwnership.MatchesMovie(new WishlistItem { Title = requested, Year = 2026 }, entry));
+        Assert.Equal(TitleKey.Normalize(indexed), TitleKey.Normalize(requested));
+    }
+
     [Theory]
     [InlineData("imdb://tt1234567", true)]
     [InlineData("imdb://tt7654321", false)]

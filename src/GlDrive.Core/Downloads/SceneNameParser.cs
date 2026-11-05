@@ -188,12 +188,16 @@ public static partial class SceneNameParser
 
     private static bool TitlesMatch(string parsedTitle, string searchTitle)
     {
-        var a = NormalizeTitle(parsedTitle);
-        var b = NormalizeTitle(searchTitle);
+        var a = ArticleFreeMatchText(parsedTitle);
+        var b = ArticleFreeMatchText(searchTitle);
         return a == b;
     }
 
-    private static string NormalizeTitle(string title)
+    /// <summary>
+    /// Release-vs-request title match text: "&amp;" as "and", a leading article dropped, spaces kept.
+    /// Deliberately looser than <see cref="TitleKey.Normalize"/>, which is the stored/compared identity key.
+    /// </summary>
+    private static string ArticleFreeMatchText(string title)
     {
         var normalized = title.ToLowerInvariant()
             .Replace("&", "and");

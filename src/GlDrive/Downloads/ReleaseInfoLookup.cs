@@ -1,4 +1,3 @@
-using System.Text;
 using GlDrive.Library;
 
 namespace GlDrive.Downloads;
@@ -79,17 +78,17 @@ public static class ReleaseInfoLookup
     internal static TmdbSearchResult? PickMatch(IReadOnlyList<TmdbSearchResult> results, ParsedRelease parsed, bool isTv)
     {
         var wantedKind = isTv ? "tv" : "movie";
-        var title = Normalize(parsed.Title);
+        var title = TitleKey.Normalize(parsed.Title);
         TmdbSearchResult? Best(IEnumerable<TmdbSearchResult> pool) => pool
             .Select((r, index) => (r, index, score:
-                (Normalize(r.DisplayTitle) == title ? 2 : 0) + (parsed.Year is { } y && r.YearParsed == y ? 1 : 0)))
+                (TitleKey.Normalize(r.DisplayTitle) == title ? 2 : 0) + (parsed.Year is { } y && r.YearParsed == y ? 1 : 0)))
             .OrderByDescending(x => x.score).ThenBy(x => x.index)
             .Select(x => x.r).FirstOrDefault();
         var usable = results.Where(r => r.Id > 0).ToList();
         return Best(usable.Where(r => r.MediaType == wantedKind))
                // The parser can misread a kind (a dated talk show, a movie with a number); accept
                // the other kind only on an exact title, never a loose cross-kind hit.
-               ?? Best(usable.Where(r => r.MediaType != wantedKind && Normalize(r.DisplayTitle) == title));
+               ?? Best(usable.Where(r => r.MediaType != wantedKind && TitleKey.Normalize(r.DisplayTitle) == title));
     }
 
     /// <summary>The parsed title, then without a scene country tag (MasterChef.US → MasterChef).</summary>
@@ -111,7 +110,7 @@ public static class ReleaseInfoLookup
         bool Matches(LibraryIndexEntry e)
         {
             if (info.TmdbId is { } id && !info.IsTv && e.Guids.Contains($"tmdb://{id}", StringComparer.OrdinalIgnoreCase)) return true;
-            if (Normalize(e.Identity.Title) != Normalize(title) && Normalize(e.Identity.Title) != Normalize(info.Parsed.Title)) return false;
+            if (TitleKey.Normalize(e.Identity.Title) != TitleKey.Normalize(title) && TitleKey.Normalize(e.Identity.Title) != TitleKey.Normalize(info.Parsed.Title)) return false;
             if (info.IsTv)
                 return e.Identity.Kind == "episode" && (info.Parsed.Season == null || e.Identity.Season == info.Parsed.Season)
                        && (info.Parsed.Episode == null || e.Identity.Episode == info.Parsed.Episode);
@@ -139,7 +138,4 @@ public static class ReleaseInfoLookup
 
     private static double? Rating(double value) => value > 0 ? Math.Round(value, 1) : null;
     private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-
-    private static string Normalize(string? title) => new((title ?? "").Normalize(NormalizationForm.FormKC)
-        .Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
 }

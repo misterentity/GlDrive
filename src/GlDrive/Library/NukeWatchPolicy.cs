@@ -30,7 +30,7 @@ public static class NukeWatchPolicy
         var owned = Identify(ownedRelease);
         var candidate = Identify(candidateRelease);
         if (owned == null || candidate == null || owned.Item.Type != candidate.Item.Type ||
-            Normalize(owned.Item.Title) != Normalize(candidate.Item.Title)) return false;
+            TitleKey.Normalize(owned.Item.Title) != TitleKey.Normalize(candidate.Item.Title)) return false;
         if (owned.Item.Type == MediaType.Movie)
         {
             if (!owned.Item.Year.HasValue || owned.Item.Year != candidate.Item.Year) return false;
@@ -89,7 +89,7 @@ public static class NukeWatchPolicy
             title = prefixParsed.Title;
             year = prefixParsed.Year;
         }
-        if (Normalize(title).Length == 0 || !tv && !year.HasValue) return null;
+        if (TitleKey.Normalize(title).Length == 0 || !tv && !year.HasValue) return null;
         var item = new WishlistItem
         {
             Type = tv ? MediaType.TvShow : MediaType.Movie, Title = title, Year = year, Quality = parsed.Quality,
@@ -103,7 +103,4 @@ public static class NukeWatchPolicy
             ? ["season:" + int.Parse(seasons[0].Groups["season"].Value)] : WishlistAcquisition.Keys(keyItem, release);
         return keys.Count == 0 ? null : new(item, keys.Order(StringComparer.Ordinal).ToArray());
     }
-
-    private static string Normalize(string text) => new(text.Normalize(System.Text.NormalizationForm.FormKC)
-        .Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
 }

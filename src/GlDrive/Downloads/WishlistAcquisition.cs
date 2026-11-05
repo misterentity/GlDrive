@@ -51,9 +51,7 @@ internal static class WishlistAcquisition
     internal static string Identity(WishlistItem item) => item.Type == MediaType.Movie && !string.IsNullOrWhiteSpace(item.ImdbId)
         ? "movie:imdb:" + item.ImdbId.ToLowerInvariant()
         : item.Type == MediaType.TvShow && item.TvMazeId.HasValue ? "tv:maze:" + item.TvMazeId.Value
-        : $"{item.Type}:{Normalize(item.Title)}:{(item.Type == MediaType.Movie ? item.Year : null)}";
-
-    private static string Normalize(string text) => new(text.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
+        : $"{item.Type}:{TitleKey.Normalize(item.Title)}:{(item.Type == MediaType.Movie ? item.Year : null)}";
 
     internal static bool SameTitle(WishlistItem left, WishlistItem right)
     {
@@ -62,7 +60,7 @@ internal static class WishlistAcquisition
             return string.Equals(left.ImdbId, right.ImdbId, StringComparison.OrdinalIgnoreCase);
         if (left.Type == MediaType.TvShow && left.TvMazeId.HasValue && right.TvMazeId.HasValue)
             return left.TvMazeId == right.TvMazeId;
-        return Normalize(left.Title) == Normalize(right.Title) &&
+        return TitleKey.Normalize(left.Title) == TitleKey.Normalize(right.Title) &&
             (left.Type == MediaType.TvShow || !left.Year.HasValue || !right.Year.HasValue || left.Year == right.Year);
     }
 
@@ -115,12 +113,12 @@ internal static class WishlistAcquisition
         // The legacy parser retains Sxx in a season-pack title. Do not let that
         // or a date token become part of the series identity.
         if (SceneNameParser.LogicalCategorySeason(release) != null)
-            return Normalize(SceneNameParser.LogicalCategoryTitle(release, parsed)) == Normalize(item.Title);
+            return TitleKey.Normalize(SceneNameParser.LogicalCategoryTitle(release, parsed)) == TitleKey.Normalize(item.Title);
         if (SceneNameParser.TryEpisodeDate(release, out var date))
         {
             var normalized = release.Replace('_', '.').Replace(' ', '.');
             var index = normalized.IndexOf(date.ToString("yyyy.MM.dd"), StringComparison.Ordinal);
-            return index > 0 && Normalize(normalized[..index]) == Normalize(item.Title);
+            return index > 0 && TitleKey.Normalize(normalized[..index]) == TitleKey.Normalize(item.Title);
         }
         return false;
     }

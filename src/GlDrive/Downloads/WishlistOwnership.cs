@@ -19,7 +19,7 @@ public static class WishlistOwnership
         var comparable = pairs.Where(p => !string.IsNullOrEmpty(p.Left) && !string.IsNullOrEmpty(p.Right)).ToArray();
         if (comparable.Any(p => !string.Equals(p.Left, p.Right, StringComparison.OrdinalIgnoreCase))) return false;
         if (comparable.Length > 0) return true;
-        if (Normalize(left.Title).Length == 0 || Normalize(left.Title) != Normalize(right.Title)) return false;
+        if (TitleKey.Normalize(left.Title).Length == 0 || TitleKey.Normalize(left.Title) != TitleKey.Normalize(right.Title)) return false;
         if (left.Year.HasValue && right.Year.HasValue) return left.Year == right.Year;
         // A manual title-only request already expresses the user's intent. Prefer
         // skipping an ambiguous import to creating a second request at another quality.
@@ -54,7 +54,7 @@ public static class WishlistOwnership
         var inventory = SeriesMonitorPolicy.Inventory(item);
         var owned = completed.SelectMany(d => SeriesMonitorPolicy.KeysForRelease(item, d.ReleaseName, d.Parsed)).ToHashSet(StringComparer.Ordinal);
         foreach (var entry in index.Entries.Where(e => e.VerifiedOnDisk && e.Identity.Kind == "episode" &&
-                     Normalize(e.Identity.Title) == Normalize(item.Title) &&
+                     TitleKey.Normalize(e.Identity.Title) == TitleKey.Normalize(item.Title) &&
                      (!item.Year.HasValue || !e.Identity.Year.HasValue || item.Year == e.Identity.Year) && MeetsLibraryCutoff(item, e, config)))
             owned.Add($"S{entry.Identity.Season:D2}E{entry.Identity.Episode:D2}");
         return inventory.All(e => owned.Contains(SeriesMonitorPolicy.Key(e)));
@@ -109,7 +109,7 @@ public static class WishlistOwnership
             matched = true;
         }
         if (matched) return true;
-        return item.Year.HasValue && item.Year == entry.Identity.Year && Normalize(item.Title) == Normalize(entry.Identity.Title);
+        return item.Year.HasValue && item.Year == entry.Identity.Year && TitleKey.Normalize(item.Title) == TitleKey.Normalize(entry.Identity.Title);
     }
 
     private static bool IsBuiltInLegacy(ScoredQualityProfile profile, DownloadConfig config) =>
@@ -118,6 +118,4 @@ public static class WishlistOwnership
 
     private static bool MeetsLegacyResolution(ScoredQualityProfile profile, QualityProfile resolution) =>
         profile.AllowedResolutions.Count == 0 || resolution != QualityProfile.Any && resolution >= profile.AllowedResolutions.Min();
-
-    private static string Normalize(string text) => new(text.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
 }

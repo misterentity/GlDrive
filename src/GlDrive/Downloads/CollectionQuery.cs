@@ -34,12 +34,12 @@ public sealed record CollectionQuery(string Kind, int? TmdbId = null, string? Im
     /// <summary>Movie results best first: an exact title (with its year), then TMDB's order.</summary>
     public IReadOnlyList<TmdbSearchResult> Rank(IEnumerable<TmdbSearchResult> results)
     {
-        var title = Normalize(Title);
-        var raw = Normalize(Raw);
+        var title = TitleKey.Normalize(Title);
+        var raw = TitleKey.Normalize(Raw);
         return results.Where(r => r.Id > 0 && r.MediaType is "movie" or "").DistinctBy(r => r.Id)
             .Select((r, index) =>
             {
-                var name = Normalize(r.DisplayTitle);
+                var name = TitleKey.Normalize(r.DisplayTitle);
                 var score = name == title && Year != null && r.YearParsed == Year ? 4
                     : raw.Length > 0 && name == raw ? 3
                     : name == title ? 2
@@ -49,7 +49,4 @@ public sealed record CollectionQuery(string Kind, int? TmdbId = null, string? Im
             .OrderByDescending(x => x.score).ThenBy(x => x.index)
             .Select(x => x.r).Take(10).ToArray();
     }
-
-    private static string Normalize(string? title) =>
-        new((title ?? "").Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
 }

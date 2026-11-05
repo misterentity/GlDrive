@@ -1,5 +1,4 @@
 using System.IO;
-using System.Text;
 using GlDrive.Downloads;
 using GlDrive.Plex;
 
@@ -152,15 +151,12 @@ public sealed class LibraryIndex
 
     public static bool SameIdentity(LibraryMediaIdentity first, LibraryMediaIdentity second)
     {
-        var firstTitle = NormalizeTitle(first.Title);
-        if (firstTitle.Length == 0 || firstTitle != NormalizeTitle(second.Title) || first.Kind != second.Kind
+        var firstTitle = TitleKey.Normalize(first.Title);
+        if (firstTitle.Length == 0 || firstTitle != TitleKey.Normalize(second.Title) || first.Kind != second.Kind
             || first.Season != second.Season || first.Episode != second.Episode) return false;
         if (second.Year.HasValue) return first.Year == second.Year;
         return true;
     }
-
-    private static string NormalizeTitle(string title) => new(title.Normalize(NormalizationForm.FormKC)
-        .Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
 
     internal static LibraryMediaIdentity? IdentityForFile(string path)
     {
