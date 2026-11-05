@@ -12,6 +12,7 @@ using GlDrive.Irc;
 using GlDrive.Services;
 using GlDrive.Services.Alerts;
 using Serilog;
+using GlDrive.Util;
 
 namespace GlDrive.UI;
 
@@ -615,14 +616,7 @@ public class TrayViewModel : INotifyPropertyChanged
             StatusText += $" | {FormatSpeed(totalSpeed)}";
     }
 
-    private static string FormatSpeed(double bytesPerSecond)
-    {
-        if (bytesPerSecond >= 1024 * 1024)
-            return $"{bytesPerSecond / (1024 * 1024):F1} MB/s";
-        if (bytesPerSecond >= 1024)
-            return $"{bytesPerSecond / 1024:F0} KB/s";
-        return $"{bytesPerSecond:F0} B/s";
-    }
+    private static string FormatSpeed(double bytesPerSecond) => ByteFormat.Format(bytesPerSecond, [0, 0, 1], suffix: "/s");
 
     public void ShowNotification(string title, string message, AlertKind kind = AlertKind.General,
         AlertSeverity severity = AlertSeverity.Information, string serverId = "", string release = "", string incident = "")

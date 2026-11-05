@@ -12,6 +12,7 @@ using GlDrive.Player;
 using GlDrive.Services;
 using LibVLCSharp.Shared;
 using Serilog;
+using GlDrive.Util;
 
 namespace GlDrive.UI;
 
@@ -1452,13 +1453,7 @@ public partial class PlayerViewModel : INotifyPropertyChanged, IDisposable
         return sanitized.Trim();
     }
 
-    private static string FormatSize(long bytes)
-    {
-        if (bytes <= 0) return "";
-        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F0} KB";
-        if (bytes < 1024L * 1024 * 1024) return $"{bytes / (1024.0 * 1024):F1} MB";
-        return $"{bytes / (1024.0 * 1024 * 1024):F2} GB";
-    }
+    private static string FormatSize(long bytes) => ByteFormat.Format(bytes, [0, 0, 1, 2], zeroText: "", minUnit: 1);
 
     public event PropertyChangedEventHandler? PropertyChanged;
     protected void OnPropertyChanged([CallerMemberName] string? name = null) =>

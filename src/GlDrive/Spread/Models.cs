@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Media;
+using GlDrive.Util;
 
 namespace GlDrive.Spread;
 
@@ -180,21 +181,9 @@ public class SpreadFileVm : INotifyPropertyChanged
     public double ProgressPercent { get => _progressPercent; set { _progressPercent = value; OnPropertyChanged(); } }
     public string Status { get => _status; set { _status = value; OnPropertyChanged(); } }
 
-    public string SizeFormatted => Size switch
-    {
-        < 1024 => $"{Size} B",
-        < 1024 * 1024 => $"{Size / 1024.0:F1} KB",
-        < 1024L * 1024 * 1024 => $"{Size / (1024.0 * 1024):F1} MB",
-        _ => $"{Size / (1024.0 * 1024 * 1024):F2} GB"
-    };
+    public string SizeFormatted => ByteFormat.Format(Size, [0, 1, 1, 2]);
 
-    public string SpeedFormatted => SpeedBps switch
-    {
-        0 => "",
-        < 1024 => $"{SpeedBps:F0} B/s",
-        < 1024 * 1024 => $"{SpeedBps / 1024:F1} KB/s",
-        _ => $"{SpeedBps / (1024 * 1024):F1} MB/s"
-    };
+    public string SpeedFormatted => ByteFormat.Format(SpeedBps, [0, 1, 1], zeroText: "", suffix: "/s");
 
     public event PropertyChangedEventHandler? PropertyChanged;
     protected void OnPropertyChanged([CallerMemberName] string? name = null) =>
@@ -215,13 +204,7 @@ public class SpreadScoreVm : INotifyPropertyChanged
     public double SpeedBps { get => _speedBps; set { _speedBps = value; OnPropertyChanged(); } }
     public string Status { get => _status; set { _status = value; OnPropertyChanged(); } }
 
-    public string SpeedFormatted => SpeedBps switch
-    {
-        0 => "",
-        < 1024 => $"{SpeedBps:F0} B/s",
-        < 1024 * 1024 => $"{SpeedBps / 1024:F1} KB/s",
-        _ => $"{SpeedBps / (1024 * 1024):F1} MB/s"
-    };
+    public string SpeedFormatted => ByteFormat.Format(SpeedBps, [0, 1, 1], zeroText: "", suffix: "/s");
 
     public event PropertyChangedEventHandler? PropertyChanged;
     protected void OnPropertyChanged([CallerMemberName] string? name = null) =>
@@ -241,13 +224,7 @@ public class BrowseItemVm : INotifyPropertyChanged
     public bool IsDirectory { get => _isDirectory; set { _isDirectory = value; OnPropertyChanged(); } }
     public string FullPath { get; set; } = "";
 
-    public string SizeFormatted => IsDirectory ? "<DIR>" : Size switch
-    {
-        < 1024 => $"{Size} B",
-        < 1024 * 1024 => $"{Size / 1024.0:F1} KB",
-        < 1024L * 1024 * 1024 => $"{Size / (1024.0 * 1024):F1} MB",
-        _ => $"{Size / (1024.0 * 1024 * 1024):F2} GB"
-    };
+    public string SizeFormatted => IsDirectory ? "<DIR>" : ByteFormat.Format(Size, [0, 1, 1, 2]);
 
     public string ModifiedFormatted => Modified == DateTime.MinValue ? "" : Modified.ToString("yyyy-MM-dd HH:mm");
 

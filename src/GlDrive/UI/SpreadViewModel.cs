@@ -8,6 +8,7 @@ using GlDrive.Config;
 using GlDrive.Services;
 using GlDrive.Spread;
 using Serilog;
+using GlDrive.Util;
 
 namespace GlDrive.UI;
 
@@ -569,13 +570,7 @@ public partial class SpreadViewModel : INotifyPropertyChanged, IDisposable
         try { d = job.GetDetail(); }
         catch (Exception ex) { Log.Debug(ex, "Race detail snapshot failed for {Id}", job.Id); return; }
 
-        static string Bytes(long b) => b switch
-        {
-            >= 1L << 30 => $"{b / (double)(1L << 30):F2} GB",
-            >= 1L << 20 => $"{b / (double)(1L << 20):F1} MB",
-            >= 1L << 10 => $"{b / (double)(1L << 10):F0} KB",
-            _ => $"{b} B"
-        };
+        static string Bytes(long b) => ByteFormat.Format(b, [0, 0, 1, 2]);
 
         var done = d.Files.Count(f => f.Status == "Done");
         var flying = d.Files.Count(f => f.Status == "In flight");
@@ -885,13 +880,7 @@ public partial class SpreadViewModel : INotifyPropertyChanged, IDisposable
             MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
-    private static string FormatSize(long bytes) => bytes switch
-    {
-        < 1024 => $"{bytes} B",
-        < 1024 * 1024 => $"{bytes / 1024.0:F1} KB",
-        < 1024L * 1024 * 1024 => $"{bytes / (1024.0 * 1024):F1} MB",
-        _ => $"{bytes / (1024.0 * 1024 * 1024):F2} GB"
-    };
+    private static string FormatSize(long bytes) => ByteFormat.Format(bytes, [0, 1, 1, 2]);
 
     private static string FormatDuration(TimeSpan ts) => ts.TotalMinutes >= 1
         ? $"{(int)ts.TotalMinutes}m {ts.Seconds}s"

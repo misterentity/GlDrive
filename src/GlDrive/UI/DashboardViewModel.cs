@@ -15,6 +15,7 @@ using GlDrive.Services;
 using GlDrive.Spread;
 using Microsoft.Win32;
 using Serilog;
+using GlDrive.Util;
 
 namespace GlDrive.UI;
 
@@ -2376,25 +2377,10 @@ public partial class DashboardViewModel : INotifyPropertyChanged, IDisposable
         SpeedGraphPoints = points;
     }
 
-    private static string FormatSize(long bytes)
-    {
-        if (bytes <= 0) return "\u2014";
-        string[] units = ["B", "KB", "MB", "GB", "TB"];
-        int i = 0;
-        double size = bytes;
-        while (size >= 1024 && i < units.Length - 1) { size /= 1024; i++; }
-        return $"{size:F1} {units[i]}";
-    }
+    private static string FormatSize(long bytes) => ByteFormat.Format(bytes, [1, 1, 1, 1, 1], zeroText: "\u2014");
 
-    private static string FormatSpeed(double bytesPerSecond)
-    {
-        if (bytesPerSecond <= 0) return "";
-        string[] units = ["B/s", "KB/s", "MB/s", "GB/s"];
-        int i = 0;
-        double speed = bytesPerSecond;
-        while (speed >= 1024 && i < units.Length - 1) { speed /= 1024; i++; }
-        return $"{speed:F1} {units[i]}";
-    }
+    private static string FormatSpeed(double bytesPerSecond) =>
+        ByteFormat.Format(bytesPerSecond, [1, 1, 1, 1], zeroText: "", suffix: "/s");
 
     // --- PreDB ---
 

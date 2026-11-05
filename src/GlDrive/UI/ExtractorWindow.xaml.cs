@@ -13,6 +13,7 @@ using Serilog;
 using SharpCompress.Archives;
 using SharpCompress.Common;
 using SharpCompress.Readers;
+using GlDrive.Util;
 
 namespace GlDrive.UI;
 
@@ -2318,13 +2319,7 @@ public partial class ExtractorWindow : Window
 
     // ── Helpers ──
 
-    private static string FormatSize(long bytes)
-    {
-        if (bytes >= 1L << 30) return $"{bytes / (double)(1L << 30):F1} GB";
-        if (bytes >= 1L << 20) return $"{bytes / (double)(1L << 20):F1} MB";
-        if (bytes >= 1L << 10) return $"{bytes / (double)(1L << 10):F0} KB";
-        return $"{bytes} B";
-    }
+    private static string FormatSize(long bytes) => ByteFormat.Compact(bytes);
 
     private void CleanFolders_Click(object sender, RoutedEventArgs e)
     {

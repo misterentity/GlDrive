@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Media;
 using GlDrive.Downloads;
 using GlDrive.Downloads.Segmented;
+using GlDrive.Util;
 
 namespace GlDrive.UI.StreamMatrix;
 
@@ -150,22 +151,9 @@ public sealed class StreamMatrixViewModel : INotifyPropertyChanged
         .Select(h => { var b = new SolidColorBrush((Color)ColorConverter.ConvertFromString(h)); b.Freeze(); return (Brush)b; })
         .ToArray();
 
-    public static string FormatRate(double bytesPerSecond) => bytesPerSecond switch
-    {
-        >= 1024 * 1024 * 1024 => $"{bytesPerSecond / (1024.0 * 1024 * 1024):0.00} GB/s",
-        >= 1024 * 1024 => $"{bytesPerSecond / (1024.0 * 1024):0.0} MB/s",
-        >= 1024 => $"{bytesPerSecond / 1024.0:0} KB/s",
-        _ => $"{bytesPerSecond:0} B/s",
-    };
+    public static string FormatRate(double bytesPerSecond) => ByteFormat.Format(bytesPerSecond, [0, 0, 1, 2], suffix: "/s");
 
-    public static string FormatBytes(long bytes) => bytes switch
-    {
-        >= 1L << 40 => $"{bytes / (double)(1L << 40):0.00} TiB",
-        >= 1L << 30 => $"{bytes / (double)(1L << 30):0.00} GiB",
-        >= 1L << 20 => $"{bytes / (double)(1L << 20):0.0} MiB",
-        >= 1L << 10 => $"{bytes / (double)(1L << 10):0} KiB",
-        _ => $"{bytes} B",
-    };
+    public static string FormatBytes(long bytes) => ByteFormat.Format(bytes, [0, 0, 1, 2, 2], iec: true);
 
     public static string FormatEta(TimeSpan t) =>
         t.TotalHours >= 100 ? "99:59:59" : $"{(int)t.TotalHours:00}:{t.Minutes:00}:{t.Seconds:00}";

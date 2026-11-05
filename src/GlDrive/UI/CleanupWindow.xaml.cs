@@ -7,6 +7,7 @@ using System.Windows.Controls;
 using GlDrive.Downloads;
 using Microsoft.Win32;
 using Serilog;
+using GlDrive.Util;
 
 namespace GlDrive.UI;
 
@@ -255,13 +256,7 @@ public partial class CleanupWindow : Window
         UpdateSelectedAction();
     }
 
-    private static string FormatSize(long bytes)
-    {
-        if (bytes >= 1L << 30) return $"{bytes / (double)(1L << 30):F1} GB";
-        if (bytes >= 1L << 20) return $"{bytes / (double)(1L << 20):F1} MB";
-        if (bytes >= 1L << 10) return $"{bytes / (double)(1L << 10):F0} KB";
-        return $"{bytes} B";
-    }
+    private static string FormatSize(long bytes) => ByteFormat.Compact(bytes);
 }
 
 public class CleanupItem : INotifyPropertyChanged

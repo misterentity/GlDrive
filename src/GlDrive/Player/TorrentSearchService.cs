@@ -6,6 +6,7 @@ using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Serilog;
+using GlDrive.Util;
 
 namespace GlDrive.Player;
 
@@ -493,14 +494,8 @@ public class TorrentSearchService : IDisposable
                "&tr=udp://tracker.openbittorrent.com:6969/announce";
     }
 
-    private static string FormatBytes(long bytes)
-    {
-        if (bytes <= 0) return "";
-        if (bytes >= 1L << 30) return $"{bytes / (double)(1L << 30):F1} GB";
-        if (bytes >= 1L << 20) return $"{bytes / (double)(1L << 20):F1} MB";
-        if (bytes >= 1L << 10) return $"{bytes / (double)(1L << 10):F0} KB";
-        return $"{bytes} B";
-    }
+    // Unknown sizes stay blank in the results grid.
+    private static string FormatBytes(long bytes) => ByteFormat.Compact(bytes, zeroText: "");
 
     public void Dispose()
     {
