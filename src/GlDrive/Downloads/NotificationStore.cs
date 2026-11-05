@@ -44,11 +44,11 @@ public class NotificationStore
     /// from screenshot / test code that wants to seed in-memory demo entries
     /// without overwriting the user's real notifications.json.
     /// </summary>
-    public NotificationStore(bool persistToDisk = true, Func<bool>? guardFeedPreferences = null)
+    public NotificationStore(bool persistToDisk = true)
     {
         _persistToDisk = persistToDisk;
         _feedViews = new(() => persistToDisk
-            ? FeedViewStore.ForFile(Path.Combine(ConfigManager.AppDataPath, "feed-views.json"), guardFeedPreferences)
+            ? FeedViewStore.ForFile(Path.Combine(ConfigManager.AppDataPath, "feed-views.json"))
             : new FeedViewStore(() => null, _ => { }));
     }
 

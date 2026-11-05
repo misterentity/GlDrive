@@ -455,7 +455,7 @@ public partial class App
             if (existing != null) existing.RefreshDecisions();
             else new CertificateDecisionsWindow(certManager).Show();
         });
-        var notificationStore = new NotificationStore(guardFeedPreferences: () => config.DataStewardship.GuardFeedPreferences);
+        var notificationStore = new NotificationStore();
         try { notificationStore.Load(); }
         catch (Exception ex) { Log.Warning(ex, "Failed to load notification store"); }
         _serverManager = new ServerManager(config, certManager, notificationStore);

@@ -14,14 +14,11 @@ authoritative. **Removal from appsettings.json is deferred** so older applicatio
 and MCP bridges continue to find their secrets after a downgrade. Existing snapshots
 and backups can still contain plaintext secrets; this change does not rewrite them.
 
-`dataStewardship.guardFeedPreferences` defaults to `false`. When enabled, saved feed
-preferences retain up to three last-good generations, and an unexplained loss of
-more than half their records preserves the rejected candidate. Explicit removal and
-unmuting remain immediate and can save an empty view. Corrupt files are copied to a
-`.corrupt` file and tracking starts empty; write failures retain the working state
-in memory. Generation copies run in the background. This first adoption is confined
-to feed preferences, which do not control downloads, joins or races. No primary file
-format changes, automatic generation restores or new engine admission limits are introduced.
+`dataStewardship.guardFeedPreferences` is retired and ignored; existing settings that
+contain it still load. Saved feed preferences (`feed-views.json`, plaintext) are written
+atomically. A corrupt file is copied to `feed-views.json.corrupt` and tracking starts
+empty; write failures retain the working state in memory. Any `*.last-good.N` or
+`.shrink-rejected` files left by older builds are no longer read or written.
 
 FiSH entries are validated individually: an invalid entry is skipped with a warning,
 and valid keys retain their timestamps. Empty targets and keys cannot be set.

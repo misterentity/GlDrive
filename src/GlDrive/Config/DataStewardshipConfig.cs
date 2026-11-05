@@ -8,6 +8,11 @@ namespace GlDrive.Config;
 public sealed class DataStewardshipConfig
 {
     public bool CopyConfigSecrets { get; set; } = true;
+    /// <summary>
+    /// Ignored: the guarded feed-preference generations it enabled were removed. Still read
+    /// and written so existing configs load under the strict converter and older builds
+    /// keep their value after a downgrade.
+    /// </summary>
     public bool GuardFeedPreferences { get; set; }
     internal string? UnparsedJson { get; init; }
 }

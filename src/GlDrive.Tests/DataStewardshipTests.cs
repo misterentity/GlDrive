@@ -69,6 +69,24 @@ public sealed class DataStewardshipTests : IDisposable
         Assert.Equal(before, File.ReadAllText(Path.Combine(_root, "config-secrets.dpapi")));
     }
 
+    /// <summary>
+    /// guardFeedPreferences no longer does anything (GuardedJsonFile was removed), but configs
+    /// that set it must still parse under the strict converter — an unknown key would demote
+    /// the whole block to UnparsedJson and switch off copyConfigSecrets.
+    /// </summary>
+    [Fact]
+    public void Retired_guardFeedPreferences_key_still_loads_and_roundtrips()
+    {
+        const string block = "{\"copyConfigSecrets\":true,\"guardFeedPreferences\":true}";
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var config = JsonSerializer.Deserialize<AppConfig>("{\"dataStewardship\":" + block + "}", options)!;
+        Assert.Null(config.DataStewardship.UnparsedJson);
+        Assert.True(config.DataStewardship.CopyConfigSecrets);
+        Assert.True(config.DataStewardship.GuardFeedPreferences);
+        using var result = JsonDocument.Parse(JsonSerializer.Serialize(config, options));
+        Assert.True(result.RootElement.GetProperty("dataStewardship").GetProperty("guardFeedPreferences").GetBoolean());
+    }
+
     [Theory]
     [InlineData("null")]
     [InlineData("[]")]
