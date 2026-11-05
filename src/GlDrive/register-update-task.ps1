@@ -24,7 +24,7 @@ Design notes:
   * FIXED ACTIONS. The executable and each task's single argument are baked in here, at elevated
     install time. A caller can ask for a task to run; it can never change what runs, what arguments
     it gets, or which directory is touched.
-  * The install destination is NOT passed. UpdateChecker.ApplyUpdate requires the destination to
+  * The install destination is NOT passed. UpdateInstaller.ApplyUpdate requires the destination to
     equal the elevated process's own directory, so it is pinned by where this action points.
 
 Failure is non-fatal: update installation falls back to interactive elevation and rollback cleanup

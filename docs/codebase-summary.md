@@ -112,7 +112,7 @@ All per-user state lives under `%AppData%\GlDrive\`. See [configuration-guide.md
 |---|---|---|
 | *(none)* | normal startup | Spawn watchdog, run WPF app |
 | `--watchdog <pid>` | `Program.RunWatchdog` | Hidden subprocess; on parent crash, reads Windows Event Log for the reason, restarts the app |
-| `--apply-update <pid> <extractDir> <installDir>` | `UpdateChecker.ApplyUpdate` | Elevated updater; waits for parent exit, renames files to `.old`, copies new files, launches child, **force-kills self** to avoid GnuTLS teardown crash |
+| `--apply-update <pid> <extractDir> <installDir>` | `UpdateInstaller.ApplyUpdate` | Elevated updater; waits for parent exit, renames files to `.old`, copies new files, launches child, **force-kills self** to avoid GnuTLS teardown crash |
 | `--screenshots` | `ScreenshotCapture.CaptureAll` | Renders wizard/dashboard/settings to PNGs for README |
 
 ## See also

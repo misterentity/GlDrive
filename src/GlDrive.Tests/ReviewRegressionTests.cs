@@ -16,7 +16,7 @@ public class ReviewRegressionTests
     public void Update_asset_versions_are_parsed_from_the_signed_name(
         string assetName, int major, int minor, int build)
     {
-        var version = Assert.IsType<Version>(UpdateChecker.ParseUpdateAssetVersion(assetName));
+        var version = Assert.IsType<Version>(UpdateInstaller.ParseUpdateAssetVersion(assetName));
         Assert.Equal(new Version(major, minor, build), version);
     }
 
@@ -25,7 +25,7 @@ public class ReviewRegressionTests
     [InlineData("GlDrive-v3.10.24-linux-x64.zip")]
     public void Invalid_update_asset_names_are_rejected(string assetName)
     {
-        Assert.Null(UpdateChecker.ParseUpdateAssetVersion(assetName));
+        Assert.Null(UpdateInstaller.ParseUpdateAssetVersion(assetName));
     }
 
     [Theory]
@@ -99,20 +99,20 @@ public class ReviewRegressionTests
         {
             UpdateMarkerHmac.WriteForProcess(marker, 4242, installedExe);
 
-            Assert.True(UpdateChecker.IsLegacyExtractedHandoff(
+            Assert.True(UpdateInstaller.IsLegacyExtractedHandoff(
                 stagedExe, staging, install));
 
             // The legacy watchdog consumes the valid marker when the original process
             // exits, before the elevated child is guaranteed to validate it.
             File.Delete(marker);
-            Assert.True(UpdateChecker.IsLegacyExtractedHandoff(
+            Assert.True(UpdateInstaller.IsLegacyExtractedHandoff(
                 stagedExe, staging, install));
 
-            Assert.False(UpdateChecker.IsLegacyExtractedHandoff(
+            Assert.False(UpdateInstaller.IsLegacyExtractedHandoff(
                 Path.Combine(root, "GlDrive.exe"), staging, install));
 
             File.Delete(Path.Combine(staging, "GlDrive.runtimeconfig.json"));
-            Assert.False(UpdateChecker.IsLegacyExtractedHandoff(
+            Assert.False(UpdateInstaller.IsLegacyExtractedHandoff(
                 stagedExe, staging, install));
         }
         finally

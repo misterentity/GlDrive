@@ -19,7 +19,7 @@ public sealed class UpdateProbationTests : IDisposable
     {
         Directory.CreateDirectory(_root);
         WriteBuild("old");
-        UpdateChecker.BackUpInstalledFiles(_root, _backups);
+        UpdateInstaller.BackUpInstalledFiles(_root, _backups);
         WriteBuild("new");
         File.WriteAllText(Path.Combine(_root, "new-only.txt"), "new content");
     }
@@ -286,7 +286,8 @@ public sealed class UpdateProbationTests : IDisposable
         var forceBusy = poll.IndexOf("ShouldForceDeferredInstall(heldFor)", StringComparison.Ordinal);
         Assert.True(skipGate >= 0 && forceBusy > skipGate);
         Assert.Contains("TimeSpan.FromHours(3)", source);
-        var apply = source[source.IndexOf("public static void ApplyUpdate(int pid", StringComparison.Ordinal)..];
+        var installer = Source("Services/UpdateInstaller.cs");
+        var apply = installer[installer.IndexOf("public static void ApplyUpdate(int pid", StringComparison.Ordinal)..];
         apply = apply[..apply.IndexOf("internal static string UpdateCompletionPath", StringComparison.Ordinal)];
         Assert.Contains("UpdateProbation.ForInstalledRoot(installDir).AcquireMutationLock()", apply);
         Assert.Contains("UpdateProbation.ForInstalledRoot(installDir).RecordInstallation", apply);
@@ -294,8 +295,7 @@ public sealed class UpdateProbationTests : IDisposable
         Assert.Contains("validatedInstallDir != null && !anotherMutationMayOwnRelaunch", apply);
         Assert.Contains("if (!anotherMutationMayOwnRelaunch) SignalUpdateCompletion(pid);", apply);
 
-        var rollback = source[source.IndexOf("internal static int RollbackFromLocalRequest", StringComparison.Ordinal)..];
-        rollback = rollback[..rollback.IndexOf("public void StartPeriodicCheck", StringComparison.Ordinal)];
+        var rollback = installer[installer.IndexOf("internal static int RollbackFromLocalRequest", StringComparison.Ordinal)..];
         Assert.DoesNotContain("WriteUpdateLog(", rollback);
         Assert.DoesNotContain("Path.GetTempPath()", rollback);
         Assert.DoesNotContain(".Kill(", rollback);
@@ -319,7 +319,7 @@ public sealed class UpdateProbationTests : IDisposable
         Assert.True(store.RecordInstallation(_backups, _now));
         using (store.AcquireMutationLock()) { }
         var next = new List<(string Original, string Backup)>();
-        UpdateChecker.BackUpInstalledFiles(_root, next);
+        UpdateInstaller.BackUpInstalledFiles(_root, next);
         Assert.True(File.Exists(ReceiptPath));
         Assert.True(File.Exists(Path.Combine(_root, UpdateProbation.MutationLockFile)));
         Assert.DoesNotContain(next, item => UpdateProbation.IsMetadataPath(_root, item.Original));
@@ -331,7 +331,7 @@ public sealed class UpdateProbationTests : IDisposable
         Assert.True(Store().RecordInstallation(_backups, _now));
         var firstReceipt = ReceiptPath;
         var hotfixBackups = new List<(string Original, string Backup)>();
-        UpdateChecker.BackUpInstalledFiles(_root, hotfixBackups);
+        UpdateInstaller.BackUpInstalledFiles(_root, hotfixBackups);
         WriteBuild("hotfix");
         var hotfix = new UpdateProbationStore(_root, new Version(3, 19, 1), _ => true,
             path => File.ReadAllText(path).StartsWith("hotfix", StringComparison.Ordinal) ? new Version(3, 19, 1) : _current);
@@ -346,7 +346,7 @@ public sealed class UpdateProbationTests : IDisposable
     {
         Assert.True(Store().RecordInstallation(_backups, _now));
         var hotfixBackups = new List<(string Original, string Backup)>();
-        UpdateChecker.BackUpInstalledFiles(_root, hotfixBackups);
+        UpdateInstaller.BackUpInstalledFiles(_root, hotfixBackups);
         WriteBuild("hotfix");
         var hotfix = new UpdateProbationStore(_root, new Version(3, 19, 1), _ => true,
             path => File.ReadAllText(path).StartsWith("hotfix", StringComparison.Ordinal) ? new Version(3, 19, 1) : _current);

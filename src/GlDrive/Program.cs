@@ -38,12 +38,12 @@ public static class Program
         var cleanupIdx = Array.FindIndex(args,
             arg => arg.Equals("--cleanup-old-updates", StringComparison.OrdinalIgnoreCase));
         if (cleanupIdx >= 0)
-            return UpdateChecker.CleanupOldUpdateFilesFromTask();
+            return UpdateInstaller.CleanupOldUpdateFilesFromTask();
 
         var rollbackIdx = Array.IndexOf(args, "--rollback-update");
         if (rollbackIdx >= 0)
             return args.Length == rollbackIdx + 3 && int.TryParse(args[rollbackIdx + 1], out var rollbackPid)
-                ? UpdateChecker.RollbackFromLocalRequest(rollbackPid, args[rollbackIdx + 2]) : 1;
+                ? UpdateInstaller.RollbackFromLocalRequest(rollbackPid, args[rollbackIdx + 2]) : 1;
 
         var taskIdx = Array.FindIndex(args,
             arg => arg.Equals("--apply-update-task", StringComparison.OrdinalIgnoreCase));
@@ -51,7 +51,7 @@ public static class Program
         {
             // Rejected handoffs have not replaced any files and can return normally.
             // A dispatched install terminates itself with its actual result.
-            return UpdateChecker.ApplyUpdateFromTask();
+            return UpdateInstaller.ApplyUpdateFromTask();
         }
 
         var applyIdx = Array.FindIndex(args,
@@ -59,7 +59,7 @@ public static class Program
         if (applyIdx >= 0 && args.Length >= applyIdx + 4 &&
             int.TryParse(args[applyIdx + 1], out var updatePid))
         {
-            UpdateChecker.ApplyUpdate(updatePid, args[applyIdx + 2], args[applyIdx + 3]);
+            UpdateInstaller.ApplyUpdate(updatePid, args[applyIdx + 2], args[applyIdx + 3]);
             return 1; // ApplyUpdate does not return after success or rollback.
         }
 

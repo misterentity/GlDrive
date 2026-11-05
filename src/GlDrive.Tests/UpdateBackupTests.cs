@@ -24,7 +24,7 @@ public sealed class UpdateBackupTests : IDisposable
         Assert.True(failure is IOException or UnauthorizedAccessException,
             $"Replacing a locked legacy backup should fail; got {failure?.GetType().Name ?? "no exception"}.");
         var backups = new List<(string Original, string Backup)>();
-        Assert.Equal(1, UpdateChecker.BackUpInstalledFiles(_root, backups));
+        Assert.Equal(1, UpdateInstaller.BackUpInstalledFiles(_root, backups));
 
         var backup = Assert.Single(backups);
         Assert.Equal(current, backup.Original);
@@ -47,14 +47,14 @@ public sealed class UpdateBackupTests : IDisposable
         using var running = new FileStream(runtime, FileMode.Open, FileAccess.Read,
             FileShare.Read | FileShare.Delete);
         var first = new List<(string Original, string Backup)>();
-        Assert.Equal(2, UpdateChecker.BackUpInstalledFiles(_root, first));
+        Assert.Equal(2, UpdateInstaller.BackUpInstalledFiles(_root, first));
         File.WriteAllText(runtime, "runtime v2");
         File.WriteAllText(main, "app v2");
         var firstRuntime = first.Single(b => b.Original == runtime).Backup;
         using var retained = new FileStream(firstRuntime, FileMode.Open, FileAccess.Read, FileShare.Read);
 
         var second = new List<(string Original, string Backup)>();
-        Assert.Equal(2, UpdateChecker.BackUpInstalledFiles(_root, second));
+        Assert.Equal(2, UpdateInstaller.BackUpInstalledFiles(_root, second));
         Assert.Equal(2, second.Count);
         Assert.DoesNotContain(second, b => first.Any(old => old.Backup == b.Backup));
         Assert.Equal("runtime v2", File.ReadAllText(second.Single(b => b.Original == runtime).Backup));
@@ -68,7 +68,7 @@ public sealed class UpdateBackupTests : IDisposable
         var copied = new List<string> { runtime, main };
         Assert.ThrowsAny<IOException>(() => File.Copy(Path.Combine(_root, "missing.tmp"), main));
         var errors = new List<string>();
-        UpdateChecker.RollBackUpdateFiles(copied, second, errors.Add);
+        UpdateInstaller.RollBackUpdateFiles(copied, second, errors.Add);
 
         Assert.Empty(errors);
         Assert.Equal("runtime v2", File.ReadAllText(runtime));
@@ -84,21 +84,21 @@ public sealed class UpdateBackupTests : IDisposable
         var current = Path.Combine(_root, "runtime.dll");
         File.WriteAllText(current, "v1");
         var first = new List<(string Original, string Backup)>();
-        UpdateChecker.BackUpInstalledFiles(_root, first);
+        UpdateInstaller.BackUpInstalledFiles(_root, first);
         File.WriteAllText(current, "v2");
         var second = new List<(string Original, string Backup)>();
-        UpdateChecker.BackUpInstalledFiles(_root, second);
+        UpdateInstaller.BackUpInstalledFiles(_root, second);
         File.WriteAllText(current, "v3");
 
         using (var retained = new FileStream(first[0].Backup, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
-            Assert.Equal((1, 1), UpdateChecker.DeleteOldUpdateFiles(_root));
+            Assert.Equal((1, 1), UpdateInstaller.DeleteOldUpdateFiles(_root));
             Assert.True(File.Exists(first[0].Backup));
             Assert.False(File.Exists(second[0].Backup));
             Assert.Equal("v3", File.ReadAllText(current));
         }
 
-        Assert.Equal((1, 0), UpdateChecker.DeleteOldUpdateFiles(_root));
+        Assert.Equal((1, 0), UpdateInstaller.DeleteOldUpdateFiles(_root));
         Assert.Equal("v3", File.ReadAllText(current));
     }
 
@@ -110,7 +110,7 @@ public sealed class UpdateBackupTests : IDisposable
         using var locked = new FileStream(current, FileMode.Open, FileAccess.Read, FileShare.Read);
         var backups = new List<(string Original, string Backup)>();
 
-        Assert.Throws<IOException>(() => UpdateChecker.BackUpInstalledFiles(_root, backups));
+        Assert.Throws<IOException>(() => UpdateInstaller.BackUpInstalledFiles(_root, backups));
 
         Assert.Empty(backups);
         Assert.Equal("installed", File.ReadAllText(current));
@@ -123,7 +123,7 @@ public sealed class UpdateBackupTests : IDisposable
         var temp = Path.Combine(_root, "temp", "gldrive-update.log");
         var shared = Path.Combine(_root, "shared", "update-install.log");
 
-        UpdateChecker.WriteUpdateLog("Update FAILED: diagnostic detail", temp, shared);
+        UpdateInstaller.WriteUpdateLog("Update FAILED: diagnostic detail", temp, shared);
 
         Assert.Equal(File.ReadAllText(temp), File.ReadAllText(shared));
         Assert.Contains("Update FAILED: diagnostic detail", File.ReadAllText(shared));
@@ -137,7 +137,7 @@ public sealed class UpdateBackupTests : IDisposable
         var blocked = Directory.CreateDirectory(Path.Combine(_root, "directory-not-file")).FullName;
         var available = Path.Combine(_root, "available.log");
 
-        UpdateChecker.WriteUpdateLog("rollback detail",
+        UpdateInstaller.WriteUpdateLog("rollback detail",
             tempUnavailable ? blocked : available, tempUnavailable ? available : blocked);
 
         Assert.Contains("rollback detail", File.ReadAllText(available));

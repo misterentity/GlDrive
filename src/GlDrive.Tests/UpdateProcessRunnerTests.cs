@@ -31,7 +31,7 @@ public sealed class UpdateProcessRunnerTests : IDisposable
             "param([string]$InstallDir)\n[Console]::Error.Write(('e' * 262144)); [Console]::Out.Write('registration-finished'); exit 0");
         var messages = new List<string>();
 
-        UpdateChecker.TryRegisterUpdateTask(_root, messages.Add, TimeSpan.FromSeconds(15));
+        UpdateInstaller.TryRegisterUpdateTask(_root, messages.Add, TimeSpan.FromSeconds(15));
 
         var result = Assert.Single(messages);
         Assert.StartsWith("Update task registration exit=0 registration-finished", result);
@@ -48,7 +48,7 @@ public sealed class UpdateProcessRunnerTests : IDisposable
         var timer = Stopwatch.StartNew();
         try
         {
-            UpdateChecker.TryRegisterUpdateTask(_root, messages.Add, TimeSpan.FromSeconds(5));
+            UpdateInstaller.TryRegisterUpdateTask(_root, messages.Add, TimeSpan.FromSeconds(5));
 
             Assert.Equal("Update task registration timed out", Assert.Single(messages));
             Assert.True(timer.Elapsed < TimeSpan.FromSeconds(12), $"Timeout took {timer.Elapsed}");

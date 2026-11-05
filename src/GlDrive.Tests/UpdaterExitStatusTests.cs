@@ -30,8 +30,8 @@ public sealed class UpdaterExitStatusTests : IClassFixture<UpdaterExitHost>
     public void Rejected_handoffs_report_failure_without_constructing_the_application()
     {
         var program = Source("Program.cs");
-        Assert.Contains("return UpdateChecker.ApplyUpdateFromTask();", program);
-        var checker = Source("Services/UpdateChecker.cs");
+        Assert.Contains("return UpdateInstaller.ApplyUpdateFromTask();", program);
+        var checker = Source("Services/UpdateInstaller.cs");
         var start = checker.IndexOf("public static int ApplyUpdateFromTask()", StringComparison.Ordinal);
         var dispatch = checker.IndexOf("ApplyUpdate(handoff.Pid", start, StringComparison.Ordinal);
         Assert.True(start >= 0 && dispatch > start);
@@ -43,7 +43,7 @@ public sealed class UpdaterExitStatusTests : IClassFixture<UpdaterExitHost>
     [Fact]
     public void Only_a_completed_install_sets_success_and_rollback_keeps_failure()
     {
-        var checker = Source("Services/UpdateChecker.cs");
+        var checker = Source("Services/UpdateInstaller.cs");
         var start = checker.IndexOf("public static void ApplyUpdate(int pid", StringComparison.Ordinal);
         var end = checker.IndexOf("internal static string UpdateCompletionPath", start, StringComparison.Ordinal);
         var apply = checker[start..end];
@@ -99,7 +99,7 @@ public sealed class UpdaterExitHost : IDisposable
                         var path = Path.Combine(directory, name.Name + ".dll");
                         return File.Exists(path) ? AssemblyLoadContext.Default.LoadFromAssemblyPath(path) : null;
                     };
-                    var method = Assembly.LoadFrom(args[0]).GetType("GlDrive.Services.UpdateChecker")
+                    var method = Assembly.LoadFrom(args[0]).GetType("GlDrive.Services.UpdateInstaller")
                         .GetMethod("TerminateUpdaterProcess", BindingFlags.Static | BindingFlags.NonPublic);
                     AppDomain.CurrentDomain.ProcessExit += (_, __) => File.WriteAllText(args[2], "ProcessExit ran");
                     new Thread(() => Thread.Sleep(Timeout.Infinite)) { IsBackground = false }.Start();

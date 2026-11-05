@@ -19,7 +19,7 @@ namespace GlDrive.Services;
 ///
 /// SECURITY MODEL. The scheduled task runs as SYSTEM, so this file is attacker-writable input to
 /// an elevated process and is treated as untrusted. It is deliberately NOT the security boundary:
-///   * It carries no install destination. <see cref="UpdateChecker.ApplyUpdate"/> already requires
+///   * It carries no install destination. <see cref="UpdateInstaller.ApplyUpdate"/> already requires
 ///     the install directory to equal the elevated process's OWN directory, so the destination is
 ///     pinned by where the task's action lives (Program Files) and cannot be redirected from here.
 ///   * It carries no code. The package is re-verified inside the elevated process against an RSA

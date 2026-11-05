@@ -377,7 +377,7 @@ internal sealed class UpdateProbationStore
         catch
         {
             var failures = new List<string>();
-            UpdateChecker.RollBackUpdateFiles(copied, moved, failures.Add);
+            UpdateInstaller.RollBackUpdateFiles(copied, moved, failures.Add);
             if (failures.Count > 0)
             {
                 throw new IOException("Rollback failed and could not restore every current file. Retained recovery files require manual review.");

@@ -5,7 +5,7 @@ RSA-2048 private key used by `release.ps1` to sign `checksums.sha256` for every 
 
 **Never commit this file.** It is in `.gitignore` at repo root.
 
-If lost: generate a new keypair, replace `ChecksumPublicKeyPem` in `src/GlDrive/Services/UpdateChecker.cs`,
+If lost: generate a new keypair, replace `ChecksumPublicKeyPem` in `src/GlDrive/Services/UpdateChecksumSignature.cs`,
 and ship a new release. Old clients (with the previous embedded public key) will refuse the new release —
 users must reinstall manually.
 
@@ -17,7 +17,7 @@ dotnet run --project /tmp/genkey
 ```
 
 ## checksum-public.pem (committed)
-For reference only. The active public key lives embedded as a constant in `UpdateChecker.cs`.
+For reference only. The active public key lives embedded as a constant in `UpdateChecksumSignature.cs`.
 Keep this file in sync with the embedded constant.
 
 ## codesign.pfx (gitignored, optional)

@@ -31,8 +31,8 @@ public sealed class UpdateTaskHandoffTests : IDisposable
     [Fact]
     public void System_task_uses_publisher_verification_not_current_user_DPAPI_authorization()
     {
-        Assert.False(UpdateChecker.RequiresUpdateAuthorization(viaScheduledTask: true));
-        Assert.True(UpdateChecker.RequiresUpdateAuthorization(viaScheduledTask: false));
+        Assert.False(UpdateInstaller.RequiresUpdateAuthorization(viaScheduledTask: true));
+        Assert.True(UpdateInstaller.RequiresUpdateAuthorization(viaScheduledTask: false));
     }
 
     public void Dispose() { try { Directory.Delete(_dir, true); } catch { } }
@@ -379,7 +379,7 @@ public sealed class OldUpdateCleanupTests : IDisposable
         File.WriteAllText(nestedOld, "old");
         File.WriteAllText(keep, "current");
 
-        var result = UpdateChecker.DeleteOldUpdateFiles(_root);
+        var result = UpdateInstaller.DeleteOldUpdateFiles(_root);
 
         Assert.Equal(2, result.Deleted);
         Assert.Equal(0, result.Remaining);
@@ -392,7 +392,7 @@ public sealed class OldUpdateCleanupTests : IDisposable
     public void Headless_cleanup_never_accepts_a_caller_supplied_directory()
     {
         var source = File.ReadAllText(Path.Combine(
-            FindRepositoryRoot(), "src", "GlDrive", "Services", "UpdateChecker.cs"));
+            FindRepositoryRoot(), "src", "GlDrive", "Services", "UpdateInstaller.cs"));
         var method = LifecycleSourceGuard.BlockAfter(source, "public static int CleanupOldUpdateFilesFromTask()");
 
         Assert.Contains("AppContext.BaseDirectory", method);

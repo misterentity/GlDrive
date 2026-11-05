@@ -83,9 +83,9 @@ public sealed class ScreenshotModeIsolationTests
     public void Updater_modes_run_before_WPF_initialization()
     {
         var program = ReadSource("src/GlDrive/Program.cs");
-        var taskDispatch = program.IndexOf("UpdateChecker.ApplyUpdateFromTask()", StringComparison.Ordinal);
-        var cleanupDispatch = program.IndexOf("UpdateChecker.CleanupOldUpdateFilesFromTask()", StringComparison.Ordinal);
-        var interactiveDispatch = program.IndexOf("UpdateChecker.ApplyUpdate(updatePid", StringComparison.Ordinal);
+        var taskDispatch = program.IndexOf("UpdateInstaller.ApplyUpdateFromTask()", StringComparison.Ordinal);
+        var cleanupDispatch = program.IndexOf("UpdateInstaller.CleanupOldUpdateFilesFromTask()", StringComparison.Ordinal);
+        var interactiveDispatch = program.IndexOf("UpdateInstaller.ApplyUpdate(updatePid", StringComparison.Ordinal);
         var wpfConstruction = program.IndexOf("var app = new App()", StringComparison.Ordinal);
 
         Assert.True(taskDispatch >= 0 && taskDispatch < wpfConstruction);
@@ -110,7 +110,7 @@ public sealed class ScreenshotModeIsolationTests
     [Fact]
     public void System_task_consumes_handoff_before_nonreturning_update_dispatch()
     {
-        var source = ReadSource("src/GlDrive/Services/UpdateChecker.cs");
+        var source = ReadSource("src/GlDrive/Services/UpdateInstaller.cs");
         var entry = source.IndexOf("public static int ApplyUpdateFromTask()", StringComparison.Ordinal);
         var clear = source.IndexOf("UpdateTaskHandoff.Clear(path)", entry, StringComparison.Ordinal);
         var dispatch = source.IndexOf("ApplyUpdate(handoff.Pid", entry, StringComparison.Ordinal);
@@ -127,7 +127,7 @@ public sealed class ScreenshotModeIsolationTests
         Assert.Contains("update-complete-{targetPid}.signal", program);
         Assert.Contains("Update completed; relaunched GlDrive", program);
 
-        var checker = ReadSource("src/GlDrive/Services/UpdateChecker.cs");
+        var checker = ReadSource("src/GlDrive/Services/UpdateInstaller.cs");
         var signal = checker.IndexOf("SignalUpdateCompletion(pid)", StringComparison.Ordinal);
         var kill = checker.IndexOf("TerminateUpdaterProcess(exitCode)", signal, StringComparison.Ordinal);
         Assert.True(signal >= 0 && signal < kill);

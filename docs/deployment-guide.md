@@ -166,7 +166,7 @@ Run / UninstallRun:
 
 ## In-app update flow
 
-Implemented by `Services/UpdateChecker.cs`, `Services/UpdateTaskHandoff.cs`, the updater entry points in `Program.cs` / `App.xaml.cs`, and the watchdog.
+Implemented by `Services/UpdateChecker.cs` (in-app: poll, download, verify, launch), `Services/UpdateInstaller.cs` (the elevated updater process), `Services/UpdateTaskHandoff.cs`, the updater entry points in `Program.cs` / `App.xaml.cs`, and the watchdog.
 
 Round-trip for an end-user pressing "Update":
 
