@@ -642,6 +642,12 @@ public partial class ServerEditDialog : Window
         }
     }
 
+    /// <summary>Section key → path from the section mappings grid (rows with both set).</summary>
+    private Dictionary<string, string> CurrentSections() => _sectionMappings
+        .Where(m => !string.IsNullOrWhiteSpace(m.RemoteSection) && !string.IsNullOrWhiteSpace(m.Path))
+        .GroupBy(m => m.RemoteSection, StringComparer.OrdinalIgnoreCase)
+        .ToDictionary(g => g.Key, g => g.First().Path, StringComparer.OrdinalIgnoreCase);
+
     private async void AiSetup_Click(object sender, RoutedEventArgs e)
     {
         var apiKey = CredentialStore.GetApiKey("openrouter") ?? "";
@@ -695,10 +701,7 @@ public partial class ServerEditDialog : Window
             }
 
             // Gather current config context from the section mappings grid
-            var currentSections = _sectionMappings
-                .Where(m => !string.IsNullOrWhiteSpace(m.RemoteSection) && !string.IsNullOrWhiteSpace(m.Path))
-                .GroupBy(m => m.RemoteSection, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(g => g.Key, g => g.First().Path, StringComparer.OrdinalIgnoreCase);
+            var currentSections = CurrentSections();
             var currentAffils = (SpreadAffilsBox.Text ?? "")
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .ToList();
@@ -820,13 +823,17 @@ public partial class ServerEditDialog : Window
             }
 
             // Always supplement with deterministic parser to catch patterns AI may have missed
-            var fallbackRules = OpenRouterClient.ParseRulesFallback(rulesText, currentSections);
+            var fallbackRules = SiteRulesParser.ToSkiplistRules(SiteRulesParser.Parse(rulesText, currentSections.Keys));
             var existingAiPatterns = result.SkiplistRules.Select(r => r.Pattern).ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var rule in fallbackRules)
             {
                 if (!existingAiPatterns.Contains(rule.Pattern))
                 {
-                    result.SkiplistRules.Add(rule);
+                    result.SkiplistRules.Add(new AiSkiplistRule
+                    {
+                        Pattern = rule.Pattern, IsRegex = rule.IsRegex, Action = rule.Action.ToString(),
+                        MatchDirectories = rule.MatchDirectories, MatchFiles = rule.MatchFiles, Section = rule.Section
+                    });
                     existingAiPatterns.Add(rule.Pattern);
                 }
             }
@@ -1595,7 +1602,7 @@ public partial class ServerEditDialog : Window
             }
 
             Log.Information("SITE RULES raw response ({Length} chars):\n{Response}", fullResponse.Length, fullResponse);
-            var parsed = SiteRulesParser.Parse(fullResponse);
+            var parsed = SiteRulesParser.Parse(fullResponse, CurrentSections().Keys);
             Log.Information("SITE RULES parsed: {RuleCount} rules, {SkipCount} skiplist, {AffilCount} affils, maxUp={Up} maxDown={Down}",
                 parsed.RawRules.Count, SiteRulesParser.ToSkiplistRules(parsed).Count,
                 parsed.Affils.Count, parsed.MaxUploads, parsed.MaxDownloads);
@@ -1656,6 +1663,8 @@ public partial class ServerEditDialog : Window
             // Apply denied content patterns
             if (parsed.DeniedPatterns.Count > 0)
                 changes.Add($"Denied: {string.Join(", ", parsed.DeniedPatterns)}");
+            if (parsed.DeniedGroups.Count > 0)
+                changes.Add($"Denied groups: {string.Join(", ", parsed.DeniedGroups)}");
 
             if (changes.Count > 0)
             {
