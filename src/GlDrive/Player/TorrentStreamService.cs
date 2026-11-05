@@ -325,7 +325,7 @@ public partial class TorrentStreamService : IDisposable
 
         // Screen BEFORE the engine ever sees this torrent. Playing is a download too — the
         // whole torrent's pieces pass through the same disk writer — so the gate applies here
-        // exactly as it does to download-and-keep.
+        // exactly as it does to queued torrent downloads (TorrentDownloadSource).
         var screening = await ScreenMagnetAsync(
             magnet, saveDir, TimeSpan.FromSeconds(120), s => onProgress?.Invoke(s, 0), ct);
 
@@ -447,275 +447,9 @@ public partial class TorrentStreamService : IDisposable
             .FirstOrDefault();
     }
 
-    // ── Download and keep ──────────────────────────────────────────────────────────
-    //
-    // Deliberately separate from the streaming path above. Streaming owns exactly one
-    // _activeManager and StartStreamingAsync calls StopAsync() first, so folding downloads
-    // into it would mean starting a download killed your stream and vice versa. Downloads
-    // live in their own dictionary: several can run at once, and StopAsync() (which the
-    // player calls whenever playback changes) leaves them alone.
-
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, TorrentManager> _downloads = new();
-
-    /// <summary>Progress snapshot for one background download.</summary>
-    public record DownloadProgress(
-        string Hash,
-        string Name,
-        double Percent,
-        long DownloadRateBytes,
-        int Seeds,
-        int Leeches,
-        string State);
-
     /// <summary>
-    /// Download a torrent to <paramref name="saveDir"/> and stop when it completes, leaving the
-    /// files in place. Runs alongside streaming and other downloads.
-    ///
-    /// Returns the info hash, or null if the magnet was unusable. Progress is reported until
-    /// the download finishes, is cancelled, or the service is disposed.
-    /// </summary>
-    /// <param name="allowBlockedContent">
-    /// When false (the default) a torrent containing executable files is refused outright and
-    /// nothing is added to the engine. When true — only ever set from an explicit user choice
-    /// in the confirmation dialog — the torrent proceeds with those files marked
-    /// DoNotDownload and swept afterwards. Refusing is the default because the failure modes
-    /// are asymmetric: a wrong block costs one extra click, a wrong allow puts an executable
-    /// in a folder the user is about to browse.
-    /// </param>
-    public async Task<string?> StartDownloadAsync(
-        string magnetLink,
-        string saveDir,
-        Action<DownloadProgress>? onProgress = null,
-        CancellationToken ct = default,
-        bool allowBlockedContent = false)
-    {
-        MagnetLink magnet;
-        try
-        {
-            magnet = MagnetLink.Parse(magnetLink);
-        }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "Torrent download: invalid magnet link");
-            return null;
-        }
-
-        var hash = magnet.InfoHashes.V1OrV2.ToHex();
-        if (_downloads.ContainsKey(hash))
-        {
-            Log.Information("Torrent download already running for {Hash}", hash);
-            return hash;
-        }
-
-        Directory.CreateDirectory(saveDir);
-
-        // Screen before adding: nothing is written, and nothing is even registered with the
-        // engine, until the contents are known and judged.
-        var screening = await ScreenMagnetAsync(magnet, saveDir, MetadataTimeout,
-            s => onProgress?.Invoke(new DownloadProgress(hash, "", 0, 0, 0, 0, s)), ct);
-
-        if (!screening.Ok)
-        {
-            onProgress?.Invoke(new DownloadProgress(hash, "", 0, 0, 0, 0,
-                screening.Error ?? "Unreadable"));
-            return null;
-        }
-
-        if (screening.HasEscapes)
-        {
-            Log.Warning("Torrent REFUSED — declares files outside the save folder ({Hash})", hash);
-            onProgress?.Invoke(new DownloadProgress(hash, screening.Torrent!.Name, 0, 0, 0, 0,
-                "Refused: unsafe paths"));
-            return null;
-        }
-
-        var blocked = screening.Blocked.ToList();
-        if (blocked.Count > 0 && !allowBlockedContent)
-        {
-            var names = string.Join(", ", blocked.Take(5)
-                .Select(b => TorrentContentPolicy.DisplayName(b.TorrentPath)));
-
-            Log.Warning("Torrent REFUSED — {Count} executable file(s): {Names} ({Hash})",
-                blocked.Count, names, hash);
-
-            onProgress?.Invoke(new DownloadProgress(hash, screening.Torrent!.Name, 0, 0, 0, 0,
-                $"Blocked: {blocked.Count} executable file(s) — {names}"));
-
-            return null;
-        }
-
-        var torrent = screening.Torrent!;
-        var manager = await _engine.AddAsync(torrent, saveDir);
-        if (!_downloads.TryAdd(hash, manager))
-        {
-            await _engine.RemoveAsync(manager);
-            return hash;
-        }
-
-        // Set while the manager is still stopped. Skipping the blocked entries rather than
-        // refusing the torrent is only reachable when the caller explicitly opted in.
-        if (blocked.Count > 0)
-        {
-            await ApplyBlocksAsync(manager, hash, screening.Decisions);
-            Log.Information("Torrent download: skipping {Count} blocked file(s) at the user's request ({Hash})",
-                blocked.Count, hash);
-        }
-
-        Log.Information("Torrent download starting → {SaveDir} ({Hash})", saveDir, hash);
-        await manager.StartAsync();
-
-        _ = MonitorDownloadAsync(hash, manager, saveDir, onProgress, ct);
-        return hash;
-    }
-
-    /// <summary>
-    /// How long to wait for magnet metadata before giving up. A magnet carries only an info
-    /// hash: until metadata arrives from a peer there is no file list, nothing is written to
-    /// disk, and progress is legitimately 0%. On a thinly-seeded torrent that phase can last
-    /// minutes, which is indistinguishable from a hang without instrumentation.
-    ///
-    /// The streaming path has always had this timeout at 120s. The download path shipped in
-    /// v3.10.66 without it — a download against a 2-seeder torrent sat at 0% with NOTHING in
-    /// the log between "starting" and "complete", so there was no way to tell slow from stuck.
-    /// Longer than streaming's because a background download can afford to be patient.
-    /// </summary>
-    private static readonly TimeSpan MetadataTimeout = TimeSpan.FromMinutes(5);
-
-    /// <summary>How often the monitor writes a progress line to the log.</summary>
-    private static readonly TimeSpan ProgressLogInterval = TimeSpan.FromSeconds(30);
-
-    private async Task MonitorDownloadAsync(
-        string hash,
-        TorrentManager manager,
-        string saveDir,
-        Action<DownloadProgress>? onProgress,
-        CancellationToken ct)
-    {
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        var lastLog = TimeSpan.Zero;
-        var metadataLogged = false;
-
-        try
-        {
-            while (!ct.IsCancellationRequested && !_disposed)
-            {
-                await Task.Delay(1000, ct);
-
-                var name = manager.Torrent?.Name ?? manager.InfoHashes.V1OrV2.ToHex();
-                var p = manager.Peers;
-
-                // ── Metadata phase ────────────────────────────────────────────────────
-                if (!manager.HasMetadata)
-                {
-                    if (sw.Elapsed > MetadataTimeout)
-                    {
-                        Log.Warning(
-                            "Torrent download: no metadata after {Elapsed:F0}s — {Seeds}S/{Leechs}L, " +
-                            "{Available} available. Giving up on {Hash}. Pick a result with more seeders.",
-                            sw.Elapsed.TotalSeconds, p.Seeds, p.Leechs, p.Available, hash);
-
-                        onProgress?.Invoke(new DownloadProgress(
-                            hash, name, 0, 0, p.Seeds, p.Leechs, "No metadata"));
-                        break;
-                    }
-
-                    onProgress?.Invoke(new DownloadProgress(
-                        hash, name, 0, 0, p.Seeds, p.Leechs,
-                        $"Metadata {p.Seeds}S/{p.Leechs}L"));
-
-                    if (sw.Elapsed - lastLog >= ProgressLogInterval)
-                    {
-                        lastLog = sw.Elapsed;
-                        Log.Information(
-                            "Torrent download: awaiting metadata {Elapsed:F0}s — {Seeds}S/{Leechs}L, {Available} available ({Hash})",
-                            sw.Elapsed.TotalSeconds, p.Seeds, p.Leechs, p.Available, hash);
-                    }
-
-                    continue;
-                }
-
-                if (!metadataLogged)
-                {
-                    metadataLogged = true;
-                    Log.Information("Torrent download: metadata received after {Elapsed:F0}s — {Name} ({Size})",
-                        sw.Elapsed.TotalSeconds, name, FormatBytes(manager.Torrent?.Size ?? 0));
-                }
-
-                // ── Transfer phase ────────────────────────────────────────────────────
-                // PartialProgress, not Progress: Progress is Bitfield.PercentComplete over the
-                // WHOLE torrent, so it can never reach 100% once any file is skipped and the
-                // UI would sit just short of done forever. PartialProgress is selector-aware
-                // and falls back to Progress when nothing is filtered.
-                onProgress?.Invoke(new DownloadProgress(
-                    hash, name, manager.PartialProgress, manager.Monitor.DownloadRate,
-                    p.Seeds, p.Leechs, manager.State.ToString()));
-
-                if (sw.Elapsed - lastLog >= ProgressLogInterval)
-                {
-                    lastLog = sw.Elapsed;
-                    Log.Information(
-                        "Torrent download: {Percent:F1}% at {Rate} — {Seeds}S/{Leechs}L, state={State} ({Name})",
-                        manager.PartialProgress, FormatBytes(manager.Monitor.DownloadRate) + "/s",
-                        p.Seeds, p.Leechs, manager.State, name);
-                }
-
-                // "Download and keep": the moment the data is on disk we stop. Seeding is not
-                // started, so nothing holds upload bandwidth or a connection afterwards.
-                if (manager.Complete || manager.State == TorrentState.Seeding)
-                {
-                    Log.Information("Torrent download complete after {Elapsed:F0}s → {SaveDir} ({Name})",
-                        sw.Elapsed.TotalSeconds, saveDir, name);
-                    onProgress?.Invoke(new DownloadProgress(
-                        hash, name, 100, 0, p.Seeds, p.Leechs, "Complete"));
-                    break;
-                }
-            }
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "Torrent download monitor failed for {Hash}", hash);
-        }
-        finally
-        {
-            await RemoveDownloadAsync(hash);
-        }
-    }
-
-    private static string FormatBytes(long bytes)
-    {
-        if (bytes <= 0) return "0 B";
-        if (bytes >= 1L << 30) return $"{bytes / (double)(1L << 30):F1} GB";
-        if (bytes >= 1L << 20) return $"{bytes / (double)(1L << 20):F1} MB";
-        if (bytes >= 1L << 10) return $"{bytes / (double)(1L << 10):F0} KB";
-        return $"{bytes} B";
-    }
-
-    /// <summary>Cancel a running download. Files already written are left on disk.</summary>
-    public Task CancelDownloadAsync(string hash) => RemoveDownloadAsync(hash);
-
-    private async Task RemoveDownloadAsync(string hash)
-    {
-        if (!_downloads.TryRemove(hash, out var manager)) return;
-
-        try
-        {
-            // Stop first: it closes the file handles via DiskManager.CloseFilesAsync, so the
-            // sweep below is not fighting an open writer.
-            await manager.StopAsync();
-            await _engine.RemoveAsync(manager);
-        }
-        catch (Exception ex)
-        {
-            Log.Debug(ex, "Error stopping torrent download {Hash}", hash);
-        }
-
-        SweepBlockedArtifacts(hash);
-    }
-
-    /// <summary>
-    /// Stops the STREAM only. Downloads are untouched by design — the player calls this on
-    /// every playback change, and it must not take background downloads down with it.
+    /// Stops the stream. The player calls this on every playback change; queued torrent
+    /// downloads run in TorrentDownloadSource and are not affected.
     /// </summary>
     public async Task StopAsync()
     {
@@ -745,6 +479,14 @@ public partial class TorrentStreamService : IDisposable
             _activeStreamHash = null;
         }
     }
+
+    /// <summary>
+    /// How long a queued download waits for magnet metadata before giving up. A magnet carries
+    /// only an info hash: until metadata arrives from a peer there is no file list and progress
+    /// is legitimately 0%. On a thinly-seeded torrent that can last minutes, so this is longer
+    /// than streaming's 120 s — a background download can afford to be patient.
+    /// </summary>
+    private static readonly TimeSpan MetadataTimeout = TimeSpan.FromMinutes(5);
 
     private static int FindFreePort()
     {

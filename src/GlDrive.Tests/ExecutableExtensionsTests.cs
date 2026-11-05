@@ -44,10 +44,12 @@ public sealed class ExecutableExtensionsTests
     }
 
     [Fact]
-    public void ArchiveExtractor_skips_executable_entries()
+    public void DownloadExtract_and_external_tool_skip_executable_entries()
     {
-        var code = Source("src", "GlDrive", "Downloads", "ArchiveExtractor.cs");
+        var code = Source("src", "GlDrive", "Downloads", "ArchiveExtraction", "ArchiveUnpacker.Directory.cs");
         Assert.Contains("ExecutableExtensions.IsExecutable", code);
+        var tool = Source("src", "GlDrive", "Downloads", "ArchiveExtraction", "ExternalArchiveTool.cs");
+        Assert.Contains("ExecutableExtensions.IsExecutable", tool);
     }
 
     /// <summary>

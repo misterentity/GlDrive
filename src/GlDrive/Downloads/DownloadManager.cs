@@ -79,6 +79,7 @@ public class DownloadManager : IDisposable
     }
 
     private readonly DiskReservation? _disk;
+    private static readonly ArchiveExtraction.ArchiveUnpacker Unpacker = new(ArchiveExtraction.ExternalArchiveTool.Default);
 
     public DownloadManager(DownloadStore store, FtpOperations ftp, StreamingDownloader downloader,
         DownloadConfig config, DiskReservation? disk = null)
@@ -1193,7 +1194,7 @@ public class DownloadManager : IDisposable
                 if (!checkpoint.IsCurrent(item, _config.VerifySfv, _config.SkipIncompleteReleases))
                     throw new IOException("Extraction inputs changed after verification");
                 var directory = checkpoint.Directories[0];
-                var extraction = await ArchiveExtractor.ExtractIfNeeded(directory, ct, disk);
+                var extraction = await Unpacker.ExtractDirectoryAsync(directory, ct, disk);
                 Log.Information("Extraction result for {Release}: extracted={Extracted}, deleteEnabled={Delete}",
                     item.ReleaseName, extraction.Extracted, _config.DeleteArchivesAfterExtract);
                 if (extraction.Extracted && _config.DeleteArchivesAfterExtract)

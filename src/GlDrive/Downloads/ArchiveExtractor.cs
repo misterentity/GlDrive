@@ -1,8 +1,5 @@
 using System.IO;
 using System.Text.RegularExpressions;
-using SharpCompress.Archives;
-using SharpCompress.Archives.Rar;
-using Serilog;
 
 namespace GlDrive.Downloads;
 
@@ -22,147 +19,6 @@ public static partial class ArchiveExtractor
     // Extended volumes: .r000-.r999, .s000-.s999 (3 digits)
     // Split archives: .001-.999
     private static readonly Regex VolumeExtRegex = MyVolumeExtRegex();
-
-    // Modern RAR multi-part: name.part02.rar, name.part003.rar (non-first volumes)
-    private static readonly Regex PartNonFirstRegex = PartNonFirstVolumeRegex();
-
-    public static Task<ArchiveExtractionResult> ExtractIfNeeded(string dirPath, CancellationToken ct)
-        => ExtractIfNeeded(dirPath, ct, DefaultDiskReservation);
-
-    internal static Task<ArchiveExtractionResult> ExtractIfNeeded(string dirPath, CancellationToken ct,
-        DiskReservation disk, Action<Stream, string, CancellationToken, long>? copy = null)
-    {
-        var dir = new DirectoryInfo(dirPath);
-        if (!dir.Exists) return Task.FromResult(new ArchiveExtractionResult(false, []));
-
-        var rarFiles = dir.GetFiles("*.rar")
-            .Where(f => !PartNonFirstRegex.IsMatch(f.Name))
-            .ToList();
-
-        if (rarFiles.Count == 0) return Task.FromResult(new ArchiveExtractionResult(false, []));
-
-        // Run extraction on a dedicated low-priority thread to avoid starving
-        // the UI thread and thread pool. Decompression is CPU-heavy.
-        var tcs = new TaskCompletionSource<ArchiveExtractionResult>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                ExtractOnThread(dirPath, rarFiles, ct, disk, copy);
-                tcs.SetResult(new ArchiveExtractionResult(true,
-                    rarFiles.Select(f => f.FullName).ToList()));
-            }
-            catch (OperationCanceledException)
-            {
-                tcs.SetCanceled(ct);
-            }
-            catch (Exception ex)
-            {
-                tcs.SetException(ex);
-            }
-        })
-        {
-            IsBackground = true,
-            Priority = ThreadPriority.BelowNormal,
-            Name = $"Extract-{Path.GetFileName(dirPath)}"
-        };
-        thread.Start();
-        return tcs.Task;
-    }
-
-    private static void ExtractOnThread(string dirPath, List<FileInfo> rarFiles, CancellationToken ct,
-        DiskReservation disk, Action<Stream, string, CancellationToken, long>? copy)
-    {
-        var safeDirPath = Path.GetFullPath(dirPath);
-        if (!safeDirPath.EndsWith(Path.DirectorySeparatorChar))
-            safeDirPath += Path.DirectorySeparatorChar;
-
-        foreach (var rarFile in rarFiles)
-        {
-            ct.ThrowIfCancellationRequested();
-            Log.Information("Extracting archive: {File}", rarFile.Name);
-
-            string? reservedRoot = null;
-            long requiredBytes = 0;
-            try
-            {
-                if (!DownloadExtractionCheckpoint.SafePath(dirPath, rarFile.FullName))
-                    throw new IOException("Archive source contains a reparse point or escaped its directory");
-                using var archive = RarArchive.OpenArchive(rarFile.FullName);
-                var entries = archive.Entries.Where(e => !e.IsDirectory).ToList();
-                if (entries.Count == 0)
-                {
-                    Log.Warning("Archive has no file entries: {File}", rarFile.Name);
-                    continue;
-                }
-
-                Log.Information("Extracting {Count} entries from {File}", entries.Count, rarFile.Name);
-                // Count exactly the entries the write loop admits. Existing outputs
-                // remain on disk until their atomic replacements are complete.
-                foreach (var entry in entries)
-                {
-                    if (entry.Key == null || ExecutableExtensions.IsExecutable(entry.Key)) continue;
-                    var target = Path.GetFullPath(Path.Combine(safeDirPath, entry.Key));
-                    if (!target.StartsWith(safeDirPath, StringComparison.OrdinalIgnoreCase) ||
-                        !DownloadExtractionCheckpoint.SafePath(dirPath, target)) continue;
-                    requiredBytes = checked(requiredBytes + Math.Max(0, entry.Size));
-                }
-                if (!disk.TryReserve(dirPath, requiredBytes, out var root))
-                    throw new ExtractionSpaceException(dirPath, requiredBytes);
-                reservedRoot = root;
-                foreach (var entry in entries)
-                {
-                    ct.ThrowIfCancellationRequested();
-
-                    if (entry.Key == null) continue;
-
-                    // Prevent path traversal (Zip Slip)
-                    var fullPath = Path.GetFullPath(Path.Combine(safeDirPath, entry.Key));
-                    if (!fullPath.StartsWith(safeDirPath, StringComparison.OrdinalIgnoreCase) ||
-                        !DownloadExtractionCheckpoint.SafePath(dirPath, fullPath))
-                    {
-                        Log.Warning("Skipping archive entry with path traversal: {Key}", entry.Key);
-                        continue;
-                    }
-
-                    // The torrent content gate allows archives — it has to, because that is how
-                    // scene releases ship — and cannot see inside them. This is where the inside
-                    // becomes files on disk, and the watch folders (E:\movies, D:\x265) are the
-                    // same folders torrents are saved to. Without this check,
-                    // Movie.2024.rar -> Sample/setup.exe walks straight past the torrent policy.
-                    if (ExecutableExtensions.IsExecutable(entry.Key))
-                    {
-                        Log.Warning("Skipping executable archive entry: {Key}", entry.Key);
-                        continue;
-                    }
-
-                    // Commit only complete entries so cancellation or corruption never
-                    // leaves a truncated file at the final destination.
-                    Log.Debug("Extracting entry: {Key} ({Size} bytes)", entry.Key, entry.Size);
-                    using var entryStream = entry.OpenEntryStream();
-                    if (copy != null) copy(entryStream, fullPath, ct, entry.Size);
-                    else ArchiveFileOperations.CopyToFileAtomically(entryStream, fullPath, ct, entry.Size);
-                }
-                Log.Information("Extraction complete: {File} ({Count} files)", rarFile.Name, entries.Count);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (ExtractionSpaceException) { throw; }
-            catch (Exception ex) when (ExtractSpaceParking.IsDiskFull(ex))
-            {
-                throw new ExtractionSpaceException(dirPath, requiredBytes, ex);
-            }
-            catch (Exception ex)
-            {
-                Log.Error(ex, "Failed to extract {File}", rarFile.Name);
-                throw;
-            }
-            finally
-            {
-                if (reservedRoot != null) disk.Release(reservedRoot, requiredBytes);
-            }
-        }
-    }
 
     public static bool DeleteArchiveSet(string firstVolumePath) =>
         ArchiveFileOperations.DeleteRarSet(firstVolumePath);
@@ -205,8 +61,4 @@ public static partial class ArchiveExtractor
     // Matches .r00-.r999, .s00-.s999, .001-.999
     [GeneratedRegex(@"^\.[rs]\d{2,3}$|^\.\d{3}$", RegexOptions.IgnoreCase)]
     private static partial Regex MyVolumeExtRegex();
-
-    // Matches non-first modern multi-part volumes: .part02.rar, .part003.rar (but NOT .part01.rar or .part001.rar)
-    [GeneratedRegex(@"\.part(?!0*1\.rar)\d+\.rar$", RegexOptions.IgnoreCase)]
-    private static partial Regex PartNonFirstVolumeRegex();
 }

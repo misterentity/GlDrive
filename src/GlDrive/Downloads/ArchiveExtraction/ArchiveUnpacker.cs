@@ -11,7 +11,7 @@ namespace GlDrive.Downloads.ArchiveExtraction;
 /// then the external UnRAR/7-Zip fallback, then the streaming reader. Knows nothing about
 /// queues, watch folders or retries — <see cref="ArchiveExtractionEngine"/> owns those.
 /// </summary>
-internal sealed class ArchiveUnpacker(IExternalArchiveTool externalTool)
+internal sealed partial class ArchiveUnpacker(IExternalArchiveTool externalTool)
 {
     /// <summary>
     /// Extract archive on a dedicated BelowNormal priority thread to avoid UI lag.

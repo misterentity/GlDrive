@@ -225,6 +225,14 @@ internal sealed class ExternalArchiveTool : IExternalArchiveTool
             if (!destination.StartsWith(safeOutput, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException($"External extractor produced an unsafe path: {relative}");
 
+            // Same rule as the SharpCompress loops: an archive's executables never reach the
+            // output folder. They are left in staging, which is deleted afterwards.
+            if (ExecutableExtensions.IsExecutable(relative))
+            {
+                Log.Warning("Skipping executable archive entry: {Key}", relative);
+                continue;
+            }
+
             if (File.Exists(destination))
             {
                 if (overwriteMode == 1) continue;

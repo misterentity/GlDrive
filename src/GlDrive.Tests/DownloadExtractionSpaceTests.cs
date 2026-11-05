@@ -2,6 +2,7 @@ using System.IO;
 using System.Diagnostics;
 using GlDrive.Config;
 using GlDrive.Downloads;
+using GlDrive.Downloads.ArchiveExtraction;
 using GlDrive.Ftp;
 using Xunit;
 
@@ -11,6 +12,9 @@ public sealed class DownloadExtractionSpaceTests
 {
     // Generated RAR5 containing one 4 KiB zero-filled payload.txt; no external tool at test time.
     internal static readonly byte[] Archive = Convert.FromBase64String("UmFyIRoHAQDz4YLrCwEFBwAGAQGAgIAAbVrdoycCAwuRAASAICARABzHgAUAC3BheWxvYWQudHh0CgMCPQRQoH1s3QHBlQ4C/iGf38Ju03v1/P5/AB13VlEDBQQA");
+
+    private static readonly ArchiveUnpacker Unpacker = new(new FakeTool((_, _) => false));
+
 
     [Fact]
     public async Task Insufficient_unpacked_space_parks_before_output_without_spending_retry_budget()
@@ -59,11 +63,11 @@ public sealed class DownloadExtractionSpaceTests
         h.Free = 4096;
         Assert.True(h.Disk.TryReserve(h.Item.LocalPath, 1, out var root));
         var shortage = await Assert.ThrowsAsync<ExtractionSpaceException>(() =>
-            ArchiveExtractor.ExtractIfNeeded(h.Item.LocalPath, default, h.Disk));
+            Unpacker.ExtractDirectoryAsync(h.Item.LocalPath, default, h.Disk));
         Assert.Equal(4096, shortage.RequiredBytes);
         Assert.False(File.Exists(Path.Combine(h.Item.LocalPath, "payload.txt")));
         h.Disk.Release(root, 1);
-        await ArchiveExtractor.ExtractIfNeeded(h.Item.LocalPath, default, h.Disk, (stream, target, ct, length) =>
+        await Unpacker.ExtractDirectoryAsync(h.Item.LocalPath, default, h.Disk, (stream, target, ct, length) =>
         {
             Assert.Equal(4096, h.Disk.ReservedOn(target));
             Assert.False(h.Disk.TryReserve(target, 1, out _));
@@ -106,7 +110,7 @@ public sealed class DownloadExtractionSpaceTests
         File.WriteAllText(target, "known-good");
         h.Free = 8192;
         var error = await Assert.ThrowsAsync<ExtractionSpaceException>(() =>
-            ArchiveExtractor.ExtractIfNeeded(h.Item.LocalPath, default, h.Disk, (_, destination, ct, length) =>
+            Unpacker.ExtractDirectoryAsync(h.Item.LocalPath, default, h.Disk, (_, destination, ct, length) =>
             {
                 using var source = new FullDiskStream(code);
                 ArchiveFileOperations.CopyToFileAtomically(source, destination, ct, length);
@@ -363,6 +367,95 @@ public sealed class DownloadExtractionSpaceTests
         {
             if (Position != 0) throw new IOException("Synthetic disk-full write boundary", code);
             return base.Read(buffer, offset, count);
+        }
+    }
+
+    [Fact]
+    public async Task Unreadable_rar_falls_back_to_external_tool_with_archive_size_reserved()
+    {
+        await using var h = new Harness();
+        Directory.CreateDirectory(h.Item.LocalPath);
+        var archive = Path.Combine(h.Item.LocalPath, "broken.rar");
+        File.WriteAllBytes(archive, new byte[3000]);
+        h.Free = 1 << 20;
+        string? calledWith = null;
+        var unpacker = new ArchiveUnpacker(new FakeTool((path, output) =>
+        {
+            calledWith = path;
+            Assert.Equal(3000, h.Disk.ReservedOn(output));
+            File.WriteAllText(Path.Combine(output, "payload.txt"), "from tool");
+            return true;
+        }));
+
+        var result = await unpacker.ExtractDirectoryAsync(h.Item.LocalPath, default, h.Disk);
+
+        Assert.True(result.Extracted);
+        Assert.Equal(archive, calledWith);
+        Assert.Equal(0, h.Disk.ReservedOn(h.Item.LocalPath));
+        Assert.True(File.Exists(Path.Combine(h.Item.LocalPath, "payload.txt")));
+    }
+
+    [Fact]
+    public async Task Unreadable_rar_without_external_tool_still_fails()
+    {
+        await using var h = new Harness();
+        Directory.CreateDirectory(h.Item.LocalPath);
+        File.WriteAllBytes(Path.Combine(h.Item.LocalPath, "broken.rar"), new byte[3000]);
+        h.Free = 1 << 20;
+
+        await Assert.ThrowsAnyAsync<Exception>(() => Unpacker.ExtractDirectoryAsync(h.Item.LocalPath, default, h.Disk));
+        Assert.Equal(0, h.Disk.ReservedOn(h.Item.LocalPath));
+    }
+
+    [Fact]
+    public async Task External_fallback_parks_when_archive_size_does_not_fit()
+    {
+        await using var h = new Harness();
+        Directory.CreateDirectory(h.Item.LocalPath);
+        File.WriteAllBytes(Path.Combine(h.Item.LocalPath, "broken.rar"), new byte[3000]);
+        h.Free = 1000;
+        var called = false;
+        var unpacker = new ArchiveUnpacker(new FakeTool((_, _) => called = true));
+
+        var error = await Assert.ThrowsAsync<ExtractionSpaceException>(() =>
+            unpacker.ExtractDirectoryAsync(h.Item.LocalPath, default, h.Disk));
+
+        Assert.Equal(3000, error.RequiredBytes);
+        Assert.False(called);
+    }
+
+    [Fact]
+    public void External_tool_output_never_commits_executables()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "gldrive-commit-" + Guid.NewGuid().ToString("N"));
+        var staging = Path.Combine(root, "staging");
+        var output = Path.Combine(root, "out");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(staging, "Sample"));
+            Directory.CreateDirectory(output);
+            File.WriteAllText(Path.Combine(staging, "movie.mkv"), "video");
+            File.WriteAllText(Path.Combine(staging, "Sample", "setup.exe"), "MZ");
+
+            ExternalArchiveTool.CommitStagedOutput(staging, output, 0, CancellationToken.None);
+
+            Assert.True(File.Exists(Path.Combine(output, "movie.mkv")));
+            Assert.False(File.Exists(Path.Combine(output, "Sample", "setup.exe")));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    private sealed class FakeTool(Func<string, string, bool> behaviour) : IExternalArchiveTool
+    {
+        public bool TryExtract(string archivePath, string outputDir, string password, int overwriteMode,
+            IProgress<ArchiveProgress> progress, CancellationToken ct)
+        {
+            Assert.Equal("", password);
+            Assert.Equal(0, overwriteMode);
+            return behaviour(archivePath, outputDir);
         }
     }
 
