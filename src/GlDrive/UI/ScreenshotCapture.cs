@@ -108,6 +108,10 @@ internal static class ScreenshotCapture
             foreach (var sr in BuildDemoSearchResults()) vm.SearchResults.Add(sr);
             vm.WishlistItems.Clear();
             foreach (var w in BuildDemoWishlist()) vm.WishlistItems.Add(w);
+            foreach (var ep in BuildDemoUpcomingEpisodes()) vm.Upcoming.UpcomingTvEpisodes.Add(ep);
+            foreach (var m in BuildDemoUpcomingMovies()) vm.Upcoming.UpcomingMovies.Add(m);
+            vm.Upcoming.SelectedUpcomingMovie = vm.Upcoming.UpcomingMovies[0];
+            vm.Upcoming.UpcomingStatus = "3 episode(s), 2 movie(s)";
             vm.MountedServerStatus.Clear();
             vm.MountedServerStatus.Add(new OverviewServerVm
             {
@@ -430,6 +434,21 @@ internal static class ScreenshotCapture
         yield return new WishlistItemVm { Id = "w10", Title = "Synthetic Mystery Miniseries",   Type = "TvShow", Year = "2026", Quality = "Q1080p", Status = "Watching",  GrabbedCount = "2" };
         yield return new WishlistItemVm { Id = "w11", Title = "Placeholder Action Sequel",      Type = "Movie",  Year = "2026", Quality = "Q2160p", Status = "Watching",  GrabbedCount = "0" };
         yield return new WishlistItemVm { Id = "w12", Title = "Test-Pattern Reality Show",      Type = "TvShow", Year = "2025", Quality = "Q720p",  Status = "Paused",    GrabbedCount = "4" };
+    }
+
+    private static IEnumerable<UpcomingTvEpisodeVm> BuildDemoUpcomingEpisodes()
+    {
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        yield return new UpcomingTvEpisodeVm { ShowName = "Sample Sci-Fi Drama", ShowType = "Scripted", EpisodeInfo = "S02E05 — The Signal", TimeDisplay = "21:00", NetworkDisplay = "Demo TV", DateDisplay = today.ToString("ddd M/d"), AirDate = today };
+        yield return new UpcomingTvEpisodeVm { ShowName = "Demo Crime Anthology", ShowType = "Scripted", EpisodeInfo = "S01E08 — Alibi", TimeDisplay = "22:00", NetworkDisplay = "Stream+", DateDisplay = today.AddDays(1).ToString("ddd M/d"), AirDate = today.AddDays(1) };
+        yield return new UpcomingTvEpisodeVm { ShowName = "Made-Up Animated Series", ShowType = "Animation", EpisodeInfo = "S04E01 — Pilot Redux", TimeDisplay = "19:30", NetworkDisplay = "Demo TV", DateDisplay = today.AddDays(3).ToString("ddd M/d"), AirDate = today.AddDays(3) };
+    }
+
+    private static IEnumerable<UpcomingMovieVm> BuildDemoUpcomingMovies()
+    {
+        var today = DateTime.Today;
+        yield return new UpcomingMovieVm { Title = "Placeholder Feature Film", Year = today.Year.ToString(), ReleaseDateDisplay = today.AddDays(9).ToString("yyyy-MM-dd"), Rating = "7.4", Genres = "Drama, Sci-Fi", Plot = "A neutral demo synopsis for the Upcoming detail panel." };
+        yield return new UpcomingMovieVm { Title = "Hypothetical Thriller", Year = today.Year.ToString(), ReleaseDateDisplay = today.AddDays(21).ToString("yyyy-MM-dd"), Genres = "Thriller" };
     }
 
     private static IEnumerable<SearchResultVm> BuildDemoSearchResults()

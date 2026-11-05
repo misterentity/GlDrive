@@ -538,7 +538,7 @@ public partial class DashboardWindow : Window
         if (header == "Upcoming" && !_upcomingLoaded)
         {
             _upcomingLoaded = true;
-            if (vm != null) await vm.LoadUpcoming();
+            if (vm != null) await vm.Upcoming.LoadUpcoming();
         }
 
         if (vm != null)

@@ -1543,7 +1543,7 @@
                         <TextBlock Grid.Column="1" Text="Upcoming" VerticalAlignment="Center"/>
                     </Grid>
                 </TabItem.Header>
-                <Border Margin="14" Style="{DynamicResource HudPanelStyle}">
+                <Border Margin="14" Style="{DynamicResource HudPanelStyle}" DataContext="{Binding Upcoming}">
                     <DockPanel>
                         <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
                             <TextBlock Text="UPCOMING RELEASES" Style="{DynamicResource SectionHeaderTextStyle}"/>

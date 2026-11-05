@@ -35,6 +35,9 @@ public sealed class UiAutomation(Func<DashboardWindow> getDashboard) : IAutomati
         "SelectedSection", "SpreadReleaseName", "InviteTarget", "AllowDownloads", "SelectedNotificationCategory", "SelectedNotificationServer",
         "BulkWishlistQuality"
     };
+    // Tab view models nested on a screen model. Their fields, collections and commands are
+    // addressed as "Section.Member" (e.g. "Upcoming.LoadUpcomingCommand") under the same allowlists.
+    private static readonly string[] Sections = ["Upcoming"];
     private static object Schema(object properties, string[] required) => new { type = "object", properties, required, additionalProperties = false };
     private static readonly object Screen = new { type = "string", @enum = Screens };
     private static readonly object Text = new { type = "string", minLength = 1, maxLength = 256 };
@@ -100,8 +103,8 @@ public sealed class UiAutomation(Func<DashboardWindow> getDashboard) : IAutomati
                 return await ((PlayerViewModel)model).AutomationDownloadTorrent(args.GetProperty("magnet").GetString()!, args.GetProperty("directory").GetString()!, args.TryGetProperty("skipBlockedFiles", out var skip) && skip.GetBoolean());
             if (operation is "ui.set" or "ui.select")
             {
-                var name = args.GetProperty("property").GetString()!;
-                var property = model.GetType().GetProperty(name) ?? throw new ArgumentException("Unknown property");
+                var (target, name) = Locate(model, args.GetProperty("property").GetString()!);
+                var property = target.GetType().GetProperty(name) ?? throw new ArgumentException("Unknown property");
                 if (property.SetMethod?.IsPublic != true) throw new ArgumentException("Property is read-only");
                 object? value;
                 if (operation == "ui.set")
@@ -118,7 +121,7 @@ public sealed class UiAutomation(Func<DashboardWindow> getDashboard) : IAutomati
                     value = Row(model, args);
                     if (!property.PropertyType.IsInstanceOfType(value)) throw new ArgumentException("Collection row does not match selection type");
                 }
-                property.SetValue(model, value);
+                property.SetValue(target, value);
                 return State(model);
             }
             if (operation == "ui.invoke")
@@ -126,9 +129,9 @@ public sealed class UiAutomation(Func<DashboardWindow> getDashboard) : IAutomati
                 // The check and command start share one dispatcher callback. Removal commands
                 // capture stable IDs synchronously before scheduling their existing Undo action.
                 validateApprovedSelection?.Invoke(model);
-                var name = args.GetProperty("command").GetString()!;
+                var (target, name) = Locate(model, args.GetProperty("command").GetString()!);
                 if (!Commands.Contains(name)) throw new ArgumentException("Command is not available through automation");
-                var command = model.GetType().GetProperty(name)?.GetValue(model) as IAsyncRelayCommand
+                var command = target.GetType().GetProperty(name)?.GetValue(target) as IAsyncRelayCommand
                     ?? throw new ArgumentException("Unknown command on this screen");
                 object? parameter = args.TryGetProperty("collection", out _) ? Row(model, args) : null;
                 if (args.TryGetProperty("parameter", out var p))
@@ -142,9 +145,9 @@ public sealed class UiAutomation(Func<DashboardWindow> getDashboard) : IAutomati
                     throw new ArgumentException("Command requires a parameter or collection row matching " + commandType.GetGenericArguments()[0].Name);
                 if (!commandType.IsGenericType && parameter != null) throw new ArgumentException("Command takes no parameter");
                 if (!command.CanExecute(parameter)) throw new InvalidOperationException("Command is disabled");
-                if (!_runningCommands.Add((model, name))) throw new InvalidOperationException("This command is already running");
+                if (!_runningCommands.Add((target, name))) throw new InvalidOperationException("This command is already running");
                 try { await command.ExecuteAsync(parameter); }
-                finally { _runningCommands.Remove((model, name)); }
+                finally { _runningCommands.Remove((target, name)); }
                 return State(model);
             }
             throw new KeyNotFoundException("Unknown UI operation");
@@ -180,17 +183,38 @@ public sealed class UiAutomation(Func<DashboardWindow> getDashboard) : IAutomati
 
     private static object Row(object model, JsonElement args)
     {
-        var name = args.GetProperty("collection").GetString()!;
-        var sequence = model.GetType().GetProperty(name)?.GetValue(model) as IEnumerable ?? throw new ArgumentException("Unknown collection");
+        var (target, name) = Locate(model, args.GetProperty("collection").GetString()!);
+        var sequence = target.GetType().GetProperty(name)?.GetValue(target) as IEnumerable ?? throw new ArgumentException("Unknown collection");
         var index = args.GetProperty("index").GetInt32();
         return sequence.Cast<object>().ElementAtOrDefault(index) ?? throw new ArgumentException("Index is out of range");
     }
 
-    private static object State(object model) => new
+    /// <summary>Resolves "Member" on the screen model or "Section.Member" on an allowlisted nested view model.</summary>
+    internal static (object Target, string Member) Locate(object model, string name)
+    {
+        var dot = name.IndexOf('.');
+        if (dot < 0) return (model, name);
+        var section = name[..dot];
+        var member = name[(dot + 1)..];
+        if (!Sections.Contains(section, StringComparer.Ordinal) || member.Length == 0 || member.Contains('.'))
+            throw new ArgumentException("Unknown member on this screen");
+        var target = model.GetType().GetProperty(section)?.GetValue(model) ?? throw new ArgumentException("Unknown member on this screen");
+        return (target, member);
+    }
+
+    private static IEnumerable<(string Prefix, object Target)> Targets(object model)
+    {
+        yield return ("", model);
+        foreach (var section in Sections)
+            if (model.GetType().GetProperty(section)?.GetValue(model) is { } nested)
+                yield return (section + ".", nested);
+    }
+
+    internal static object State(object model) => new
     {
         state = Project(model, 0),
-        editableFields = model.GetType().GetProperties().Where(p => Editable.Contains(p.Name) && p.SetMethod?.IsPublic == true && Scalar(p.PropertyType)).Select(p => new { name = p.Name, type = p.PropertyType.Name }).ToArray(),
-        commands = model.GetType().GetProperties().Where(p => Commands.Contains(p.Name) && typeof(IAsyncRelayCommand).IsAssignableFrom(p.GetValue(model)?.GetType())).Select(p => p.Name).ToArray()
+        editableFields = Targets(model).SelectMany(t => t.Target.GetType().GetProperties().Where(p => Editable.Contains(p.Name) && p.SetMethod?.IsPublic == true && Scalar(p.PropertyType)).Select(p => new { name = t.Prefix + p.Name, type = p.PropertyType.Name })).ToArray(),
+        commands = Targets(model).SelectMany(t => t.Target.GetType().GetProperties().Where(p => Commands.Contains(p.Name) && typeof(IAsyncRelayCommand).IsAssignableFrom(p.GetValue(t.Target)?.GetType())).Select(p => t.Prefix + p.Name)).ToArray()
     };
 
     internal static bool Scalar(Type type) => type.IsPrimitive || type.IsEnum || type == typeof(string) || type == typeof(decimal) || type == typeof(DateTime) || type == typeof(TimeSpan) || (Nullable.GetUnderlyingType(type) is { } inner && Scalar(inner));
