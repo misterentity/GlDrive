@@ -127,6 +127,7 @@ public sealed class TorrentPeerTransferTests
         ListenEndPoints = listenPort == null ? [] : new() { ["ipv4"] = new IPEndPoint(IPAddress.Loopback, listenPort.Value) },
         AllowLocalPeerDiscovery = false, AllowPortForwarding = false,
         AutoSaveLoadFastResume = true, AutoSaveLoadMagnetLinkMetadata = true,
+        FastResumeMode = FastResumeMode.Accurate,
         MaximumDownloadRate = 0, MaximumUploadRate = 0
     }.ToSettings();
 

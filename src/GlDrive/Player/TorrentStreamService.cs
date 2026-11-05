@@ -38,7 +38,8 @@ public partial class TorrentStreamService : IDisposable
         string downloadPath,
         string? vpnAdapterName = null,
         TorrentContentPolicy? contentPolicy = null,
-        long maxDownloadBytesPerSecond = 0)
+        long maxDownloadBytesPerSecond = 0,
+        bool queueDownloads = false)
     {
         _policy = contentPolicy ?? new TorrentContentPolicy(blockExecutables: true);
 
@@ -72,6 +73,9 @@ public partial class TorrentStreamService : IDisposable
             AllowPortForwarding = false,
             AutoSaveLoadDhtCache = true,
             AutoSaveLoadFastResume = true,
+            // Queue ownership ends at completion/cancellation. Accurate mode avoids
+            // MonoTorrent's unowned periodic resume writer racing that shutdown.
+            FastResumeMode = queueDownloads ? FastResumeMode.Accurate : FastResumeMode.BestEffort,
             AutoSaveLoadMagnetLinkMetadata = true,
             DhtEndPoint = new IPEndPoint(bindAddress, dhtPort),
             ListenEndPoints = new Dictionary<string, IPEndPoint>

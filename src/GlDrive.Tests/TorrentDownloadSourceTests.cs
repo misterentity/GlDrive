@@ -13,6 +13,24 @@ namespace GlDrive.Tests;
 public sealed class TorrentDownloadSourceTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Queue_engine_uses_accurate_resume_while_player_retains_its_existing_policy(bool queueDownloads)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "gldrive-resume-policy-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var service = new TorrentStreamService(root, queueDownloads: queueDownloads);
+            var engine = (ClientEngine)typeof(TorrentStreamService)
+                .GetField("_engine", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(service)!;
+            Assert.True(engine.Settings.AutoSaveLoadFastResume);
+            Assert.Equal(queueDownloads ? FastResumeMode.Accurate : FastResumeMode.BestEffort, engine.Settings.FastResumeMode);
+            Assert.Empty(engine.Torrents);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Theory]
     [InlineData(7)]
     [InlineData(100)]
     public async Task Queued_torrent_can_use_the_engine_connection_budget_without_a_hidden_sixty_peer_cap(int budget)
@@ -24,7 +42,7 @@ public sealed class TorrentDownloadSourceTests
             {
                 CacheDirectory = root, DhtEndPoint = null, ListenEndPoints = [],
                 AllowLocalPeerDiscovery = false, AllowPortForwarding = false,
-                MaximumConnections = budget
+                MaximumConnections = budget, FastResumeMode = FastResumeMode.Accurate
             }.ToSettings();
             using var engine = new ClientEngine(settings);
             using var service = new TorrentStreamService(engine, new TorrentContentPolicy(true));
@@ -35,6 +53,41 @@ public sealed class TorrentDownloadSourceTests
             Assert.Equal(budget, engine.Settings.MaximumConnections);
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task Resume_write_failure_after_stop_still_unregisters_manager_and_releases_payload_writer()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "gldrive-resume-locked-" + Guid.NewGuid().ToString("N"));
+        var payload = Path.Combine(root, "payload");
+        Directory.CreateDirectory(payload);
+        var bytes = Enumerable.Range(0, 1024).Select(i => (byte)i).ToArray();
+        Assert.True(Torrent.TryLoad(TorrentData(SHA1.HashData(bytes), ("video.mkv", bytes.Length)), out var torrent));
+        var file = Path.Combine(payload, "video.mkv");
+        await File.WriteAllBytesAsync(file, bytes);
+        try
+        {
+            var settings = new EngineSettingsBuilder
+            {
+                CacheDirectory = Path.Combine(root, "cache"), DhtEndPoint = null, ListenEndPoints = [],
+                AllowLocalPeerDiscovery = false, AllowPortForwarding = false,
+                AutoSaveLoadFastResume = true, FastResumeMode = FastResumeMode.Accurate
+            }.ToSettings();
+            using var engine = new ClientEngine(settings);
+            using var service = new TorrentStreamService(engine, new TorrentContentPolicy(true));
+            var decisions = new TorrentContentPolicy(true).EvaluateAll(torrent.Files.Select(f => f.Path), payload).ToArray();
+            var transfer = await service.AddQueueDownloadAsync(torrent, payload, decisions, CancellationToken.None);
+            var manager = Assert.Single(engine.Torrents);
+            await transfer.StartAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.True(transfer.Snapshot.VerifiedComplete);
+            using (File.Open(settings.GetFastResumePath(torrent.InfoHashes), FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                await Assert.ThrowsAsync<IOException>(() => transfer.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.Equal(TorrentState.Stopped, manager.State);
+            Assert.Empty(engine.Torrents);
+            using (File.Open(file, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { }
+            Assert.Equal(bytes, await File.ReadAllBytesAsync(file));
+        }
+        finally { Directory.Delete(root, true); }
     }
 
     [Theory]
@@ -94,7 +147,8 @@ public sealed class TorrentDownloadSourceTests
                 {
                     CacheDirectory = cache, DhtEndPoint = null, ListenEndPoints = [],
                     AllowLocalPeerDiscovery = false, AllowPortForwarding = false,
-                    AutoSaveLoadFastResume = true, AutoSaveLoadMagnetLinkMetadata = true
+                    AutoSaveLoadFastResume = true, AutoSaveLoadMagnetLinkMetadata = true,
+                    FastResumeMode = FastResumeMode.Accurate
                 }.ToSettings();
                 var engine = new ClientEngine(settings);
                 var service = new TorrentStreamService(engine, new TorrentContentPolicy(true));

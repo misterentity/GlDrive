@@ -70,14 +70,50 @@ public sealed class DownloadTreeTests
     {
         var plan = await DownloadTree.BuildAsync("/video.mkv", _destination,
             (_, _) => Task.FromResult(false), (_, _) => Task.FromResult(true),
-            (_, _) => throw new InvalidOperationException("Files must not be listed as directories"), default);
+            (_, _) => throw new InvalidOperationException("SIZE makes a listing unnecessary"), default,
+            (path, _) => { Assert.Equal("/video.mkv", path); return Task.FromResult(25L); });
         Assert.False(plan.IsDirectory);
         Assert.Equal("/video.mkv", Assert.Single(plan.Files).RemotePath);
         Assert.Empty(plan.Directories);
+        Assert.Equal(25, Assert.Single(plan.Files).Size);
 
         await Assert.ThrowsAsync<FileNotFoundException>(() => DownloadTree.BuildAsync("/missing", _destination,
             (_, _) => Task.FromResult(false), (_, _) => Task.FromResult(false),
             (_, _) => Task.FromResult(Array.Empty<FtpListItem>()), default));
+    }
+
+    [Fact]
+    public async Task Single_file_size_falls_back_to_exact_parent_listing_when_size_command_is_unsupported()
+    {
+        var plan = await DownloadTree.BuildAsync("/folder/video.mkv", _destination,
+            (_, _) => Task.FromResult(false), (_, _) => Task.FromResult(true),
+            (path, _) =>
+            {
+                Assert.Equal("/folder", path);
+                return Task.FromResult(new[] { Entry("other.mkv"), Entry("video.mkv") });
+            }, default, (_, _) => Task.FromResult(-1L));
+        Assert.Equal(25, Assert.Single(plan.Files).Size);
+    }
+
+    [Fact]
+    public async Task Unknown_single_file_size_cannot_start_an_unreserved_payload()
+    {
+        await Assert.ThrowsAsync<IOException>(() => DownloadTree.BuildAsync("/video.mkv", _destination,
+            (_, _) => Task.FromResult(false), (_, _) => Task.FromResult(true),
+            (_, _) => Task.FromResult(new[] { Entry("other.mkv") }), default,
+            (_, _) => Task.FromResult(-1L)));
+    }
+
+    [Fact]
+    public async Task Unknown_listing_size_is_resolved_before_publishing_the_directory_plan()
+    {
+        var file = Entry("video.mkv");
+        file.Size = -1;
+        var plan = await DownloadTree.BuildAsync("/release", _destination,
+            (_, _) => Task.FromResult(true), (_, _) => Task.FromResult(false),
+            (_, _) => Task.FromResult(new[] { file }), default,
+            (path, _) => { Assert.Equal("/release/video.mkv", path); return Task.FromResult(123L); });
+        Assert.Equal(123, Assert.Single(plan.Files).Size);
     }
 
     [Fact]

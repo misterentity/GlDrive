@@ -52,6 +52,16 @@ internal sealed class DownloadRelocation(Func<ServerConfig> server,
             Add(server.SpreadSite.Sections.FirstOrDefault(p => p.Key.Equals(mapped.RemoteSection, StringComparison.OrdinalIgnoreCase)).Value);
             Add(server.Notifications.WatchPath.TrimEnd('/') + "/" + mapped.RemoteSection);
         }
+        // IRC wishlist paths start under the watch root, but a newly announced
+        // release can still be under /incoming in a category we never spread.
+        // Search roots cover that source inventory independently of spread rules.
+        // At most two exact checks per configured root; never crawl or list it.
+        foreach (var root in server.Search.SearchPaths)
+        {
+            if (string.IsNullOrWhiteSpace(root)) continue;
+            Add(root.TrimEnd('/') + "/" + item.Category);
+            Add(root);
+        }
         foreach (var path in server.SpreadSite.Sections.Values) Add(path);
         return paths;
     }

@@ -30,7 +30,7 @@ internal sealed class TorrentDownloadSource : IWholeDownloadSource, IDisposable,
         : this(() => new TorrentDownloadBackend(new TorrentStreamService(
             Path.Combine(ConfigManager.AppDataPath, "torrent-downloads"),
             config.Torrent.VpnAdapterName, new TorrentContentPolicy(config.Torrent),
-            TorrentStreamService.DownloadRateLimit(config.Downloads)))) { }
+            TorrentStreamService.DownloadRateLimit(config.Downloads), queueDownloads: true))) { }
 
     internal TorrentDownloadSource(Func<ITorrentDownloadBackend> backend, TimeSpan? pollInterval = null)
     {
@@ -241,6 +241,8 @@ internal sealed class TorrentDownloadBackend(TorrentStreamService service) : ITo
 
 public partial class TorrentStreamService
 {
+    // Completion also awaits the tracker announce; allow its normal retry window.
+    internal TimeSpan QueueCompletionTimeout { get; set; } = TimeSpan.FromMinutes(1);
     // A caller-owned, explicitly configured engine supports isolated verification and
     // keeps queue downloads independent of the Player's streaming engine lifetime.
     internal TorrentStreamService(ClientEngine engine, TorrentContentPolicy policy)
@@ -294,6 +296,8 @@ public partial class TorrentStreamService
         IReadOnlyList<TorrentFileDecision> decisions, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
+        if (_engine.Settings.AutoSaveLoadFastResume && _engine.Settings.FastResumeMode != FastResumeMode.Accurate)
+            throw new InvalidOperationException("Queue downloads require an engine configured for accurate fast resume.");
         var manager = await _engine.AddAsync(torrent, directory,
             new TorrentSettingsBuilder
             {
@@ -302,7 +306,7 @@ public partial class TorrentStreamService
                 // still enforces this aggregate ceiling when several torrents are active.
                 MaximumConnections = _engine.Settings.MaximumConnections
             }.ToSettings()).ConfigureAwait(false);
-        var transfer = new QueueTransfer(_engine, manager);
+        var transfer = new QueueTransfer(_engine, manager, QueueCompletionTimeout);
         try
         {
             for (var i = 0; i < manager.Files.Count; i++)
@@ -326,11 +330,32 @@ public partial class TorrentStreamService
         _engine.Dispose();
     }
 
-    private sealed class QueueTransfer(ClientEngine engine, TorrentManager manager) : ITorrentDownloadTransfer
+    private sealed class QueueTransfer : ITorrentDownloadTransfer
     {
+        private readonly ClientEngine engine;
+        private readonly TorrentManager manager;
+        private readonly TimeSpan _completionTimeout;
+        private readonly TaskCompletionSource _completionSaved = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<TorrentState> _pausedFrom = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly object _sync = new();
         private Task? _disposal;
         internal List<string> BlockedPaths { get; } = [];
+
+        internal QueueTransfer(ClientEngine engine, TorrentManager manager, TimeSpan completionTimeout)
+        {
+            this.engine = engine;
+            this.manager = manager;
+            _completionTimeout = completionTimeout;
+            // Subscribe before StartAsync: cached complete payloads can enter
+            // Seeding immediately after their startup checkpoint is written.
+            manager.TorrentStateChanged += StateChanged;
+        }
+
+        private void StateChanged(object? sender, TorrentStateChangedEventArgs args)
+        {
+            if (args.NewState == TorrentState.Seeding) _completionSaved.TrySetResult();
+            if (args.NewState == TorrentState.Paused) _pausedFrom.TrySetResult(args.OldState);
+        }
         public async Task StartAsync()
         {
             await manager.StartAsync().ConfigureAwait(false);
@@ -361,14 +386,52 @@ public partial class TorrentStreamService
         private async Task StopAndRemoveAsync()
         {
             // No cancellation token: the owner must wait until writers close before publishing a terminal state.
-            await WaitForStartupAsync().ConfigureAwait(false);
-            await manager.StopAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
-            try { await engine.RemoveAsync(manager, RemoveMode.KeepAllData).ConfigureAwait(false); }
+            try
+            {
+                await WaitForStartupAsync().ConfigureAwait(false);
+                TimeoutException? completionTimeout = null;
+                try
+                {
+                    // Pause on MonoTorrent's own loop before inspecting the previous
+                    // state, so cancellation cannot race a new completion transition.
+                    // Seeding is visible before its async checkpoint finishes; only
+                    // the later state event means that write and file close drained.
+                    if (manager.State is TorrentState.Downloading or TorrentState.Seeding)
+                    {
+                        await manager.PauseAsync().ConfigureAwait(false);
+                        if (manager.State == TorrentState.Paused &&
+                            await _pausedFrom.Task.WaitAsync(_completionTimeout).ConfigureAwait(false) == TorrentState.Seeding)
+                            await _completionSaved.Task.WaitAsync(_completionTimeout).ConfigureAwait(false);
+                    }
+                }
+                catch (TimeoutException ex) { completionTimeout = ex; }
+
+                // A missing event is an error, not proof that the checkpoint write
+                // drained. Still attempt owned shutdown and preserve any failure.
+                Exception? stopFailure = null;
+                try { await manager.StopAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false); }
+                catch (Exception ex) when (manager.State == TorrentState.Stopped)
+                {
+                    // MonoTorrent closes payload writers and sets Stopped before
+                    // saving resume data. A resume I/O failure must not leak the
+                    // registered manager or suppress blocked-artifact cleanup.
+                    stopFailure = ex;
+                }
+                try { await engine.RemoveAsync(manager, RemoveMode.KeepAllData).ConfigureAwait(false); }
+                finally
+                {
+                    // Stop has closed writers even if unregistering the manager fails.
+                    foreach (var path in BlockedPaths.Distinct(StringComparer.OrdinalIgnoreCase))
+                        if (File.Exists(path)) File.Delete(path);
+                }
+                if (stopFailure != null)
+                    System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(stopFailure).Throw();
+                if (completionTimeout != null)
+                    throw new TimeoutException("Torrent completion checkpoint did not finish before shutdown.", completionTimeout);
+            }
             finally
             {
-                // Stop has closed writers even if unregistering the manager fails.
-                foreach (var path in BlockedPaths.Distinct(StringComparer.OrdinalIgnoreCase))
-                    if (File.Exists(path)) File.Delete(path);
+                manager.TorrentStateChanged -= StateChanged;
             }
         }
 

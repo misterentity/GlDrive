@@ -17,7 +17,7 @@ internal static class DownloadTree
         Func<string, CancellationToken, Task<bool>> directoryExists,
         Func<string, CancellationToken, Task<bool>> fileExists,
         Func<string, CancellationToken, Task<FtpListItem[]>> list,
-        CancellationToken ct)
+        CancellationToken ct, Func<string, CancellationToken, Task<long>>? fileSize = null)
     {
         ct.ThrowIfCancellationRequested();
         var isDirectory = await directoryExists(remotePath, ct);
@@ -28,7 +28,22 @@ internal static class DownloadTree
             ct.ThrowIfCancellationRequested();
             if (!isFile)
                 throw new FileNotFoundException($"Remote path does not exist or is inaccessible: {remotePath}");
-            return new DownloadTreePlan(false, [new FtpDownloadFile(remotePath, localPath, -1)], []);
+            // Establish the payload budget before DownloadManager admits any writer.
+            // Servers without SIZE can still supply the exact file's size in LIST/MLSD.
+            var size = fileSize == null ? -1 : await fileSize(remotePath, ct);
+            ct.ThrowIfCancellationRequested();
+            if (size < 0)
+            {
+                var separator = remotePath.LastIndexOf('/');
+                var parent = separator <= 0 ? "/" : remotePath[..separator];
+                var name = remotePath[(separator + 1)..];
+                var entries = await list(parent, ct);
+                ct.ThrowIfCancellationRequested();
+                size = entries.FirstOrDefault(entry => entry.Type == FtpObjectType.File &&
+                    entry.Name.Equals(name, StringComparison.Ordinal))?.Size ?? -1;
+            }
+            if (size < 0) throw new IOException($"Cannot determine download size before reserving disk space: {remotePath}");
+            return new DownloadTreePlan(false, [new FtpDownloadFile(remotePath, localPath, size)], []);
         }
 
         var root = Path.GetFullPath(localPath);
@@ -81,7 +96,11 @@ internal static class DownloadTree
                 }
                 else
                 {
-                    files.Add(new FtpDownloadFile(source, destination, entry.Size));
+                    var size = entry.Size;
+                    if (size < 0 && fileSize != null) size = await fileSize(source, ct);
+                    ct.ThrowIfCancellationRequested();
+                    if (size < 0) throw new IOException($"Cannot determine download size before reserving disk space: {source}");
+                    files.Add(new FtpDownloadFile(source, destination, size));
                 }
             }
         }

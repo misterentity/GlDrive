@@ -8,8 +8,16 @@ namespace GlDrive.Downloads;
 
 public sealed record ArchiveExtractionResult(bool Extracted, IReadOnlyList<string> FirstVolumes);
 
+public sealed class ExtractionSpaceException(string outputDirectory, long requiredBytes, Exception? inner = null)
+    : IOException($"Waiting for extraction space: need {requiredBytes:N0} additional bytes on {Path.GetPathRoot(outputDirectory)}", inner)
+{
+    public string OutputDirectory { get; } = outputDirectory;
+    public long RequiredBytes { get; } = requiredBytes;
+}
+
 public static partial class ArchiveExtractor
 {
+    internal static readonly DiskReservation DefaultDiskReservation = new();
     // Old-style volumes: .r00-.r99, .s00-.s99 (2 digits)
     // Extended volumes: .r000-.r999, .s000-.s999 (3 digits)
     // Split archives: .001-.999
@@ -19,6 +27,10 @@ public static partial class ArchiveExtractor
     private static readonly Regex PartNonFirstRegex = PartNonFirstVolumeRegex();
 
     public static Task<ArchiveExtractionResult> ExtractIfNeeded(string dirPath, CancellationToken ct)
+        => ExtractIfNeeded(dirPath, ct, DefaultDiskReservation);
+
+    internal static Task<ArchiveExtractionResult> ExtractIfNeeded(string dirPath, CancellationToken ct,
+        DiskReservation disk, Action<Stream, string, CancellationToken, long>? copy = null)
     {
         var dir = new DirectoryInfo(dirPath);
         if (!dir.Exists) return Task.FromResult(new ArchiveExtractionResult(false, []));
@@ -37,7 +49,7 @@ public static partial class ArchiveExtractor
         {
             try
             {
-                ExtractOnThread(dirPath, rarFiles, ct);
+                ExtractOnThread(dirPath, rarFiles, ct, disk, copy);
                 tcs.SetResult(new ArchiveExtractionResult(true,
                     rarFiles.Select(f => f.FullName).ToList()));
             }
@@ -59,7 +71,8 @@ public static partial class ArchiveExtractor
         return tcs.Task;
     }
 
-    private static void ExtractOnThread(string dirPath, List<FileInfo> rarFiles, CancellationToken ct)
+    private static void ExtractOnThread(string dirPath, List<FileInfo> rarFiles, CancellationToken ct,
+        DiskReservation disk, Action<Stream, string, CancellationToken, long>? copy)
     {
         var safeDirPath = Path.GetFullPath(dirPath);
         if (!safeDirPath.EndsWith(Path.DirectorySeparatorChar))
@@ -70,8 +83,12 @@ public static partial class ArchiveExtractor
             ct.ThrowIfCancellationRequested();
             Log.Information("Extracting archive: {File}", rarFile.Name);
 
+            string? reservedRoot = null;
+            long requiredBytes = 0;
             try
             {
+                if (!DownloadExtractionCheckpoint.SafePath(dirPath, rarFile.FullName))
+                    throw new IOException("Archive source contains a reparse point or escaped its directory");
                 using var archive = RarArchive.OpenArchive(rarFile.FullName);
                 var entries = archive.Entries.Where(e => !e.IsDirectory).ToList();
                 if (entries.Count == 0)
@@ -81,6 +98,19 @@ public static partial class ArchiveExtractor
                 }
 
                 Log.Information("Extracting {Count} entries from {File}", entries.Count, rarFile.Name);
+                // Count exactly the entries the write loop admits. Existing outputs
+                // remain on disk until their atomic replacements are complete.
+                foreach (var entry in entries)
+                {
+                    if (entry.Key == null || ExecutableExtensions.IsExecutable(entry.Key)) continue;
+                    var target = Path.GetFullPath(Path.Combine(safeDirPath, entry.Key));
+                    if (!target.StartsWith(safeDirPath, StringComparison.OrdinalIgnoreCase) ||
+                        !DownloadExtractionCheckpoint.SafePath(dirPath, target)) continue;
+                    requiredBytes = checked(requiredBytes + Math.Max(0, entry.Size));
+                }
+                if (!disk.TryReserve(dirPath, requiredBytes, out var root))
+                    throw new ExtractionSpaceException(dirPath, requiredBytes);
+                reservedRoot = root;
                 foreach (var entry in entries)
                 {
                     ct.ThrowIfCancellationRequested();
@@ -89,7 +119,8 @@ public static partial class ArchiveExtractor
 
                     // Prevent path traversal (Zip Slip)
                     var fullPath = Path.GetFullPath(Path.Combine(safeDirPath, entry.Key));
-                    if (!fullPath.StartsWith(safeDirPath, StringComparison.OrdinalIgnoreCase))
+                    if (!fullPath.StartsWith(safeDirPath, StringComparison.OrdinalIgnoreCase) ||
+                        !DownloadExtractionCheckpoint.SafePath(dirPath, fullPath))
                     {
                         Log.Warning("Skipping archive entry with path traversal: {Key}", entry.Key);
                         continue;
@@ -110,15 +141,25 @@ public static partial class ArchiveExtractor
                     // leaves a truncated file at the final destination.
                     Log.Debug("Extracting entry: {Key} ({Size} bytes)", entry.Key, entry.Size);
                     using var entryStream = entry.OpenEntryStream();
-                    ArchiveFileOperations.CopyToFileAtomically(entryStream, fullPath, ct);
+                    if (copy != null) copy(entryStream, fullPath, ct, entry.Size);
+                    else ArchiveFileOperations.CopyToFileAtomically(entryStream, fullPath, ct, entry.Size);
                 }
                 Log.Information("Extraction complete: {File} ({Count} files)", rarFile.Name, entries.Count);
             }
             catch (OperationCanceledException) { throw; }
+            catch (ExtractionSpaceException) { throw; }
+            catch (Exception ex) when (ExtractSpaceParking.IsDiskFull(ex))
+            {
+                throw new ExtractionSpaceException(dirPath, requiredBytes, ex);
+            }
             catch (Exception ex)
             {
                 Log.Error(ex, "Failed to extract {File}", rarFile.Name);
                 throw;
+            }
+            finally
+            {
+                if (reservedRoot != null) disk.Release(reservedRoot, requiredBytes);
             }
         }
     }

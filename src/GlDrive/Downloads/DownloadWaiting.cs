@@ -15,6 +15,10 @@ public static class DownloadWaiting
 
     public static WaitingState? Describe(DownloadItem item) => item.Status switch
     {
+        DownloadStatus.Queued when item.ExtractionCheckpoint?.WaitingDirectory != null => item.RuntimeWait ??
+            new("extraction-space", item.ErrorMessage ?? "Waiting for free extraction space"),
+        DownloadStatus.Queued when item.SpaceCheckpoint != null => item.RuntimeWait ??
+            new("download-space", item.ErrorMessage ?? "Waiting for free download space"),
         DownloadStatus.Queued => item.RuntimeWait ?? new WaitingState(
             item.SourceCompletionPending ? "source-incomplete" : "download-queue",
             (!string.IsNullOrWhiteSpace(item.ErrorMessage) ? item.ErrorMessage : item.StatusDetail) ?? (item.SourceCompletionPending

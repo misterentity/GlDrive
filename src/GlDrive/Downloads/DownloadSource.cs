@@ -17,7 +17,8 @@ internal sealed class DownloadSource(FtpOperations ftp, StreamingDownloader down
 {
     public bool IsInCooldown => downloader.IsPoolInCooldown;
     public Task<DownloadTreePlan> PlanAsync(string remotePath, string localPath, CancellationToken ct) =>
-        DownloadTree.BuildAsync(remotePath, localPath, ftp.DirectoryExists, ftp.FileExists, ftp.ListDirectory, ct);
+        DownloadTree.BuildAsync(remotePath, localPath, ftp.DirectoryExists, ftp.FileExists, ftp.ListDirectory, ct,
+            ftp.GetFileSize);
     public Task DownloadAsync(IReadOnlyList<FtpDownloadFile> files, IProgress<DownloadProgress>? progress, CancellationToken ct) =>
         downloader.DownloadFiles(files, progress, ct);
     public Task DownloadAsync(IReadOnlyList<FtpDownloadFile> files, IProgress<DownloadProgress>? progress,

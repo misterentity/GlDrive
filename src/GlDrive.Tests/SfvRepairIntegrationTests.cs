@@ -115,15 +115,15 @@ public sealed class SfvRepairIntegrationTests
     }
 
     [Fact]
-    public async Task Failed_disk_reservation_does_not_create_a_staging_folder_or_marker()
+    public async Task Parked_disk_reservation_does_not_create_a_staging_folder_or_marker()
     {
         await using var h = new Harness(disk: new DiskReservation(0, _ => 0));
         h.AddPayload("disc.rar", "sound", "sound");
 
         await h.RunOnePass();
 
-        Assert.Equal(DownloadStatus.Failed, h.Item.Status);
-        Assert.Contains("Insufficient disk space", h.Item.ErrorMessage);
+        Assert.Equal(DownloadStatus.Queued, h.Item.Status);
+        Assert.Equal("download-space", DownloadWaiting.Describe(h.Item)!.ReasonCode);
         Assert.False(Directory.Exists(h.Item.LocalPath));
         Assert.Null(h.Item.SfvRepairOwner);
         Assert.Empty(h.Source.Fetches);

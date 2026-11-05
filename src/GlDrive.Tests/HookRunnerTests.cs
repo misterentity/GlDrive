@@ -282,7 +282,10 @@ public sealed class HookRunnerTests : IDisposable
         await File.WriteAllTextAsync(childScript, "Start-Sleep -Seconds 60");
         await File.WriteAllTextAsync(script, "param($child, $pidFile)\n$start = [System.Diagnostics.ProcessStartInfo]::new((Join-Path $PSHOME 'pwsh.exe'))\n$start.UseShellExecute = $false\n$start.CreateNoWindow = $true\n$start.ArgumentList.Add('-NoProfile')\n$start.ArgumentList.Add('-File')\n$start.ArgumentList.Add($child)\n$p = [System.Diagnostics.Process]::Start($start)\n[System.IO.File]::WriteAllText($pidFile, $p.Id.ToString())\n[Console]::WriteLine(('x' * 20000) + 'TAIL-END')\nStart-Sleep -Seconds 60");
         var command = Command(); command.Executable = shell; command.ScriptPath = script;
-        command.Arguments = [childScript, pidPath]; command.TimeoutSeconds = 3; command.OutputLimitCharacters = 32;
+        // The deadline includes two PowerShell startups before the output assertion.
+        // Under the full suite, three seconds could expire before the fixture ran.
+        // Keep the 60-second body so timeout and process-tree cleanup remain exercised.
+        command.Arguments = [childScript, pidPath]; command.TimeoutSeconds = 10; command.OutputLimitCharacters = 32;
         var result = await HookRunner.ExecuteAsync(command, Event(), CancellationToken.None);
         Assert.Equal("timeout", result.Outcome);
         Assert.True(result.Output.Length <= 32);

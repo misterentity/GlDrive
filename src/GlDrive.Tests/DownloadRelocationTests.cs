@@ -21,6 +21,7 @@ public sealed class DownloadRelocationTests
     public void Candidates_include_watch_sections_and_all_matching_maps_with_deduplication()
     {
         var config = new ServerConfig();
+        config.Search.SearchPaths = [];
         config.Notifications.WatchPath = "/recent/";
         config.SpreadSite.Sections = new() { ["video"] = "/incoming/video", ["archive"] = "/archive/video" };
         config.SpreadSite.SectionMappings =
@@ -50,9 +51,70 @@ public sealed class DownloadRelocationTests
     public void Unsafe_configured_roots_are_ignored()
     {
         var config = new ServerConfig();
+        config.Search.SearchPaths = [];
         config.Notifications.WatchPath = "relative";
         config.SpreadSite.Sections = new() { ["a"] = "/bad/../path", ["b"] = "/bad\\path", ["c"] = "/ok" };
         Assert.Equal("/ok/" + Item().ReleaseName, Assert.Single(DownloadRelocation.Candidates(config, Item())));
+    }
+
+    [Fact]
+    public void Search_roots_add_only_exact_category_and_flat_candidates_with_safe_deduplication()
+    {
+        var config = new ServerConfig();
+        config.Notifications.WatchPath = "relative";
+        config.Search.SearchPaths = ["", "relative", "/bad/../path", "/bad\\path", "/bad\rpath", "/ok/", "/ok"];
+        Assert.Equal(new[] { "/ok/video/", "/ok/" }.Select(path => path + Item().ReleaseName),
+            DownloadRelocation.Candidates(config, Item()));
+    }
+
+    [Theory]
+    [InlineData("x264-sd")]
+    [InlineData("bluray")]
+    public async Task Inferred_recent_source_is_found_under_configured_search_root_without_a_spread_section(string category)
+    {
+        var item = Item();
+        item.Category = category;
+        item.RemotePath = "/recent/" + category + "/" + item.ReleaseName;
+        item.LocalPath = "unchanged-local";
+        var expected = "/incoming/" + category + "/" + item.ReleaseName;
+        var config = new ServerConfig();
+        config.Search.SearchPaths = ["/incoming", "/recent", "/archive"];
+        Assert.Empty(config.SpreadSite.Sections);
+        var probes = new List<string>();
+        string? persisted = null;
+        var relocation = new DownloadRelocation(() => config, (path, _) =>
+        {
+            Assert.NotNull(persisted);
+            probes.Add(path);
+            return Task.FromResult(path == expected);
+        });
+
+        var result = await relocation.ResolveAsync(item, Now, () => persisted = JsonSerializer.Serialize(item), default);
+
+        Assert.Equal(RelocationOutcome.Relocated, result.Outcome);
+        Assert.Equal(expected, item.RemotePath);
+        Assert.Equal("unchanged-local", item.LocalPath);
+        Assert.Equal(0, item.RetryCount);
+        Assert.Equal(1, item.RelocationAttempts);
+        Assert.Equal(new[] { "/recent/" + category + "/" + item.ReleaseName, expected }, probes);
+        var restored = JsonSerializer.Deserialize<DownloadItem>(persisted!)!;
+        Assert.Equal(RelocationOutcome.Waiting, DownloadRelocation.Admission(restored, Now.AddMinutes(4))!.Outcome);
+        Assert.Null(DownloadRelocation.Admission(restored, Now.AddMinutes(5)));
+    }
+
+    [Fact]
+    public async Task Configured_search_root_can_contain_the_release_directly()
+    {
+        var item = Item();
+        var config = new ServerConfig();
+        config.Search.SearchPaths = ["/archive/video"];
+        var expected = "/archive/video/" + item.ReleaseName;
+        var relocation = new DownloadRelocation(() => config, (path, _) => Task.FromResult(path == expected));
+
+        var result = await relocation.ResolveAsync(item, Now, () => { }, default);
+
+        Assert.Equal(RelocationOutcome.Relocated, result.Outcome);
+        Assert.Equal(expected, item.RemotePath);
     }
 
     [Fact]

@@ -38,6 +38,18 @@ public sealed class DiskReservation
     private static string RootOf(string path)
         => Path.GetPathRoot(Path.GetFullPath(path)) ?? path;
 
+    /// <summary>Read-only admission probe for parked work; TryReserve still owns final admission.</summary>
+    public bool CanReserve(string localPath, long bytes)
+    {
+        if (bytes <= 0) return true;
+        lock (_lock)
+        {
+            var root = RootOf(localPath);
+            var free = _freeSpaceProvider(root);
+            return free == long.MaxValue || bytes <= Math.Max(0, free - _reserved.GetValueOrDefault(root) - _headroomBytes);
+        }
+    }
+
     /// <summary>
     /// Try to reserve <paramref name="bytes"/> on the drive holding
     /// <paramref name="localPath"/>, accounting for other live reservations and
@@ -55,7 +67,7 @@ public sealed class DiskReservation
             var free = _freeSpaceProvider(root);
             if (free == long.MaxValue) { Add(root, bytes); return true; } // unknown free → allow
             var alreadyReserved = _reserved.GetValueOrDefault(root);
-            if (free - alreadyReserved - bytes < _headroomBytes)
+            if (bytes > Math.Max(0, free - alreadyReserved - _headroomBytes))
             {
                 Log.Information("Disk reservation denied on {Root}: need {Need}, free {Free}, reserved {Res}, headroom {Head}",
                     root, bytes, free, alreadyReserved, _headroomBytes);

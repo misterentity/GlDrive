@@ -96,6 +96,10 @@ public class DownloadItem
     public List<SfvRepairFile> SfvRepairFiles { get; set; } = [];
     /// <summary>Positive CRC failure holds watch-folder extraction until verification succeeds.</summary>
     public bool SfvIntegrityHold { get; set; }
+    /// <summary>Verified local archives awaiting post-processing; survives capacity waits/restarts.</summary>
+    public DownloadExtractionCheckpoint? ExtractionCheckpoint { get; set; }
+    /// <summary>Capacity-only admission hold; a restored capacity always requires a fresh source plan.</summary>
+    public DownloadSpaceCheckpoint? SpaceCheckpoint { get; set; }
 }
 
 public sealed class SfvRepairFile

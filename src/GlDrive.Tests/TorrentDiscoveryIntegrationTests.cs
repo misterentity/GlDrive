@@ -17,16 +17,17 @@ namespace GlDrive.Tests;
 public sealed class TorrentDiscoveryIntegrationTests
 {
     [Theory]
-    [InlineData(1)]
-    [InlineData(3)]
-    public async Task Tracker_discovery_falls_back_in_metadata_and_payload_and_uses_every_required_peer(int peerCount)
+    [InlineData(1, false)]
+    [InlineData(3, false)]
+    [InlineData(1, true)]
+    public async Task Tracker_discovery_falls_back_in_metadata_and_payload_and_uses_every_required_peer(int peerCount, bool timeoutCompletion)
     {
         const int pieceSize = 16384;
         const string fileName = "synthetic-discovery.bin";
         var root = Path.Combine(Path.GetTempPath(), "gldrive-discovery-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-        await using var trackers = new ScriptedTrackers();
+        await using var trackers = new ScriptedTrackers(holdCompletion: peerCount == 1);
         var seedEngines = new List<ClientEngine>();
         var seeds = new List<TorrentManager>();
         TorrentStreamService? service = null;
@@ -87,6 +88,7 @@ public sealed class TorrentDiscoveryIntegrationTests
             var downloadEngine = new ClientEngine(Settings(Path.Combine(root, "download-cache"), FreeLoopbackPort()),
                 peerNetworking.ApplyTo(TorrentTrackerFactories.Create()));
             service = new TorrentStreamService(downloadEngine, new TorrentContentPolicy(true));
+            if (timeoutCompletion) service.QueueCompletionTimeout = TimeSpan.FromMilliseconds(100);
             var downloadDirectory = Path.Combine(root, "download");
             Directory.CreateDirectory(downloadDirectory);
             var magnet = MagnetLink.Parse("magnet:?xt=urn:btih:" + torrent.InfoHashes.V1OrV2.ToHex() +
@@ -105,18 +107,51 @@ public sealed class TorrentDiscoveryIntegrationTests
             Assert.All(seeds, seed => Assert.Equal(0, seed.Monitor.DataBytesSent));
             var metadataBytesByRoute = receivedByRoute.ToDictionary(pair => pair.Key, pair => pair.Value);
 
-            TorrentManager payloadManager;
-            await using (var transfer = await service.AddQueueDownloadAsync(screened.Torrent, downloadDirectory,
-                             screened.Decisions, deadline.Token))
+            TorrentManager? payloadManager = null;
+            var timeoutChecked = false;
+            try
             {
-                payloadManager = Assert.Single(downloadEngine.Torrents);
-                await transfer.StartAsync();
-                await Until(() => transfer.Snapshot.VerifiedComplete, deadline.Token);
-                Assert.True(payloadManager.Bitfield.AllTrue);
-                Assert.Equal(payload.Length, payloadManager.Monitor.DataBytesReceived);
-                trackers.AssertFallback(phase: 1, stopped: false);
+                await using (var transfer = await service.AddQueueDownloadAsync(screened.Torrent, downloadDirectory,
+                                 screened.Decisions, deadline.Token))
+                {
+                    payloadManager = Assert.Single(downloadEngine.Torrents);
+                    await transfer.StartAsync();
+                    await Until(() => transfer.Snapshot.VerifiedComplete, deadline.Token);
+                    Assert.True(payloadManager.Bitfield.AllTrue);
+                    Assert.Equal(payload.Length, payloadManager.Monitor.DataBytesReceived);
+                    trackers.AssertFallback(phase: 1, stopped: false);
+                    if (peerCount == 1)
+                    {
+                        // MonoTorrent exposes Seeding before its completion checkpoint
+                        // finishes. Hold its Completed announce to keep that operation
+                        // in flight while the owner asks to stop the transfer.
+                        await trackers.CompletionObserved.Task.WaitAsync(deadline.Token);
+                        var disposal = transfer.DisposeAsync().AsTask();
+                        try
+                        {
+                            if (timeoutCompletion)
+                            {
+                                await Assert.ThrowsAsync<TimeoutException>(() => disposal.WaitAsync(TimeSpan.FromSeconds(5)));
+                                Assert.True(disposal.IsFaulted); // The owned deadline, not the outer test bound.
+                                Assert.Equal(TorrentState.Stopped, payloadManager.State);
+                                Assert.Empty(downloadEngine.Torrents);
+                                timeoutChecked = true;
+                            }
+                            else
+                            {
+                                await Until(() => payloadManager.State != TorrentState.Seeding, deadline.Token);
+                                Assert.Equal(TorrentState.Paused, payloadManager.State);
+                                Assert.False(disposal.IsCompleted);
+                            }
+                        }
+                        finally { trackers.ReleaseCompletion(); }
+                        if (!timeoutCompletion) await disposal.WaitAsync(deadline.Token);
+                    }
+                }
             }
+            catch (TimeoutException) when (timeoutCompletion && timeoutChecked) { }
 
+            Assert.NotNull(payloadManager);
             Assert.Equal(TorrentState.Stopped, payloadManager.State);
             Assert.Empty(downloadEngine.Torrents);
             await Until(() => trackers.PhaseStopped(1), deadline.Token);
@@ -136,6 +171,7 @@ public sealed class TorrentDiscoveryIntegrationTests
         }
         finally
         {
+            trackers.ReleaseCompletion();
             if (service != null) await service.DisposeQueueEngineAsync();
             foreach (var engine in seedEngines)
             {
@@ -153,6 +189,7 @@ public sealed class TorrentDiscoveryIntegrationTests
         ListenEndPoints = new() { ["ipv4"] = new IPEndPoint(IPAddress.Loopback, port) },
         AllowLocalPeerDiscovery = false, AllowPortForwarding = false, AutoSaveLoadDhtCache = false,
         AutoSaveLoadFastResume = true, AutoSaveLoadMagnetLinkMetadata = true,
+        FastResumeMode = FastResumeMode.Accurate,
         MaximumConnections = 100, MaximumHalfOpenConnections = 16,
         MaximumDownloadRate = 0, MaximumUploadRate = 0
     }.ToSettings();
@@ -178,16 +215,21 @@ public sealed class TorrentDiscoveryIntegrationTests
         private readonly HashSet<int> _seedPorts = [];
         private readonly List<Phase> _phases = [new()];
         private int _phase;
+        private readonly bool _holdCompletion;
+        private readonly TaskCompletionSource _completionRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource CompletionObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Uri[] Uris { get; }
 
-        public ScriptedTrackers()
+        public ScriptedTrackers(bool holdCompletion = false)
         {
+            _holdCompletion = holdCompletion;
             _sockets = [new(new IPEndPoint(IPAddress.Loopback, 0)), new(new IPEndPoint(IPAddress.Loopback, 0))];
             Uris = _sockets.Select(socket => new Uri($"udp://127.0.0.1:{((IPEndPoint)socket.Client.LocalEndPoint!).Port}/announce")).ToArray();
             _servers = _sockets.Select((socket, index) => Serve(socket, index)).ToArray();
         }
 
         public void AddSeed(int port) { lock (_sync) _seedPorts.Add(port); }
+        public void ReleaseCompletion() => _completionRelease.TrySetResult();
 
         public bool PhaseStopped(int phase)
         {
@@ -229,10 +271,12 @@ public sealed class TorrentDiscoveryIntegrationTests
                         var evt = BinaryPrimitives.ReadInt32BigEndian(request.AsSpan(80));
                         var port = BinaryPrimitives.ReadUInt16BigEndian(request.AsSpan(96));
                         bool fail;
+                        bool holdCompletion;
                         int[] peers;
                         lock (_sync)
                         {
                             fail = false;
+                            holdCompletion = false;
                             peers = [];
                             if (!_seedPorts.Contains(port))
                             {
@@ -255,12 +299,18 @@ public sealed class TorrentDiscoveryIntegrationTests
                                     if (evt == 2 && fail) phase.FailedStarted++;
                                     if (!fail)
                                     {
+                                        holdCompletion = _holdCompletion && evt == 1;
                                         if (evt == 2) phase.HealthyStarted++;
                                         phase.HealthyTracker = tracker;
                                         peers = _seedPorts.ToArray();
                                     }
                                 }
                             }
+                        }
+                        if (holdCompletion)
+                        {
+                            CompletionObserved.TrySetResult();
+                            await _completionRelease.Task.WaitAsync(_stop.Token);
                         }
                         if (fail)
                         {

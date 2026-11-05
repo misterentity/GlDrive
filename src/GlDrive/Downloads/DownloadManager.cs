@@ -56,6 +56,8 @@ public class DownloadManager : IDisposable
     public Func<bool>? BackgroundPullMayRun { get; set; }
     internal int BackgroundPullRecheckSeconds { get; set; } = 15;
     internal int SfvRepairRecheckSeconds { get; set; } = 1;
+    internal int ExtractionSpaceRecheckSeconds { get; set; } = 60;
+    internal int DownloadSpaceRecheckSeconds { get; set; } = 60;
 
     public DownloadStore Store => _store;
     private WishlistStore? _wishlist;
@@ -322,6 +324,7 @@ public class DownloadManager : IDisposable
             item.ErrorMessage = null;
             item.StatusDetail = null;
             item.RuntimeWait = null;
+            item.SpaceCheckpoint = null; // An explicit resume requests a fresh source/capacity plan.
         }
         _store.Update(item);
         EnqueueForProcessing(item);
@@ -347,6 +350,7 @@ public class DownloadManager : IDisposable
         // Don't reset DownloadedBytes — resume will pick up from partial
         item.ErrorMessage = null;
         item.RuntimeWait = null;
+        item.SpaceCheckpoint = null;
         _store.Update(item);
         EnqueueForProcessing(item);
         NotifyDownloadStatus(item);
@@ -445,7 +449,9 @@ public class DownloadManager : IDisposable
                 var fresh = _store.GetById(item.Id);
                 if (fresh == null || fresh.Status != DownloadStatus.Queued) continue;
 
-                if (!MayRunBackgroundPull(fresh))
+                var localExtraction = fresh.ExtractionCheckpoint?.IsCurrent(fresh,
+                    _config.VerifySfv, _config.SkipIncompleteReleases) == true;
+                if (!localExtraction && !MayRunBackgroundPull(fresh))
                 {
                     ParkForRacing(fresh, ct);
                     continue;
@@ -454,7 +460,7 @@ public class DownloadManager : IDisposable
                 // Cooldown-defer: if the download pool is in a BNC cooldown, a Borrow
                 // would just throw and burn a retry. Re-queue and wait for the window
                 // to clear — no RetryCount cost (like the race engine's cooldown skip).
-                if (_source?.IsInCooldown == true)
+                if (!localExtraction && _source?.IsInCooldown == true)
                 {
                     fresh.RuntimeWait = new("pool-cooldown", "Existing download pool is in cooldown", DateTimeOffset.UtcNow.AddSeconds(15));
                     EnqueueForProcessing(fresh);
@@ -587,18 +593,13 @@ public class DownloadManager : IDisposable
             if (reservedRoot != null) _disk?.Release(reservedRoot, reservedBytes);
         }
 
-        bool ReserveDisk(long? requiredBytes = null)
+        bool ReserveDisk(long remaining, IReadOnlyList<FtpDownloadFile>? files = null)
         {
             if (_disk == null) return true;
-            var remaining = requiredBytes ?? Math.Max(0, item.TotalBytes - item.DownloadedBytes);
             if (!_disk.TryReserve(item.LocalPath, remaining, out var root))
             {
-                var free = new DriveInfo(root).IsReady ? new DriveInfo(root).AvailableFreeSpace : 0;
-                item.Status = DownloadStatus.Failed;
-                item.ErrorMessage = $"Insufficient disk space: need {FormatSize(remaining)} (with reservations), have ~{FormatSize(free)}";
-                _store.Update(item);
-                NotifyDownloadStatus(item);
-                EmitDownloadOutcome(item, "failed");
+                item.SpaceCheckpoint = DownloadSpaceCheckpoint.Capture(item, remaining, files);
+                ParkForDownloadSpace(item, remaining, itemCts.Token);
                 return false;
             }
             reservedRoot = root;
@@ -612,11 +613,38 @@ public class DownloadManager : IDisposable
             NotifyDownloadStatus(item);
 
             itemCts.Token.ThrowIfCancellationRequested();
-            CheckBackgroundPull(item);
             // Check the destination before listing remotely. Otherwise a network outage
             // burns retries on a download that should remain parked for an absent drive.
             if (DownloadTargetVolume.MissingVolumeRoot(item.LocalPath) is { } missingRoot)
                 throw new DriveNotFoundException($"Destination drive {missingRoot} is not mounted");
+
+            if (item.SpaceCheckpoint is { } space)
+            {
+                if (_disk != null && space.RemainingBytes(item) is { } remaining &&
+                    !_disk.CanReserve(item.LocalPath, remaining))
+                {
+                    ParkForDownloadSpace(item, remaining, itemCts.Token);
+                    return;
+                }
+                // A capacity hint never substitutes for a current source plan.
+                item.SpaceCheckpoint = null;
+                _store.Update(item);
+            }
+
+            if (item.ExtractionCheckpoint is { } checkpoint)
+            {
+                if (checkpoint.IsCurrent(item, _config.VerifySfv, _config.SkipIncompleteReleases))
+                {
+                    ReleaseSlot();
+                    if (!_config.AutoExtract || await ExtractCompletedDownload(item, itemCts.Token))
+                        CompleteItem(item, itemCts.Token);
+                    return;
+                }
+                // Changed/missing inputs must pass the normal source and SFV gates again.
+                item.ExtractionCheckpoint = null;
+                _store.Update(item);
+            }
+            CheckBackgroundPull(item);
 
             DownloadTreePlan plan;
             if (_wholeSource != null)
@@ -689,6 +717,8 @@ public class DownloadManager : IDisposable
                 {
                     // Single file download
                     var fileName = Path.GetFileName(item.RemotePath);
+                    item.TotalBytes = plan.Files.Sum(file => Math.Max(0, file.Size));
+                    if (!ReserveDisk(RequiredDownloadBytes(plan.Files), plan.Files)) return;
 
                     if (HasPartial(item.LocalPath))
                         EmitDownloadOutcome(item, "resumed");
@@ -750,8 +780,9 @@ public class DownloadManager : IDisposable
                     // Disk-space reservation (v3.6 Phase 2b) — accounts for what OTHER
                     // concurrent downloads already reserved, so N downloads can't each
                     // see "enough room" and collectively overrun the disk. Reserve the
-                    // not-yet-on-disk remainder (TotalBytes minus already-downloaded).
-                    if (!ReserveDisk()) return;
+                    // missing files, based on actual cache state rather than stale
+                    // persisted progress. Partial staging is reserved conservatively.
+                    if (!ReserveDisk(RequiredDownloadBytes(plan.Files), plan.Files)) return;
 
                     if (_config.SfvRepairEnabled)
                         SfvRepair.RecordOwnership(item, plan, _store.TrySave);
@@ -815,6 +846,9 @@ public class DownloadManager : IDisposable
             // Network phase done — hand the concurrency slot back so other downloads
             // can start while THIS item runs CPU-bound SFV verify + extraction.
             ReleaseSlot();
+            // Downloaded bytes are now reflected in the filesystem's free-space
+            // measurement. Extraction makes its own claim for additional output.
+            ReleaseReservation();
 
             // Presence is always required when an SFV exists. The setting only
             // controls the expensive CRC scan, never whether missing files count.
@@ -880,43 +914,11 @@ public class DownloadManager : IDisposable
             // Auto-extract RAR archives if enabled
             if (_config.AutoExtract && Directory.Exists(item.LocalPath))
             {
-                try
-                {
-                    lock (_activeCts)
-                    {
-                        itemCts.Token.ThrowIfCancellationRequested();
-                        item.Status = DownloadStatus.Extracting;
-                    }
-                    _store.Update(item);
-                    NotifyDownloadStatus(item);
-
-                    foreach (var directory in plan.Directories)
-                    {
-                        var extraction = await ArchiveExtractor.ExtractIfNeeded(directory, itemCts.Token);
-                        Log.Information("Extraction result for {Release}: extracted={Extracted}, deleteEnabled={Delete}",
-                            item.ReleaseName, extraction.Extracted, _config.DeleteArchivesAfterExtract);
-                        if (extraction.Extracted && _config.DeleteArchivesAfterExtract)
-                        {
-                            var cleanupSucceeded = true;
-                            foreach (var firstVolume in extraction.FirstVolumes)
-                                cleanupSucceeded &= ArchiveExtractor.DeleteArchiveSet(firstVolume);
-                            if (!cleanupSucceeded)
-                                Log.Warning("Extraction succeeded but one or more source volumes could not be deleted for {Release}",
-                                    item.ReleaseName);
-                        }
-                    }
-                }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception ex)
-                {
-                    Log.Error(ex, "Extraction failed for {Release}", item.ReleaseName);
-                    item.Status = DownloadStatus.Failed;
-                    item.ErrorMessage = $"Extraction failed: {ex.Message}";
-                    _store.Update(item);
-                    NotifyDownloadStatus(item);
-                    EmitDownloadOutcome(item, "failed");
-                    return;
-                }
+                item.ExtractionCheckpoint = DownloadExtractionCheckpoint.Capture(item, plan.Directories,
+                    _config.VerifySfv, _config.SkipIncompleteReleases);
+                _store.Update(item);
+                _store.Save();
+                if (!await ExtractCompletedDownload(item, itemCts.Token)) return;
             }
 
             lock (_volumeWaitLock) _volumeWaitAttempts.Remove(item.Id);
@@ -1150,6 +1152,99 @@ public class DownloadManager : IDisposable
         first.Files.Select(f => (f.RemotePath, f.Size)).OrderBy(f => f.RemotePath, StringComparer.Ordinal)
             .SequenceEqual(second.Files.Select(f => (f.RemotePath, f.Size)).OrderBy(f => f.RemotePath, StringComparer.Ordinal));
 
+    internal static long RequiredDownloadBytes(IReadOnlyList<FtpDownloadFile> files) =>
+        files.Where(file => !SfvRepair.IsLocallyComplete(file)).Sum(file => Math.Max(0, file.Size));
+
+    private void ParkForDownloadSpace(DownloadItem item, long bytes, CancellationToken ct)
+    {
+        lock (_activeCts)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (item.Status == DownloadStatus.Cancelled) throw new OperationCanceledException(ct);
+            item.Status = DownloadStatus.Queued;
+            item.ErrorMessage = $"Waiting for download space: need {FormatSize(bytes)} (with reservations)";
+            _store.Update(item);
+            _store.Save();
+        }
+        Log.Information("Download waiting for disk space: {Release} — {Reason}", item.ReleaseName, item.ErrorMessage);
+        NotifyDownloadStatus(item);
+        ScheduleRetry(item, Math.Max(1, DownloadSpaceRecheckSeconds), "download-space");
+    }
+
+    private async Task<bool> ExtractCompletedDownload(DownloadItem item, CancellationToken ct)
+    {
+        var checkpoint = item.ExtractionCheckpoint ?? throw new InvalidOperationException("Missing extraction checkpoint");
+        var disk = _disk ?? ArchiveExtractor.DefaultDiskReservation;
+        try
+        {
+            if (checkpoint.WaitingDirectory is { } waiting && !disk.CanReserve(waiting, checkpoint.RequiredBytes))
+                throw new ExtractionSpaceException(waiting, checkpoint.RequiredBytes);
+            lock (_activeCts)
+            {
+                ct.ThrowIfCancellationRequested();
+                item.Status = DownloadStatus.Extracting;
+                item.ExtractionCheckpoint = checkpoint = checkpoint.Transition();
+            }
+            _store.Update(item);
+            NotifyDownloadStatus(item);
+            while (checkpoint.Directories.Count > 0)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (!checkpoint.IsCurrent(item, _config.VerifySfv, _config.SkipIncompleteReleases))
+                    throw new IOException("Extraction inputs changed after verification");
+                var directory = checkpoint.Directories[0];
+                var extraction = await ArchiveExtractor.ExtractIfNeeded(directory, ct, disk);
+                Log.Information("Extraction result for {Release}: extracted={Extracted}, deleteEnabled={Delete}",
+                    item.ReleaseName, extraction.Extracted, _config.DeleteArchivesAfterExtract);
+                if (extraction.Extracted && _config.DeleteArchivesAfterExtract)
+                {
+                    foreach (var firstVolume in extraction.FirstVolumes)
+                    {
+                        if (!DownloadExtractionCheckpoint.SafePath(item.LocalPath, firstVolume))
+                            throw new IOException("Archive cleanup path is outside the extraction root");
+                        if (!ArchiveExtractor.DeleteArchiveSet(firstVolume))
+                            Log.Warning("Extraction succeeded but source cleanup was incomplete for {Release}", item.ReleaseName);
+                    }
+                }
+                item.ExtractionCheckpoint = checkpoint = checkpoint.Transition(completedDirectory: directory);
+                _store.Update(item);
+                _store.Save();
+            }
+            item.ExtractionCheckpoint = null;
+            return true;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (ExtractionSpaceException ex)
+        {
+            lock (_activeCts)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (item.Status == DownloadStatus.Cancelled) throw new OperationCanceledException(ct);
+                item.ExtractionCheckpoint = checkpoint = checkpoint.Transition(ex.OutputDirectory, ex.RequiredBytes);
+                item.Status = DownloadStatus.Queued;
+                item.ErrorMessage = ex.Message;
+                _store.Update(item);
+                _store.Save();
+            }
+            Log.Information("Download waiting for extraction space: {Release} — {Reason}", item.ReleaseName, ex.Message);
+            NotifyDownloadStatus(item);
+            ScheduleRetry(item, Math.Max(1, ExtractionSpaceRecheckSeconds), "extraction-space");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            ct.ThrowIfCancellationRequested();
+            item.ExtractionCheckpoint = null;
+            Log.Error(ex, "Extraction failed for {Release}", item.ReleaseName);
+            item.Status = DownloadStatus.Failed;
+            item.ErrorMessage = $"Extraction failed: {ex.Message}";
+            _store.Update(item);
+            NotifyDownloadStatus(item);
+            EmitDownloadOutcome(item, "failed");
+            return false;
+        }
+    }
+
     internal void ParkForSource(DownloadItem item, string reason, CancellationToken ct, bool sourceEvidence = true)
     {
         TimeSpan delay;
@@ -1205,6 +1300,8 @@ public class DownloadManager : IDisposable
             item.StatusDetail = null;
             item.RequiresContentApproval = false;
             item.SourceCompletionPending = false;
+            item.ExtractionCheckpoint = null;
+            item.SpaceCheckpoint = null;
             _sourceWaitAttempts.Remove(item.Id);
             item.CompletedAt = DateTime.UtcNow;
             _store.Update(item);

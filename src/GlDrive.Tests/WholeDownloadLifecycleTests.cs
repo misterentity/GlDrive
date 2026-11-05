@@ -98,7 +98,7 @@ public sealed class WholeDownloadLifecycleTests
     [InlineData(false, false)]
     [InlineData(true, true)]
     [InlineData(false, true)]
-    public async Task Reenqueue_same_content_is_rejected_while_cancelled_or_failed_owner_drains(bool cancel, bool removeHistory)
+    public async Task Reenqueue_same_content_is_rejected_while_cancelled_or_space_waiting_owner_drains(bool cancel, bool removeHistory)
     {
         var disk = cancel ? null : new DiskReservation(0, _ => 50);
         await using var h = new Harness(disk: disk);
@@ -111,7 +111,7 @@ public sealed class WholeDownloadLifecycleTests
             h.Manager.Cancel(h.Item.Id);
         }
         await first.DisposeEntered.Task.WaitAsync(Limit);
-        Assert.Equal(cancel ? DownloadStatus.Cancelled : DownloadStatus.Failed, h.Item.Status);
+        Assert.Equal(cancel ? DownloadStatus.Cancelled : DownloadStatus.Queued, h.Item.Status);
         if (removeHistory) h.Store.Remove(h.Item.Id);
         var replacement = new DownloadItem { SourceKind = DownloadSourceKind.Torrent,
             RemotePath = h.Item.RemotePath, LocalPath = h.Item.LocalPath, TorrentMagnet = h.Item.TorrentMagnet };
@@ -121,9 +121,18 @@ public sealed class WholeDownloadLifecycleTests
         Assert.Equal(1, h.Source.PrepareCalls);
         first.ReleaseDisposal.TrySetResult();
         await h.WaitIdle();
-        Assert.Null(h.Manager.FindPendingOrActive(h.Item.RemotePath));
-        Assert.True(h.Manager.Enqueue(replacement));
-        Assert.Equal(removeHistory ? 1 : 2, h.Store.Items.Count);
+        if (!cancel && !removeHistory)
+        {
+            Assert.Same(h.Item, h.Manager.FindPendingOrActive(h.Item.RemotePath));
+            Assert.False(h.Manager.Enqueue(replacement));
+            Assert.Single(h.Store.Items);
+        }
+        else
+        {
+            Assert.Null(h.Manager.FindPendingOrActive(h.Item.RemotePath));
+            Assert.True(h.Manager.Enqueue(replacement));
+            Assert.Equal(removeHistory ? 1 : 2, h.Store.Items.Count);
+        }
     }
 
     [Fact]
@@ -226,17 +235,36 @@ public sealed class WholeDownloadLifecycleTests
     [Fact]
     public async Task Insufficient_disk_disposes_preparation_without_starting_payload()
     {
-        var disk = new DiskReservation(0, _ => 50);
+        long free = 50;
+        var disk = new DiskReservation(0, _ => free);
         await using var h = new Harness(disk: disk);
         var prepared = h.Source.Add();
-        var failed = h.WhenStatus(DownloadStatus.Failed);
+        var waiting = h.WhenStatus(DownloadStatus.Queued);
         h.Manager.Start();
-        await failed.WaitAsync(Limit);
+        await waiting.WaitAsync(Limit);
         await h.WaitIdle();
         Assert.Equal(0, prepared.ExecuteCalls);
         Assert.Equal(1, prepared.DisposeCalls);
         Assert.Equal(0, disk.ReservedOn(h.Item.LocalPath));
-        Assert.Contains("Insufficient disk space", h.Item.ErrorMessage);
+        Assert.Equal("download-space", DownloadWaiting.Describe(h.Item)!.ReasonCode);
+        await h.Reload();
+        h.Source.PrepareOverride = (_, _) => throw new IOException("Metadata must not be fetched while capacity is denied");
+        waiting = h.WhenStatus(DownloadStatus.Queued);
+        h.Manager.Start();
+        await waiting.WaitAsync(Limit);
+        await h.WaitIdle();
+        Assert.Equal(1, h.Source.PrepareCalls);
+        Assert.Equal(0, h.Item.RetryCount);
+        free = 1000;
+        h.Source.PrepareOverride = null;
+        var resumed = h.Source.Add();
+        var completed = h.WhenStatus(DownloadStatus.Completed);
+        h.Manager.Start();
+        await completed.WaitAsync(Limit);
+        await h.WaitIdle();
+        Assert.Equal(2, h.Source.PrepareCalls);
+        Assert.Equal(1, resumed.ExecuteCalls);
+        Assert.Null(h.Item.SpaceCheckpoint);
     }
 
     [Fact]
@@ -246,11 +274,11 @@ public sealed class WholeDownloadLifecycleTests
         await using var h = new Harness(disk: disk);
         h.Item.DownloadedBytes = h.Item.TotalBytes = 100;
         var prepared = h.Source.Add();
-        var settled = h.WhenStatus(DownloadStatus.Failed, DownloadStatus.Completed);
+        var settled = h.WhenStatus(DownloadStatus.Queued, DownloadStatus.Completed);
         h.Manager.Start();
         await settled.WaitAsync(Limit);
         await h.WaitIdle();
-        Assert.Equal(DownloadStatus.Failed, h.Item.Status);
+        Assert.Equal(DownloadStatus.Queued, h.Item.Status);
         Assert.Equal(0, prepared.ExecuteCalls);
         Assert.False(Directory.Exists(h.Item.LocalPath));
         Assert.Equal(0, disk.ReservedOn(h.Item.LocalPath));
