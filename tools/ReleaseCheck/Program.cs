@@ -477,7 +477,8 @@ static async Task CheckManualEnumerationAndDownloads(FtpClientFactory factory, s
         .GetMethod("BuildAsync", BindingFlags.Static | BindingFlags.NonPublic)!;
     Func<string, CancellationToken, Task<bool>> directoryExists = ftp.DirectoryExists;
     Func<string, CancellationToken, Task<bool>> fileExists = ftp.FileExists;
-    var planning = (Task)planner.Invoke(null, [tree, local, directoryExists, fileExists, list, ct])!;
+    Func<string, CancellationToken, Task<long>> fileSize = ftp.GetFileSize;
+    var planning = (Task)planner.Invoke(null, [tree, local, directoryExists, fileExists, list, ct, fileSize])!;
     await planning;
     var plan = planning.GetType().GetProperty("Result")!.GetValue(planning)!;
     var plannedFiles = (IReadOnlyList<FtpDownloadFile>)plan.GetType().GetProperty("Files")!.GetValue(plan)!;
@@ -488,6 +489,19 @@ static async Task CheckManualEnumerationAndDownloads(FtpClientFactory factory, s
         File.ReadAllBytes(Path.Combine(local, p.Key)).SequenceEqual(p.Value))
         && Directory.Exists(Path.Combine(local, "Empty")),
         "recursive download preserves nested duplicate basenames, empty folders and every payload byte");
+
+    var singleDestination = Path.Combine(localRoot, "single-file", "release.nfo");
+    var singlePlanning = (Task)planner.Invoke(null,
+        [tree + "/release.nfo", singleDestination, directoryExists, fileExists, list, ct, fileSize])!;
+    await singlePlanning;
+    var singlePlan = singlePlanning.GetType().GetProperty("Result")!.GetValue(singlePlanning)!;
+    var singleFiles = (IReadOnlyList<FtpDownloadFile>)singlePlan.GetType().GetProperty("Files")!.GetValue(singlePlan)!;
+    Check(singleFiles.Count == 1 && singleFiles[0].Size == payloads["release.nfo"].Length
+        && !File.Exists(singleDestination),
+        "single-file planning obtains the exact native FTP SIZE before a destination writer opens");
+    await downloader.DownloadFiles(singleFiles, null, ct);
+    Check(File.ReadAllBytes(singleDestination).SequenceEqual(payloads["release.nfo"]),
+        "single-file download preserves the exact payload from its size-budgeted plan");
 
     foreach (var shortData in new[] { true, false })
     {
