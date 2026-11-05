@@ -31,6 +31,8 @@ public sealed record PersistedRace(
     public bool KeepUntilAvailable { get; init; }
     // Separate from Resumes, which continues to bound restart/crash recovery.
     public int ResumeCount { get; init; }
+    // Re-runs after a source probe that got too few answers to prove absence.
+    public int SourceProbeRetries { get; init; }
     public string StopReason { get; init; } = "";
     public RacePartialState? Partial { get; init; }
     public DateTime? FirstUploadAtUtc => Partial?.FirstUploadAtUtc;

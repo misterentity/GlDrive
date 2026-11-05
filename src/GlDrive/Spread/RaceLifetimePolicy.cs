@@ -56,6 +56,8 @@ internal static class RaceLifetimePolicy
 {
     internal const int MaxPartialResumes = 3;
     internal const int MaxCleanupAttempts = 6;
+    // With Defer's 30 s doubling backoff (5 min cap) this spans ~17 min of probing.
+    internal const int MaxSourceProbeRetries = 6;
     internal static readonly TimeSpan CleanupRetryDelay = TimeSpan.FromMinutes(5);
 
     internal static DateTime? Deadline(RacePartialState? partial, int hours) =>

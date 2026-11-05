@@ -110,6 +110,57 @@ public sealed class RacePartialPersistenceTests : IDisposable
         Assert.True(manager.NextRequest(request, stalled, _now.AddHours(10), false, true)!.CleanupOnly);
     }
 
+    private static SpreadJob FailedJob(PersistedRace request, string error)
+    {
+        var job = new SpreadJob(request.Section, request.ReleaseName, request.Mode, new SpreadConfig(),
+            new(), new(), new(), new SpeedTracker(), new SkiplistEvaluator());
+        typeof(SpreadJob).GetMethod("SetFailed", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(job, [error]);
+        Assert.Equal(SpreadJobState.Failed, job.State);
+        return job;
+    }
+
+    // 2026-11-04 00:14: siteb's pool died while Love.Island S01E13's probe ran (7 of 24
+    // answered). The request had no partial, so NextRequest returned null and the episode was
+    // never raced; E14-E16, queued behind it, waited for the reconnect and completed.
+    [Theory]
+    [InlineData("Source probe inconclusive — 7 of 24 path probes returned an answer (17 failed)")]
+    [InlineData("Source scan never succeeded — pools unavailable (login cap?)")]
+    public void Unanswered_source_probe_without_partial_is_retried_within_a_bound(string error)
+    {
+        using var manager = new SpreadManager(new AppConfig(), _directory);
+        var request = RaceLifetimePolicyTests.Request() with { QueuedAtUtc = _now };
+        using var job = FailedJob(request, error);
+
+        var retry = manager.NextRequest(request, job, _now, false, true);
+        Assert.NotNull(retry);
+        Assert.False(retry!.CleanupOnly);
+        Assert.Equal(1, retry.SourceProbeRetries);
+        Assert.True(retry.NextProbeAtUtc > _now);
+        Assert.False(retry.KeepUntilAvailable);
+
+        var spent = request with { SourceProbeRetries = RaceLifetimePolicy.MaxSourceProbeRetries };
+        Assert.Null(manager.NextRequest(spent, job, _now, false, true));
+    }
+
+    [Fact]
+    public void Source_probe_retry_budget_survives_the_queue_store()
+    {
+        var store = new RaceQueueStore(Path.Combine(_directory, "retries.json"));
+        var request = RaceLifetimePolicyTests.Request() with { QueuedAtUtc = _now, SourceProbeRetries = 2 };
+        Assert.True(store.Save(() => [request]));
+        Assert.Equal(2, Assert.Single(store.Load()).SourceProbeRetries);
+    }
+
+    [Fact]
+    public void Release_absent_without_partial_is_still_dropped()
+    {
+        using var manager = new SpreadManager(new AppConfig(), _directory);
+        var request = RaceLifetimePolicyTests.Request() with { QueuedAtUtc = _now };
+        using var job = FailedJob(request, "Release not found on any server — check release name and section paths");
+        Assert.Null(manager.NextRequest(request, job, _now, false, true));
+    }
+
     [Fact]
     public void Failed_store_reports_failure_instead_of_claiming_durable_ownership()
     {

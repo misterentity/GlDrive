@@ -62,10 +62,17 @@ public partial class SpreadManager
                 "Stopped by user; owned partial retained until cleanup deadline", deadline);
         if (!stillRequested) return null;
         if (deferredForPools) return request;
-        if (request.HasOwnedPartial && job.State == SpreadJobState.Failed
+        var sourceUnanswered = job.State == SpreadJobState.Failed
             && (job.LastError?.Contains("Source probe inconclusive", StringComparison.OrdinalIgnoreCase) == true
-                || job.LastError?.Contains("Source scan never succeeded", StringComparison.OrdinalIgnoreCase) == true))
+                || job.LastError?.Contains("Source scan never succeeded", StringComparison.OrdinalIgnoreCase) == true);
+        if (request.HasOwnedPartial && sourceUnanswered)
             return request.Defer(now, "Source unavailable; retaining partial until it can be checked", true, false);
+        // An unanswered probe proves nothing about the release, and an announce is
+        // one-shot, so dropping here loses the release for good. Retry, bounded.
+        if (sourceUnanswered && request.SourceProbeRetries < RaceLifetimePolicy.MaxSourceProbeRetries)
+            return request.Defer(now,
+                $"Source did not answer; re-probing ({request.SourceProbeRetries + 1}/{RaceLifetimePolicy.MaxSourceProbeRetries})",
+                false, false) with { SourceProbeRetries = request.SourceProbeRetries + 1 };
         if (job.State == SpreadJobState.Waiting)
             return request.Defer(now, job.WaitReason ?? "Waiting for remaining release files",
                 job.WaitingForIncompleteRelease, job.Sites.Values.Any(s => s.BytesTransferred > 0));
