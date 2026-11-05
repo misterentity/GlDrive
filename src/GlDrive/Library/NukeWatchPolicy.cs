@@ -5,8 +5,6 @@ namespace GlDrive.Library;
 
 public static class NukeWatchPolicy
 {
-    private static readonly Regex SeasonToken = new(@"(?:^|[._ -])S(?<season>\d{1,3})(?:E\d{1,3}(?:(?:E|-E?)\d{1,3})*)?(?=$|[._ -])",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
     private static readonly Regex DateToken = new(@"(?:^|[._ -])(?:19|20)\d{2}[._ -]\d{2}[._ -]\d{2}(?=$|[._ -])",
         RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
 
@@ -66,7 +64,7 @@ public static class NukeWatchPolicy
     {
         if (!NukeWatchStore.ValidRelease(release)) return null;
         var parsed = SceneNameParser.Parse(release);
-        var seasons = SeasonToken.Matches(release);
+        var seasons = EpisodeToken.FindAll(release);
         var dates = DateToken.Matches(release);
         if (seasons.Count > 1 || dates.Count > 1 || seasons.Count != 0 && dates.Count != 0) return null;
         var tv = seasons.Count != 0 || dates.Count != 0;
@@ -99,8 +97,8 @@ public static class NukeWatchPolicy
         // The shared wishlist parser expands ranges into exact episode keys. Use a
         // neutral series identity so punctuation differences cannot change the set.
         var keyItem = new WishlistItem { Type = MediaType.TvShow, Title = "correction" };
-        IReadOnlyList<string> keys = seasons.Count == 1 && !seasons[0].Value.Contains('E', StringComparison.OrdinalIgnoreCase)
-            ? ["season:" + int.Parse(seasons[0].Groups["season"].Value)] : WishlistAcquisition.Keys(keyItem, release);
+        IReadOnlyList<string> keys = seasons.Count == 1 && seasons[0].IsSeasonPack
+            ? ["season:" + seasons[0].Season] : WishlistAcquisition.Keys(keyItem, release);
         return keys.Count == 0 ? null : new(item, keys.Order(StringComparer.Ordinal).ToArray());
     }
 }

@@ -19,10 +19,6 @@ public static class LibraryPlanner
 {
     private static readonly HashSet<string> VideoExtensions = new(StringComparer.OrdinalIgnoreCase)
         { ".mkv", ".mp4", ".m4v", ".avi", ".mov", ".ts" };
-    private static readonly Regex MultiEpisode = new(@"S\d{1,3}E\d{1,3}(?:[ ._-]*E\d|[-+]\d)",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
-    private static readonly Regex EpisodeToken = new(@"S\d{1,3}E\d{1,3}",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
     private static readonly Regex ParenthesizedYear = new(@"\((?<year>(?:19|20)\d{2})\)",
         RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
     private static readonly Regex SdLabel = new(@" - SD$",
@@ -32,8 +28,8 @@ public static class LibraryPlanner
 
     public static LibraryMediaIdentity? TryIdentity(string releaseName)
     {
-        if (string.IsNullOrWhiteSpace(releaseName) || releaseName.Length > 512 || MultiEpisode.IsMatch(releaseName)
-            || EpisodeToken.Matches(releaseName).Count > 1 || SceneNameParser.TryEpisodeDate(releaseName, out _)) return null;
+        if (string.IsNullOrWhiteSpace(releaseName) || releaseName.Length > 512 || EpisodeToken.MayCoverSeveralEpisodes(releaseName)
+            || SceneNameParser.TryEpisodeDate(releaseName, out _)) return null;
         // The shared scene parser expects bare year tokens; Plex names use (year).
         var parsed = SceneNameParser.Parse(ParenthesizedYear.Replace(releaseName, " ${year} "));
         if (string.IsNullOrWhiteSpace(parsed.Title) || parsed.IsSeasonPack) return null;

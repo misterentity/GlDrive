@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using GlDrive.Config;
 
 namespace GlDrive.Downloads;
@@ -9,11 +8,6 @@ public sealed record WishlistQualityDecision(bool Accepted, int Score, bool Meet
 /// <summary>Local identity and profile policy; it never lists or probes a source.</summary>
 internal static class WishlistAcquisition
 {
-    private static readonly Regex Episode = new(@"(?:^|[._ -])S(?<season>\d{1,3})E(?<first>\d{1,3})(?<rest>(?:E\d{1,3}|-E?\d{1,3})*)(?=[._ -]|$)",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
-    private static readonly Regex ExtraEpisodes = new(@"(?<range>-)?E?(?<number>\d{1,3})",
-        RegexOptions.CultureInvariant | RegexOptions.NonBacktracking, TimeSpan.FromMilliseconds(100));
-
     internal static ScoredQualityProfile? ResolveProfile(WishlistItem item, DownloadConfig config)
     {
         var profile = ResolveConfiguredProfile(item, config);
@@ -76,26 +70,8 @@ internal static class WishlistAcquisition
         if (string.IsNullOrWhiteSpace(release) || release.Length > 1024) return [];
         var identity = Identity(item);
         if (item.Type == MediaType.Movie) return [identity];
-        var match = Episode.Match(release);
-        if (match.Success)
-        {
-            var season = int.Parse(match.Groups["season"].Value);
-            var first = int.Parse(match.Groups["first"].Value);
-            var episodes = new HashSet<int> { first };
-            var previous = first;
-            foreach (Match extra in ExtraEpisodes.Matches(match.Groups["rest"].Value))
-            {
-                var next = int.Parse(extra.Groups["number"].Value);
-                if (extra.Groups["range"].Success)
-                {
-                    if (next < previous || next - previous > 100) return [];
-                    for (var episode = previous; episode <= next; episode++) episodes.Add(episode);
-                }
-                else episodes.Add(next);
-                previous = next;
-            }
-            return episodes.Order().Select(e => $"{identity}:S{season:D2}E{e:D2}").ToArray();
-        }
+        if (EpisodeToken.FindEpisode(release) is { } token)
+            return token.Episodes.Select(e => $"{identity}:S{token.Season:D2}E{e:D2}").ToArray();
         parsed ??= SceneNameParser.Parse(release);
         if (parsed.Season is { } pack) return [$"{identity}:S{pack:D2}"];
         if (SceneNameParser.TryEpisodeDate(release, out var date)) return [$"{identity}:{date:yyyy-MM-dd}"];
