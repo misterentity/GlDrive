@@ -31,7 +31,7 @@ public partial class ReleaseInfoWindow : Window
         StatusText.Text = "Looking up on TMDB…";
         try
         {
-            using var tmdb = new TmdbClient(config.Downloads.ResolveTmdbKey());
+            var tmdb = MetadataClients.Tmdb;
             _info = await ReleaseInfoLookup.LookupAsync(_release, tmdb, _cts.Token);
         }
         catch (OperationCanceledException) { return; }

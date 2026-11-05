@@ -117,6 +117,41 @@ public sealed class TmdbCollectionTests
         Assert.Equal(0, calls);
     }
 
+    // MetadataClients keeps one TmdbClient for the process; a key saved in Settings must apply
+    // to its next request without a restart, and a removed key must stop requests.
+    [Fact]
+    public async Task Long_lived_client_reads_the_api_key_on_every_request()
+    {
+        var key = "";
+        var queries = new List<string>();
+        using var client = new TmdbClient(() => key, new Handler((request, _) =>
+        {
+            queries.Add(request.RequestUri!.Query);
+            return Response(queries.Count % 2 == 1 ? Movie : Collection);
+        }));
+        Assert.False(client.HasApiKey);
+        Assert.Equal("unknown", (await client.GetMovieCollection(42)).Status);
+        Assert.Empty(queries);
+
+        key = "first";
+        Assert.True(client.HasApiKey);
+        await client.GetMovieCollection(42);
+        key = "second";
+        await client.GetMovieCollection(42);
+        Assert.Equal(["?api_key=first", "?api_key=first", "?api_key=second", "?api_key=second"], queries);
+
+        key = "";
+        Assert.False(client.HasApiKey);
+    }
+
+    [Fact]
+    public void TvMaze_summary_html_is_stripped_to_text_or_null()
+    {
+        Assert.Equal("A show about bears.", TvMazeClient.StripHtml("<p>A show about <b>bears</b>.</p>"));
+        Assert.Null(TvMazeClient.StripHtml("<p> </p>"));
+        Assert.Null(TvMazeClient.StripHtml(null));
+    }
+
     [Fact]
     public async Task Oversized_stream_without_length_header_is_still_bounded()
     {

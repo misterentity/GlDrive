@@ -8,7 +8,7 @@ namespace GlDrive.Downloads;
 public partial class TmdbClient : IDisposable
 {
     private readonly HttpClient _http;
-    private readonly string _apiKey;
+    private readonly Func<string> _apiKeySource;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -36,18 +36,22 @@ public partial class TmdbClient : IDisposable
         [37] = "Western"
     };
 
-    public TmdbClient(string apiKey) : this(apiKey, null) { }
+    public TmdbClient(string apiKey) : this(() => apiKey, null) { }
 
-    internal TmdbClient(string apiKey, HttpMessageHandler? handler)
+    internal TmdbClient(string apiKey, HttpMessageHandler? handler) : this(() => apiKey, handler) { }
+
+    /// <summary>Reads the key on every request, so one long-lived client follows Settings changes.</summary>
+    internal TmdbClient(Func<string> apiKey, HttpMessageHandler? handler = null)
     {
-        _apiKey = apiKey;
+        _apiKeySource = apiKey;
         _http = new HttpClient(handler ?? new HttpClientHandler { AllowAutoRedirect = false });
         _http.BaseAddress = new Uri("https://api.themoviedb.org/");
         _http.Timeout = TimeSpan.FromSeconds(15);
         _http.DefaultRequestHeaders.Add("User-Agent", "GlDrive/1.0");
     }
 
-    public bool HasApiKey => !string.IsNullOrEmpty(_apiKey);
+    private string ApiKey => _apiKeySource() ?? "";
+    public bool HasApiKey => !string.IsNullOrEmpty(ApiKey);
     internal TimeSpan CalendarRequestTimeout { get; set; } = TimeSpan.FromSeconds(15);
 
     public async Task<MovieReleaseDates> GetReleaseDates(int tmdbId, string region = "US", CancellationToken ct = default)
@@ -57,7 +61,7 @@ public partial class TmdbClient : IDisposable
         if (!HasApiKey || tmdbId <= 0) return new(Region: region, Status: "unavailable", CheckedAtUtc: DateTimeOffset.UtcNow);
         try
         {
-            var json = await ReadCalendarJson($"3/movie/{tmdbId}/release_dates?api_key={Uri.EscapeDataString(_apiKey)}", ct).ConfigureAwait(false);
+            var json = await ReadCalendarJson($"3/movie/{tmdbId}/release_dates?api_key={Uri.EscapeDataString(ApiKey)}", ct).ConfigureAwait(false);
             return MovieReleaseDates.ParseTmdb(json, region, DateTimeOffset.UtcNow);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -71,7 +75,7 @@ public partial class TmdbClient : IDisposable
             !imdbId[2..].All(char.IsAsciiDigit)) return null;
         try
         {
-            var json = await ReadCalendarJson($"3/find/{imdbId}?external_source=imdb_id&api_key={Uri.EscapeDataString(_apiKey)}", ct).ConfigureAwait(false);
+            var json = await ReadCalendarJson($"3/find/{imdbId}?external_source=imdb_id&api_key={Uri.EscapeDataString(ApiKey)}", ct).ConfigureAwait(false);
             using var document = JsonDocument.Parse(json);
             if (document.RootElement.ValueKind != JsonValueKind.Object ||
                 !document.RootElement.TryGetProperty("movie_results", out var results) || results.ValueKind != JsonValueKind.Array) return null;
@@ -114,7 +118,7 @@ public partial class TmdbClient : IDisposable
         if (!HasApiKey) return [];
         try
         {
-            var baseUrl = $"3/discover/movie?api_key={_apiKey}" +
+            var baseUrl = $"3/discover/movie?api_key={ApiKey}" +
                           $"&with_release_type=2|3|4" +
                           $"&release_date.gte={from:yyyy-MM-dd}" +
                           $"&release_date.lte={to:yyyy-MM-dd}" +
@@ -141,7 +145,7 @@ public partial class TmdbClient : IDisposable
             var movies = new List<TmdbMovie>();
             for (var page = 1; page <= 2; page++)
             {
-                var url = $"3/trending/movie/week?api_key={_apiKey}&page={page}";
+                var url = $"3/trending/movie/week?api_key={ApiKey}&page={page}";
                 var response = await _http.GetStringAsync(url, ct);
                 var result = JsonSerializer.Deserialize<TmdbDiscoverResponse>(response, JsonOptions);
                 if (result?.Results != null) movies.AddRange(result.Results);
@@ -161,7 +165,7 @@ public partial class TmdbClient : IDisposable
             var shows = new List<TmdbTvShow>();
             for (var page = 1; page <= 2; page++)
             {
-                var url = $"3/trending/tv/week?api_key={_apiKey}&page={page}";
+                var url = $"3/trending/tv/week?api_key={ApiKey}&page={page}";
                 var response = await _http.GetStringAsync(url, ct);
                 var result = JsonSerializer.Deserialize<TmdbTvResponse>(response, JsonOptions);
                 if (result?.Results != null) shows.AddRange(result.Results);
@@ -178,7 +182,7 @@ public partial class TmdbClient : IDisposable
         if (!HasApiKey) return null;
         try
         {
-            var url = $"3/movie/{tmdbId}?api_key={_apiKey}";
+            var url = $"3/movie/{tmdbId}?api_key={ApiKey}";
             var response = await _http.GetStringAsync(url, ct);
             return JsonSerializer.Deserialize<TmdbMovieDetail>(response, JsonOptions);
         }
@@ -203,7 +207,7 @@ public partial class TmdbClient : IDisposable
         if (!HasApiKey || string.IsNullOrWhiteSpace(query)) return [];
         try
         {
-            var url = $"3/search/multi?api_key={_apiKey}&query={Uri.EscapeDataString(query)}&page=1";
+            var url = $"3/search/multi?api_key={ApiKey}&query={Uri.EscapeDataString(query)}&page=1";
             var response = await _http.GetStringAsync(url, ct);
             var result = JsonSerializer.Deserialize<TmdbSearchMultiResponse>(response, JsonOptions);
             return result?.Results?.Where(r => r.MediaType is "movie" or "tv").ToArray() ?? [];
@@ -216,7 +220,7 @@ public partial class TmdbClient : IDisposable
         if (!HasApiKey) return null;
         try
         {
-            var url = $"3/tv/{tvId}?api_key={_apiKey}";
+            var url = $"3/tv/{tvId}?api_key={ApiKey}";
             var response = await _http.GetStringAsync(url, ct);
             return JsonSerializer.Deserialize<TmdbTvDetail>(response, JsonOptions);
         }
@@ -228,7 +232,7 @@ public partial class TmdbClient : IDisposable
         if (!HasApiKey) return null;
         try
         {
-            var url = $"3/tv/{tvId}/season/{seasonNumber}?api_key={_apiKey}";
+            var url = $"3/tv/{tvId}/season/{seasonNumber}?api_key={ApiKey}";
             var response = await _http.GetStringAsync(url, ct);
             return JsonSerializer.Deserialize<TmdbSeason>(response, JsonOptions);
         }

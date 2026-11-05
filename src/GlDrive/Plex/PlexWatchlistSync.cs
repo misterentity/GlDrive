@@ -146,7 +146,7 @@ public sealed class PlexWatchlistSync : IDisposable
 
     private static async Task<WatchlistSeriesMetadata?> FetchMetadata(WishlistItem item, CancellationToken ct)
     {
-        using var client = new TvMazeClient();
+        var client = MetadataClients.TvMaze;
         var show = item.TvMazeId is > 0 ? await client.GetShow(item.TvMazeId.Value, ct).ConfigureAwait(false) :
             await client.LookupExternal(item.TvdbId, item.ImdbId, ct).ConfigureAwait(false);
         ct.ThrowIfCancellationRequested();

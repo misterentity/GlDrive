@@ -500,7 +500,7 @@ public partial class PlayerViewModel : INotifyPropertyChanged, IDisposable
             {
                 try
                 {
-                    using var tmdb = new TmdbClient(key);
+                    var tmdb = MetadataClients.Tmdb;
                     var results = await tmdb.SearchMulti(request.Query, request.Token);
                     if (_discoverySearch.CanPublish(request))
                     {
@@ -578,7 +578,7 @@ public partial class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
         try
         {
-            using var tmdb = new TmdbClient(_config.Downloads.ResolveTmdbKey());
+            var tmdb = MetadataClients.Tmdb;
             var detail = await tmdb.GetTvDetail(tvId);
             if (detail?.Seasons == null) return;
 
@@ -600,7 +600,7 @@ public partial class PlayerViewModel : INotifyPropertyChanged, IDisposable
         Episodes.Clear();
         try
         {
-            using var tmdb = new TmdbClient(_config.Downloads.ResolveTmdbKey());
+            var tmdb = MetadataClients.Tmdb;
             var season = await tmdb.GetTvSeason(tvId, seasonNumber);
             if (season?.Episodes == null) return;
 
@@ -728,7 +728,7 @@ public partial class PlayerViewModel : INotifyPropertyChanged, IDisposable
 
         try
         {
-            using var tmdb = new TmdbClient(_config.Downloads.ResolveTmdbKey());
+            var tmdb = MetadataClients.Tmdb;
 
             var movies = await tmdb.GetTrendingMovies();
             TrendingMovies.Clear();

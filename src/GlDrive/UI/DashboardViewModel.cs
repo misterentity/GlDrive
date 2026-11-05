@@ -1214,7 +1214,7 @@ public partial class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     private void AddMedia(MediaType type)
     {
-        var dialog = new MetadataSearchDialog(type, _config.Downloads.ResolveOmdbKey(), _config.Downloads.QualityDefault)
+        var dialog = new MetadataSearchDialog(type, _config.Downloads.QualityDefault)
         {
             Owner = Application.Current.Windows.OfType<DashboardWindow>().FirstOrDefault()
         };
@@ -1582,7 +1582,7 @@ public partial class DashboardViewModel : INotifyPropertyChanged, IDisposable
         {
             if (loadTv)
             {
-                using var tvMaze = new TvMazeClient();
+                var tvMaze = MetadataClients.TvMaze;
                 var today = DateOnly.FromDateTime(DateTime.Today);
                 var episodes = new List<UpcomingTvEpisodeVm>();
                 var seenShowEps = new HashSet<string>();
@@ -1618,7 +1618,7 @@ public partial class DashboardViewModel : INotifyPropertyChanged, IDisposable
                             DateDisplay = date.ToString("ddd M/d"),
                             AirDate = date,
                             PosterUrl = ep.Show.Image?.Medium,
-                            Plot = StripHtml(ep.Show.Summary),
+                            Plot = TvMazeClient.StripHtml(ep.Show.Summary),
                             Rating = ep.Show.Rating?.Average?.ToString("F1"),
                             Genres = ep.Show.Genres != null ? string.Join(", ", ep.Show.Genres) : "",
                             TvMazeId = ep.Show.Id
@@ -1638,7 +1638,7 @@ public partial class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
             if (loadMovies && HasTmdbKey)
             {
-                using var tmdb = new TmdbClient(_config.Downloads.ResolveTmdbKey());
+                var tmdb = MetadataClients.Tmdb;
                 var from = DateOnly.FromDateTime(DateTime.Today);
                 var to = DateOnly.FromDateTime(DateTime.Today.AddDays(30));
                 var movies = await tmdb.GetUpcomingReleases(from, to);
@@ -1682,7 +1682,7 @@ public partial class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
         try
         {
-            using var tvMaze = new TvMazeClient();
+            var tvMaze = MetadataClients.TvMaze;
             var shows = await tvMaze.Search(query);
             var results = new List<UpcomingTvEpisodeVm>();
 
@@ -1706,7 +1706,7 @@ public partial class DashboardViewModel : INotifyPropertyChanged, IDisposable
                     AirDate = ep?.Airdate is { } ad2 && DateOnly.TryParse(ad2, out var d2)
                         ? d2 : default,
                     PosterUrl = result.Show.Image?.Medium,
-                    Plot = StripHtml(result.Show.Summary),
+                    Plot = TvMazeClient.StripHtml(result.Show.Summary),
                     Rating = result.Show.Rating?.Average?.ToString("F1"),
                     Genres = result.Show.Genres != null ? string.Join(", ", result.Show.Genres) : "",
                     TvMazeId = result.Show.Id
@@ -1787,7 +1787,7 @@ public partial class DashboardViewModel : INotifyPropertyChanged, IDisposable
             // Fetch detail for ImdbId if we don't have it
             if (string.IsNullOrEmpty(movie.ImdbId) && HasTmdbKey)
             {
-                using var tmdb = new TmdbClient(_config.Downloads.ResolveTmdbKey());
+                var tmdb = MetadataClients.Tmdb;
                 var detail = await tmdb.GetMovieDetail(movie.TmdbId);
                 if (detail != null)
                 {
@@ -1834,7 +1834,7 @@ public partial class DashboardViewModel : INotifyPropertyChanged, IDisposable
             CalendarStatus = "Refreshing movie release dates…";
             if (upcoming && _selectedUpcomingMovie is { } movie)
             {
-                using var client = new TmdbClient(_config.Downloads.ResolveTmdbKey());
+                var client = MetadataClients.Tmdb;
                 var dates = await client.GetReleaseDates(movie.TmdbId, _config.Downloads.MovieCalendarRegion, _calendarStop.Token);
                 _calendarStop.Token.ThrowIfCancellationRequested();
                 if (dates.Status != "unavailable") movie.ReleaseDates = dates;
@@ -1860,8 +1860,8 @@ public partial class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
     private async Task RefreshAllMetadata()
     {
-        using var tvMaze = new TvMazeClient();
-        using var omdb = new OmdbClient(_config.Downloads.ResolveOmdbKey());
+        var tvMaze = MetadataClients.TvMaze;
+        var omdb = MetadataClients.Omdb;
         var updated = 0;
 
         foreach (var item in _wishlistStore.Items.ToList())
@@ -1878,7 +1878,7 @@ public partial class DashboardViewModel : INotifyPropertyChanged, IDisposable
                     if (show == null) continue;
 
                     item.PosterUrl ??= show.Image?.Medium;
-                    item.Plot ??= StripHtml(show.Summary);
+                    item.Plot ??= TvMazeClient.StripHtml(show.Summary);
                     item.Rating ??= show.Rating?.Average?.ToString("F1");
                     item.Genres ??= show.Genres != null ? string.Join(", ", show.Genres) : null;
                     _wishlistStore.Update(item);
@@ -1905,13 +1905,6 @@ public partial class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
         RefreshWishlist();
         Log.Information("Refreshed metadata for {Count} item(s)", updated);
-    }
-
-    private static string? StripHtml(string? html)
-    {
-        if (string.IsNullOrWhiteSpace(html)) return null;
-        var text = Regex.Replace(html, "<[^>]+>", "").Trim();
-        return string.IsNullOrEmpty(text) ? null : text;
     }
 
     private void RefreshNotifications()
@@ -1950,23 +1943,22 @@ public partial class DashboardViewModel : INotifyPropertyChanged, IDisposable
 
             if (parsed.Season != null)
             {
-                using var tvMaze = new TvMazeClient();
+                var tvMaze = MetadataClients.TvMaze;
                 var results = await tvMaze.Search(parsed.Title);
                 var show = results.FirstOrDefault();
                 if (show != null)
                 {
                     item.PosterUrl = show.Image?.Medium;
-                    item.Plot = StripHtml(show.Summary);
+                    item.Plot = TvMazeClient.StripHtml(show.Summary);
                     item.Rating = show.Rating?.Average?.ToString("F1");
                     item.Genres = show.Genres != null ? string.Join(", ", show.Genres) : null;
                 }
             }
             else
             {
-                var omdbKey = _config.Downloads.ResolveOmdbKey();
-                if (!string.IsNullOrEmpty(omdbKey))
+                var omdb = MetadataClients.Omdb;
+                if (omdb.HasApiKey)
                 {
-                    using var omdb = new OmdbClient(omdbKey);
                     var results = await omdb.Search(parsed.Title);
                     var movie = results.FirstOrDefault();
                     if (movie != null)

@@ -12,21 +12,25 @@ public class OmdbClient : IDisposable
 {
     private readonly HttpClient _http;
     private readonly HttpClient _freeHttp;
-    private readonly string _apiKey;
+    private readonly Func<string> _apiKeySource;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
     };
 
-    public OmdbClient(string apiKey)
+    public OmdbClient(string apiKey) : this(() => apiKey) { }
+
+    /// <summary>Reads the key on every request, so one long-lived client follows Settings changes.</summary>
+    internal OmdbClient(Func<string> apiKey)
     {
-        _apiKey = apiKey;
+        _apiKeySource = apiKey;
         _http = new HttpClient { BaseAddress = new Uri("https://www.omdbapi.com/"), Timeout = TimeSpan.FromSeconds(15) };
         _freeHttp = new HttpClient { BaseAddress = new Uri("https://api.imdbapi.dev/"), Timeout = TimeSpan.FromSeconds(15) };
     }
 
-    public bool HasApiKey => !string.IsNullOrEmpty(_apiKey);
+    private string ApiKey => _apiKeySource() ?? "";
+    public bool HasApiKey => !string.IsNullOrEmpty(ApiKey);
 
     /// <summary>
     /// True when either OMDB (paid) or imdbapi.dev (free) backend is available.
@@ -40,7 +44,7 @@ public class OmdbClient : IDisposable
         {
             try
             {
-                var url = $"?apikey={_apiKey}&s={Uri.EscapeDataString(query)}&type=movie";
+                var url = $"?apikey={ApiKey}&s={Uri.EscapeDataString(query)}&type=movie";
                 var response = await _http.GetStringAsync(url, ct);
                 var result = JsonSerializer.Deserialize<OmdbSearchResponse>(response, JsonOptions);
                 if (result?.Search is { Length: > 0 }) return result.Search;
@@ -73,7 +77,7 @@ public class OmdbClient : IDisposable
         {
             try
             {
-                var url = $"?apikey={_apiKey}&i={Uri.EscapeDataString(imdbId)}";
+                var url = $"?apikey={ApiKey}&i={Uri.EscapeDataString(imdbId)}";
                 var response = await _http.GetStringAsync(url, ct);
                 var movie = JsonSerializer.Deserialize<OmdbMovie>(response, JsonOptions);
                 if (movie != null && !string.IsNullOrEmpty(movie.Title)) return movie;

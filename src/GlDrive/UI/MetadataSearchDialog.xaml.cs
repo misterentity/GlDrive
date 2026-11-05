@@ -18,7 +18,7 @@ public partial class MetadataSearchDialog : Window
 
     public WishlistItem? SelectedItem { get; private set; }
 
-    public MetadataSearchDialog(MediaType mediaType, string omdbApiKey, string? defaultQuality = null)
+    public MetadataSearchDialog(MediaType mediaType, string? defaultQuality = null)
     {
         InitializeComponent();
         QualityCombo.SelectedItem = QualityCombo.Items.Cast<ComboBoxItem>()
@@ -27,9 +27,9 @@ public partial class MetadataSearchDialog : Window
         Title = mediaType == MediaType.Movie ? "Search Movies (OMDB)" : "Search TV Shows (TVMaze)";
 
         if (mediaType == MediaType.TvShow)
-            _tvMaze = new TvMazeClient();
+            _tvMaze = MetadataClients.TvMaze;
         else
-            _omdb = new OmdbClient(omdbApiKey);
+            _omdb = MetadataClients.Omdb;
     }
 
     private async void Search_Click(object sender, RoutedEventArgs e) => await DoSearch();
@@ -65,7 +65,7 @@ public partial class MetadataSearchDialog : Window
                 var shows = await _tvMaze.Search(query);
                 foreach (var show in shows)
                 {
-                    var summary = StripHtml(show.Summary);
+                    var summary = TvMazeClient.StripHtml(show.Summary);
                     var rating = show.Rating?.Average?.ToString("F1");
                     var genres = show.Genres != null ? string.Join(", ", show.Genres) : null;
 
@@ -231,20 +231,6 @@ public partial class MetadataSearchDialog : Window
     {
         DialogResult = false;
         Close();
-    }
-
-    protected override void OnClosed(EventArgs e)
-    {
-        base.OnClosed(e);
-        _tvMaze?.Dispose();
-        _omdb?.Dispose();
-    }
-
-    private static string? StripHtml(string? html)
-    {
-        if (string.IsNullOrWhiteSpace(html)) return null;
-        var text = Regex.Replace(html, "<[^>]+>", "").Trim();
-        return string.IsNullOrEmpty(text) ? null : text;
     }
 }
 

@@ -13,7 +13,8 @@ public sealed class MovieCalendar(DownloadConfig config, WishlistStore wishlist,
         var item = wishlist.GetById(itemId) ?? throw new KeyNotFoundException("Unknown wishlist item");
         if (item.Type != MediaType.Movie) throw new ArgumentException("Release dates apply to movies");
         var identity = new MovieCalendarIdentity(item.TmdbId, item.ImdbId, item.Title, item.Year);
-        using var client = clientFactory?.Invoke() ?? new TmdbClient(config.ResolveTmdbKey());
+        using var injected = clientFactory?.Invoke();
+        var client = injected ?? MetadataClients.Tmdb;
         var id = identity.TmdbId ?? await client.FindMovieByImdbId(identity.ImdbId, ct).ConfigureAwait(false);
         var dates = await client.GetReleaseDates(id ?? 0, config.MovieCalendarRegion, ct).ConfigureAwait(false);
         ct.ThrowIfCancellationRequested();

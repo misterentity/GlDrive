@@ -22,7 +22,7 @@ public partial class TmdbClient
         whole.CancelAfter(CollectionLookupTimeout);
         try
         {
-            var json = await ReadCalendarJson($"3/movie/{movieTmdbId}?api_key={Uri.EscapeDataString(_apiKey)}",
+            var json = await ReadCalendarJson($"3/movie/{movieTmdbId}?api_key={Uri.EscapeDataString(ApiKey)}",
                 whole.Token, CollectionRequestTimeout).ConfigureAwait(false);
             var (status, collectionId) = TmdbCollectionParser.MovieCollection(json, movieTmdbId);
             if (status != "available") return new(status, null);
@@ -34,7 +34,7 @@ public partial class TmdbClient
 
     private async Task<TmdbCollectionResult> ReadCollection(int collectionId, CancellationToken ct)
     {
-        var json = await ReadCalendarJson($"3/collection/{collectionId}?api_key={Uri.EscapeDataString(_apiKey)}",
+        var json = await ReadCalendarJson($"3/collection/{collectionId}?api_key={Uri.EscapeDataString(ApiKey)}",
             ct, CollectionRequestTimeout).ConfigureAwait(false);
         return TmdbCollectionParser.Collection(json, collectionId);
     }

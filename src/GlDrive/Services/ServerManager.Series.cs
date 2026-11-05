@@ -15,7 +15,7 @@ public partial class ServerManager
 
     private void InitializeSeries()
     {
-        _seriesMetadata = new TvMazeClient();
+        _seriesMetadata = MetadataClients.TvMaze;
         _seriesRefresher = new SeriesInventoryRefresher(_wantedWishlist, _seriesMetadata.GetEpisodes);
         if (_spreadManager != null) _spreadManager.JobCompleted += OnRacePullCompleted;
     }
@@ -114,6 +114,5 @@ public partial class ServerManager
     {
         if (_spreadManager != null) _spreadManager.JobCompleted -= OnRacePullCompleted;
         _seriesCts.Cancel();
-        _seriesMetadata.Dispose();
     }
 }

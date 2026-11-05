@@ -1,6 +1,7 @@
 using System.Net.Http;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Serilog;
 
 namespace GlDrive.Downloads;
@@ -198,6 +199,14 @@ public class TvMazeClient : IDisposable
             Log.Warning(ex, "TVMaze get show with next episode failed for id: {Id}", id);
             return null;
         }
+    }
+
+    /// <summary>TVMaze summaries are HTML fragments; returns the plain text, or null when empty.</summary>
+    public static string? StripHtml(string? html)
+    {
+        if (string.IsNullOrWhiteSpace(html)) return null;
+        var text = Regex.Replace(html, "<[^>]+>", "").Trim();
+        return string.IsNullOrEmpty(text) ? null : text;
     }
 
     public void Dispose() => _http.Dispose();

@@ -25,8 +25,8 @@ public class MetadataFilterService : IDisposable
     {
         _appConfig = appConfig;
         _sitebotFacts = sitebotFacts;
-        _omdb = new OmdbClient(appConfig.Downloads.ResolveOmdbKey());
-        _tvMaze = new TvMazeClient();
+        _omdb = MetadataClients.Omdb;
+        _tvMaze = MetadataClients.TvMaze;
     }
 
     public readonly record struct FilterVerdict(bool Allowed, string Reason);
@@ -199,12 +199,8 @@ public class MetadataFilterService : IDisposable
             ? []
             : text.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
-    public void Dispose()
-    {
-        _omdb.Dispose();
-        _tvMaze.Dispose();
-        GC.SuppressFinalize(this);
-    }
+    // The metadata clients are process-wide (MetadataClients) and outlive this service.
+    public void Dispose() => GC.SuppressFinalize(this);
 
     private record ReleaseMetadata(
         string Title, double? Rating, int? Votes,

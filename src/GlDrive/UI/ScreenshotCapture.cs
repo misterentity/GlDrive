@@ -506,7 +506,7 @@ internal static class ScreenshotCapture
             (new TagRulesDialog(new SectionMapping { IrcSection = "MOVIES", RemoteSection = "MOVIES" }), "dialog-tag-rules"),
             (new FirstRunAgentConsentDialog("Demo model"), "dialog-agent-consent"),
             (new RevertRunsDialog(), "dialog-revert-runs"),
-            (new MetadataSearchDialog(MediaType.TvShow, ""), "dialog-metadata-search"),
+            (new MetadataSearchDialog(MediaType.TvShow), "dialog-metadata-search"),
             (new GlftpdInstallerWindow(), "dialog-installer")
         })
         {

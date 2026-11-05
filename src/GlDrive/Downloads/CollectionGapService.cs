@@ -157,7 +157,7 @@ public sealed class CollectionGapService
     public async Task<IReadOnlyList<TmdbSearchResult>> ResolveMovieAsync(CollectionQuery query, CancellationToken ct = default)
     {
         if (query.TmdbId is { } id) return [new TmdbSearchResult { Id = id, MediaType = "movie" }];
-        using var client = new TmdbClient(_config.Downloads.ResolveTmdbKey());
+        var client = MetadataClients.Tmdb;
         if (!client.HasApiKey) throw new InvalidOperationException("No TMDB API key is configured.");
         if (query.ImdbId != null)
             return await client.FindMovieByImdbId(query.ImdbId, ct).ConfigureAwait(false) is { } found
@@ -170,7 +170,7 @@ public sealed class CollectionGapService
 
     private async Task<TmdbCollectionResult> FetchCollectionAsync(int movieTmdbId, CancellationToken ct)
     {
-        using var client = new TmdbClient(_config.Downloads.ResolveTmdbKey());
+        var client = MetadataClients.Tmdb;
         return await client.GetMovieCollection(movieTmdbId, ct).ConfigureAwait(false);
     }
 
