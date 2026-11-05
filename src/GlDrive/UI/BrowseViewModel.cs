@@ -302,7 +302,8 @@ public class BrowseViewModel : INotifyPropertyChanged, IDisposable
                     if (dstServer.Pool != null)
                     {
                         await using var conn = await dstServer.Pool.BorrowFor(GlDrive.Ftp.FtpBorrowPurpose.Browse, ct);
-                        await conn.Client.Execute($"MKD {dstPath}", ct);
+                        var (made, code, message) = await GlDrive.Ftp.FtpDirectoryMaker.EnsurePath(conn.Client.Execute, dstPath, ct);
+                        if (!made) Log.Debug("FXP: could not make {Dir}: {Code} {Message}", dstPath, code, message);
                     }
 
                     var destFile = dstPath.TrimEnd('/') + "/" + item.Name;

@@ -4020,19 +4020,6 @@ public partial class SpreadJob : IDisposable
     }
 
     /// <summary>
-    /// cbftp's MKD response check: accept 257 / any 2xx as success, and also
-    /// accept 550 when the message body indicates the directory already exists.
-    /// Different glftpd versions + themes use slightly different phrasings.
-    /// </summary>
-    private static bool IsMkdSuccess(FluentFTP.FtpReply reply)
-    {
-        if (reply.Success) return true;
-        var msg = reply.Message ?? "";
-        return msg.Contains("File exist", StringComparison.OrdinalIgnoreCase)
-            || msg.Contains("already exist", StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
     /// glftpd mp3/0day sections store releases under a dated subdirectory
     /// (e.g. /mp3/0625/Release). ALWAYS route those sections through today's date
     /// dir — the CWD/MKD navigation in EnsureDirectoryExists creates it if missing.
@@ -4066,7 +4053,7 @@ public partial class SpreadJob : IDisposable
             ? basePath
             : basePath.TrimEnd('/') + "/" + dirPart.Trim('/');
 
-        var (ok, code, msg) = await EnsurePathByNavigation(client, fullDir, ct,
+        var (ok, code, msg) = await Ftp.FtpDirectoryMaker.EnsurePath(client.Execute, fullDir, ct,
             created => RecordCreatedRoot(dstId, basePath, created,
                 RaceLifetimePolicy.AccountIdentity(client.Host, client.Port, client.Credentials.UserName)));
         if (!ok)
@@ -4083,60 +4070,6 @@ public partial class SpreadJob : IDisposable
         // have to hand-edit section-blacklist.json after fixing site perms/paths.
         if (!msg.StartsWith("exists", StringComparison.Ordinal))
             ClearBlacklistOnSuccess(dstId);
-    }
-
-    /// <summary>
-    /// Ensure an absolute directory path exists using cbftp-style navigation: CWD to
-    /// the server root, then CWD into each path component, issuing a RELATIVE MKD for
-    /// any component that doesn't exist yet. Returns the FTP reply code+message of the
-    /// first failure. Relative MKD (vs an absolute "MKD /a/b/c") is what glftpd
-    /// dirscripts/path-filters expect; the absolute form is widely denied even on a
-    /// fully-permissioned account.
-    /// </summary>
-    private static async Task<(bool ok, string code, string msg)> EnsurePathByNavigation(
-        FluentFTP.AsyncFtpClient client, string fullPath, CancellationToken ct, Action<string>? created = null)
-        => await NavigateOwnedPath((command, token) => client.Execute(command, token), fullPath, ct, created);
-
-    internal static async Task<(bool ok, string code, string msg)> NavigateOwnedPath(
-        Func<string, CancellationToken, Task<FluentFTP.FtpReply>> execute,
-        string fullPath, CancellationToken ct, Action<string>? created = null)
-    {
-        var sanitized = Ftp.CpsvDataHelper.SanitizeFtpPath(fullPath);
-
-        // Fast path: the whole directory already exists. CWD is cheap + idempotent.
-        var whole = await execute($"CWD {sanitized}", ct);
-        if (whole.Success) return (true, whole.Code ?? "250", "exists (CWD)");
-
-        var parts = sanitized.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length == 0) return (false, "ERR", "empty path");
-
-        var root = await execute("CWD /", ct);
-        if (!root.Success) return (false, root.Code ?? "", root.Message ?? "CWD / failed");
-
-        var createdAny = false;
-        var currentPath = "";
-        foreach (var part in parts)
-        {
-            currentPath += "/" + part;
-            var cwd = await execute($"CWD {part}", ct);
-            if (cwd.Success) continue; // component already exists — descend into it
-
-            var mkd = await execute($"MKD {part}", ct);
-            if (!IsMkdSuccess(mkd))
-                return (false, mkd.Code ?? "", mkd.Message ?? "(no reply text)");
-            // A concurrent creator can answer 550 "already exists". That is
-            // navigable, but never establishes our ownership of the directory.
-            if (mkd.Success && !(mkd.Message ?? "").Contains("exist", StringComparison.OrdinalIgnoreCase))
-            {
-                createdAny = true;
-                created?.Invoke(currentPath);
-            }
-
-            var cwd2 = await execute($"CWD {part}", ct);
-            if (!cwd2.Success)
-                return (false, cwd2.Code ?? "", cwd2.Message ?? "CWD after MKD failed");
-        }
-        return (true, createdAny ? "257" : "250", createdAny ? "created" : "exists");
     }
 
     /// <summary>

@@ -1,5 +1,6 @@
 using System.IO;
 using FluentFTP;
+using GlDrive.Ftp;
 using GlDrive.Spread;
 using Xunit;
 
@@ -12,9 +13,9 @@ public sealed class RaceOwnedNavigationTests
     {
         var created = new List<string>();
         var replies = new Queue<string>(["550", "250", "250", "250", "550", "257", "250"]);
-        var result = await SpreadJob.NavigateOwnedPath((_, _) => Task.FromResult(new FtpReply { Code = replies.Dequeue() }),
+        var result = await FtpDirectoryMaker.EnsurePath((_, _) => Task.FromResult(new FtpReply { Code = replies.Dequeue() }),
             "/video/Release/CD1", default, created.Add);
-        Assert.True(result.ok);
+        Assert.True(result.Ok);
         Assert.Equal(["/video/Release/CD1"], created);
     }
 
@@ -23,9 +24,9 @@ public sealed class RaceOwnedNavigationTests
     {
         var created = new List<string>();
         var replies = new Queue<string>(["550", "250", "250", "550", "257", "550"]);
-        var result = await SpreadJob.NavigateOwnedPath((_, _) => Task.FromResult(new FtpReply { Code = replies.Dequeue() }),
+        var result = await FtpDirectoryMaker.EnsurePath((_, _) => Task.FromResult(new FtpReply { Code = replies.Dequeue() }),
             "/video/Release", default, created.Add);
-        Assert.False(result.ok);
+        Assert.False(result.Ok);
         Assert.Equal(["/video/Release"], created);
     }
 
@@ -37,8 +38,8 @@ public sealed class RaceOwnedNavigationTests
             new() { Code = "550" }, new() { Code = "250" }, new() { Code = "250" },
             new() { Code = "550" }, new() { Code = "550", Message = "File already exists" }, new() { Code = "250" }
         ]);
-        Assert.True((await SpreadJob.NavigateOwnedPath((_, _) => Task.FromResult(replies.Dequeue()),
-            "/video/Release", default, created.Add)).ok);
+        Assert.True((await FtpDirectoryMaker.EnsurePath((_, _) => Task.FromResult(replies.Dequeue()),
+            "/video/Release", default, created.Add)).Ok);
         Assert.Empty(created);
     }
 
@@ -47,7 +48,7 @@ public sealed class RaceOwnedNavigationTests
     {
         var commands = new List<string>();
         var replies = new Queue<string>(["550", "250", "250", "550", "257"]);
-        await Assert.ThrowsAsync<IOException>(() => SpreadJob.NavigateOwnedPath((command, _) =>
+        await Assert.ThrowsAsync<IOException>(() => FtpDirectoryMaker.EnsurePath((command, _) =>
         {
             commands.Add(command);
             return Task.FromResult(new FtpReply { Code = replies.Dequeue() });

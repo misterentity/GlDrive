@@ -1640,17 +1640,11 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             var relPath = relativePath;
             transfer.BeforeStore = async storeCt =>
             {
-                await dstClient.Execute($"MKD {Ftp.CpsvDataHelper.SanitizeFtpPath(dstPath)}", storeCt);
+                // Best effort: a directory that still can't be made surfaces as the STOR failure.
                 var dirPart = Path.GetDirectoryName(relPath)?.Replace('\\', '/');
-                if (!string.IsNullOrEmpty(dirPart))
-                {
-                    var current = dstPath.TrimEnd('/');
-                    foreach (var part in dirPart.Split('/', StringSplitOptions.RemoveEmptyEntries))
-                    {
-                        current += "/" + part;
-                        await dstClient.Execute($"MKD {Ftp.CpsvDataHelper.SanitizeFtpPath(current)}", storeCt);
-                    }
-                }
+                var dir = string.IsNullOrEmpty(dirPart) ? dstPath : dstPath.TrimEnd('/') + "/" + dirPart.Trim('/');
+                var (made, code, message) = await Ftp.FtpDirectoryMaker.EnsurePath(dstClient.Execute, dir, storeCt);
+                if (!made) Log.Debug("Direct FXP: could not make {Dir}: {Code} {Message}", dir, code, message);
             };
             var ok = await transfer.ExecuteAsync(srcConn, dstConn, fullPath, destFile, mode,
                 _config.Spread.TransferTimeoutSeconds, ct,
