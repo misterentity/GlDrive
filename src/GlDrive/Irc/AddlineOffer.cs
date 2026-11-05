@@ -1,6 +1,5 @@
 using System.IO;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using GlDrive.Config;
 using GlDrive.Util;
@@ -92,25 +91,12 @@ public sealed class AddlineOfferStore
 
     private Data Load()
     {
-        try
-        {
-            if (!File.Exists(_path)) return new();
-            var json = Encoding.UTF8.GetString(ProtectedData.Unprotect(File.ReadAllBytes(_path), null, DataProtectionScope.CurrentUser));
-            var data = JsonSerializer.Deserialize<Data>(json, Json) ?? new();
-            data.Offers.RemoveAll(o => DateTimeOffset.UtcNow - o.SentAtUtc > Retention);
-            return data;
-        }
-        catch (Exception ex)
-        {
-            Log.Warning("Addline offers unreadable ({Error}); starting empty", ex.GetType().Name);
-            return new();
-        }
+        var data = DpapiFile.ReadJson<Data>(_path, d => d.Offers != null && d.Offers.All(o => o != null) && d.LastMasks != null,
+            Json, keepCorrupt: false,
+            onCorrupt: ex => Log.Warning("Addline offers unreadable ({Error}); starting empty", ex.GetType().Name)) ?? new();
+        data.Offers.RemoveAll(o => DateTimeOffset.UtcNow - o.SentAtUtc > Retention);
+        return data;
     }
 
-    private void Save(Data data)
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-        var bytes = ProtectedData.Protect(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(data, Json)), null, DataProtectionScope.CurrentUser);
-        SecureFile.WriteAllBytesRestricted(_path, bytes);
-    }
+    private void Save(Data data) => DpapiFile.WriteJson(_path, data, Json);
 }

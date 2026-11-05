@@ -322,6 +322,7 @@ public partial class App
             {
                 try { UpdateChecker.CleanupOldUpdateFiles(); } catch { }
                 try { Irc.IrcLogStore.PruneOld(); } catch { }
+                try { Util.SecureFile.SweepOrphanedTempFiles(ConfigManager.AppDataPath, TimeSpan.FromHours(1)); } catch { }
             });
         var asmVersion = System.Reflection.Assembly.GetExecutingAssembly()
             .GetName().Version?.ToString() ?? "unknown";

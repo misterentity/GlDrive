@@ -1,6 +1,4 @@
 using System.IO;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using GlDrive.Config;
 using GlDrive.Util;
@@ -122,23 +120,15 @@ public class PmHistoryStore : IDisposable
 
     public void Flush() => FlushSave();
 
-    // Fully serialized: two flushers (debounce timer + Dispose) must not both write the
-    // shared .tmp path concurrently, and the serialize must see every committed Append.
+    // Fully serialized: the serialize must see every committed Append, and two flushers
+    // (debounce timer + Dispose) must not interleave an older snapshot over a newer one.
     private void FlushSave()
     {
         lock (_lock)
         {
             try
             {
-                var json = JsonSerializer.Serialize(_history, JsonOptions);
-                Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
-                var encrypted = ProtectedData.Protect(
-                    Encoding.UTF8.GetBytes(json), null, DataProtectionScope.CurrentUser);
-                var tempPath = _filePath + ".tmp";
-                File.WriteAllBytes(tempPath, encrypted);
-                SecureFile.RestrictFilePermissions(tempPath);
-                File.Move(tempPath, _filePath, overwrite: true);
-                SecureFile.RestrictFilePermissions(_filePath);
+                DpapiFile.WriteJson(_filePath, _history, JsonOptions);
             }
             catch
             {
@@ -153,33 +143,18 @@ public class PmHistoryStore : IDisposable
 
     private void Load()
     {
-        if (!File.Exists(_filePath)) return;
-        try
+        // An unreadable file is kept as .corrupt for forensics and history starts empty —
+        // it is expendable and must never block IRC startup.
+        var loaded = DpapiFile.ReadJson<Dictionary<string, List<PmHistoryEntry>>>(_filePath,
+            history => !history.Any(pair => pair.Value == null || pair.Value.Any(entry => entry == null || entry.Text == null || entry.Nick == null)),
+            JsonOptions,
+            onCorrupt: ex => Log.Warning(ex, "Failed to load PM history from {Path}, starting empty", _filePath));
+        lock (_lock)
         {
-            using var stream = new FileStream(_filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            using var memory = new MemoryStream();
-            stream.CopyTo(memory);
-            var fileBytes = memory.ToArray();
-            var decrypted = ProtectedData.Unprotect(fileBytes, null, DataProtectionScope.CurrentUser);
-            var json = Encoding.UTF8.GetString(decrypted);
-            var loaded = JsonSerializer.Deserialize<Dictionary<string, List<PmHistoryEntry>>>(json, JsonOptions);
-            if (loaded == null || loaded.Any(pair => pair.Value == null || pair.Value.Any(entry => entry == null || entry.Text == null || entry.Nick == null)))
-                throw new InvalidDataException();
-            lock (_lock)
-            {
-                _history = new(StringComparer.OrdinalIgnoreCase);
-                foreach (var pair in loaded.OrderBy(pair => pair.Value.Count == 0 ? DateTime.MinValue : pair.Value.Max(entry => entry.Timestamp)).TakeLast(MaxTargets))
-                    _history[pair.Key] = pair.Value.OrderBy(entry => entry.Timestamp).TakeLast(MaxMessagesPerTarget).ToList();
-            }
-        }
-        catch (Exception ex)
-        {
-            // Keep the unreadable file for forensics, then start empty — history is
-            // expendable and must never block IRC startup.
-            Log.Warning(ex, "Failed to load PM history from {Path}, starting empty", _filePath);
-            try { File.Copy(_filePath, _filePath + ".corrupt", overwrite: true); } catch { }
-            lock (_lock)
-                _history = new(StringComparer.OrdinalIgnoreCase);
+            _history = new(StringComparer.OrdinalIgnoreCase);
+            if (loaded == null) return;
+            foreach (var pair in loaded.OrderBy(pair => pair.Value.Count == 0 ? DateTime.MinValue : pair.Value.Max(entry => entry.Timestamp)).TakeLast(MaxTargets))
+                _history[pair.Key] = pair.Value.OrderBy(entry => entry.Timestamp).TakeLast(MaxMessagesPerTarget).ToList();
         }
     }
 

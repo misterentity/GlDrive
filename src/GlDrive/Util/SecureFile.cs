@@ -24,6 +24,12 @@ public static class SecureFile
 
     /// <summary>Capture mutable state only after earlier saves to this path finish.</summary>
     public static void WriteAllTextRestricted(string path, Func<string> createContent)
+        => WriteRestricted(path, () => System.Text.Encoding.UTF8.GetBytes(createContent()));
+
+    public static void WriteAllBytesRestricted(string path, byte[] content)
+        => WriteRestricted(path, () => content);
+
+    private static void WriteRestricted(string path, Func<byte[]> createContent)
     {
         var gate = _locks.GetOrAdd(Path.GetFullPath(path), _ => new object());
         lock (gate)
@@ -37,7 +43,7 @@ public static class SecureFile
             {
                 try
                 {
-                    WriteAllTextRestrictedInner(path, content);
+                    WriteAllBytesRestrictedInner(path, content);
                     return;
                 }
                 catch (IOException ex) when (attempt < maxAttempts)
@@ -58,12 +64,6 @@ public static class SecureFile
         }
     }
 
-    private static void WriteAllTextRestrictedInner(string path, string content)
-        => WriteAllBytesRestrictedInner(path, System.Text.Encoding.UTF8.GetBytes(content));
-
-    public static void WriteAllBytesRestricted(string path, byte[] content)
-        => WithPathLock(path, () => WriteAllBytesRestrictedInner(path, content));
-
     private static void WriteAllBytesRestrictedInner(string path, byte[] content)
     {
         var security = new FileSecurity();
@@ -72,7 +72,7 @@ public static class SecureFile
         security.AddAccessRule(new FileSystemAccessRule(
             currentUser, FileSystemRights.FullControl, AccessControlType.Allow));
 
-        var tempPath = path + $".{Guid.NewGuid():N}.tmp";
+        var tempPath = TempPathFor(path);
         try
         {
             using (var fs = System.IO.FileSystemAclExtensions.Create(
@@ -92,6 +92,44 @@ public static class SecureFile
             RestrictFilePermissions(path);
         }
         finally { if (File.Exists(tempPath)) File.Delete(tempPath); }
+    }
+
+    internal static string TempPathFor(string path) => path + $".{Guid.NewGuid():N}.tmp";
+
+    // "<name>.<32 lowercase hex>.tmp" — exactly what TempPathFor produces.
+    private static readonly System.Text.RegularExpressions.Regex TempName =
+        new(@"^.+\.[0-9a-f]{32}\.tmp$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    internal static bool IsOrphanCandidate(string fileName) => TempName.IsMatch(fileName);
+
+    /// <summary>
+    /// Deletes staging files an interrupted write left behind (crash or kill between create
+    /// and move). Top level of <paramref name="directory"/> only, only names matching the
+    /// staging pattern, only files older than <paramref name="minAge"/> so a write in flight
+    /// is never touched, and at most <paramref name="maxFiles"/> per call.
+    /// </summary>
+    public static int SweepOrphanedTempFiles(string directory, TimeSpan minAge, int maxFiles = 200, DateTime? nowUtc = null)
+    {
+        if (!Directory.Exists(directory)) return 0;
+        var cutoff = (nowUtc ?? DateTime.UtcNow) - minAge;
+        var deleted = 0;
+        foreach (var file in Directory.EnumerateFiles(directory, "*.tmp", SearchOption.TopDirectoryOnly))
+        {
+            if (deleted >= maxFiles) break;
+            if (!IsOrphanCandidate(Path.GetFileName(file))) continue;
+            try
+            {
+                if (File.GetLastWriteTimeUtc(file) > cutoff) continue;
+                File.Delete(file);
+                deleted++;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Log.Debug("Orphaned temp file {File} not removed: {Msg}", file, ex.Message);
+            }
+        }
+        if (deleted > 0) Log.Information("Removed {Count} orphaned temp file(s) from {Directory}", deleted, directory);
+        return deleted;
     }
 
     public static void RestrictFilePermissions(string path)

@@ -1,6 +1,3 @@
-using System.IO;
-using System.Security.Cryptography;
-using System.Text.Json;
 using Serilog;
 using GlDrive.Util;
 
@@ -28,37 +25,14 @@ public sealed class IrcUnreadStore : IDisposable
     public IrcUnreadStore(string path, int capacity = 512, Action<string, byte[]>? write = null)
     {
         _path = path; _capacity = Math.Max(1, capacity);
-        _write = write ?? ((file, bytes) =>
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-            File.WriteAllBytes(file + ".tmp", bytes);
-            SecureFile.RestrictFilePermissions(file + ".tmp");
-            File.Move(file + ".tmp", file, true);
-            SecureFile.RestrictFilePermissions(file);
-        });
-        try
-        {
-            if (File.Exists(path))
-            {
-                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                if (stream.Length > 4 * 1024 * 1024) throw new InvalidDataException();
-                using var memory = new MemoryStream();
-                stream.CopyTo(memory);
-                var data = ProtectedData.Unprotect(memory.ToArray(), null, DataProtectionScope.CurrentUser);
-                var rows = JsonSerializer.Deserialize<IrcUnreadEntry[]>(data) ?? throw new InvalidDataException();
-                if (rows.Any(e => e == null || string.IsNullOrEmpty(e.Target) || e.Messages < 0 || e.Highlights < 0 || e.Highlights > e.Messages ||
-                    e.Received < e.Messages || e.ReceivedHighlights < e.Highlights || e.ReceivedHighlights > e.Received || string.IsNullOrEmpty(e.Generation)))
-                    throw new InvalidDataException();
-                // A callback from a previous service instance cannot acknowledge this session.
-                foreach (var row in rows.OrderBy(e => e.LastUtc).TakeLast(_capacity))
-                    _entries[row.Target] = row with { Generation = Guid.NewGuid().ToString("N") };
-            }
-        }
-        catch
-        {
-            try { File.Copy(path, path + ".corrupt", true); } catch { }
-            _entries.Clear(); Warn();
-        }
+        _write = write ?? DpapiFile.WriteBytes;
+        var rows = DpapiFile.ReadJson<IrcUnreadEntry[]>(path, loaded => !loaded.Any(e => e == null || string.IsNullOrEmpty(e.Target) ||
+                e.Messages < 0 || e.Highlights < 0 || e.Highlights > e.Messages || e.Received < e.Messages ||
+                e.ReceivedHighlights < e.Highlights || e.ReceivedHighlights > e.Received || string.IsNullOrEmpty(e.Generation)),
+            maxBytes: 4 * 1024 * 1024, onCorrupt: _ => Warn());
+        // A callback from a previous service instance cannot acknowledge this session.
+        foreach (var row in (rows ?? []).OrderBy(e => e.LastUtc).TakeLast(_capacity))
+            _entries[row.Target] = row with { Generation = Guid.NewGuid().ToString("N") };
         using var flow = ExecutionContext.IsFlowSuppressed() ? default : ExecutionContext.SuppressFlow();
         _timer = new(_ => Save(), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
     }
@@ -111,8 +85,7 @@ public sealed class IrcUnreadStore : IDisposable
             lock (_gate) { revision = _revision; if (revision == _savedRevision) return; rows = _entries.Values.ToArray(); }
             try
             {
-                var bytes = ProtectedData.Protect(JsonSerializer.SerializeToUtf8Bytes(rows), null, DataProtectionScope.CurrentUser);
-                _write(_path, bytes);
+                _write(_path, DpapiFile.Encode(rows));
                 lock (_gate) _savedRevision = revision;
             }
             catch { Warn(); }
