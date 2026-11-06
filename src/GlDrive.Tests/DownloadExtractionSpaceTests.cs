@@ -425,6 +425,63 @@ public sealed class DownloadExtractionSpaceTests
     }
 
     [Fact]
+    public async Task External_fallback_preserves_known_unpacked_reservation_and_disk_full_retry_threshold()
+    {
+        await using var h = new Harness();
+        Directory.CreateDirectory(h.Item.LocalPath);
+        var archive = Path.Combine(h.Item.LocalPath, "fixture.rar");
+        var target = Path.Combine(h.Item.LocalPath, "payload.txt");
+        File.WriteAllBytes(archive, Archive);
+        File.WriteAllText(target, "known-good");
+        h.Free = 8192;
+        long fallbackReservation = 0;
+        var unpacker = new ArchiveUnpacker(new FakeTool((_, output) =>
+        {
+            fallbackReservation = h.Disk.ReservedOn(output);
+            h.Free = 1000;
+            throw new IOException("UnRAR.exe failed (exit 5)");
+        }));
+
+        var error = await Assert.ThrowsAsync<ExtractionSpaceException>(() =>
+            unpacker.ExtractDirectoryAsync(h.Item.LocalPath, default, h.Disk, (_, _, _, _) =>
+                throw new SharpCompress.Common.InvalidFormatException("Synthetic decoder format failure after entry discovery")));
+
+        Assert.Equal(4096, fallbackReservation);
+        Assert.Equal(4096, error.RequiredBytes);
+        Assert.False(h.Disk.CanReserve(h.Item.LocalPath, error.RequiredBytes));
+        Assert.Equal("known-good", File.ReadAllText(target));
+        Assert.Equal(Archive, File.ReadAllBytes(archive));
+        Assert.Equal(0, h.Disk.ReservedOn(h.Item.LocalPath));
+        h.Free = 8192;
+        Assert.True(h.Disk.CanReserve(h.Item.LocalPath, error.RequiredBytes));
+    }
+
+    [Fact]
+    public async Task External_fallback_parks_before_tool_when_known_unpacked_output_no_longer_fits()
+    {
+        await using var h = new Harness();
+        Directory.CreateDirectory(h.Item.LocalPath);
+        var archive = Path.Combine(h.Item.LocalPath, "fixture.rar");
+        File.WriteAllBytes(archive, Archive);
+        h.Free = 8192;
+        var called = false;
+        var unpacker = new ArchiveUnpacker(new FakeTool((_, _) => called = true));
+
+        var error = await Assert.ThrowsAsync<ExtractionSpaceException>(() =>
+            unpacker.ExtractDirectoryAsync(h.Item.LocalPath, default, h.Disk, (_, _, _, _) =>
+            {
+                h.Free = 1000;
+                throw new InvalidOperationException("Synthetic decoder failure after entry discovery");
+            }));
+
+        Assert.Equal(4096, error.RequiredBytes);
+        Assert.False(called);
+        Assert.Equal(Archive, File.ReadAllBytes(archive));
+        Assert.False(File.Exists(Path.Combine(h.Item.LocalPath, "payload.txt")));
+        Assert.Equal(0, h.Disk.ReservedOn(h.Item.LocalPath));
+    }
+
+    [Fact]
     public void External_tool_output_never_commits_executables()
     {
         var root = Path.Combine(Path.GetTempPath(), "gldrive-commit-" + Guid.NewGuid().ToString("N"));

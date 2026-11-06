@@ -164,14 +164,15 @@ internal sealed partial class ArchiveUnpacker
             {
                 // Same SharpCompress failure family the watch-folder extractor falls back on
                 // ("Unknown Rar Header" on scene .r00 sets). The external tool stages its output
-                // and never writes into the release folder directly; its size is unknown up
-                // front, so reserve the archive's own size (scene RARs are stored, not packed).
+                // and never writes into the release folder directly. A decoder may fail after
+                // entry discovery, so retain the known unpacked requirement. The archive size
+                // is only an estimate when discovery failed before sizes were available.
                 Log.Warning("Download extract: SharpCompress failed ({Msg}), trying external tool: {File}",
                     ex.Message, rarFile.Name);
                 ReleaseReservation();
                 if (ContainsReparsePoint(dirPath))
                     throw new IOException("Archive output folder contains a reparse point");
-                Reserve(volumeFiles.Sum(v => v.Length));
+                Reserve(Math.Max(requiredBytes, volumeFiles.Sum(v => v.Length)));
                 if (!externalTool.TryExtract(rarFile.FullName, dirPath, "", overwriteMode: 0, NoProgress, ct))
                     throw;
                 Log.Information("Extraction complete: {File} (external tool)", rarFile.Name);

@@ -12,6 +12,13 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.20.14 — preserve extraction fallback capacity (2026-11-06)
+
+- External archive fallback retains a known unpacked-size reservation and the same
+  disk-space recovery threshold instead of downgrading both to compressed size.
+- Regression tests cover capacity lost before fallback and disk-full recovery after
+  fallback starts. See [release notes](releases/v3.20.14.md).
+
 ## v3.19.5 — accurate retry and race-completion diagnostics (2026-11-02)
 
 - Configuration refreshes distinguish scheduled retry deferrals from genuine mount failures and stop calling existing unavailable sites new servers.
