@@ -363,13 +363,18 @@ public class FtpConnectionPool : IAsyncDisposable
     /// the native recv is still in flight; the caller must defer any teardown).
     /// Never throws.
     /// </summary>
+    // glftpd does not count NOOP as activity: sitec reaped every pooled login 300-330 s
+    // after connect despite a NOOP every 30 s ("421 Timeout (300 seconds)", 250 times on
+    // 2026-11-08/09). PWD is a real command every server counts and has no side effects.
+    internal const string KeepaliveCommand = "PWD";
+
     private static async Task<LiveProbe> ProbeLive(AsyncFtpClient client, CancellationToken ct)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(ProbeDeadline);
         try
         {
-            var reply = await client.Execute("NOOP", cts.Token);
+            var reply = await client.Execute(KeepaliveCommand, cts.Token);
             return reply.Success ? LiveProbe.Healthy : LiveProbe.DeadCompleted;
         }
         catch (OperationCanceledException)

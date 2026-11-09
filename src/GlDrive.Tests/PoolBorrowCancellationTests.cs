@@ -105,7 +105,7 @@ public sealed class PoolBorrowCancellationTests
     [InlineData(false)]
     public async Task Cancellation_around_a_real_control_probe_preserves_the_pool_boundary(bool cancelBeforeBorrow)
     {
-        await using var server = new WithheldNoopServer();
+        await using var server = new WithheldProbeServer();
         var client = new AsyncFtpClient("127.0.0.1", "synthetic", "synthetic", server.Port);
         client.Config.Noop = false;
         client.Config.NoopInterval = 0;
@@ -114,6 +114,7 @@ public sealed class PoolBorrowCancellationTests
         client.Config.ConnectTimeout = 2000;
         client.Config.ReadTimeout = 5000;
         await client.Connect();
+        server.Armed = true;
         var gate = new ObservedGate(initialHeld: 1);
         await using var pool = new FtpConnectionPool(null!, 1, gate);
         Set(pool, "_created", 1);
@@ -130,7 +131,7 @@ public sealed class PoolBorrowCancellationTests
             var borrow = pool.Borrow(caller.Token);
             if (!cancelBeforeBorrow)
             {
-                await server.NoopObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                await server.ProbeObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 caller.Cancel();
             }
             await Assert.ThrowsAnyAsync<OperationCanceledException>(
@@ -144,7 +145,7 @@ public sealed class PoolBorrowCancellationTests
                 .GetValue(pool)!);
             if (cancelBeforeBorrow)
             {
-                Assert.False(server.NoopObserved.Task.IsCompleted);
+                Assert.False(server.ProbeObserved.Task.IsCompleted);
                 Assert.Equal(1, pool.TotalCreated);
                 Assert.Equal(1, gate.Held);
                 Assert.Equal(0, pool.QuarantineSize);
@@ -208,16 +209,17 @@ public sealed class PoolBorrowCancellationTests
         public void TightenTo(int newLimit) { }
     }
 
-    private sealed class WithheldNoopServer : IAsyncDisposable
+    private sealed class WithheldProbeServer : IAsyncDisposable
     {
         private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
         private readonly CancellationTokenSource _stop = new();
         private readonly Task _worker;
-        internal TaskCompletionSource NoopObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ProbeObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource Disconnected { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal int Port => ((IPEndPoint)_listener.LocalEndpoint).Port;
+        internal volatile bool Armed;
 
-        internal WithheldNoopServer()
+        internal WithheldProbeServer()
         {
             _listener.Start();
             _worker = Run();
@@ -234,9 +236,11 @@ public sealed class PoolBorrowCancellationTests
                 await writer.WriteLineAsync("220 Synthetic FTP");
                 while (await reader.ReadLineAsync(_stop.Token) is { } command)
                 {
-                    if (command == "NOOP")
+                    // Hold only the pool's liveness probe, and only after login (the
+                    // client may send the same verb while connecting).
+                    if (Armed && command == FtpConnectionPool.KeepaliveCommand)
                     {
-                        NoopObserved.TrySetResult();
+                        ProbeObserved.TrySetResult();
                         continue; // hold the reply so cancellation interrupts the actual probe
                     }
                     await writer.WriteLineAsync(command.Split(' ')[0] switch

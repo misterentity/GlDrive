@@ -1435,10 +1435,9 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
         // skip silently with INFO instead of starting + failing as WARN.
         if (sectionEligible.Count == 0)
         {
-            Log.Information("Auto-race skipped: no configured server has section [{Section}] for {Release}",
-                category, releaseName);
-            AutoRaceAttempted?.Invoke(category, releaseName,
-                $"Skipped — no server has section [{category}]");
+            var why = CandidatePredicates.DescribeNoEligibleSection(allowed.Count, denials, category);
+            Log.Information("Auto-race skipped: {Reason} for {Release}", why, releaseName);
+            AutoRaceAttempted?.Invoke(category, releaseName, $"Skipped — {why}");
             return;
         }
 

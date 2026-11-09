@@ -95,6 +95,20 @@ internal static class CandidatePredicates
     }
 
     /// <summary>
+    /// Why no participant was left with the announced section. When rules dropped every
+    /// site before the section check ran, the section was never the reason — say so
+    /// (a global *720p* deny was logged as "no configured server has section [tv-hd]").
+    /// </summary>
+    internal static string DescribeNoEligibleSection(
+        int allowedCount, IReadOnlyCollection<string> denials, string category)
+    {
+        if (allowedCount == 0 && denials.Count > 0)
+            return $"denied on every server ({string.Join(", ", denials)})";
+        var denied = denials.Count > 0 ? $" (denied: {string.Join(", ", denials)})" : "";
+        return $"no configured server has section [{category}]{denied}";
+    }
+
+    /// <summary>
     /// May a directory scan fall back onto the dedicated FXP (spread) pool?
     ///
     /// The fallback exists so a saturated main pool can't abandon a scan outright, but

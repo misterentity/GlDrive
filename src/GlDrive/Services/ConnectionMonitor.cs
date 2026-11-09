@@ -122,10 +122,40 @@ public class ConnectionMonitor
         }
     }
 
-    private async Task CheckHealthAsync(CancellationToken ct)
+    private Task CheckHealthAsync(CancellationToken ct) =>
+        ProbeWithOneRetryAsync(ProbeFreshBorrowAsync,
+            first => Log.Debug(first, "ConnectionMonitor[{Server}]: one pooled login failed its probe — re-probing on a fresh borrow before declaring the server lost", _factory.Host),
+            ct);
+
+    private async Task<Exception?> ProbeFreshBorrowAsync(CancellationToken ct)
     {
         await using var conn = await _pool.BorrowFor(FtpBorrowPurpose.ConnectionMonitor, ct);
-        await ProbeConnectionAsync(conn, token => conn.Client.Execute("NOOP", token), ct);
+        try
+        {
+            await ProbeConnectionAsync(conn, token => conn.Client.Execute(FtpConnectionPool.KeepaliveCommand, token), ct);
+            return null;
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            return ex; // the probe poisoned this login; disposing it frees the slot
+        }
+    }
+
+    /// <summary>
+    /// A failed probe proves only that ONE pooled login is dead — servers reap idle
+    /// logins on their own clock. Declare the server lost only when a second, freshly
+    /// borrowed login fails too. Borrow failures propagate as before (no extra login).
+    /// </summary>
+    internal static async Task ProbeWithOneRetryAsync(
+        Func<CancellationToken, Task<Exception?>> probeFreshBorrow, Action<Exception> onFirstFailure,
+        CancellationToken ct)
+    {
+        var first = await probeFreshBorrow(ct);
+        if (first is null) return;
+        onFirstFailure(first);
+        var second = await probeFreshBorrow(ct);
+        if (second is not null)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(second);
     }
 
     internal static async Task ProbeConnectionAsync(
