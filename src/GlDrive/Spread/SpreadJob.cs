@@ -294,7 +294,17 @@ public partial class SpreadJob : IDisposable
     public SpreadMode Mode { get; }
     public SpreadJobState State { get; private set; } = SpreadJobState.Running;
     public DateTime StartedAt { get; } = DateTime.UtcNow;
-    public IReadOnlyDictionary<string, SiteProgress> Sites => _siteProgress;
+    // Readers may keep enumerating while recovery adds a participant. Snapshot
+    // the dictionary structure; existing progress objects retain their identity.
+    public IReadOnlyDictionary<string, SiteProgress> Sites
+    {
+        get { lock (_progressLock) return new Dictionary<string, SiteProgress>(_siteProgress); }
+    }
+
+    private string[] SnapshotSiteIds()
+    {
+        lock (_progressLock) return _siteProgress.Keys.ToArray();
+    }
 
     /// <summary>
     /// Wired by SpreadManager so each transfer respects the global per-server
@@ -329,17 +339,20 @@ public partial class SpreadJob : IDisposable
     {
         get
         {
-            var sites = _siteProgress.Values;
-            if (sites.Count == 0) return 0;
-            int maxTotal = 0;
-            int maxDestOwned = 0;
-            foreach (var s in sites)
+            lock (_progressLock)
             {
-                if (s.FilesTotal > maxTotal) maxTotal = s.FilesTotal;
-                if (!s.IsSource && s.FilesOwned > maxDestOwned) maxDestOwned = s.FilesOwned;
+                var sites = _siteProgress.Values;
+                if (sites.Count == 0) return 0;
+                int maxTotal = 0;
+                int maxDestOwned = 0;
+                foreach (var s in sites)
+                {
+                    if (s.FilesTotal > maxTotal) maxTotal = s.FilesTotal;
+                    if (!s.IsSource && s.FilesOwned > maxDestOwned) maxDestOwned = s.FilesOwned;
+                }
+                if (maxTotal == 0) return 0;
+                return (int)Math.Min(65535L, (long)maxDestOwned * 65535L / maxTotal);
             }
-            if (maxTotal == 0) return 0;
-            return (int)Math.Min(65535L, (long)maxDestOwned * 65535L / maxTotal);
         }
     }
     public IReadOnlyList<ActiveTransferInfo> ActiveTransferList
@@ -416,14 +429,32 @@ public partial class SpreadJob : IDisposable
     }
 
     /// <summary>
-    /// Swap the pool dictionary. Called by SpreadManager after ReinitDeadPools
-    /// replaces an exhausted pool with a fresh one — without this the job would
-    /// hold a reference to the disposed pool for its entire lifetime.
-    /// Must be called before RunAsync begins using pools.
+    /// Publish a refreshed pool snapshot after reinitialization or live recovery.
+    /// A previously unavailable participant may now have a pool for the first time;
+    /// its slot/progress entry must exist before dispatch can see that pool.
     /// </summary>
     public void UpdatePools(Dictionary<string, FtpConnectionPool> pools)
     {
-        _pools = pools;
+        // Validate the whole snapshot before changing either registry. Source
+        // discovery must register a new participant's config before its pool.
+        foreach (var serverId in pools.Keys)
+            if (!_serverConfigs.ContainsKey(serverId))
+                throw new ArgumentException($"No participant configuration for pool '{serverId}'", nameof(pools));
+
+        lock (_progressLock)
+        {
+            foreach (var serverId in pools.Keys)
+                if (!_siteProgress.ContainsKey(serverId))
+                    _siteProgress[serverId] = new SiteProgress
+                    {
+                        ServerId = serverId,
+                        ServerName = _serverConfigs[serverId].Name
+                    };
+
+            // Keep existing objects (including active slots) across removal and
+            // replacement: in-flight transfers still release their original claims.
+            _pools = pools;
+        }
     }
 
     /// <summary>
@@ -465,7 +496,7 @@ public partial class SpreadJob : IDisposable
     // Caller holds _ownershipLock. A source can also receive missing files, so
     // its display role must not exclude it from delivery/outcome accounting.
     private IEnumerable<string> ParticipatingReceiversNoLock() =>
-        (_sitePathsRef?.Keys ?? (IEnumerable<string>)_siteProgress.Keys)
+        (_sitePathsRef?.Keys ?? (IEnumerable<string>)SnapshotSiteIds())
         .Where(id => IsReceivingSite(id) && !IsUnopenedFillOnlyNoLock(id));
 
     internal (int FilesTotal, int FilesDelivered, bool CleanComplete) DeliveryOutcome()
@@ -1225,10 +1256,11 @@ public partial class SpreadJob : IDisposable
                     if (activeCount == 0 && idleSeconds > 60)
                     {
                         int missingFiles;
+                        var sweepSiteIds = SnapshotSiteIds();
                         lock (_ownershipLock)
                         {
                             missingFiles = 0;
-                            foreach (var (serverId, _) in _siteProgress)
+                            foreach (var serverId in sweepSiteIds)
                             {
                                 if (_serverConfigs[serverId].SpreadSite.DownloadOnly) continue;
                                 // An unopened fill-only dest isn't missing work —
@@ -1390,7 +1422,7 @@ public partial class SpreadJob : IDisposable
         }
         catch (Exception ex)
         {
-            SetFailed(ex.Message);
+            SetFailedCore(ex.Message, ex);
         }
         finally
         {
@@ -3410,13 +3442,7 @@ public partial class SpreadJob : IDisposable
                 // get a progress entry from ProcessFiles.
                 lock (_progressLock)
                 {
-                    if (!_siteProgress.ContainsKey(a.serverId))
-                        _siteProgress[a.serverId] = new SiteProgress
-                        {
-                            ServerId = a.serverId,
-                            ServerName = altConfig.Name,
-                            IsSource = true
-                        };
+                    _siteProgress[a.serverId].IsSource = true;
                 }
                 Log.Information("Spread: alternate source {Src} found at {Path} — resuming {Release}",
                     _serverConfigs.TryGetValue(a.serverId, out var sc2) ? sc2.Name : a.serverId, a.path, ReleaseName);
@@ -3851,6 +3877,7 @@ public partial class SpreadJob : IDisposable
     /// </summary>
     private void EvaluateDestCompletion(int finalTotal)
     {
+        var participants = _sitePathsRef?.Keys ?? (IEnumerable<string>)SnapshotSiteIds();
         lock (_ownershipLock)
         {
             // Only actual race participants — _siteProgress holds every pooled
@@ -3859,7 +3886,6 @@ public partial class SpreadJob : IDisposable
             // forever-"pending" destination in DestinationState and sweep
             // missing-counts (observed: SITEC reported pending in races it
             // never joined, 2026-06-08).
-            var participants = _sitePathsRef?.Keys ?? (IEnumerable<string>)_siteProgress.Keys;
             foreach (var serverId in participants)
             {
                 if (!_serverConfigs.TryGetValue(serverId, out var cfg)) continue;
@@ -4003,12 +4029,12 @@ public partial class SpreadJob : IDisposable
     private bool IsJobComplete()
     {
         if (HasPendingReleaseInventory()) return false;
+        var participants = _sitePathsRef?.Keys ?? (IEnumerable<string>)SnapshotSiteIds();
         lock (_ownershipLock)
         {
             if (_fileInfos.Count == 0) return false;
             if (_expectedFileCount > 0 && _fileInfos.Count < _expectedFileCount) return false;
 
-            var participants = _sitePathsRef?.Keys ?? (IEnumerable<string>)_siteProgress.Keys;
             foreach (var serverId in participants)
             {
                 if (!IsReceivingSite(serverId)) continue;
@@ -4368,7 +4394,9 @@ public partial class SpreadJob : IDisposable
     /// <summary>Last failure message (PRD R1/O3). Null if the job didn't fail.</summary>
     public string? LastError { get; private set; }
 
-    private void SetFailed(string message)
+    private void SetFailed(string message) => SetFailedCore(message, null);
+
+    private void SetFailedCore(string message, Exception? exception)
     {
         if (IsExpectedNoWorkOutcome(message))
         {
@@ -4385,7 +4413,7 @@ public partial class SpreadJob : IDisposable
         State = TerminalStateFor(message);
         LastError = message;
         Error?.Invoke(this, message);
-        Log.Warning("Spread job failed: {Release} — {Error}", ReleaseName, message);
+        Log.Warning(exception, "Spread job failed: {Release} — {Error}", ReleaseName, message);
     }
 
     /// <summary>

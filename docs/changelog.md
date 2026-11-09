@@ -12,6 +12,15 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.20.15 — recover spread participants safely (2026-11-09)
+
+- Recovered server pools acquire per-site progress before becoming available to a
+  running spread job, preventing missing-key failures when scheduling transfers.
+- Existing progress survives pool replacement, and newly discovered sources keep
+  their source role. Unexpected race failures retain diagnostic exception context.
+- UI and completion readers snapshot participant collections while recovery adds sites.
+- See [release notes](releases/v3.20.15.md) for the fix and its operational limits.
+
 ## v3.20.14 — preserve extraction fallback capacity (2026-11-06)
 
 - External archive fallback retains a known unpacked-size reservation and the same
