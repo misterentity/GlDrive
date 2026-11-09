@@ -62,6 +62,7 @@ internal static class RaceAnnounceMerge
         }
         // Dated trees require an actual announced/discovered path. Guessing today's
         // directory can silently point a queued or resumed release at the wrong day.
+        if (SectionPath.IsDated(basePath)) return null;
         var leaf = basePath?.TrimEnd('/').Split('/').LastOrDefault();
         if (leaf?.Equals("mp3", StringComparison.OrdinalIgnoreCase) == true || leaf?.Equals("0day", StringComparison.OrdinalIgnoreCase) == true) return null;
         var path = string.IsNullOrWhiteSpace(basePath) ? null : basePath.TrimEnd('/') + "/" + release;

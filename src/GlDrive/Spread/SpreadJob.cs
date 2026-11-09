@@ -3596,7 +3596,7 @@ public partial class SpreadJob : IDisposable
     /// and the mid-race relocation probe.</summary>
     internal static List<string> CandidateBasePaths(ServerConfig config, string section)
     {
-        var paths = config.SpreadSite.Sections.Values.Select(v => v.TrimEnd('/')).ToList();
+        var paths = config.SpreadSite.Sections.Values.Select(v => SectionPath.Expand(v).TrimEnd('/')).ToList();
         if (!string.IsNullOrEmpty(config.Notifications.WatchPath))
         {
             // Watch path categories: /recent/tv-hd, /recent/x265, etc.
@@ -4052,15 +4052,19 @@ public partial class SpreadJob : IDisposable
     /// (Previously this PROBED for the date dir and only used it when it already
     /// existed, otherwise dropping the release into the section ROOT — /mp3/Release —
     /// where glftpd denies MKD, so the first release of each day failed.) Other
-    /// sections return the base unchanged.
+    /// sections return the base unchanged. A path carrying the explicit
+    /// <see cref="SectionPath.DateToken"/> is expanded instead of guessed.
     /// </summary>
-    private static string DatedBase(string sectionBase)
+    internal static string DatedBase(string sectionBase) => DatedBase(sectionBase, DateTime.UtcNow);
+
+    internal static string DatedBase(string sectionBase, DateTime utcNow)
     {
         var trimmed = sectionBase.TrimEnd('/');
+        if (SectionPath.IsDated(trimmed)) return SectionPath.Expand(trimmed, utcNow).TrimEnd('/');
         var sectionName = trimmed.TrimStart('/').Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? "";
         if (sectionName.Equals("mp3", StringComparison.OrdinalIgnoreCase) ||
             sectionName.Equals("0day", StringComparison.OrdinalIgnoreCase))
-            return trimmed + "/" + DateTime.UtcNow.ToString("MMdd");
+            return trimmed + "/" + utcNow.ToString("MMdd");
         return trimmed;
     }
 

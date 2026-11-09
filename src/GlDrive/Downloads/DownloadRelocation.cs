@@ -37,7 +37,8 @@ internal sealed class DownloadRelocation(Func<ServerConfig> server,
         {
             if (string.IsNullOrWhiteSpace(folder) || !folder.StartsWith('/') || folder.Contains('\\') ||
                 folder.Any(char.IsControl) || folder.Split('/').Any(p => p is "." or "..")) return;
-            var path = folder.TrimEnd('/') + "/" + item.ReleaseName;
+            // A dated tree is checked at today's folder only — an exact existence probe, never a listing.
+            var path = GlDrive.Spread.SectionPath.Expand(folder).TrimEnd('/') + "/" + item.ReleaseName;
             if (!path.Equals(item.RemotePath.TrimEnd('/'), StringComparison.Ordinal) && !paths.Contains(path, StringComparer.Ordinal))
                 paths.Add(path);
         }

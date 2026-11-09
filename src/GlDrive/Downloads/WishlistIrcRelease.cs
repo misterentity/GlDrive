@@ -20,6 +20,8 @@ internal static class WishlistIrcRelease
         }
         folder ??= FindSection(server, section);
         folder ??= server.Notifications.WatchPath.TrimEnd('/') + "/" + section;
+        // The announce was received now, so a dated tree's folder is today's.
+        folder = SectionPath.Expand(folder);
         if (!folder.StartsWith('/') || folder.Any(char.IsControl)) return null;
         return folder.TrimEnd('/') + "/" + release;
     }

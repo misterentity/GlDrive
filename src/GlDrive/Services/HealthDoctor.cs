@@ -112,7 +112,7 @@ internal static class HealthDoctor
             {
                 var paths = server.SpreadSite.Sections.Values.Concat(server.SpreadSite.SectionMappings.Where(m => m.Enabled).Select(m =>
                     !string.IsNullOrWhiteSpace(m.Path) ? m.Path : server.SpreadSite.Sections.GetValueOrDefault(m.RemoteSection, "")))
-                    .Where(p => !string.IsNullOrWhiteSpace(p)).Distinct(StringComparer.Ordinal).Take(MaxInputsPerServer + 1).ToArray();
+                    .Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => GlDrive.Spread.SectionPath.Expand(p)).Distinct(StringComparer.Ordinal).Take(MaxInputsPerServer + 1).ToArray();
                 if (paths.Length > MaxInputsPerServer) partial = true;
                 foreach (var path in paths.Take(MaxInputsPerServer))
                 {
