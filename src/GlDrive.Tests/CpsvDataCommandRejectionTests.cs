@@ -115,9 +115,9 @@ public sealed class CpsvDataCommandRejectionTests
         // Anchor on the borrow scope, not a character distance: v3.10.116 added an
         // in-LIST cancellation branch between the LIST and this catch.
         var scopeEnd = job.IndexOf("List<string>? subdirs", scan, StringComparison.Ordinal);
-        var ioCatch = job.IndexOf("catch (IOException", scan, StringComparison.Ordinal);
-        Assert.True(ioCatch > scan && scopeEnd > ioCatch, "the scan's IOException catch left the LIST borrow scope");
-        var line = job.Substring(ioCatch, job.IndexOf('\n', ioCatch) - ioCatch);
+        var failureCatch = job.IndexOf("catch (Exception ex)", scan, StringComparison.Ordinal);
+        Assert.True(failureCatch > scan && scopeEnd > failureCatch, "the scan's failure catch left the LIST borrow scope");
+        var line = job.Substring(failureCatch, job.IndexOf('\n', failureCatch) - failureCatch);
         Assert.Contains("when (!FtpCommandRejection.IsClean(ex))", line);
     }
 
