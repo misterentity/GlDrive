@@ -23,6 +23,15 @@ internal static class FtpListing
                 new FtpReply { Code = ex.CompletionCode ?? "", Message = ex.Message },
                 FtpCommandRejection.LeavesChannelInSync(ex.CompletionCode));
         }
+        catch (NullReferenceException ex) when (!client.IsConnected)
+        {
+            // FluentFTP 53 retries LIST internally after a control disconnect.
+            // With owner-exclusive reconnects disabled and TYPE already cached,
+            // that retry dereferences the closed stream's missing LocalEndPoint.
+            // Preserve the original exception, but surface the transport failure
+            // so the owner discards this lease and recovers through the login gate.
+            throw new IOException($"LIST {path} lost its control connection while opening the data stream", ex);
+        }
         ct.ThrowIfCancellationRequested();
         ValidateReply(LatestListingReply(client.LastReplies, previousReply), path);
         // A fresh positive completion is evidence even for an empty directory.

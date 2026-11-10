@@ -1,6 +1,7 @@
 using GlDrive.Config;
 using GlDrive.Downloads;
 using GlDrive.Spread;
+using System.Globalization;
 using Xunit;
 
 namespace GlDrive.Tests;
@@ -62,5 +63,78 @@ public sealed class SectionPathTests
         Assert.NotNull(path);
         Assert.DoesNotContain("{", path);
         Assert.EndsWith("/" + Release, path);
+    }
+
+    [Fact]
+    public void Explicit_dated_mapping_is_a_discovery_candidate_without_guessing_a_known_source()
+    {
+        var site = MappedSite();
+        var hint = new RaceSourceHint(site.Id, "flac");
+        Assert.Null(RaceAnnounceMerge.ResolveSourcePath(site, hint, Release));
+
+        var paths = SpreadJob.SourceHintCandidatePaths(site, hint, "flac", Release);
+        Assert.Equal(SectionPath.Expand("/dated/{MMDD}") + "/" + Release, paths[0]);
+        Assert.DoesNotContain(paths, path => path.Contains('{'));
+    }
+
+    [Fact]
+    public void Explicit_dated_mapping_is_probed_when_a_source_moves()
+    {
+        var paths = SpreadJob.RelocationCandidatePaths(MappedSite(), "flac", Release, "/gone/" + Release);
+        Assert.Contains(SectionPath.Expand("/dated/{MMDD}") + "/" + Release, paths);
+        Assert.Equal("/recent/flac/" + Release, paths[0]);
+    }
+
+    [Theory]
+    [InlineData(false, ".*")]
+    [InlineData(true, "^Different\\.")]
+    public void Disabled_or_nonmatching_mapping_is_not_added_to_discovery(bool enabled, string trigger)
+    {
+        var site = MappedSite();
+        site.SpreadSite.SectionMappings[0].Enabled = enabled;
+        site.SpreadSite.SectionMappings[0].TriggerRegex = trigger;
+        Assert.DoesNotContain(SpreadJob.SourceHintCandidatePaths(site, null, "flac", Release),
+            path => path.StartsWith("/dated/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Discovery_uses_only_the_first_matching_mapping()
+    {
+        var site = MappedSite();
+        site.SpreadSite.SectionMappings.Add(new()
+        {
+            Enabled = true, IrcSection = "flac", RemoteSection = "FLAC", Path = "/later/{MMDD}"
+        });
+        var paths = SpreadJob.SourceHintCandidatePaths(site, null, "flac", Release);
+        Assert.Contains(SectionPath.Expand("/dated/{MMDD}") + "/" + Release, paths);
+        Assert.DoesNotContain(paths, path => path.StartsWith("/later/", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("ar-SA")]
+    [InlineData("fa-IR")]
+    [InlineData("th-TH")]
+    public void Dated_paths_use_Gregorian_month_and_day_independently_of_user_culture(string culture)
+    {
+        var previous = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo(culture);
+            Assert.Equal("/FLAC/1109", SectionPath.Expand("/FLAC/{MMDD}", Nov9));
+            Assert.Equal("/mp3/1109", SpreadJob.DatedBase("/mp3", Nov9));
+        }
+        finally { CultureInfo.CurrentCulture = previous; }
+    }
+
+    private static ServerConfig MappedSite()
+    {
+        var site = new ServerConfig { Id = "source" };
+        site.Notifications.WatchPath = "/recent";
+        site.SpreadSite.Sections["FLAC"] = "/flat";
+        site.SpreadSite.SectionMappings.Add(new()
+        {
+            Enabled = true, IrcSection = "FLAC", RemoteSection = "FLAC", Path = "/dated/{MMDD}"
+        });
+        return site;
     }
 }

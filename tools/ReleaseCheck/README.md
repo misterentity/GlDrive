@@ -64,7 +64,21 @@ The full harness also runs 800 commands on one borrowed FTPS session, crossing F
 
 It also retains one Windows directory handle across multi-page enumeration, mounted rename, and delete/create operations. Restarting enumeration on that same handle must reflect each change; this catches stale handle snapshots that ordinary `Directory.GetFiles` calls on fresh handles miss.
 
-It also rejects two NOOP probes through the disposable fixture: the monitor must signal connection loss, reject the first reconnect probe, and wait for a positive reply before reporting recovery. Shutdown must not emit another connection-loss event.
+The monitor checks warm every native session before arming PWD faults, so login's own
+PWD cannot consume a test response. A single `421` idle-reap reply must be followed by
+a positive `257` from a distinct pooled session without a connection-loss/recovery event
+or another login. A second scenario rejects four PWD probes: both initial attempts and
+both attempts during the first reconnect. It must report exactly one outage, preserve
+the failed reconnect, and report recovery only after the fifth, positive reply. Both
+scenarios verify session/lease accounting after shutdown. Append `--monitor-only` to
+run these cases after certificate and initialization checks.
+
+The listing-disconnect check closes the fixture's control and data connections during
+the first native listing send. This reproduces FluentFTP 53's disconnected-listing retry
+null-reference fault. The operation must fail as `IOException` with the original fault
+retained, discard its native session, and recover the actual listing with exactly one
+fresh login. An interrupted listing must never count as an empty inventory. Append
+`--listing-disconnect-only` to run this case after certificate and initialization checks.
 
 Cached and live search are exercised against actual FTPS directories: decorated completion markers are excluded while real release names containing COMPLETE or a bracketed group prefix remain searchable. A root search also verifies that a reused session's non-root working directory cannot redirect a configured `/` listing.
 

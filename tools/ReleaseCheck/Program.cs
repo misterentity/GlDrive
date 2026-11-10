@@ -97,6 +97,19 @@ if (args.Contains("--initialization-only", StringComparer.Ordinal))
     Console.WriteLine("PASS: native pool initialization verification complete");
     return;
 }
+if (args.Contains("--monitor-only", StringComparer.Ordinal))
+{
+    await CheckConnectionMonitor(factory, root, deadline.Token);
+    Console.WriteLine("PASS: native connection monitor verification complete");
+    return;
+}
+if (args.Contains("--listing-disconnect-only", StringComparer.Ordinal))
+{
+    await CheckListingDisconnect(factory, root, deadline.Token);
+    Console.WriteLine("PASS: native listing disconnect verification complete");
+    return;
+}
+await CheckListingDisconnect(factory, root, deadline.Token);
 await using var pool = new FtpConnectionPool(factory, 2);
 await pool.Initialize(deadline.Token);
 var ftp = new FtpOperations(pool);
@@ -386,32 +399,7 @@ try
 }
 finally { host.Unmount(); }
 
-// A real FTP rejection is returned normally by FluentFTP.Execute, not thrown.
-// Exercise the monitor loop and recovery against the native FTPS fixture.
-var lost = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-var restored = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-var lossCount = 0;
-var monitor = new ConnectionMonitor(pool, factory, new PoolConfig
-{
-    KeepaliveIntervalSeconds = 1,
-    ReconnectInitialDelaySeconds = 1,
-    ReconnectMaxDelaySeconds = 2
-});
-monitor.ConnectionLost += () => { Interlocked.Increment(ref lossCount); lost.TrySetResult(); };
-monitor.ConnectionRestored += () => restored.TrySetResult();
-File.WriteAllText(Path.Combine(root, "noop-replies"), "");
-File.WriteAllText(Path.Combine(root, "reject-noop-once"), "2");
-monitor.Start();
-try
-{
-    await lost.Task.WaitAsync(TimeSpan.FromSeconds(10));
-    Check(lossCount == 1, "monitor rejects a real negative NOOP reply");
-    await restored.Task.WaitAsync(TimeSpan.FromSeconds(10));
-    Check(File.ReadAllLines(Path.Combine(root, "noop-replies")).SequenceEqual(new[] { "500", "500", "200" }),
-        "monitor waits for a positive NOOP after a rejected reconnect probe");
-}
-finally { await monitor.StopAsync(); }
-Check(lossCount == 1, "monitor shutdown does not report a false connection loss");
+await CheckConnectionMonitor(factory, root, deadline.Token);
 var loginBudget = GuardedFtpLogin.GetLoginBudget(FtpLoginAccount.From(config.Connection));
 Check(loginBudget.Enabled && loginBudget.Limit == 100 && loginBudget.AttemptsInWindow > 7 &&
       loginBudget.AttemptsInWindow < 100 && loginBudget.PersistenceHealthy &&
@@ -423,6 +411,126 @@ static void Check(bool success, string step)
 {
     if (!success) throw new InvalidOperationException("FAIL: " + step);
     Console.WriteLine("PASS: " + step);
+}
+
+static async Task CheckListingDisconnect(FtpClientFactory factory, string fixtureRoot, CancellationToken ct)
+{
+    await using var listingPool = new FtpConnectionPool(factory, 1);
+    await listingPool.Initialize(ct);
+    var operations = new FtpOperations(listingPool);
+    File.WriteAllText(Path.Combine(fixtureRoot, "data", "disconnect-survivor.txt"), "retained payload");
+    await operations.ListDirectory("/", ct); // complete login and prime the normal native listing path
+    var authenticationLog = Path.Combine(fixtureRoot, "authentication-attempts");
+    var loginCount = File.ReadAllLines(authenticationLog).Length;
+    var marker = Path.Combine(fixtureRoot, "disconnect-listing-once");
+    File.WriteAllText(marker, "armed");
+    Exception? failure = null;
+    try { await operations.ListDirectory("/", ct); }
+    catch (Exception ex) { failure = ex; }
+    finally { File.Delete(marker); }
+    File.WriteAllText(Path.Combine(fixtureRoot, "listing-disconnect-observed.txt"),
+        failure?.ToString() ?? "no failure");
+    Check(File.Exists(Path.Combine(fixtureRoot, "listing-disconnected")),
+        "native listing fixture interrupts data and control channels during the listing");
+    Check(failure is IOException, "disconnected native listing fails as IO instead of null-reference or empty inventory");
+    Check(failure?.InnerException is NullReferenceException,
+        "native listing failure retains the original disconnected FluentFTP null-reference evidence");
+    Check(listingPool.ActiveCount == 0 && listingPool.ActiveBorrows.Count == 0 && listingPool.TotalCreated == 0,
+        "failed native listing discards its borrowed session and releases accounting");
+    var recovered = await operations.ListDirectory("/", ct);
+    Check(recovered.Any(item => item.Name == "disconnect-survivor.txt"),
+        "listing recovers actual remote inventory through a fresh native session");
+    Check(File.ReadAllLines(authenticationLog).Length == loginCount + 1 && listingPool.TotalCreated == 1
+        && listingPool.ActiveCount == 0 && listingPool.ActiveBorrows.Count == 0,
+        "listing recovery uses exactly one new login and leaves no borrowed lease");
+}
+
+static async Task CheckConnectionMonitor(FtpClientFactory factory, string fixtureRoot, CancellationToken ct)
+{
+    // Every native session is connected BEFORE fault injection. This separates a
+    // monitor PWD from the same verb FluentFTP sends as part of authentication.
+    foreach (var rejectedProbes in new[] { 1, 4 })
+    {
+        var sessionCount = rejectedProbes + 1;
+        await using var monitorPool = new FtpConnectionPool(factory, sessionCount);
+        var held = new List<PooledConnection>();
+        try
+        {
+            for (var i = 0; i < sessionCount; i++) held.Add(await monitorPool.Borrow(ct));
+        }
+        finally { foreach (var connection in held) await connection.DisposeAsync(); }
+        var authenticationLog = Path.Combine(fixtureRoot, "authentication-attempts");
+        var loginCount = File.ReadAllLines(authenticationLog).Length;
+        var replyLog = Path.Combine(fixtureRoot, "monitor-pwd-replies");
+        var armed = Path.Combine(fixtureRoot, "monitor-pwd-enabled");
+        File.WriteAllText(replyLog, "");
+        File.WriteAllText(Path.Combine(fixtureRoot, "monitor-pwd-failures"), rejectedProbes.ToString());
+        File.WriteAllText(Path.Combine(fixtureRoot, "monitor-pwd-failure-code"), rejectedProbes == 1 ? "421" : "500");
+        File.WriteAllText(armed, "ready");
+        var firstCycle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lost = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var restored = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lossCount = 0;
+        var restoredCount = 0;
+        var failurePhases = new List<bool>();
+        var repliesAtRestore = 0;
+        var monitor = new ConnectionMonitor(monitorPool, factory, new PoolConfig
+        {
+            KeepaliveIntervalSeconds = 1,
+            ReconnectInitialDelaySeconds = 1,
+            ReconnectMaxDelaySeconds = 2
+        });
+        // The existing periodic callback observes a completed health-check cycle.
+        typeof(ConnectionMonitor).GetField("_healthCheckCount", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(monitor, 9);
+        monitor.PeriodicMetricsCallback = () => firstCycle.TrySetResult();
+        monitor.ConnectionLost += () => { Interlocked.Increment(ref lossCount); lost.TrySetResult(); };
+        monitor.ConnectionRestored += () =>
+        {
+            Interlocked.Increment(ref restoredCount);
+            repliesAtRestore = File.ReadAllLines(replyLog).Length;
+            restored.TrySetResult();
+        };
+        monitor.FailureObserved += (_, reconnect, _) => failurePhases.Add(reconnect);
+        monitor.Start();
+        try
+        {
+            if (rejectedProbes == 1)
+                await firstCycle.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+            else
+            {
+                await lost.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+                await restored.Task.WaitAsync(TimeSpan.FromSeconds(15), ct);
+            }
+        }
+        finally
+        {
+            await monitor.StopAsync();
+            File.Delete(armed);
+        }
+        var replies = File.ReadAllLines(replyLog).Select(line => line.Split('|')).ToArray();
+        var codes = replies.Select(parts => parts[1]).ToArray();
+        Console.WriteLine($"Native monitor PWD trace ({rejectedProbes} rejections): {string.Join(",", codes)}; distinct sessions={replies.Select(parts => parts[0]).Distinct().Count()}");
+        if (rejectedProbes == 1)
+        {
+            Check(codes.SequenceEqual(new[] { "421", "257" }) && replies.Select(parts => parts[0]).Distinct().Count() == 2,
+                "monitor retries a reaped native session on a distinct healthy pooled login");
+            Check(lossCount == 0 && restoredCount == 0 && failurePhases.Count == 0,
+                "one idle-reaped login causes no false connection-loss or reconnect event");
+        }
+        else
+        {
+            Check(codes.SequenceEqual(new[] { "500", "500", "500", "500", "257" }),
+                "monitor rejects both initial PWD probes and both first reconnect probes");
+            Check(lossCount == 1 && restoredCount == 1 && repliesAtRestore == 5
+                && failurePhases.SequenceEqual(new[] { false, true }),
+                "monitor reports one real outage and waits for positive PWD before recovery");
+        }
+        Check(File.ReadAllLines(authenticationLog).Length == loginCount,
+            "native monitor re-probes available sessions without spending another login");
+        Check(monitorPool.TotalCreated == 1 && monitorPool.ActiveCount == 0 && monitorPool.ActiveBorrows.Count == 0,
+            "native monitor retires failed sessions without a lease or shutdown accounting leak");
+    }
 }
 
 static async Task CheckManualEnumerationAndDownloads(FtpClientFactory factory, string fixtureRoot,

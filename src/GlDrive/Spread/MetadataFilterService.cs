@@ -22,11 +22,15 @@ public class MetadataFilterService : IDisposable
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(15);
 
     public MetadataFilterService(AppConfig appConfig, SitebotFactStore? sitebotFacts = null)
+        : this(appConfig, MetadataClients.Omdb, MetadataClients.TvMaze, sitebotFacts) { }
+
+    internal MetadataFilterService(AppConfig appConfig, OmdbClient omdb, TvMazeClient tvMaze,
+        SitebotFactStore? sitebotFacts = null)
     {
         _appConfig = appConfig;
         _sitebotFacts = sitebotFacts;
-        _omdb = MetadataClients.Omdb;
-        _tvMaze = MetadataClients.TvMaze;
+        _omdb = omdb;
+        _tvMaze = tvMaze;
     }
 
     public readonly record struct FilterVerdict(bool Allowed, string Reason);
@@ -39,6 +43,9 @@ public class MetadataFilterService : IDisposable
     {
         if (!config.Enabled)
             return new FilterVerdict(true, "filter disabled");
+        if (config.MinImdbRating <= 0 && config.MinVotes <= 0 && !config.SkipEndedShows &&
+            SplitList(config.AllowGenres).Count == 0 && SplitList(config.DenyGenres).Count == 0)
+            return new FilterVerdict(true, "no metadata thresholds configured");
 
         // Only a trusted, exact server/release fact may replace the HTTP lookup,
         // and only when it contains all fields needed by the active filters.
@@ -47,16 +54,22 @@ public class MetadataFilterService : IDisposable
             EvaluateSitebotMetadata(config, metadata, releaseName) is { } hinted)
             return hinted;
 
-        var cacheKey = $"{parsed.Title}|{parsed.Year}|{parsed.Season}";
+        // Unknown/music/software releases must not be guessed to be movies. An
+        // exact trusted sitebot fact above may still supply authoritative metadata.
+        var mediaClass = SceneNameParser.ClassifyCategory(releaseName);
+        if (mediaClass == null) return new FilterVerdict(true, "not classified as video (fail-open)");
+
+        var cacheKey = $"{mediaClass}|{parsed.Title}|{parsed.Year}|{parsed.Season}";
         if (_cache.TryGetValue(cacheKey, out var cached) && cached.IsFresh)
             return ApplyThresholds(config, cached.Metadata);
 
+        ct.ThrowIfCancellationRequested();
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, config.LookupTimeoutSeconds)));
 
         try
         {
-            var meta = parsed.Season is > 0 || parsed.Episode is > 0
+            var meta = mediaClass == "TV"
                 ? await LookupTv(parsed, cts.Token)
                 : await LookupMovie(parsed, cts.Token);
 
@@ -68,6 +81,10 @@ public class MetadataFilterService : IDisposable
 
             _cache[cacheKey] = new CacheEntry(meta, DateTime.UtcNow);
             return ApplyThresholds(config, meta);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (OperationCanceledException)
         {

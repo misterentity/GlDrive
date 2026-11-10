@@ -45,7 +45,7 @@ public partial class SpreadJob
             release.Contains('\\') || release.Any(char.IsControl)) return [];
         var preferred = hint == null ? null : RaceAnnounceMerge.ResolveSourcePath(config, hint, release);
         return (preferred == null ? Enumerable.Empty<string>() : new[] { preferred })
-            .Concat(CandidateBasePaths(config, hint?.Section ?? section).Select(p => p.TrimEnd('/') + "/" + release))
+            .Concat(CandidateBasePaths(config, hint?.Section ?? section, release).Select(p => p.TrimEnd('/') + "/" + release))
             .Distinct(StringComparer.Ordinal).Take(100).ToArray();
     }
 

@@ -2075,8 +2075,11 @@ public partial class SpreadJob : IDisposable
                 conn.Poison($"scan LIST {currentPath}: data-channel deadline");
                 throw new ScanListingFailedException(currentPath, ex);
             }
-            catch (IOException ex) when (!FtpCommandRejection.IsClean(ex))
+            catch (Exception ex) when (!FtpCommandRejection.IsClean(ex))
             {
+                // A library/protocol failure can leave native state or replies
+                // unsafe even when it is not an IOException. Never return that
+                // session to the pool; clean final rejections remain reusable.
                 conn.Poison($"scan LIST {currentPath}: {ex.GetType().Name}");
                 throw new ScanListingFailedException(currentPath, ex);
             }
@@ -3594,9 +3597,18 @@ public partial class SpreadJob : IDisposable
     /// its configured section dirs plus the notification watch path joined with the
     /// normalised section name (e.g. /recent/tv-hd). Shared by the Phase-1 source probe
     /// and the mid-race relocation probe.</summary>
-    internal static List<string> CandidateBasePaths(ServerConfig config, string section)
+    internal static List<string> CandidateBasePaths(ServerConfig config, string section, string? releaseName = null)
     {
-        var paths = config.SpreadSite.Sections.Values.Select(v => SectionPath.Expand(v).TrimEnd('/')).ToList();
+        var paths = new List<string>();
+        // A dated mapping cannot establish a known source without an existence
+        // check. Keep its explicit path as an advisory probe candidate even when
+        // that path is absent from Sections; otherwise the source can never be found.
+        if (releaseName != null && SectionMapper.Resolve(config.SpreadSite, section, releaseName) is { Mapping: { } mapping }
+            && !string.IsNullOrWhiteSpace(mapping.Path) && mapping.Path.StartsWith('/')
+            && !mapping.Path.Contains('\\') && !mapping.Path.Any(char.IsControl)
+            && !mapping.Path.Split('/').Any(part => part is "." or ".."))
+            paths.Add(SectionPath.Expand(mapping.Path).TrimEnd('/'));
+        paths.AddRange(config.SpreadSite.Sections.Values.Select(v => SectionPath.Expand(v).TrimEnd('/')));
         if (!string.IsNullOrEmpty(config.Notifications.WatchPath))
         {
             // Watch path categories: /recent/tv-hd, /recent/x265, etc.
@@ -3619,7 +3631,7 @@ public partial class SpreadJob : IDisposable
         var watch = config.Notifications.WatchPath?.TrimEnd('/');
         bool UnderWatch(string p) => !string.IsNullOrEmpty(watch) &&
             p.StartsWith(watch + "/", StringComparison.Ordinal);
-        return CandidateBasePaths(config, section)
+        return CandidateBasePaths(config, section, releaseName)
             .Select(b => b + "/" + releaseName)
             .Where(p => !string.Equals(p, current, StringComparison.Ordinal))
             .OrderBy(p => UnderWatch(p) ? 0 : 1) // stable: section order kept within each group
@@ -4064,7 +4076,7 @@ public partial class SpreadJob : IDisposable
         var sectionName = trimmed.TrimStart('/').Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? "";
         if (sectionName.Equals("mp3", StringComparison.OrdinalIgnoreCase) ||
             sectionName.Equals("0day", StringComparison.OrdinalIgnoreCase))
-            return trimmed + "/" + utcNow.ToString("MMdd");
+            return trimmed + "/" + utcNow.ToString("MMdd", System.Globalization.CultureInfo.InvariantCulture);
         return trimmed;
     }
 

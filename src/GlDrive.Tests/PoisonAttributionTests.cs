@@ -172,8 +172,8 @@ public class PoisonAttributionTests
         var inner = listScope.IndexOf("catch (OperationCanceledException ex)", StringComparison.Ordinal);
         Assert.True(inner >= 0, "the in-LIST cancellation branch is gone");
         Assert.Contains("throw new ScanListingFailedException(currentPath, ex)", listScope[inner..]);
-        // The unclean IOException branch wraps too.
-        var io = listScope.IndexOf("catch (IOException ex) when (!FtpCommandRejection.IsClean(ex))", StringComparison.Ordinal);
+        // Every unclean post-borrow failure wraps, including library exceptions.
+        var io = listScope.IndexOf("catch (Exception ex) when (!FtpCommandRejection.IsClean(ex))", StringComparison.Ordinal);
         Assert.True(io >= 0);
         Assert.Contains("throw new ScanListingFailedException(currentPath, ex)", listScope[io..]);
         // Both poison with a reason before throwing.

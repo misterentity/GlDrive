@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from pyftpdlib.authorizers import DummyAuthorizer
-from pyftpdlib.handlers import TLS_FTPHandler
+from pyftpdlib.handlers import TLS_FTPHandler, TLS_DTPHandler
 from pyftpdlib.servers import FTPServer
 
 root = pathlib.Path(tempfile.mkdtemp(prefix="gldrive-ftps-check-"))
@@ -31,8 +31,24 @@ blocked_port = blocked_data.getsockname()[1]
 pem = root / "fixture.pem"
 pem.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
                                  serialization.NoEncryption()) + cert.public_bytes(serialization.Encoding.PEM))
+
+class ReleaseCheckDataHandler(TLS_DTPHandler):
+    def send(self, data):
+        if getattr(self.cmd_channel, "_drop_listing", False) and self._ssl_established:
+            self.cmd_channel._drop_listing = False
+            (root / "disconnect-listing-once").unlink()
+            (root / "listing-disconnected").write_text("control and data closed during listing read")
+            # Skip TLS close-notify on both fixture sockets: this models an
+            # interrupted transfer, rather than a clean empty directory reply.
+            self._error = True
+            self.cmd_channel._error = True
+            self.cmd_channel.close()
+            return 0
+        return super().send(data)
+
 class ReleaseCheckHandler(TLS_FTPHandler):
     _reject_retr_completion = False
+    dtp_handler = ReleaseCheckDataHandler
     proto_cmds = TLS_FTPHandler.proto_cmds.copy()
     proto_cmds["SITE SEARCH"] = {"perm": None, "auth": True, "arg": None,
                                 "help": "Syntax: SITE SEARCH <query>"}
@@ -65,10 +81,12 @@ class ReleaseCheckHandler(TLS_FTPHandler):
 
     def ftp_LIST(self, path):
         if not self.reject_search_listing(path):
+            self._drop_listing = (root / "disconnect-listing-once").exists()
             return super().ftp_LIST(path)
 
     def ftp_MLSD(self, path):
         if not self.reject_search_listing(path):
+            self._drop_listing = (root / "disconnect-listing-once").exists()
             return super().ftp_MLSD(path)
 
     def ftp_USER(self, line):
@@ -101,6 +119,24 @@ class ReleaseCheckHandler(TLS_FTPHandler):
             self.respond(f"227 Entering passive mode (127,0,0,1,{blocked_port // 256},{blocked_port % 256}).")
         else:
             super().ftp_PASV(line)
+
+    def ftp_PWD(self, line):
+        # Armed only after every test session has finished its login (which also
+        # sends PWD). These markers belong solely to this disposable fixture.
+        if not (root / "monitor-pwd-enabled").exists():
+            return super().ftp_PWD(line)
+        reject = root / "monitor-pwd-failures"
+        remaining = int(reject.read_text()) if reject.exists() else 0
+        code = (root / "monitor-pwd-failure-code").read_text().strip() if remaining else "257"
+        if remaining:
+            reject.write_text(str(remaining - 1))
+        with (root / "monitor-pwd-replies").open("a") as replies:
+            replies.write(f"{self.remote_port}|{code}\n")
+        if code == "257":
+            return super().ftp_PWD(line)
+        self.respond(code + " Fixture control probe rejection")
+        if code == "421":
+            self.close_when_done()
 
     def ftp_SIZE(self, file):
         if (root / "short-retr-size").exists() and pathlib.Path(file).name == "short.bin":

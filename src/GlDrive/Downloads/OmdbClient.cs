@@ -13,6 +13,10 @@ public class OmdbClient : IDisposable
     private readonly HttpClient _http;
     private readonly HttpClient _freeHttp;
     private readonly Func<string> _apiKeySource;
+    private readonly Func<DateTimeOffset> _utcNow;
+    private readonly ProviderState _paidState = new();
+    private readonly ProviderState _freeState = new();
+    internal static readonly TimeSpan OutageRetryDelay = TimeSpan.FromMinutes(1);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -22,11 +26,16 @@ public class OmdbClient : IDisposable
     public OmdbClient(string apiKey) : this(() => apiKey) { }
 
     /// <summary>Reads the key on every request, so one long-lived client follows Settings changes.</summary>
-    internal OmdbClient(Func<string> apiKey)
+    internal OmdbClient(Func<string> apiKey, HttpMessageHandler? handler = null,
+        Func<DateTimeOffset>? utcNow = null)
     {
         _apiKeySource = apiKey;
-        _http = new HttpClient { BaseAddress = new Uri("https://www.omdbapi.com/"), Timeout = TimeSpan.FromSeconds(15) };
-        _freeHttp = new HttpClient { BaseAddress = new Uri("https://api.imdbapi.dev/"), Timeout = TimeSpan.FromSeconds(15) };
+        _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
+        _http = handler == null ? new HttpClient() : new HttpClient(handler, disposeHandler: false);
+        _freeHttp = handler == null ? new HttpClient() : new HttpClient(handler, disposeHandler: false);
+        _http.BaseAddress = new Uri("https://www.omdbapi.com/");
+        _freeHttp.BaseAddress = new Uri("https://api.imdbapi.dev/");
+        _http.Timeout = _freeHttp.Timeout = TimeSpan.FromSeconds(15);
     }
 
     private string ApiKey => _apiKeySource() ?? "";
@@ -40,73 +49,105 @@ public class OmdbClient : IDisposable
 
     public async Task<OmdbMovie[]> Search(string query, CancellationToken ct = default)
     {
-        if (HasApiKey)
+        ct.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(query)) return [];
+        var key = ApiKey;
+        if (!string.IsNullOrEmpty(key))
         {
-            try
-            {
-                var url = $"?apikey={ApiKey}&s={Uri.EscapeDataString(query)}&type=movie";
-                var response = await _http.GetStringAsync(url, ct);
-                var result = JsonSerializer.Deserialize<OmdbSearchResponse>(response, JsonOptions);
-                if (result?.Search is { Length: > 0 }) return result.Search;
-            }
-            catch (Exception ex)
-            {
-                Log.Warning(ex, "OMDB search failed, falling back to imdbapi.dev: {Query}", query);
-            }
+            var url = $"?apikey={Uri.EscapeDataString(key)}&s={Uri.EscapeDataString(query)}&type=movie";
+            var result = await Request<OmdbSearchResponse>(_http, _paidState, url, "OMDB", key, ct);
+            if (result?.Search is { Length: > 0 }) return result.Search;
         }
 
         // Fallback: imdbapi.dev /search/titles?query=...
-        try
-        {
-            var url = $"search/titles?query={Uri.EscapeDataString(query)}";
-            var response = await _freeHttp.GetStringAsync(url, ct);
-            var result = JsonSerializer.Deserialize<ImdbApiDevSearchResponse>(response, JsonOptions);
-            if (result?.Titles == null) return [];
-            return Array.ConvertAll(result.Titles, ImdbApiDevMapper.ToOmdbMovie);
-        }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "imdbapi.dev search failed for: {Query}", query);
-            return [];
-        }
+        var free = await Request<ImdbApiDevSearchResponse>(_freeHttp, _freeState,
+            $"search/titles?query={Uri.EscapeDataString(query)}", "imdbapi.dev", "", ct);
+        return free?.Titles == null ? [] : Array.ConvertAll(free.Titles, ImdbApiDevMapper.ToOmdbMovie);
     }
 
     public async Task<OmdbMovie?> GetById(string imdbId, CancellationToken ct = default)
     {
-        if (HasApiKey)
+        ct.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(imdbId)) return null;
+        var key = ApiKey;
+        if (!string.IsNullOrEmpty(key))
         {
-            try
-            {
-                var url = $"?apikey={ApiKey}&i={Uri.EscapeDataString(imdbId)}";
-                var response = await _http.GetStringAsync(url, ct);
-                var movie = JsonSerializer.Deserialize<OmdbMovie>(response, JsonOptions);
-                if (movie != null && !string.IsNullOrEmpty(movie.Title)) return movie;
-            }
-            catch (Exception ex)
-            {
-                Log.Warning(ex, "OMDB get by id failed, falling back to imdbapi.dev: {Id}", imdbId);
-            }
+            var url = $"?apikey={Uri.EscapeDataString(key)}&i={Uri.EscapeDataString(imdbId)}";
+            var movie = await Request<OmdbMovie>(_http, _paidState, url, "OMDB", key, ct);
+            if (movie != null && !string.IsNullOrEmpty(movie.Title)) return movie;
         }
 
         // Fallback: imdbapi.dev /titles/{id}
+        var title = await Request<ImdbApiDevTitle>(_freeHttp, _freeState,
+            $"titles/{Uri.EscapeDataString(imdbId)}", "imdbapi.dev", "", ct);
+        return title != null ? ImdbApiDevMapper.ToOmdbMovie(title) : null;
+    }
+
+    private async Task<T?> Request<T>(HttpClient http, ProviderState state, string url,
+        string provider, string credentialIdentity, CancellationToken ct) where T : class
+    {
+        // Search and detail share one gate per provider. Concurrent callers cannot
+        // all probe an outage, and a changed paid key can recover immediately.
+        await state.Gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var url = $"titles/{Uri.EscapeDataString(imdbId)}";
-            var response = await _freeHttp.GetStringAsync(url, ct);
-            var title = JsonSerializer.Deserialize<ImdbApiDevTitle>(response, JsonOptions);
-            return title != null ? ImdbApiDevMapper.ToOmdbMovie(title) : null;
+            ct.ThrowIfCancellationRequested();
+            if (state.CredentialIdentity != credentialIdentity)
+            {
+                state.CredentialIdentity = credentialIdentity;
+                state.NextAttempt = DateTimeOffset.MinValue;
+                state.Failures = 0;
+            }
+            if (_utcNow() < state.NextAttempt) return null;
+            try
+            {
+                using var response = await http.GetAsync(url, ct).ConfigureAwait(false);
+                if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                {
+                    state.Failures = 0;
+                    state.NextAttempt = DateTimeOffset.MinValue;
+                    return null;
+                }
+                response.EnsureSuccessStatusCode();
+                var content = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                var result = JsonSerializer.Deserialize<T>(content, JsonOptions);
+                ct.ThrowIfCancellationRequested();
+                state.Failures = 0;
+                state.NextAttempt = DateTimeOffset.MinValue;
+                return result;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // Caller cancellation is not provider failure and must not launch
+                // the fallback or stop the next caller from using this provider.
+                throw;
+            }
+            catch (Exception ex)
+            {
+                state.NextAttempt = _utcNow() + OutageRetryDelay;
+                if (++state.Failures == 1)
+                    Log.Warning(ex, "Metadata provider {Provider} unavailable; retrying after {Delay}", provider, OutageRetryDelay);
+                else
+                    Log.Warning("Metadata provider {Provider} remains unavailable ({FailureType}); retrying after {Delay}",
+                        provider, ex.GetType().Name, OutageRetryDelay);
+                return null;
+            }
         }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "imdbapi.dev get by id failed for: {Id}", imdbId);
-            return null;
-        }
+        finally { state.Gate.Release(); }
     }
 
     public void Dispose()
     {
         _http.Dispose();
         _freeHttp.Dispose();
+    }
+
+    private sealed class ProviderState
+    {
+        public SemaphoreSlim Gate { get; } = new(1, 1);
+        public string? CredentialIdentity { get; set; }
+        public DateTimeOffset NextAttempt { get; set; }
+        public int Failures { get; set; }
     }
 }
 

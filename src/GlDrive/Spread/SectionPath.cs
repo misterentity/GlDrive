@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace GlDrive.Spread;
 
 /// <summary>
@@ -15,7 +17,7 @@ internal static class SectionPath
 
     /// <summary>Substitute today's (UTC) date folder for the token; other paths pass through.</summary>
     public static string Expand(string path, DateTime utcNow) =>
-        IsDated(path) ? path.Replace(DateToken, utcNow.ToString("MMdd"), StringComparison.OrdinalIgnoreCase) : path;
+        IsDated(path) ? path.Replace(DateToken, utcNow.ToString("MMdd", CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase) : path;
 
     public static string Expand(string path) => Expand(path, DateTime.UtcNow);
 }

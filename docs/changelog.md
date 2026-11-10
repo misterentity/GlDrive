@@ -12,6 +12,26 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.20.18 — listing recovery and metadata resilience (2026-11-10)
+
+- Disconnected standard listings retain their transport cause and discard unsafe
+  scan sessions, including failures outside the IOException family.
+- Source discovery and relocation probe matching dated mapping paths, with
+  culture-independent UTC date folders.
+- Metadata filters skip non-video releases and empty thresholds. Provider failures
+  receive a shared one-minute retry delay; caller cancellation does not trigger fallback.
+- Native smoke covers PWD stale-session recovery, genuine outages/reconnects and
+  real GnuTLS listing disconnect/recovery. See [release notes](releases/v3.20.18.md).
+
+## v3.20.17 — idle-login probes (2026-11-09)
+
+- Use PWD keepalives and verify a second pooled session before declaring an outage.
+- Distinguish races denied by every site's rules from missing section mappings.
+
+## v3.20.16 — explicit dated section folders (2026-11-09)
+
+- Support `{MMDD}` in configured section paths. See [release notes](releases/v3.20.16.md).
+
 ## v3.20.15 — recover spread participants safely (2026-11-09)
 
 - Recovered server pools acquire per-site progress before becoming available to a

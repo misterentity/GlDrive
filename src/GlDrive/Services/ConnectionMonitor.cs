@@ -15,7 +15,7 @@ public class ConnectionMonitor
     private bool _wasConnected = true;
     private int _healthCheckCount;
 
-    // Managed timeout for the keepalive NOOP. Kept under FluentFTP.GnuTLS's 15s
+    // Managed timeout for the keepalive probe. Kept under FluentFTP.GnuTLS's 15s
     // CommTimeout floor so the health check yields promptly without cancelling the
     // native recv (see ProbeConnectionAsync for why cancelling it is fatal).
     private static readonly TimeSpan NoopTimeout = TimeSpan.FromSeconds(10);
@@ -74,7 +74,7 @@ public class ConnectionMonitor
             {
                 await Task.Delay(TimeSpan.FromSeconds(_config.KeepaliveIntervalSeconds), ct);
 
-                // Health check via NOOP
+                // Health check through an exclusively borrowed session.
                 Exception? failure = null;
                 var checkStarted = DateTime.UtcNow;
                 try
@@ -173,13 +173,13 @@ public class ConnectionMonitor
             var reply = await noop.WaitAsync(timeout ?? NoopTimeout, ct);
             ct.ThrowIfCancellationRequested();
             // Execute returns negative FTP replies normally; awaiting it is not proof
-            // of health. NOOP requires a positive completion (not a 1xx/3xx reply).
+            // of health. The probe requires a positive completion (not a 1xx/3xx reply).
             if (reply.Code?.StartsWith("2", StringComparison.Ordinal) != true)
                 throw new FtpCommandException(reply);
         }
         catch
         {
-            conn.Poison("NOOP probe failed");
+            conn.Poison("keepalive probe failed");
             if (noop != null)
                 _ = noop.ContinueWith(t => { _ = t.Exception; }, TaskScheduler.Default);
             throw;
