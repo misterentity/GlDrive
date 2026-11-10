@@ -25,14 +25,25 @@ verified-against:
 
 `FxpTransfer` (`Spread/FxpTransfer.cs:26`), mode chosen by `FxpModeDetector` (`Spread/FxpModeDetector.cs`). Four modes:
 
-| Mode | Source | Dest |
+| Mode | Source data setup | Destination data setup |
 |---|---|---|
-| PASV-PASV | PASV | PASV |
-| CPSV-PASV | CPSV | PASV |
-| PASV-CPSV | PASV | CPSV |
+| PASV-PASV | PORT, SSCN ON (TLS client) | PASV, SSCN OFF (TLS server) |
+| CPSV-PASV | PORT, SSCN ON (TLS client) | PASV, SSCN OFF (TLS server) |
+| PASV-CPSV | PASV, SSCN OFF (TLS server) | PORT, SSCN ON (TLS client) |
 | Relay | CPSV | CPSV (piped through local memory) |
 
-`SSCN ON` is sent before PASV/PORT for secure FXP data channels. `SendTypeI` verifies the `TYPE I` response before CPSV/PASV to prevent a BNC response-queue desync. When both sites support CPSV, `CpsvPasv` is tried first (`Spread/FxpTransfer.cs:152`).
+Mode names describe each site's CPSV capability; they are not the literal command
+sequence. `SSCN` selects the TLS role independently of TCP active/passive mode.
+Ordinary direct transfers explicitly assign opposite roles before PASV/PORT and
+refuse failed role negotiation before starting file transfer. `SendTypeI` logs an
+unexpected `TYPE I` reply as a BNC response-queue diagnostic. For two CPSV sites,
+an eligible direct probe has the source listen with CPSV as TLS client and the
+destination connect with PORT/SSCN OFF as TLS server. A clean direct-probe rejection
+can fall back to encrypted local relay; unsafe control state cannot.
+After completed ordinary direct transfers or clean duplicates, the active session
+returns to SSCN OFF for later local downloads. A failed or uncertain role reset
+quarantines the session while preserving the completed file result. Other failed
+transfers quarantine any session that may still carry the client role.
 
 **Relay route memory:** Relay's per-file direct-transfer probe used to poison both connections on every *successful* transfer. `_relayOnlyRoutes` remembers a failed direct route for `RelayRouteRetry` = 6h (`Spread/FxpTransfer.cs:41`) so it isn't re-probed each file.
 

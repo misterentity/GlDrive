@@ -38,6 +38,8 @@ internal sealed class DirectFxpCompletionException(string message) : IOException
 public class FxpTransfer
 {
     private readonly Action<GlDrive.AiAgent.FileTransferEvent> _recordTransfer;
+    private readonly HashSet<AsyncFtpClient> _sscnClientRoles = [];
+    private static readonly TimeSpan SscnResetTimeout = TimeSpan.FromSeconds(3);
 
     public FxpTransfer() : this(evt => App.TelemetryRecorder?.Record(GlDrive.AiAgent.TelemetryStream.Transfers, evt)) { }
 
@@ -401,6 +403,13 @@ public class FxpTransfer
             ok = false;
         }
 
+        // SSCN persists on the control session. A later local SFV download may
+        // borrow this spread login and expects the remote endpoint to be a TLS
+        // server. Restore only after synchronized success (including an early
+        // dupe); on every other exit quarantine without sending more commands.
+        await RestoreSscnRole(source, ok && !_sourceOwesRetrReply, ct);
+        await RestoreSscnRole(dest, ok && !_sourceOwesRetrReply, ct);
+
         totalSw.Stop();
 
         try
@@ -439,23 +448,6 @@ public class FxpTransfer
         var reply = await client.Execute("TYPE I", ct);
         if (!reply.Success)
             Log.Warning("TYPE I unexpected response on {Label}: {Code} {Msg}", label, reply.Code, reply.Message);
-    }
-
-    /// <summary>
-    /// Enable Secure Server-to-Server Connection Negotiation (SSCN ON) for secure FXP.
-    /// Required by most glftpd sites — without this, the data channel between servers
-    /// is unencrypted and will be rejected by sites requiring secure transfers.
-    /// SSCN ON tells the server to negotiate TLS on the FXP data channel.
-    /// Only needs to be sent once per session but is safe to re-send.
-    /// </summary>
-    private static async Task EnableSscn(AsyncFtpClient client, string label, CancellationToken ct)
-    {
-        var reply = await client.Execute("SSCN ON", ct);
-        if (reply.Code == "200")
-            Log.Debug("SSCN ON enabled on {Label}", label);
-        else
-            Log.Debug("SSCN ON response on {Label}: {Code} {Msg} (may not be supported)",
-                label, reply.Code, reply.Message);
     }
 
     // PRET (PRE-Transfer) support cache. drftpd and some ioFTPD configs require
@@ -515,9 +507,10 @@ public class FxpTransfer
         await SendTypeI(src, "source", ct);
         await SendTypeI(dst, "dest", ct);
 
-        // Enable secure FXP (SSCN) — passive side accepts TLS, active side initiates
-        await EnableSscn(dst, "dest-passive", ct);
-        await EnableSscn(src, "source-active", ct);
+        // SSCN selects the TLS role, not encryption itself: ON on both endpoints
+        // creates two TLS clients. Reset the passive side's persistent session role.
+        await SetSscn(dst, on: false, "dest-passive", FxpFaultSide.Dest, ct);
+        await SetSscn(src, on: true, "source-active", FxpFaultSide.Source, ct);
 
         // PRET STOR before PASV on the passive side (drftpd / some ioFTPD configs
         // need this to pre-route the listener; glftpd ignores with 500/cached).
@@ -576,8 +569,8 @@ public class FxpTransfer
 
         await SendTypeI(src, "source", ct);
         await SendTypeI(dst, "dest", ct);
-        await EnableSscn(dst, "dest-passive", ct);
-        await EnableSscn(src, "source-active", ct);
+        await SetSscn(dst, on: false, "dest-passive", FxpFaultSide.Dest, ct);
+        await SetSscn(src, on: true, "source-active", FxpFaultSide.Source, ct);
 
         // PRET STOR on dest before PASV (drftpd-style passive-route hint).
         await BestEffortPret(dst, "STOR", dstPath, ct);
@@ -649,7 +642,7 @@ public class FxpTransfer
         await SendTypeI(src, "source", ct);
         await SendTypeI(dst, "dest", ct);
         // Pooled sessions may carry SSCN ON from earlier transfers; exactly one side may be TLS client.
-        await SetSscn(dst, on: false, "dest-active", ct);
+        await SetSscn(dst, on: false, "dest-active", FxpFaultSide.Dest, ct);
 
         await BestEffortPret(src, "RETR", srcPath, ct);
 
@@ -727,10 +720,60 @@ public class FxpTransfer
     private static void Observe(Task task) =>
         _ = task.ContinueWith(t => { _ = t.Exception; }, TaskScheduler.Default);
 
-    private static async Task SetSscn(AsyncFtpClient client, bool on, string label, CancellationToken ct)
+    private async Task SetSscn(AsyncFtpClient client, bool on, string label, FxpFaultSide side, CancellationToken ct)
     {
+        // Mark before sending: a lost reply cannot prove SSCN ON was rejected.
+        if (on) _sscnClientRoles.Add(client);
         var reply = await client.Execute(on ? "SSCN ON" : "SSCN OFF", ct);
         Log.Debug("SSCN {Mode} on {Label}: {Code} {Msg}", on ? "ON" : "OFF", label, reply.Code, reply.Message);
+        // Without confirmation a reused session's role is unknown. Do not start
+        // a transfer with two TLS clients/servers or downgrade data protection.
+        if (reply.Code?.StartsWith("2", StringComparison.Ordinal) != true)
+        {
+            var message = $"SSCN {(on ? "ON" : "OFF")} failed on {label}: {reply.Code} {reply.Message}";
+            // Relay may reuse sessions only after a final rejection. A closing
+            // 421 or unexpected preliminary reply cannot authorize more commands.
+            if (!FtpCommandRejection.LeavesChannelInSync(reply.Code))
+                throw new DirectFxpCompletionException(message);
+            throw Fault(side, message);
+        }
+        if (!on) _sscnClientRoles.Remove(client);
+    }
+
+    private async Task RestoreSscnRole(PooledConnection connection, bool synchronizedSuccess, CancellationToken ct)
+    {
+        var client = connection.Client;
+        if (!_sscnClientRoles.Contains(client)) return;
+        if (!synchronizedSuccess || connection.Poisoned || ct.IsCancellationRequested)
+        {
+            connection.Poison("FXP ended with SSCN client role still active");
+            return;
+        }
+
+        try
+        {
+            // Never cancel a native receive. A managed timeout quarantines the
+            // session, observes its pending read, and issues no further commands.
+            var reset = client.Execute("SSCN OFF", CancellationToken.None);
+            if (await Task.WhenAny(reset, Task.Delay(SscnResetTimeout, ct)) != reset)
+            {
+                Observe(reset);
+                connection.Poison("SSCN OFF reset timed out after completed FXP");
+                return;
+            }
+            var reply = await reset;
+            if (reply.Code?.StartsWith("2", StringComparison.Ordinal) == true)
+            {
+                _sscnClientRoles.Remove(client);
+                return;
+            }
+            connection.Poison($"SSCN OFF reset rejected after completed FXP: {reply.Code}");
+        }
+        catch (Exception ex)
+        {
+            // The file was delivered; cleanup failure spends the login, not a retry.
+            connection.Poison($"SSCN OFF reset failed after completed FXP: {ex.GetType().Name}");
+        }
     }
 
     private async Task<bool> ExecutePasvCpsv(
@@ -744,8 +787,8 @@ public class FxpTransfer
 
         await SendTypeI(src, "source", ct);
         await SendTypeI(dst, "dest", ct);
-        await EnableSscn(src, "source-passive", ct);
-        await EnableSscn(dst, "dest-active", ct);
+        await SetSscn(src, on: false, "source-passive", FxpFaultSide.Source, ct);
+        await SetSscn(dst, on: true, "dest-active", FxpFaultSide.Dest, ct);
 
         // PRET RETR on src before PASV (drftpd routes the listener to a slave
         // that actually holds the file).

@@ -283,12 +283,21 @@ Four FXP modes, picked by `FxpModeDetector` from the pair's CPSV capability:
 
 | Source CPSV | Dest CPSV | Mode | Notes |
 |---|---|---|---|
-| no | no | **PASV-PASV** | Plain FXP, both routable |
-| yes | no | **CPSV-PASV** | Source behind BNC — source does `SSCN ON` + `CPSV`, dest does `PORT` |
-| no | yes | **PASV-CPSV** | Dest behind BNC — dest does `SSCN ON` + `CPSV`, source does `PORT` |
+| no | no | **PASV-PASV** | Dest uses PASV/SSCN OFF (TLS server); source uses PORT/SSCN ON (TLS client) |
+| yes | no | **CPSV-PASV** | Dest uses PASV/SSCN OFF; source uses PORT/SSCN ON |
+| no | yes | **PASV-CPSV** | Source uses PASV/SSCN OFF; dest uses PORT/SSCN ON |
 | yes | yes | **Relay** | Both behind BNC — `CpsvDataHelper` opens both data channels locally, double-buffered memory copy (256 KB buffers) pipes bytes between them |
 
-`FxpTransfer.SendTypeI()` is called before every transfer as a BNC-queue-desync canary; `EnableSscn()` sends `SSCN ON` to negotiate encrypted FXP control data.
+`FxpTransfer.SendTypeI()` logs unexpected TYPE I replies as a BNC-queue diagnostic.
+`SetSscn()` selects the data-channel TLS role: ON means TLS client, OFF means TLS
+server. Direct transfers assign opposite roles explicitly on reused sessions;
+SSCN is not an encryption toggle. Failed ordinary role negotiation stops before
+file transfer. An eligible Relay-mode direct probe instead uses source CPSV as
+TLS client and destination PORT/SSCN OFF as TLS server; only a clean rejection
+can lead to encrypted relay on those sessions.
+Completed ordinary transfers restore SSCN OFF before a pooled session can serve a
+local download. Unsafe or unsuccessful cleanup quarantines that session without
+turning a delivered file into a failed transfer.
 
 Scoring (0 → 65535) happens in `SpreadScorer.Score`:
 

@@ -12,8 +12,11 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
-## v3.20.18 — listing recovery and metadata resilience (2026-11-10)
+## v3.20.18 — FTP recovery, TLS roles and metadata resilience (2026-11-10)
 
+- Direct FXP assigns opposite TLS roles and resets reused sessions, preventing
+  both peers from attempting the TLS client handshake. Role negotiation requires
+  confirmation; unsafe replies cannot authorize further data commands or fallback.
 - Disconnected standard listings retain their transport cause and discard unsafe
   scan sessions, including failures outside the IOException family.
 - Source discovery and relocation probe matching dated mapping paths, with

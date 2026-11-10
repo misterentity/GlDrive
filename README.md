@@ -62,7 +62,7 @@ glftpd sites have quirks that off-the-shelf FTP clients handle badly. Each of th
 - **Bounded partial-race recovery**: payload progress resets the idle timeout; an absolute cap defaults to 90 minutes. Stopped partials can resume up to three times behind fresh races. A ten-hour deadline triggers guarded cleanup of incomplete directories GlDrive created, with cleanup notices and persisted history.
 - **Zipscript-aware completion**, alternate-source failover, mid-race source relocation (`/incoming` → `/recent`), and `-MISSING` placeholder / leading-dot metadata filtering
 - **Scoring 0–65535**: SFV first, NFO after 15 s, then size + route speed (rolling 10-sample history) + site priority + ownership − failure penalty
-- **PRET** support cached per host; `TYPE I` canary, `SSCN ON`, deferred `MKD`, completion sweep
+- **PRET** support cached per host; `TYPE I` canary, explicit opposite TLS roles via `SSCN ON/OFF`, deferred `MKD`, completion sweep
 - **Dupe-as-success**: `553` replies matching cbftp's dupe patterns count toward completion
 - **Skiplist cascade** (per-site then global, glob or bounded regex, first match wins), section availability pre-filter, and race history (max 500) with the full skiplist trace
 - Auto-race on IRC announce or `/recent` detection
