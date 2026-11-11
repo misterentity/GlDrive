@@ -5,6 +5,7 @@ using System.Text;
 using FluentFTP;
 using GlDrive.Config;
 using GlDrive.Downloads;
+using GlDrive.Downloads.Segmented;
 using GlDrive.Ftp;
 using Xunit;
 
@@ -215,6 +216,113 @@ public sealed class DownloadSourceCompletionTests
     }
 
     [Fact]
+    public async Task Verified_growth_during_transfer_parks_without_retries_and_survives_restart()
+    {
+        await using var h = new Harness();
+        h.Source.Files["movie.mkv"] = Bytes("pre");
+        h.Source.DownloadFault = files =>
+        {
+            h.Source.Files["movie.mkv"] = Bytes("prefix");
+            var file = Assert.Single(files);
+            return new RemoteFileSizeExceededException(file.RemotePath, file.Size);
+        };
+        await h.RunAsync();
+        AssertWaiting(h);
+        Assert.Contains("grew during download", h.Item.ErrorMessage);
+        Assert.Equal(2, h.Source.PlanCalls);
+        Assert.Empty(h.Source.Fetches);
+        h.Source.DownloadFault = null;
+        await h.ReloadAsync();
+        Assert.True(h.Item.SourceCompletionPending);
+        await h.RunAsync();
+        Assert.Equal(DownloadStatus.Completed, h.Item.Status);
+        Assert.Equal(0, h.Item.RetryCount);
+        Assert.Equal(Bytes("prefix"), File.ReadAllBytes(Path.Combine(h.Item.LocalPath, "movie.mkv")));
+    }
+
+    [Theory]
+    [InlineData("unchanged")]
+    [InlineData("smaller")]
+    [InlineData("missing")]
+    [InlineData("sibling")]
+    [InlineData("case")]
+    [InlineData("probe-failure")]
+    [InlineData("unknown-size")]
+    public async Task Unproven_growth_retains_bounded_failure_handling(string scenario)
+    {
+        await using var h = new Harness();
+        h.Source.Files["movie.mkv"] = Bytes("pre");
+        h.Source.DownloadFault = files =>
+        {
+            var file = Assert.Single(files);
+            if (scenario == "smaller") h.Source.Files["movie.mkv"] = Bytes("p");
+            if (scenario == "missing") h.Source.Files.Remove("movie.mkv");
+            if (scenario == "sibling") h.Source.Files["other.mkv"] = Bytes("prefix");
+            if (scenario == "case")
+            {
+                h.Source.Files.Remove("movie.mkv");
+                h.Source.Files["MOVIE.mkv"] = Bytes("prefix");
+            }
+            if (scenario == "probe-failure") h.Source.AfterPlan = () => throw new IOException("probe unavailable");
+            return new RemoteFileSizeExceededException(file.RemotePath, scenario == "unknown-size" ? -1 : file.Size);
+        };
+        await h.RunAsync();
+        Assert.Equal(DownloadStatus.Failed, h.Item.Status);
+        Assert.False(h.Item.SourceCompletionPending);
+        Assert.Contains("more bytes", h.Item.ErrorMessage);
+        Assert.Null(h.Item.CompletedAt);
+    }
+
+    [Fact]
+    public async Task Single_file_growth_waits_without_a_directory_manifest_hold()
+    {
+        await using var h = new Harness();
+        h.Source.IsDirectory = false;
+        h.Source.Files["disc.rar"] = Bytes("pre");
+        h.Source.DownloadFault = files =>
+        {
+            h.Source.Files["disc.rar"] = Bytes("prefix");
+            var file = Assert.Single(files);
+            return new RemoteFileSizeExceededException(file.RemotePath, file.Size);
+        };
+        await h.RunAsync();
+        AssertWaiting(h, sourceEvidence: false);
+        h.Source.DownloadFault = null;
+        await h.ReloadAsync();
+        Assert.False(h.Item.SourceCompletionPending);
+        Assert.StartsWith("Waiting for release completion:", h.Item.ErrorMessage);
+        await h.RunAsync();
+        Assert.Equal(DownloadStatus.Completed, h.Item.Status);
+        Assert.Equal(0, h.Item.RetryCount);
+        Assert.Equal(Bytes("prefix"), File.ReadAllBytes(Path.Combine(h.Item.LocalPath, "disc.rar")));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Cancellation_during_growth_probe_is_not_replaced_by_waiting_or_failure(bool ioFailure)
+    {
+        await using var h = new Harness();
+        h.Source.Files["movie.mkv"] = Bytes("pre");
+        h.Source.DownloadFault = files =>
+        {
+            var file = Assert.Single(files);
+            h.Source.Files["movie.mkv"] = Bytes("prefix");
+            h.Source.AfterPlan = () =>
+            {
+                h.Manager.Cancel(h.Item.Id);
+                if (ioFailure) throw new IOException("cancelled probe");
+            };
+            return new RemoteFileSizeExceededException(file.RemotePath, file.Size);
+        };
+        await h.RunAsync();
+        Assert.Equal(DownloadStatus.Cancelled, h.Item.Status);
+        Assert.Null(h.Item.ErrorMessage);
+        Assert.False(h.Item.SourceCompletionPending);
+        Assert.Empty(h.Source.Fetches);
+    }
+
+    [Fact]
     public async Task Newly_arrived_payload_and_marker_are_detected_before_completion()
     {
         await using var h = new Harness();
@@ -383,17 +491,21 @@ public sealed class DownloadSourceCompletionTests
         public Dictionary<string, int> Fetches { get; } = new(StringComparer.Ordinal);
         public string[] Markers { get; set; } = [];
         public bool HasCompletionMarker { get; set; }
+        public bool IsDirectory { get; set; } = true;
         public Action? AfterDownload { get; set; }
         public Action? AfterPlan { get; set; }
+        public Func<IReadOnlyList<FtpDownloadFile>, Exception?>? DownloadFault { get; set; }
+        public int PlanCalls { get; private set; }
         public int ManifestRefreshes { get; private set; }
         public bool IsInCooldown => false;
 
         public Task<DownloadTreePlan> PlanAsync(string remotePath, string localPath, CancellationToken ct)
         {
+            PlanCalls++;
             var files = Files.Select(f => new FtpDownloadFile(remotePath + "/" + f.Key,
                 Path.Combine(localPath, f.Key.Replace('/', Path.DirectorySeparatorChar)), f.Value.LongLength)).ToArray();
             var dirs = files.Select(f => Path.GetDirectoryName(f.LocalPath)!).Append(localPath).Distinct().ToArray();
-            var plan = new DownloadTreePlan(true, files, dirs)
+            var plan = new DownloadTreePlan(IsDirectory, files, dirs)
             {
                 IncompleteReasons = Markers,
                 HasCompletionMarker = HasCompletionMarker
@@ -404,6 +516,7 @@ public sealed class DownloadSourceCompletionTests
 
         public async Task DownloadAsync(IReadOnlyList<FtpDownloadFile> files, IProgress<DownloadProgress>? progress, CancellationToken ct)
         {
+            if (DownloadFault?.Invoke(files) is { } error) throw error;
             foreach (var file in files)
             {
                 ct.ThrowIfCancellationRequested();

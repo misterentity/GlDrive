@@ -12,6 +12,16 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.20.19 — growing download sources (2026-11-11)
+
+- Stop retrying an obsolete FTP file size on every download lane. Refresh the
+  inventory and wait without consuming retries only when the same source file
+  is confirmed larger; unproven growth retains bounded failure handling.
+- Drain peer readers and clear unconfirmed staging before replanning, preserving
+  cancellation, native session quarantine and final-file completion checks.
+- Add regression and native FTPS coverage for growth, persistence, recovery and
+  peer cleanup. See [release notes](releases/v3.20.19.md).
+
 ## v3.20.18 — FTP recovery, TLS roles and metadata resilience (2026-11-10)
 
 - Direct FXP assigns opposite TLS roles and resets reused sessions, preventing

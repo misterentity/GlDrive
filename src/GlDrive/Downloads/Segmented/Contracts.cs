@@ -25,6 +25,18 @@ public readonly record struct ByteRange(long Start, long End)
 /// </summary>
 public sealed record TransferFile(string Key, string LocalPath, long Size, string? Validator = null);
 
+/// <summary>
+/// FTP delivered bytes beyond the immutable download plan. Repeating that plan cannot
+/// confirm this file; the caller must refresh its source inventory before retrying.
+/// This alone does not prove growth (a server may have ignored REST).
+/// </summary>
+internal sealed class RemoteFileSizeExceededException(string remotePath, long expectedSize)
+    : IOException("server sent more bytes than the file size")
+{
+    public string RemotePath { get; } = remotePath;
+    public long ExpectedSize { get; } = expectedSize;
+}
+
 public enum LaneState { Connecting, Active, Idle, Yielded, Failed, Done }
 
 /// <summary>Live per-lane numbers for the downloads list ("2 streams · Ethernet ×1, race login ×1").</summary>

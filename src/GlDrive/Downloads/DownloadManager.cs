@@ -998,6 +998,41 @@ public class DownloadManager : IDisposable
             // question is settled — let the next absence start its backoff from the beginning.
             lock (_volumeWaitLock) _volumeWaitAttempts.Remove(item.Id);
 
+            if (ex is Segmented.RemoteFileSizeExceededException { ExpectedSize: >= 0 } oversized && _source != null)
+            {
+                try
+                {
+                    var refreshed = await _source.PlanAsync(item.RemotePath, item.LocalPath, itemCts.Token);
+                    itemCts.Token.ThrowIfCancellationRequested();
+                    // Extra bytes alone may mean a broken REST implementation. Only a
+                    // fresh larger listing of this exact FTP path proves source growth.
+                    if (refreshed.Files.Any(file =>
+                        string.Equals(file.RemotePath, oversized.RemotePath, StringComparison.Ordinal) &&
+                        file.Size > oversized.ExpectedSize))
+                    {
+                        ParkForSource(item, "source file grew during download", itemCts.Token,
+                            sourceEvidence: refreshed.IsDirectory);
+                        return;
+                    }
+                }
+                catch (Exception) when (itemCts.IsCancellationRequested || item.Status is DownloadStatus.Cancelled or DownloadStatus.Paused)
+                {
+                    RecordCancellation(item, globalCt.IsCancellationRequested);
+                    return;
+                }
+                catch (OperationCanceledException)
+                {
+                    RecordCancellation(item, globalCt.IsCancellationRequested);
+                    return;
+                }
+                catch (Exception probeError)
+                {
+                    // Unavailable evidence must not turn a protocol failure into an
+                    // indefinite wait. Retain the original error and bounded retry path.
+                    Log.Debug(probeError, "Could not verify source growth after oversized download");
+                }
+            }
+
             if (Relocation != null && DownloadRelocation.IsMissingRemotePath(ex))
             {
                 try

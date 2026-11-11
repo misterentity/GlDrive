@@ -127,6 +127,12 @@ if (args.Contains("--search-only", StringComparer.Ordinal))
     Console.WriteLine("PASS: local native FTPS search verification complete");
     return;
 }
+if (args.Contains("--growing-download-only", StringComparer.Ordinal))
+{
+    await CheckGrowingDownloadRecovery(factory, root, remoteRoot, deadline.Token);
+    Console.WriteLine("PASS: native growing-download verification complete");
+    return;
+}
 await CheckSourceRelocation(factory, root, remoteRoot, deadline.Token);
 if (args.Contains("--relocation-only", StringComparer.Ordinal))
 {
@@ -135,6 +141,7 @@ if (args.Contains("--relocation-only", StringComparer.Ordinal))
 }
 await NativeNukePollCheck.Run(factory, root, deadline.Token);
 await CheckManualEnumerationAndDownloads(factory, root, remoteRoot, deadline.Token);
+await CheckGrowingDownloadRecovery(factory, root, remoteRoot, deadline.Token);
 await CheckIncompleteDownloadRecovery(factory, root, remoteRoot, deadline.Token);
 await CheckIncompleteRaceRecovery(factory, root, remoteRoot, deadline.Token);
 if (args.Contains("--downloads-only", StringComparer.Ordinal))
@@ -752,6 +759,136 @@ static async Task CheckSearchRecovery(FtpClientFactory factory, string fixtureRo
         File.Delete(responsePath);
         File.Delete(denialPath);
     }
+}
+
+static async Task CheckGrowingDownloadRecovery(FtpClientFactory factory, string fixtureRoot,
+    string remoteRoot, CancellationToken ct)
+{
+    await using var growthPool = new FtpConnectionPool(factory, 1);
+    await growthPool.Initialize(ct);
+    var ftp = new FtpOperations(growthPool);
+    var localRoot = Path.Combine(fixtureRoot, "growing-download-check", remoteRoot.TrimStart('/'));
+    Directory.CreateDirectory(localRoot);
+    var growthMarker = Path.Combine(fixtureRoot, "grow-retr-once");
+    var retrLog = Path.Combine(fixtureRoot, "retr-attempts");
+    var initial = new byte[8192];
+    new Random(3114).NextBytes(initial);
+    var expected = initial.Concat(Enumerable.Range(0, 2048).Select(i => (byte)i)).ToArray();
+    var downloadConfig = new DownloadConfig
+    {
+        MaxConcurrentDownloads = 1, MaxRetries = 0, AutoExtract = false, VerifySfv = false
+    };
+    typeof(DownloadNetworkServices).GetField("_usage", BindingFlags.Static | BindingFlags.NonPublic)!
+        .SetValue(null, new NetworkUsageStore(Path.Combine(localRoot, "network-usage.json")));
+    var downloader = new StreamingDownloader(growthPool, "growth-fixture", downloadConfig, 0, null);
+    int RetrCount(string name) => File.Exists(retrLog)
+        ? File.ReadAllLines(retrLog).Count(line => line == name) : 0;
+
+    try
+    {
+        const string directName = "growing-direct.bin";
+        var directRemote = remoteRoot + "/" + directName;
+        File.WriteAllBytes(Path.Combine(fixtureRoot, "data", directRemote.TrimStart('/')), initial);
+        var directDestination = Path.Combine(localRoot, directName);
+        File.WriteAllText(growthMarker, directName);
+        var directAttempts = RetrCount(directName);
+        IOException? growth = null;
+        try
+        {
+            await downloader.DownloadFiles(
+                [new FtpDownloadFile(directRemote, directDestination, initial.Length)], null, ct);
+        }
+        catch (IOException ex) { growth = ex; }
+        Check(growth is RemoteFileSizeExceededException changed
+            && changed.RemotePath == directRemote && changed.ExpectedSize == initial.Length,
+            "native RETR growth carries the changed remote path and stale planned size");
+        Check(RetrCount(directName) == directAttempts + 1 && !File.Exists(directDestination),
+            "native RETR growth stops the obsolete plan after one transfer without publishing a truncated file");
+        await downloader.DownloadFiles(
+            [new FtpDownloadFile(directRemote, directDestination, expected.Length)], null, ct);
+        Check(File.ReadAllBytes(directDestination).SequenceEqual(expected),
+            "a fresh native size plan recovers every byte after a growing-file transfer");
+
+        const string managedName = "growing-managed.bin";
+        var managedRelease = remoteRoot + "/Growing.Release-GRP";
+        Directory.CreateDirectory(Path.Combine(fixtureRoot, "data", managedRelease.TrimStart('/')));
+        var managedRemote = managedRelease + "/" + managedName;
+        File.WriteAllBytes(Path.Combine(fixtureRoot, "data", managedRemote.TrimStart('/')), initial);
+        var managedDestination = Path.Combine(localRoot, "managed-release");
+        var destination = Path.Combine(managedDestination, managedName);
+        var storePath = Path.Combine(localRoot, "queue.json");
+        var item = new DownloadItem
+        {
+            RemotePath = managedRelease, LocalPath = managedDestination,
+            ReleaseName = managedName, ServerId = "growth-fixture"
+        };
+        var managedAttempts = RetrCount(managedName);
+        using (var manager = new DownloadManager(DownloadStore.ForFile(storePath), ftp, downloader, downloadConfig))
+        {
+            var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var sentinelDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            manager.DownloadStatusChanged += changed =>
+            {
+                if (changed.Id == item.Id && changed.Status == DownloadStatus.Queued
+                    && changed.SourceCompletionPending)
+                    parked.TrySetResult();
+                if (changed.Id == item.Id && changed.Status == DownloadStatus.Failed)
+                    parked.TrySetException(new Exception(changed.ErrorMessage));
+                if (changed.ReleaseName == "growth-sentinel" && changed.Status == DownloadStatus.Completed)
+                    sentinelDone.TrySetResult();
+            };
+            File.WriteAllText(growthMarker, managedName);
+            manager.Enqueue(item);
+            manager.Start();
+            try
+            {
+                await parked.Task.WaitAsync(TimeSpan.FromSeconds(15), ct);
+                Check(item.RetryCount == 0 && item.CompletedAt == null && !File.Exists(destination)
+                    && RetrCount(managedName) == managedAttempts + 1,
+                    "native manager confirms remote growth and parks without consuming a zero retry budget");
+                var sentinelRemote = remoteRoot + "/growth-sentinel.bin";
+                var sentinelDestination = Path.Combine(localRoot, "sentinel.bin");
+                File.WriteAllBytes(Path.Combine(fixtureRoot, "data", sentinelRemote.TrimStart('/')), [3, 2, 1]);
+                Check(manager.Enqueue(new DownloadItem
+                {
+                    ReleaseName = "growth-sentinel", RemotePath = sentinelRemote, LocalPath = sentinelDestination
+                }), "a growth-waiting download permits unrelated queued work");
+                await sentinelDone.Task.WaitAsync(TimeSpan.FromSeconds(15), ct);
+                Check(File.ReadAllBytes(sentinelDestination).SequenceEqual(new byte[] { 3, 2, 1 }),
+                    "native growth recovery releases the sole download slot and FTP pool connection");
+            }
+            finally { await manager.StopAsync(); }
+        }
+
+        var restartedStore = DownloadStore.ForFile(storePath);
+        restartedStore.Load();
+        var restored = restartedStore.GetById(item.Id)!;
+        Check(restored.Status == DownloadStatus.Queued && restored.SourceCompletionPending
+            && restored.RetryCount == 0,
+            "confirmed native growth waiting persists across a download-manager restart");
+        using (var manager = new DownloadManager(restartedStore, ftp, downloader, downloadConfig))
+        {
+            var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            manager.DownloadStatusChanged += changed =>
+            {
+                if (changed.Id != restored.Id) return;
+                if (changed.Status == DownloadStatus.Completed) completed.TrySetResult();
+                if (changed.Status == DownloadStatus.Failed)
+                    completed.TrySetException(new Exception(changed.ErrorMessage));
+            };
+            manager.Start();
+            try
+            {
+                await completed.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
+                Check(restored.RetryCount == 0 && restored.ErrorMessage == null
+                    && File.ReadAllBytes(destination).SequenceEqual(expected)
+                    && !File.Exists(destination + StagedFile.StagingSuffix),
+                    "restarted native manager automatically replans and publishes the complete grown payload");
+            }
+            finally { await manager.StopAsync(); }
+        }
+    }
+    finally { File.Delete(growthMarker); }
 }
 
 static async Task CheckIncompleteDownloadRecovery(FtpClientFactory factory, string fixtureRoot,

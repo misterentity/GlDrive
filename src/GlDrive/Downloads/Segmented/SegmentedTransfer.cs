@@ -52,13 +52,18 @@ public sealed class SegmentedTransfer
         public required RangeScheduler Scheduler;
         public required CancellationTokenSource Cts;
         public readonly int[] Committed;
+        public readonly bool[] ReplanFiles;
         public readonly List<LaneRun> Lanes = new();
         public readonly object Gate = new();
         public ExceptionDispatchInfo? LastLaneError;
         public ExceptionDispatchInfo? Fatal;
         private TaskCompletionSource _workSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Run(int fileCount) => Committed = new int[fileCount];
+        public Run(int fileCount)
+        {
+            Committed = new int[fileCount];
+            ReplanFiles = new bool[fileCount];
+        }
 
         public void PulseWork()
         {
@@ -122,15 +127,35 @@ public sealed class SegmentedTransfer
         }
         finally
         {
-            if (run != null)
+            try
             {
-                run.Cts.Cancel();
-                await Task.WhenAll(laneTasks);
-                run.Cts.Dispose();
+                if (run != null)
+                {
+                    try
+                    {
+                        run.Cts.Cancel();
+                        await Task.WhenAll(laneTasks);
+                        // A peer may finish a native read/write after the first invalidation.
+                        // Clear late ranges only after every reader drains. ResetDone may
+                        // fail on disk; disposal below must still release all file handles.
+                        ExceptionDispatchInfo? resetFailure = null;
+                        for (int i = 0; i < staged.Length; i++)
+                        {
+                            if (!run.ReplanFiles[i]) continue;
+                            try { staged[i].ResetDone(); }
+                            catch (Exception ex) { resetFailure ??= ExceptionDispatchInfo.Capture(ex); }
+                        }
+                        resetFailure?.Throw();
+                    }
+                    finally { run.Cts.Dispose(); }
+                }
             }
-            foreach (var lane in pendingLanes) await DisposeLaneAsync(lane);
-            foreach (var s in staged)
-                if (s != null) await s.DisposeAsync();
+            finally
+            {
+                foreach (var lane in pendingLanes) await DisposeLaneAsync(lane);
+                foreach (var s in staged)
+                    if (s != null) await s.DisposeAsync();
+            }
         }
     }
 
@@ -258,6 +283,7 @@ public sealed class SegmentedTransfer
         {
             while (!token.IsCancellationRequested)
             {
+                if (run.Fatal != null) return;
                 if (run.Scheduler.AllComplete) { lr.State = LaneState.Done; return; }
                 if (lane.ShouldYield) { lr.State = LaneState.Yielded; return; }
 
@@ -281,6 +307,14 @@ public sealed class SegmentedTransfer
                 catch (DiskFailure df)
                 {
                     lock (run.Gate) run.Fatal ??= ExceptionDispatchInfo.Capture(df.InnerException!);
+                    run.Cts.Cancel();
+                    lr.State = LaneState.Failed;
+                    return;
+                }
+                catch (RemoteFileSizeExceededException ex)
+                {
+                    lock (run.Gate)
+                        if (!token.IsCancellationRequested) run.Fatal ??= ExceptionDispatchInfo.Capture(ex);
                     run.Cts.Cancel();
                     lr.State = LaneState.Failed;
                     return;
@@ -527,6 +561,19 @@ public sealed class SegmentedTransfer
                 // interrupt it like any other read.
                 await reader!.FinishAsync(true, readToken);
             }
+            catch (RemoteFileSizeExceededException ex)
+            {
+                // The plan's immutable size is already disproved. Reconnecting a lane
+                // cannot fix it. Stop this cohort and let the owner verify a fresh listing.
+                lock (run.Gate)
+                {
+                    if (!token.IsCancellationRequested) run.Fatal ??= ExceptionDispatchInfo.Capture(ex);
+                    run.ReplanFiles[a.FileIndex] = true;
+                }
+                InvalidateFile(run, a.FileIndex, sequential: false);
+                Log.Information("Download plan size exceeded for {File} — refreshing source inventory", file.LocalPath);
+                throw;
+            }
             catch (OperationCanceledException) when (!token.IsCancellationRequested && Volatile.Read(ref interrupt) != 0)
             {
                 // Interrupted before the server confirmed: the control channel still owes its
@@ -584,6 +631,7 @@ public sealed class SegmentedTransfer
     {
         for (int i = 0; i < _files.Count; i++)
         {
+            if (run.Fatal != null) return;
             if (Volatile.Read(ref run.Committed[i]) != 0 || !run.Scheduler.IsFileComplete(i)) continue;
             if (Interlocked.Exchange(ref run.Committed[i], 1) != 0) continue;
             try

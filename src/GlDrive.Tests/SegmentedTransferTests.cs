@@ -370,6 +370,37 @@ public sealed class SegmentedTransferTests : IDisposable
 
     // ---- Codex review round 1 regressions ----
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Oversized_source_stops_the_stale_plan_once_and_fresh_inventory_recovers(bool stoppable)
+    {
+        var current = AddFile("growing.bin", 200_000);
+        var stale = current with { Size = 100_000, Validator = "100000:v0" };
+        var overflow = new RemoteFileSizeExceededException(stale.Key, stale.Size);
+        var lane = new FakeLane(_source, "main", canStopEarly: stoppable)
+        {
+            FinishFault = eof => eof ? overflow : null,
+        };
+        var completed = new ConcurrentBag<string>();
+        var error = await Assert.ThrowsAsync<RemoteFileSizeExceededException>(() =>
+            new SegmentedTransfer([stale], Opts(f => completed.Add(f.Key), maxFailures: 4))
+                .RunAsync([lane], null, null, default));
+
+        Assert.Same(overflow, error);
+        Assert.Single(lane.Opens);
+        Assert.Single(lane.Faults);
+        Assert.Equal(1, lane.DisposeCount);
+        Assert.Empty(completed);
+        Assert.False(File.Exists(stale.LocalPath));
+        Assert.True(File.Exists(stale.LocalPath + StagedFile.StagingSuffix));
+        var refreshed = new FakeLane(_source, "fresh", canStopEarly: stoppable);
+        await new SegmentedTransfer([current], Opts(f => completed.Add(f.Key)))
+            .RunAsync([refreshed], null, null, default);
+        AssertOnDisk(current);
+        Assert.Single(completed);
+    }
+
     [Fact]
     public async Task FailedCompletion_IsNotCommitted_AndTheFileIsRefetched()
     {

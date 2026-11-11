@@ -148,6 +148,13 @@ class ReleaseCheckHandler(TLS_FTPHandler):
         self._reject_retr_completion = (root / "reject-retr-completion").exists()
         with (root / "retr-attempts").open("a") as attempts:
             attempts.write(pathlib.Path(file).name + "\n")
+        growth = root / "grow-retr-once"
+        if growth.exists() and pathlib.Path(file).name == growth.read_text().strip():
+            # LIST/SIZE already returned the old length. Grow only this generated
+            # payload immediately before RETR opens it, after the client's plan.
+            growth.unlink()
+            with pathlib.Path(file).open("ab") as payload:
+                payload.write(bytes(range(256)) * 8)
         return super().ftp_RETR(file)
 
     def respond(self, response, *args, **kwargs):
