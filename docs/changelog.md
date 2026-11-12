@@ -12,6 +12,12 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.20.21 — race queue controls (2026-11-11)
+
+- Spread tab: CLEAR QUEUE removes every race that has not started; STOP ALL also
+  stops the running ones. A race you stop leaves the list instead of staying as
+  a STOPPED card. See [release notes](releases/v3.20.21.md).
+
 ## v3.20.20 — request filler that fills (2026-11-11)
 
 - The auto request filler detected requests but never filled one: fills sat in

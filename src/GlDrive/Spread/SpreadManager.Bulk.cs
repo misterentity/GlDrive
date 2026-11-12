@@ -100,6 +100,25 @@ public partial class SpreadManager
         return new(changed.Count, selected.Count - changed.Count, saved);
     }
 
+    /// <summary>
+    /// Remove every request that is still waiting. Requests that are starting, running,
+    /// under a control action, or that own uploaded files (which need their cleanup) stay.
+    /// </summary>
+    public BulkRaceRemovalResult ClearQueuedRequests()
+    {
+        string[] waiting;
+        lock (_lock) waiting = _raceQueue.Select(request => request.RequestId).ToArray();
+        return RemoveQueuedRequests(waiting);
+    }
+
+    /// <summary>Stop every running race. Returns how many were told to stop.</summary>
+    public int StopAllJobs()
+    {
+        var jobs = ActiveJobs;
+        foreach (var job in jobs) StopJob(job.Id);
+        return jobs.Count;
+    }
+
     /// <summary>Remove only the selected still-queued identities, with no cancellation or cleanup side effects.</summary>
     public BulkRaceRemovalResult RemoveQueuedRequests(IEnumerable<string> requestIds)
     {

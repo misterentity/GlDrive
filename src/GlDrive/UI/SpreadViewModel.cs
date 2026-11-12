@@ -241,6 +241,7 @@ public partial class SpreadViewModel : INotifyPropertyChanged, IDisposable
         if (spread == null) { SpreadStatus = "Spread engine not available"; return; }
         if (!spread.ActiveJobs.Any(job => job.Id == target.Id))
         { SpreadStatus = "Race is no longer active"; return; }
+        lock (_userStopped) _userStopped.Add(target.Id);
         spread.StopJob(target.Id);
         SpreadStatus = $"Stop requested: {target.Release}";
         SafeRefresh();
@@ -628,6 +629,12 @@ public partial class SpreadViewModel : INotifyPropertyChanged, IDisposable
     private void FreezeFinishedJob(SpreadJob job)
     {
         var vm = SpreadJobs.FirstOrDefault(j => j.Id == job.Id);
+        // A race the user stopped is cleared from the list; it remains in race history.
+        if (TakeUserStopped(job.Id))
+        {
+            if (vm != null) { _jobMaxSpeed.Remove(vm.Id); SpreadJobs.Remove(vm); }
+            return;
+        }
         if (vm == null)
         {
             vm = new SpreadJobVm { Id = job.Id };

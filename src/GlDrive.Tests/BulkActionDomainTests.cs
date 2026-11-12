@@ -155,6 +155,22 @@ public sealed class BulkActionDomainTests : IDisposable
         Assert.Equal(replacement.RequestId, Assert.Single(new RaceQueueStore(Path.Combine(_root, "race-queue.json")).Load()).RequestId);
     }
 
+    [Fact]
+    public void Clearing_the_queue_removes_waiting_requests_and_keeps_owned_partials()
+    {
+        using var manager = new SpreadManager(new AppConfig(), _root);
+        var waiting = RaceControlPolicyTests.Request() with { RequestId = "waiting" };
+        var other = RaceControlPolicyTests.Request() with { RequestId = "other", ReleaseName = "Other.Release" };
+        var owned = RaceControlPolicyTests.Request(true) with { RequestId = "owned", ReleaseName = "Owned.Release" };
+        var queue = Field<List<PersistedRace>>(manager, "_raceQueue"); queue.Add(waiting); queue.Add(other); queue.Add(owned);
+
+        Assert.Equal(new BulkRaceRemovalResult(2, 1), manager.ClearQueuedRequests());
+
+        Assert.Equal("owned", Assert.Single(manager.QueuedRaces).RequestId);
+        Assert.Equal("owned", Assert.Single(new RaceQueueStore(Path.Combine(_root, "race-queue.json")).Load()).RequestId);
+        Assert.Equal(0, manager.StopAllJobs());
+    }
+
     [Theory]
     [InlineData("owned-partial")]
     [InlineData("cleanup")]

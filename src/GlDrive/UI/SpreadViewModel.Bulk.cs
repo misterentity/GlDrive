@@ -41,6 +41,10 @@ public partial class SpreadViewModel
     public ICommand RemoveSelectedQueuedRacesCommand { get; private set; } = null!;
     public ICommand AddSelectedQueuedSitesCommand { get; private set; } = null!;
     public ICommand RemoveSelectedQueuedSitesCommand { get; private set; } = null!;
+    public ICommand ClearQueueCommand { get; private set; } = null!;
+    public ICommand StopAllRacesCommand { get; private set; } = null!;
+    // Races the user stopped: their cards leave the list instead of lingering as STOPPED.
+    private readonly HashSet<string> _userStopped = new(StringComparer.Ordinal);
     public void SetBulkScheduler(Func<string, Action, bool> schedule) => _scheduleBulk = schedule;
 
     private void InitializeBulkQueueActions()
@@ -57,8 +61,43 @@ public partial class SpreadViewModel
                     $"Removed {result.Removed}; skipped {result.Skipped} started, replaced, busy or owned-partial requests. No content deleted.";
             }));
         });
+        ClearQueueCommand = new RelayCommand(() => ClearQueue(stopRunning: false));
+        StopAllRacesCommand = new RelayCommand(() => ClearQueue(stopRunning: true));
         AddSelectedQueuedSitesCommand = new RelayCommand(() => EditSelectedQueueSites(true));
         RemoveSelectedQueuedSitesCommand = new RelayCommand(() => EditSelectedQueueSites(false));
+    }
+
+    private void ClearQueue(bool stopRunning)
+    {
+        var spread = _serverManager.Spread;
+        if (spread == null) { SpreadStatus = "Spread engine not available"; return; }
+        var waiting = spread.QueuedRaces.Count;
+        var running = stopRunning ? spread.ActiveJobs.Count : 0;
+        if (waiting == 0 && running == 0) { SpreadStatus = stopRunning ? "Nothing is running or queued." : "The queue is already empty."; return; }
+        if (_scheduleBulk == null) { SpreadStatus = "Open the dashboard to use this with Undo."; return; }
+        var label = stopRunning
+            ? $"Stop {running} running race{(running == 1 ? "" : "s")} and clear {waiting} queued"
+            : $"Clear {waiting} queued race request{(waiting == 1 ? "" : "s")}";
+        _scheduleBulk(label, () => _ = RunQueueBulkAsync(() =>
+        {
+            var stopped = 0;
+            if (stopRunning)
+            {
+                foreach (var job in spread.ActiveJobs)
+                    lock (_userStopped) _userStopped.Add(job.Id);
+                stopped = spread.StopAllJobs();
+            }
+            var result = spread.ClearQueuedRequests();
+            return (stopRunning ? $"Stopped {stopped} running; " : "") +
+                $"removed {result.Removed} queued" +
+                (result.Skipped > 0 ? $"; kept {result.Skipped} that are starting or have uploaded files to clean up" : "") +
+                ". No content deleted.";
+        }));
+    }
+
+    private bool TakeUserStopped(string jobId)
+    {
+        lock (_userStopped) return _userStopped.Remove(jobId);
     }
 
     private void EditSelectedQueueSites(bool add)

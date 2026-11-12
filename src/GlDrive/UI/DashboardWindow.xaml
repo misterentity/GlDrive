@@ -2368,6 +2368,14 @@
                                                 FontSize="12" VerticalAlignment="Center"
                                                 Command="{Binding ClearFinishedCommand}"
                                                 ToolTip="Remove all finished race cards from the list"/>
+                                        <Button DockPanel.Dock="Right" Content="CLEAR QUEUE" Padding="8,2" Margin="8,0,0,0"
+                                                FontSize="12" VerticalAlignment="Center"
+                                                Command="{Binding ClearQueueCommand}"
+                                                ToolTip="Remove every race that has not started. Running races continue. Undo is offered for 10 seconds."/>
+                                        <Button DockPanel.Dock="Right" Content="STOP ALL" Padding="8,2" Margin="8,0,0,0"
+                                                FontSize="12" VerticalAlignment="Center"
+                                                Command="{Binding StopAllRacesCommand}"
+                                                ToolTip="Stop every running race and remove every queued one. Undo is offered for 10 seconds."/>
                                         <TextBlock Text="AUTO RACES" Style="{DynamicResource SectionHeaderTextStyle}" VerticalAlignment="Center"/>
                                     </DockPanel>
                                 </Border>
