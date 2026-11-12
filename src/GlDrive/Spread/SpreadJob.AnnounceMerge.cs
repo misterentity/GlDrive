@@ -30,6 +30,7 @@ public partial class SpreadJob
     private bool CanApplySourceHint(ServerConfig? config, RaceSourceHint hint)
     {
         if (!RaceAnnounceMerge.CanSource(config)) return false;
+        if (IsRequestFill) return true;
         var mapping = SectionMapper.Resolve(config!.SpreadSite, hint.Section, ReleaseName);
         return _skiplist.EvaluateTiered(ReleaseName, true, false, mapping?.RemoteSection ?? hint.Section,
             config.SpreadSite.Skiplist, mapping?.TagRules ?? Array.Empty<SkiplistRule>(), _spreadConfig.GlobalSkiplist,

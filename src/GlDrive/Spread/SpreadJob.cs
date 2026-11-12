@@ -391,6 +391,33 @@ public partial class SpreadJob : IDisposable
 
     private readonly string? _knownSourceServerId;
     private readonly string? _knownSourcePath;
+
+    /// <summary>
+    /// Request fills: serverId → the exact release directory to fill on that site.
+    /// Such a site is a destination only, outside its section map and section rules.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? DestinationPaths { get; set; }
+    private bool HasDestinationOverride(string serverId) => DestinationPaths?.ContainsKey(serverId) == true;
+    private bool IsRequestFill => DestinationPaths is { Count: > 0 };
+
+    // The site creates REQUEST-<release> when the request is made and renames or
+    // removes it when it is filled. Never recreate it: only fill one that exists.
+    private async Task<bool> RequestDirectoryExistsAsync(string serverId, string requestPath, CancellationToken ct)
+    {
+        var parent = requestPath[..requestPath.TrimEnd('/').LastIndexOf('/')];
+        if (parent.Length == 0 || !_pools.TryGetValue(serverId, out var pool) || pool.IsDisposed) return false;
+        try
+        {
+            await using var conn = await pool.BorrowFor(FtpBorrowPurpose.Race, ct);
+            return await conn.Client.DirectoryExists(parent, ct);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Spread: request directory check failed for {Path}", parent);
+            return false;
+        }
+    }
     private readonly Dictionary<string, FtpConnectionPool> _mainPools;
 
     public SpreadJob(string section, string releaseName, SpreadMode mode,
@@ -551,6 +578,10 @@ public partial class SpreadJob : IDisposable
             var parsed = SceneNameParser.Parse(ReleaseName);
             foreach (var (serverId, config) in _serverConfigs)
             {
+                // A request names the exact release the site asked for. Skiplists say
+                // what may be raced INTO a section; they govern neither the requests
+                // directory nor the site the release is merely read from.
+                if (IsRequestFill) break;
                 var siteRules = config.SpreadSite.Skiplist;
                 var globalRules = _spreadConfig.GlobalSkiplist;
                 var (action, trace) = _skiplist.EvaluateWithTrace(ReleaseName, true, false,
@@ -605,6 +636,7 @@ public partial class SpreadJob : IDisposable
             foreach (var (serverId, config) in _serverConfigs)
             {
                 if (sitePaths.ContainsKey(serverId)) continue; // Already known
+                if (HasDestinationOverride(serverId)) continue; // Request destination, never a source
                 // Probe all section paths AND the notification watch path. The same
                 // list drives the mid-race relocation probe (FindRelocatedSourcePath),
                 // so the two never disagree about where a site may hold a release.
@@ -671,6 +703,23 @@ public partial class SpreadJob : IDisposable
             // discovery loop awaits FTP. Verify those buffered candidates before
             // deciding there is no source; they are not in the initial config map.
             await ApplyPendingSourceHintsAsync(ct, sitePaths, sourceServers);
+            // A request destination is exactly the requested directory and never a
+            // source, whatever discovery or an announce hint said about that site.
+            if (DestinationPaths is { Count: > 0 } requestPaths)
+            {
+                foreach (var (serverId, requestPath) in requestPaths)
+                {
+                    if (!_serverConfigs.TryGetValue(serverId, out var requester)) continue;
+                    if (!await RequestDirectoryExistsAsync(serverId, requestPath, ct))
+                    {
+                        SetFailed($"Request directory is gone on {requester.Name}: {requestPath}");
+                        return;
+                    }
+                    sitePaths[serverId] = requestPath;
+                    sourceServers.Remove(serverId);
+                    Log.Information("Spread: {Server} is REQUEST DESTINATION at {Path}", requester.Name, requestPath);
+                }
+            }
             // Failed or unavailable hinted sources remain buffered for recovery.
             // A clean negative elsewhere cannot turn that uncertainty into absence.
             pathsErrored += _announcedSources.Count;
@@ -2685,8 +2734,8 @@ public partial class SpreadJob : IDisposable
                         // Mirror of DownloadOnly on the source side.
                         if (_serverConfigs[srcId].SpreadSite.NeverSource) { skippedNeverSource++; continue; }
                         if (LiveSpreadPolicy.IsAffiliated(dstConfig, ReleaseName)) { skippedAffil++; continue; }
-                        var srcAction = LiveSpreadPolicy.FileAction(_skiplist, _serverConfigs[srcId], _spreadConfig, Section, ReleaseName, fileName);
-                        var skipAction = LiveSpreadPolicy.FileAction(_skiplist, dstConfig, _spreadConfig, Section, ReleaseName, fileName);
+                        var srcAction = LiveSpreadPolicy.FileAction(_skiplist, _serverConfigs[srcId], _spreadConfig, Section, ReleaseName, fileName, IsRequestFill);
+                        var skipAction = LiveSpreadPolicy.FileAction(_skiplist, dstConfig, _spreadConfig, Section, ReleaseName, fileName, IsRequestFill);
                         if (srcAction == SkiplistAction.Deny || skipAction == SkiplistAction.Deny) continue;
 
                         // Check slots from snapshot (no nested lock)

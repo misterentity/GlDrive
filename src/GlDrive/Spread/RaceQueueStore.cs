@@ -37,6 +37,10 @@ public sealed record PersistedRace(
     public RacePartialState? Partial { get; init; }
     public DateTime? FirstUploadAtUtc => Partial?.FirstUploadAtUtc;
     public bool CleanupOnly { get; init; }
+    // Request fill: serverId → exact release directory on that site.
+    public Dictionary<string, string>? DestinationPaths { get; init; }
+    // Request fills are time-critical and take the next free race slot.
+    public bool Urgent { get; init; }
     public int CleanupAttempts { get; init; }
     internal bool HasOwnedPartial => Partial?.Directories.Count > 0;
 

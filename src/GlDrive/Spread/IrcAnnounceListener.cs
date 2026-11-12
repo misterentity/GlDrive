@@ -31,6 +31,8 @@ public class IrcAnnounceListener : IDisposable
 
     /// <summary>Passive source-health annotation; does not change announce matching or admission.</summary>
     public Func<bool>? SourceDown { get; set; }
+    /// <summary>Request chatter (request/filled announces, REQUEST- directories) is not a release announce.</summary>
+    public Func<string, bool>? IsRequestTraffic { get; set; }
 
     public event Action<string, string, string, bool>? ReleaseAnnounced; // serverId, section, releaseName, autoRace
     public event Action<SitebotEvent>? SitebotEventReceived;
@@ -79,6 +81,8 @@ public class IrcAnnounceListener : IDisposable
         // a bracketed FiSH-decrypted PM could otherwise false-trigger an auto-race or, via
         // the no-match path below, write PM plaintext into the plaintext ai-data telemetry.
         if (!IrcLogStore.IsChannelName(target))
+            return;
+        if (IsRequestTraffic?.Invoke(message.Text) == true)
             return;
 
         var channel = _channels.FirstOrDefault(c => c.Name.Equals(target, StringComparison.OrdinalIgnoreCase));

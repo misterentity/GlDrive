@@ -142,7 +142,7 @@ public class OpenRouterClient : IDisposable
             "priority": "Normal",
             "download_only": false,
             "excluded_notification_categories": ["xxx-paysite", "0day-xxx"],
-            "request_filler_pattern": "!request\\s+(?<release>\\S+)",
+            "request_filler_pattern": "REQUESTED by\\s+(?<nick>\\S+)\\s*:\\s*\\[\\s*(?<number>\\d+)\\s*:?\\s*\\]\\s*(?<release>\\S+)",
             "request_filler_channel": "#requests",
             "explanation": "Brief summary: what rules were found and what deny patterns were generated"
         }
@@ -174,8 +174,11 @@ public class OpenRouterClient : IDisposable
         - "excluded_notification_categories": FTP section keys to exclude from
           new-release notifications — typically adult/paysite/spam sections.
           Match exact keys from the FTP sections list (lowercase is fine).
-        - "request_filler_*": ONLY populate if IRC data shows a request channel
-          with !request or similar commands. Leave null otherwise.
+        - "request_filler_*": ONLY populate if IRC data shows the SITEBOT announcing
+          requests. The pattern must match the bot's announce line (not the
+          "!request" command a user types) and capture the release name as
+          (?<release>...); capture the request number as (?<number>...) and the
+          requester as (?<nick>...) when the line carries them. Leave null otherwise.
         """;
 
     public OpenRouterClient(string apiKey, string model = "openai/gpt-oss-120b")

@@ -107,8 +107,12 @@ internal static class RaceLifetimePolicy
         && !path.StartsWith('/') && !path.Contains('\\') && !path.Any(char.IsControl)
         && path.Split('/').All(p => p.Length > 0 && p is not ("." or ".."));
 
+    internal static bool IsSafeAbsolutePath(string? path) => !string.IsNullOrEmpty(path)
+        && path.StartsWith('/') && !path.Contains('\\') && !path.Any(char.IsControl)
+        && path.Trim('/').Split('/').All(p => p.Length > 0 && p is not ("." or ".."));
+
     internal static int QueuePriority(PersistedRace request) =>
-        request.CleanupOnly ? 0 : request.ResumeCount == 0 && !request.HasOwnedPartial ? 1 : 2;
+        request.CleanupOnly || request.Urgent ? 0 : request.ResumeCount == 0 && !request.HasOwnedPartial ? 1 : 2;
 
     internal static bool IsWholeReleaseCompletionMarker(string relativeDirectory, string name,
         IReadOnlyList<string> markers) => relativeDirectory.Length == 0

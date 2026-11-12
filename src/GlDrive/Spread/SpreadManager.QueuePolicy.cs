@@ -64,6 +64,26 @@ public partial class SpreadManager
         if (duplicate < 0) return null;
         var queued = _raceQueue[duplicate];
         var updated = _config.Spread.MergeRaceAnnounces && !queued.CleanupOnly ? MergeRaceNoLock(queued, incoming, true) : queued;
+        // A request fill for an already queued release promotes that entry: it gains
+        // the request directory and the requester, and moves to the front of the queue.
+        if (incoming.DestinationPaths is { Count: > 0 } requested
+            && !requested.All(d => queued.DestinationPaths?.GetValueOrDefault(d.Key) == d.Value))
+        {
+            // Work already uploaded elsewhere on the requester cannot be re-aimed.
+            if (queued.CleanupOnly || queued.HasOwnedPartial)
+                return new(RaceStartOutcome.Unavailable, incoming.Section, incoming.ReleaseName,
+                    Reason: "Release is already queued with work in progress");
+            var destinations = new Dictionary<string, string>(queued.DestinationPaths ?? []);
+            foreach (var (serverId, path) in requested) destinations[serverId] = path;
+            updated = updated with
+            {
+                Urgent = true,
+                ServerIds = updated.ServerIds.Union(incoming.ServerIds).ToList(),
+                DestinationPaths = destinations,
+                KnownSourceServerId = updated.KnownSourceServerId ?? incoming.KnownSourceServerId,
+                KnownSourcePath = updated.KnownSourcePath ?? incoming.KnownSourcePath
+            };
+        }
         _raceQueue[duplicate] = updated;
         return new(RaceStartOutcome.Duplicate, incoming.Section, incoming.ReleaseName,
             QueuePosition: includeQueuePosition ? QueuePositionNoLock(updated, now) : null, Reason: updated.WaitReason ?? "Release is already queued",

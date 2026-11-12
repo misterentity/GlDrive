@@ -12,6 +12,16 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.20.20 — request filler that fills (2026-11-11)
+
+- The auto request filler detected requests but never filled one: fills sat in
+  the ordinary race queue until they expired, targeted a section directory, and
+  were never marked filled. It now opens a request on the sitebot's announce or
+  the requests directory, takes the first exact source, races into
+  `<requests>/REQUEST-<release>/<release>` at the front of the queue, and sends
+  the filled command when the upload is complete. A fill starts only while the
+  site's own request directory exists. See [release notes](releases/v3.20.20.md).
+
 ## v3.20.19 — growing download sources (2026-11-11)
 
 - Stop retrying an obsolete FTP file size on every download lane. Refresh the

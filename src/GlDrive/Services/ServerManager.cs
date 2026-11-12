@@ -763,6 +763,7 @@ public partial class ServerManager : IDisposable
                 }
                 if (_servers.TryGetValue(serverId, out var mount))
                     mount.OnIrcRelease(section, release);
+                foreach (var requests in _requestFillers.Values) requests.OnReleaseSeen(release);
                 if (autoRace)
                 {
                     // The announcing site usually has the release — pass it as source hint.
@@ -772,13 +773,71 @@ public partial class ServerManager : IDisposable
             _announceListeners.TryAdd(serverConfig.Id, listener);
         }
 
-        // Wire auto request filler (RaceTrade-style)
-        if (serverConfig.Irc.RequestFiller.Enabled && _spreadManager != null)
+        if (serverConfig.Irc.RequestFiller.Enabled && _spreadManager is { } spread)
         {
-            var filler = new RequestFiller(serverConfig.Id, ircService,
-                serverConfig.Irc.RequestFiller, _spreadManager);
-            _requestFillers.TryAdd(serverConfig.Id, filler);
+            var filler = CreateRequestFiller(serverConfig, ircService, spread);
+            if (_requestFillers.TryAdd(serverConfig.Id, filler))
+            {
+                ircService.MessageReceived += filler.OnMessage;
+                spread.JobEnded += filler.OnJobEnded;
+                filler.Detach = () =>
+                {
+                    ircService.MessageReceived -= filler.OnMessage;
+                    spread.JobEnded -= filler.OnJobEnded;
+                };
+                if (_announceListeners.TryGetValue(serverConfig.Id, out var announces))
+                    announces.IsRequestTraffic = filler.IsRequestTraffic;
+            }
+            else filler.Dispose();
         }
+    }
+
+    private RequestFiller CreateRequestFiller(ServerConfig serverConfig, IrcService ircService, SpreadManager spread)
+    {
+        var serverId = serverConfig.Id;
+        return new RequestFiller(serverId, serverConfig.Irc.RequestFiller, new RequestFillerHost
+        {
+            FindSource = (release, ct) => spread.SearchRequestSource(release, [serverId], ct),
+            ListDirectories = async (path, ct) =>
+            {
+                if (!_servers.TryGetValue(serverId, out var mount) || mount.Ftp is not { } ftp
+                    || mount.CurrentState != MountState.Connected) return null;
+                try
+                {
+                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    timeout.CancelAfter(TimeSpan.FromSeconds(30));
+                    return (await ftp.ListDirectory(path, timeout.Token))
+                        .Where(item => item.Type == FluentFTP.FtpObjectType.Directory)
+                        .Select(item => item.Name).ToList();
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (Exception ex)
+                {
+                    Log.Debug(ex, "RequestFiller: listing {Path} failed on {Server}", path, serverConfig.Name);
+                    return null;
+                }
+            },
+            StartFill = (section, release, sourceId, sourcePath, destination) =>
+                spread.StartRequestFill(section, release, sourceId, sourcePath, serverId, destination),
+            IsFillPending = release => spread.HasPendingRequestFill(release, serverId),
+            CancelFill = (section, release) =>
+            {
+                spread.RemoveQueuedRace(section, release);
+                if (spread.ActiveJobs.FirstOrDefault(j => j.ReleaseName.Equals(release, StringComparison.OrdinalIgnoreCase)
+                        && j.DestinationPaths?.ContainsKey(serverId) == true) is { } job)
+                    spread.StopJob(job.Id);
+            },
+            SendIrc = (channel, text) => ircService.SendMessage(channel, text),
+            SendSiteCommand = async (command, ct) =>
+            {
+                if (!_servers.TryGetValue(serverId, out var mount) || mount.Pool is not { } pool) return false;
+                await using var conn = await pool.BorrowFor(FtpBorrowPurpose.SiteCommand, ct);
+                var reply = await conn.Client.Execute(command, ct);
+                Log.Information("RequestFiller: {Command} on {Server}: {Code} {Message}",
+                    command, serverConfig.Name, reply.Code, reply.Message);
+                return reply.Success;
+            }
+        });
     }
 
     private async Task StopIrcService(string serverId)

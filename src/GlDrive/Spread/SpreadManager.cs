@@ -483,11 +483,35 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
         return result;
     }
 
+    /// <summary>True while a fill of this release into this site's request directory is queued, starting or running.</summary>
+    public bool HasPendingRequestFill(string releaseName, string requesterServerId)
+    {
+        lock (_lock)
+            return _raceQueue.Concat(_startingRequests).Concat(_activeRequests.Values)
+                .Any(r => !r.CleanupOnly && IsSameRace(r.ReleaseName, releaseName)
+                    && r.DestinationPaths?.ContainsKey(requesterServerId) == true);
+    }
+
+    /// <summary>
+    /// Fill a site request: race <paramref name="releaseName"/> from a known source into
+    /// the exact directory <paramref name="destinationPath"/> on the requesting site,
+    /// ahead of ordinary queued races.
+    /// </summary>
+    public RaceStartResult StartRequestFill(string section, string releaseName,
+        string sourceServerId, string sourcePath, string requesterServerId, string destinationPath)
+    {
+        if (!RaceLifetimePolicy.IsSafeAbsolutePath(destinationPath))
+            return new(RaceStartOutcome.Unavailable, section, releaseName, Reason: "Unsafe request destination path");
+        return StartRaceCore(section, releaseName, [sourceServerId, requesterServerId], SpreadMode.Race,
+            sourceServerId, sourcePath, throwOnAdmissionFailure: false,
+            destinationPaths: new() { [requesterServerId] = destinationPath });
+    }
+
     internal Func<DateTime> AdmissionUtcNow { get; set; } = () => DateTime.UtcNow;
 
     private RaceStartResult StartRaceCore(string section, string releaseName,
         IReadOnlyList<string> serverIds, SpreadMode mode, string? knownSourceServerId, string? knownSourcePath,
-        bool throwOnAdmissionFailure)
+        bool throwOnAdmissionFailure, Dictionary<string, string>? destinationPaths = null)
     {
         // Sanitize inputs
         releaseName = SanitizeFtpPath(releaseName);
@@ -507,7 +531,8 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             var now = AdmissionUtcNow();
             var maxRaces = Math.Max(_config.Spread.MaxConcurrentRaces, 1);
             request = new PersistedRace(section, releaseName, serverIds.ToList(), mode,
-                knownSourceServerId, knownSourcePath, now);
+                knownSourceServerId, knownSourcePath, now)
+                { DestinationPaths = destinationPaths, Urgent = destinationPaths != null };
             if (IsRaceNuked(request))
                 return new(RaceStartOutcome.Unavailable, section, releaseName, Reason: NukeHoldMessage);
             queued = MergeDuplicateNoLock(request, now);
@@ -674,6 +699,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
                 pools, mainPools, configs, _speedTracker, _skiplist, _blacklist,
                 knownSourceServerId, knownSourcePath);
             job.RestorePartial(request);
+            job.DestinationPaths = request.DestinationPaths;
             job.SitebotFacts = SitebotFacts;
             job.IsReleaseNuked = IsNuked;
             // Resume timestamps include previous active work, not just queue wait.
@@ -1842,8 +1868,44 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
         string release, IReadOnlyCollection<string> excludeIds, CancellationToken ct)
         => SearchReleaseOnServers(release, excludeIds, ct, CancellationToken.None);
 
+    /// <summary>
+    /// Source lookup for a request fill: the first site to answer with an exact match
+    /// wins instead of waiting out the slowest site's timeout, and skiplists (which
+    /// govern what is raced INTO a site) do not disqualify a site as the source.
+    /// </summary>
+    public async Task<SearchResult?> SearchRequestSource(
+        string release, IReadOnlyCollection<string> excludeIds, CancellationToken ct)
+    {
+        using var first = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var pending = GetConnectedServerIds().Where(id => !excludeIds.Contains(id))
+            .Select(id => SearchReleaseOnServers(release,
+                GetConnectedServerIds().Where(other => other != id).Concat(excludeIds).ToList(),
+                first.Token, CancellationToken.None, applySkiplist: false))
+            .ToList();
+        try
+        {
+            while (pending.Count > 0)
+            {
+                var done = await Task.WhenAny(pending);
+                pending.Remove(done);
+                SearchResult? hit;
+                try { hit = await done; }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested) { continue; }
+                if (hit != null) return hit;
+            }
+            return null;
+        }
+        finally
+        {
+            first.Cancel();
+            foreach (var task in pending)
+                _ = task.ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
+        }
+    }
+
     public async Task<SearchResult?> SearchReleaseOnServers(
-        string release, IReadOnlyCollection<string> excludeIds, CancellationToken ct, CancellationToken stopToken)
+        string release, IReadOnlyCollection<string> excludeIds, CancellationToken ct, CancellationToken stopToken,
+        bool applySkiplist = true)
     {
         ct.ThrowIfCancellationRequested();
         stopToken.ThrowIfCancellationRequested();
@@ -1902,8 +1964,10 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             // FindBestTransfer's route scoring.
             if (sc.SpreadSite.NeverSource) continue;
             if (_blacklist.IsBlacklisted(r.ServerId, r.Category)) continue;
-            var action = _skiplist.Evaluate(release, true, false, r.ServerId, r.Category,
-                sc.SpreadSite.Skiplist, _config.Spread.GlobalSkiplist);
+            var action = applySkiplist
+                ? _skiplist.Evaluate(release, true, false, r.ServerId, r.Category,
+                    sc.SpreadSite.Skiplist, _config.Spread.GlobalSkiplist)
+                : SkiplistAction.Allow;
             if (action == SkiplistAction.Deny) continue;
             best = r;
             break;

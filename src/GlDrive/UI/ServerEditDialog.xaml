@@ -298,10 +298,10 @@
                     <StackPanel Margin="0,6,0,0">
                         <CheckBox x:Name="RequestFillerEnabledBox" Content="Enable auto request filler"
                                   Margin="0,0,0,6"
-                                  ToolTip="Detect !request announces on IRC and auto-fill from other connected servers"/>
-                        <TextBlock Text="Request Pattern (regex with named group 'release'):" Margin="0,0,0,2"/>
+                                  ToolTip="Detect the sitebot's request announces and open REQUEST- directories, then fill them from other connected servers"/>
+                        <TextBlock Text="Sitebot request announce (regex with named group 'release'):" Margin="0,0,0,2"/>
                         <TextBox x:Name="RequestFillerPatternBox" Margin="0,0,0,6"
-                                 ToolTip="Default: !request\s+(?&lt;release&gt;\S+)"/>
+                                 ToolTip="Matches the sitebot's announce, e.g. REQUESTED by nick : [ 3:] Release.Name-GRP. Leave empty for the built-in pattern."/>
                         <TextBlock Text="Channel (empty = all):" Margin="0,0,0,2"/>
                         <TextBox x:Name="RequestFillerChannelBox" Margin="0,0,0,6"
                                  ToolTip="Only watch this channel for requests. Leave empty to watch all joined channels."/>

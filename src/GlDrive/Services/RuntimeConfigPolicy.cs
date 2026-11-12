@@ -33,7 +33,7 @@ internal static class RuntimeConfigPolicy
             [typeof(IrcConfig)] = Map(irc: "Enabled Host Port UseTls Nick AltNick RealName AutoConnect InviteNick FishEnabled FishMode FallbackCharset Channels AnnounceRules RequestFiller"),
             [typeof(IrcChannelConfig)] = Map(irc: "Name Key AutoJoin Sitebot"),
             [typeof(IrcAnnounceRule)] = Map(irc: "Enabled Channel Pattern AutoRace"),
-            [typeof(RequestFillerConfig)] = Map(irc: "Enabled Pattern Channel MaxPerHour CooldownSeconds")
+            [typeof(RequestFillerConfig)] = Map(irc: "Enabled Pattern FilledPattern Channel BotNick RequestPath DirectoryPrefix FilledCommand MaxPerHour CooldownSeconds")
         };
 
     private static IReadOnlyDictionary<string, RuntimeConfigEffect> Map(string basic = "", string remount = "", string irc = "", string notifications = "", string search = "", string live = "", string deferred = "")

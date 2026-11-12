@@ -27,17 +27,33 @@ public class IrcConfig
 }
 
 /// <summary>
-/// RaceTrade-style auto request filler: detects request announces in IRC
-/// and fills them by racing a matching release from another connected server
-/// into this server's request path.
+/// Auto request filler: detects open requests from the sitebot's announce and the
+/// site's requests directory, and fills them by racing a matching release from
+/// another connected server into <c>RequestPath/DirectoryPrefix+release/release</c>.
 /// </summary>
 public class RequestFillerConfig
 {
     public bool Enabled { get; set; }
-    /// <summary>Regex matching request announces. Must capture named group "release".</summary>
-    public string Pattern { get; set; } = @"!request\s+(?<release>\S+)";
-    /// <summary>IRC channel to monitor (empty = all channels).</summary>
+    /// <summary>
+    /// Regex matching the sitebot's request announce. Must capture named group "release";
+    /// "number" and "nick" are optional. Empty (or the old "!request" default) uses the built-in pattern.
+    /// </summary>
+    public string Pattern { get; set; } = GlDrive.Spread.RequestAnnounceParser.DefaultRequestedPattern;
+    /// <summary>Regex matching the sitebot's "request filled" announce (named group "release"). Empty = built-in.</summary>
+    public string FilledPattern { get; set; } = "";
+    /// <summary>IRC channel to monitor and to send the filled command to (empty = all channels).</summary>
     public string Channel { get; set; } = "";
+    /// <summary>Only accept request announces from this nick (empty = any nick).</summary>
+    public string BotNick { get; set; } = "";
+    /// <summary>The site's requests directory.</summary>
+    public string RequestPath { get; set; } = "/requests";
+    /// <summary>Prefix of an open request's directory name.</summary>
+    public string DirectoryPrefix { get; set; } = "REQUEST-";
+    /// <summary>
+    /// Sent once a fill is complete. {release} and {number} are substituted. A value
+    /// starting with "SITE " goes over FTP; anything else is said in the IRC channel.
+    /// </summary>
+    public string FilledCommand { get; set; } = "!reqfilled {release}";
     /// <summary>Max number of request fills per hour (rate limit).</summary>
     public int MaxPerHour { get; set; } = 10;
     /// <summary>Minimum seconds between request fills.</summary>
