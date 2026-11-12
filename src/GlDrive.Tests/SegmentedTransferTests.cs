@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.IO;
+using System.Text.Json;
 using GlDrive.Downloads.Segmented;
 using Xunit;
 
@@ -633,15 +634,39 @@ public sealed class SegmentedTransferTests : IDisposable
     public async Task CancelledDuringEofConfirmation_IsNotPublished_AndResumeRefetchesOnlyTheTail()
     {
         var f = AddFile("a.r00", 300_000);
+        StagedFile? canceledFile = null;
         using (var cts = new CancellationTokenSource())
         {
             var hanging = new FakeLane(_source, "main", canStopEarly: false) { BlockEofFinish = true };
-            var run = new SegmentedTransfer([f], Opts()).RunAsync([hanging], null, null, cts.Token);
+            var transfer = new SegmentedTransfer([f], Opts()) { StagedFileOpened = staged => canceledFile = staged };
+            var run = transfer.RunAsync([hanging], null, null, cts.Token);
             while (!hanging.Finishes.Contains(true)) await Task.Delay(10);
             cts.Cancel();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
         }
         Assert.False(File.Exists(f.LocalPath), "an unconfirmed file must not be published");
+
+        // Keep the state before resuming: a successful refetch removes the sidecar, otherwise
+        // hiding whether a lost prefix came from range invalidation or failed persistence.
+        Assert.NotNull(canceledFile);
+        var expectedPrefix = new ByteRange(0, 294_912); // 36 complete 8 KiB reads; the EOF chunk is unconfirmed.
+        var ranges = canceledFile.Done.Ranges;
+        var sidecarExists = File.Exists(canceledFile.SidecarPath);
+        var sidecar = sidecarExists ? File.ReadAllText(canceledFile.SidecarPath) : "<missing>";
+        var stateDetails = $"In-memory ranges: {string.Join(", ", ranges.Select(r => $"[{r.Start},{r.End})"))}; " +
+            $"sidecar {canceledFile.SidecarPath}: {sidecar}";
+        Assert.True(ranges.Count == 1 && ranges[0] == expectedPrefix,
+            $"Cancellation must retain the confirmed in-memory prefix. {stateDetails}");
+        Assert.True(sidecarExists, $"Cancellation must persist its resume state. {stateDetails}");
+        using (var saved = JsonDocument.Parse(sidecar))
+        {
+            var savedRanges = saved.RootElement.GetProperty("ranges");
+            Assert.True(savedRanges.GetArrayLength() == 1 && savedRanges[0].GetArrayLength() == 2 &&
+                savedRanges[0][0].GetInt64() == expectedPrefix.Start && savedRanges[0][1].GetInt64() == expectedPrefix.End,
+                $"Persisted ranges must retain the same confirmed prefix. {stateDetails}");
+            Assert.Equal(f.Size, saved.RootElement.GetProperty("size").GetInt64());
+            Assert.Equal(f.Validator, saved.RootElement.GetProperty("validator").GetString());
+        }
 
         var second = new FakeLane(_source, "main");
         await new SegmentedTransfer([f], Opts()).RunAsync([second], null, null, default);
