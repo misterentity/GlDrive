@@ -17,6 +17,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
     // A refused local admission is already a decision, not another network fault.
     // Scope it to the pool/factory that observed it so remounts do not inherit stale holds.
     private readonly Dictionary<string, (object Owner, DateTime RetryAtUtc)> _poolAdmissionHolds = new();
+    private readonly HashSet<string> _startupPoolsPending = new();
     private readonly List<SpreadJob> _activeJobs = new();
     private readonly List<PersistedRace> _raceQueue = new();
     // Admission runs callbacks outside _lock. Reserve its request before leaving
@@ -231,6 +232,10 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
     internal SpreadManager(AppConfig config, string stateDirectory)
     {
         _config = config;
+        // Restored races can become due before MountServer has even created a factory.
+        // A known source scheduled for automatic mounting is still pending in that gap.
+        _startupPoolsPending.UnionWith(config.Servers
+            .Where(server => server.Enabled && server.Mount.AutoMountOnStart).Select(server => server.Id));
         _history = new RaceHistoryStore(Path.Combine(stateDirectory, "race-history.json"));
         _blacklist = new SectionBlacklistStore(Path.Combine(stateDirectory, "section-blacklist.json"));
         _metadataFilter = new MetadataFilterService(config, SitebotFacts);
@@ -357,6 +362,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
                     ReferenceEquals(desired, factory))
                 {
                     _spreadPools[serverId] = pool;
+                    _startupPoolsPending.Remove(serverId);
                     _poolAdmissionHolds.Remove(serverId);
                     _topologyVersion++; // invalidate the section-feasibility cache
                     registered = true;
@@ -451,6 +457,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
         {
             _spreadPools.Remove(serverId, out pool);
             _factories.Remove(serverId);
+            _startupPoolsPending.Remove(serverId);
             _poolAdmissionHolds.Remove(serverId);
             _topologyVersion++; // invalidate the section-feasibility cache
         }
@@ -550,8 +557,9 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             }
 
             request = _config.Spread.MergeRaceAnnounces ? MergeRaceNoLock(request, request, true) : PredictRaceNoLock(request);
-            var waitingForAdmission = request.ServerIds.Any(id => IsPoolAdmissionHeldNoLock(id, now))
-                && (request.ServerIds.Count(id => CanUsePoolNoLock(id, now)) < 2 || KnownSourcesAdmissionHeldNoLock(request, now));
+            var waitingForAdmission = KnownSourcesAdmissionHeldNoLock(request, now)
+                || request.ServerIds.Any(id => IsPoolAdmissionHeldNoLock(id, now))
+                    && request.ServerIds.Count(id => CanUsePoolNoLock(id, now)) < 2;
             if (_activeJobs.Count + _startingRequests.Count >= maxRaces || waitingForAdmission)
             {
                 _raceQueue.Add(request);
@@ -1020,9 +1028,17 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
         return null;
     }
 
-    private bool IsPoolAdmissionHeldNoLock(string id, DateTime now) =>
-        _spreadPools.TryGetValue(id, out var pool) && pool.IsExhausted
-        && PoolAdmissionRetryAtNoLock(id, pool, now) != null;
+    private bool IsPoolAdmissionHeldNoLock(string id, DateTime now)
+    {
+        if (_spreadPools.TryGetValue(id, out var pool))
+            return pool.IsExhausted && PoolAdmissionRetryAtNoLock(id, pool, now) != null;
+        return _factories.TryGetValue(id, out var factory)
+            && PoolAdmissionRetryAtNoLock(id, factory, now) != null;
+    }
+
+    private bool IsSourcePoolPendingNoLock(string id) => !_spreadPools.ContainsKey(id)
+        && (_factories.ContainsKey(id) || _startupPoolsPending.Contains(id)
+            && _config.Servers.Any(server => server.Id == id && server.Enabled && server.Mount.AutoMountOnStart));
 
     private bool CanUsePoolNoLock(string id, DateTime now) =>
         _spreadPools.TryGetValue(id, out var pool) && !pool.IsDisposed && !pool.IsTrustParked
@@ -1034,7 +1050,10 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
         var sources = RaceAnnounceMerge.Hints(request).Select(hint => hint.ServerId)
             .Where(id => request.ServerIds.Contains(id) && RaceAnnounceMerge.CanSource(_config.Servers.FirstOrDefault(s => s.Id == id)))
             .Distinct().ToArray();
-        return sources.Any(id => IsPoolAdmissionHeldNoLock(id, now))
+        // A login deadline permits another initialization attempt; it does not mean
+        // that a source pool exists. Wait for registration (which drains the queue),
+        // or another announced source, without spending source-probe retries.
+        return sources.Any(id => IsPoolAdmissionHeldNoLock(id, now) || IsSourcePoolPendingNoLock(id))
             && !sources.Any(id => CanUsePoolNoLock(id, now));
     }
 

@@ -12,6 +12,16 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.20.24 — wait for recovering source pools (2026-11-12)
+
+- Keep queued and fresh races waiting for an announced source during startup,
+  including the interval before its pool factory is registered.
+- Respect factory-owned login holds and wait for actual source-pool recovery
+  after a hold expires, without spending request retries on inconclusive probes.
+- Allow healthy announced alternatives, preserve intentional disconnect and
+  configuration behavior, and retain destination, cleanup and expiry policies.
+- See [release notes](releases/v3.20.24.md) for scope and verification context.
+
 ## v3.20.23 — fullscreen and FTP session recovery (2026-11-12)
 
 - Prevent fullscreen close callbacks from attaching the video view twice; close
