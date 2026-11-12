@@ -1061,7 +1061,11 @@ public partial class SpreadJob : IDisposable
             _backgroundReads = new BackgroundReadLifetime(token);
 
             var lastActivity = DateTime.UtcNow;
-            var scorer = new SpreadScorer(_speedTracker);
+            var chain = RouteChainPolicy.Create(_spreadConfig, _serverConfigs.Values);
+            if (chain != null)
+                Log.Information("Spread: routes ranked by the fixed chain [{Chain}] for {Release}",
+                    string.Join(" > ", _spreadConfig.RouteChain), ReleaseName);
+            var scorer = new SpreadScorer(_speedTracker, chain);
             var consecutiveEmpty = 0;
 
             while (!token.IsCancellationRequested

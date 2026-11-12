@@ -17,6 +17,13 @@ public class SpreadConfig
     /// <summary>Deadline from the first upload for finishing or cleaning our partial release.</summary>
     public int PartialRaceDeadlineHours { get; set; } = 10;
     public int MaxConcurrentRaces { get; set; } = 1;
+    /// <summary>
+    /// Off (default): a route's share of the transfer score comes from its measured speed.
+    /// On: it comes from <see cref="RouteChain"/> instead.
+    /// </summary>
+    public bool UseRouteChain { get; set; }
+    /// <summary>Site names or ids in the order a release should travel, e.g. sitea, siteb, sitec.</summary>
+    public List<string> RouteChain { get; set; } = [];
     /// <summary>Nonpreemptive highest-response-ratio ordering within existing lifetime priority classes.</summary>
     public bool SizeAwareRaceQueue { get; set; } = true;
     /// <summary>Merge duplicate announce participants and valid source hints into the existing request.</summary>

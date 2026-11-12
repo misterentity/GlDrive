@@ -5,10 +5,12 @@ namespace GlDrive.Spread;
 public class SpreadScorer
 {
     private readonly SpeedTracker _speedTracker;
+    private readonly RouteChainPolicy? _chain;
 
-    public SpreadScorer(SpeedTracker speedTracker)
+    public SpreadScorer(SpeedTracker speedTracker, RouteChainPolicy? chain = null)
     {
         _speedTracker = speedTracker;
+        _chain = chain;
     }
 
     public int Score(SpreadFileInfo file, string srcId, string dstId,
@@ -31,8 +33,11 @@ public class SpreadScorer
         if (maxFileSize > 0)
             score += (int)(file.Size / (double)maxFileSize * 2000);
 
-        // Average speed for this route (3000 max)
-        if (maxSpeedBps > 0)
+        // Route: the fixed chain when one is set, else this route's measured
+        // average speed (3000 max).
+        if (_chain != null)
+            score += _chain.Score(srcId, dstId);
+        else if (maxSpeedBps > 0)
         {
             var avgSpeed = _speedTracker.GetAverageSpeed(srcId, dstId);
             score += (int)(Math.Min(avgSpeed / maxSpeedBps, 1.0) * 3000);

@@ -336,6 +336,15 @@
                         <TextBox Text="{Binding SpreadMaxConcurrent, UpdateSourceTrigger=PropertyChanged}"
                                  Width="80" HorizontalAlignment="Left" Margin="0,0,0,8"
                                  aia:AiAgentAttached.FreezablePath="/spread/maxConcurrentRaces"/>
+                        <CheckBox Content="Use a fixed route chain instead of measured route speed"
+                                  IsChecked="{Binding SpreadUseRouteChain}" Margin="0,0,0,4"
+                                  ToolTip="Off: each route is ranked by the average speed of its last transfers. On: routes are ranked by the chain below."/>
+                        <TextBlock Text="Route chain (site names in order, comma-separated):" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding SpreadRouteChain, UpdateSourceTrigger=PropertyChanged}"
+                                 IsEnabled="{Binding SpreadUseRouteChain}"
+                                 HorizontalAlignment="Stretch" Margin="0,0,0,8"
+                                 AutomationProperties.Name="Route chain"
+                                 ToolTip="Example: sitea, siteb, sitec sends sitea to siteb first, then siteb to sitec. Other routes are still used when a hop is unavailable."/>
                         <CheckBox Content="Auto-race when new releases are detected"
                                   IsChecked="{Binding SpreadAutoRace}" Margin="0,0,0,4"/>
                         <CheckBox Content="Show tray notification on race completion"

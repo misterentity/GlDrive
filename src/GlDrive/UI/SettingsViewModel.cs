@@ -50,6 +50,8 @@ public class SettingsViewModel : INotifyPropertyChanged
     private readonly string _initialSpreadPoolSize;
     private readonly string _initialSpreadMaxConcurrent;
     private bool _spreadAutoRace;
+    private bool _spreadUseRouteChain;
+    private string _spreadRouteChain = "";
     private bool _spreadNotifyComplete;
     private bool _spreadDebugMode;
     private bool _spreadValidateOnBorrow;
@@ -103,6 +105,8 @@ public class SettingsViewModel : INotifyPropertyChanged
         _spreadMaxConcurrent = config.Spread.MaxConcurrentRaces.ToString();
         _initialSpreadMaxConcurrent = _spreadMaxConcurrent;
         _spreadAutoRace = config.Spread.AutoRaceOnNotification;
+        _spreadUseRouteChain = config.Spread.UseRouteChain;
+        _spreadRouteChain = string.Join(", ", config.Spread.RouteChain);
         _spreadNotifyComplete = config.Spread.NotifyOnRaceComplete;
         _spreadDebugMode = config.Spread.DebugMode;
         _spreadValidateOnBorrow = config.Spread.ValidateConnectionOnBorrow;
@@ -155,6 +159,8 @@ public class SettingsViewModel : INotifyPropertyChanged
     public string SpreadHardTimeout { get => _spreadHardTimeout; set { _spreadHardTimeout = value; OnPropertyChanged(); } }
     public string SpreadMaxConcurrent { get => _spreadMaxConcurrent; set { _spreadMaxConcurrent = value; OnPropertyChanged(); } }
     public bool SpreadAutoRace { get => _spreadAutoRace; set { _spreadAutoRace = value; OnPropertyChanged(); } }
+    public bool SpreadUseRouteChain { get => _spreadUseRouteChain; set { _spreadUseRouteChain = value; OnPropertyChanged(); } }
+    public string SpreadRouteChain { get => _spreadRouteChain; set { _spreadRouteChain = value; OnPropertyChanged(); } }
     public bool SpreadNotifyComplete { get => _spreadNotifyComplete; set { _spreadNotifyComplete = value; OnPropertyChanged(); } }
     public bool SpreadDebugMode { get => _spreadDebugMode; set { _spreadDebugMode = value; OnPropertyChanged(); } }
     public bool SpreadValidateOnBorrow { get => _spreadValidateOnBorrow; set { _spreadValidateOnBorrow = value; OnPropertyChanged(); } }
@@ -414,6 +420,8 @@ public class SettingsViewModel : INotifyPropertyChanged
         config.Spread.TransferTimeoutSeconds = int.TryParse(SpreadTransferTimeout, out var stt) ? Math.Clamp(stt, 10, 600) : 60;
         config.Spread.HardTimeoutSeconds = int.TryParse(SpreadHardTimeout, out var sht) ? Math.Clamp(sht, 60, 7200) : 1200;
         config.Spread.AutoRaceOnNotification = SpreadAutoRace;
+        config.Spread.UseRouteChain = SpreadUseRouteChain;
+        config.Spread.RouteChain = GlDrive.Spread.RouteChainPolicy.Parse(SpreadRouteChain);
         config.Spread.NotifyOnRaceComplete = SpreadNotifyComplete;
         config.Spread.DebugMode = SpreadDebugMode;
         config.Spread.ValidateConnectionOnBorrow = SpreadValidateOnBorrow;

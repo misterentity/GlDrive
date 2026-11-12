@@ -12,6 +12,12 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.20.22 — fixed route chain (2026-11-11)
+
+- Spread routes are ranked by measured speed by default; a new setting ranks
+  them by a fixed site order instead (next hop first, skipping ahead lower,
+  backwards last). It never forbids a route. See [release notes](releases/v3.20.22.md).
+
 ## v3.20.21 — race queue controls (2026-11-11)
 
 - Spread tab: CLEAR QUEUE removes every race that has not started; STOP ALL also
