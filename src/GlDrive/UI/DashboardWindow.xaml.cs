@@ -101,6 +101,7 @@ public partial class DashboardWindow : Window
         vm.PropertyChanged += Vm_StreamMatrixChanged;
         Closed += (_, _) =>
         {
+            ExitFullscreen();
             vm.PropertyChanged -= Vm_StreamMatrixChanged;
             vm.Dispose();
             _playerVm?.Dispose();
@@ -826,15 +827,7 @@ public partial class DashboardWindow : Window
 
     private void ExitFullscreen()
     {
-        if (_fullscreenWindow == null) return;
-
-        // Move VideoView back to the player tab
-        _fullscreenWindow.Content = null;
-        if (PlayerVideoArea != null)
-            PlayerVideoArea.Children.Insert(0, PlayerVideoView);
-
-        _fullscreenWindow.Close();
-        _fullscreenWindow = null;
+        PlayerFullscreen.Exit(ref _fullscreenWindow, PlayerVideoArea, PlayerVideoView);
     }
 
     // Search result card clicked

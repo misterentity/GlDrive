@@ -86,7 +86,11 @@ public class SpreadConfig
     /// sites for an alternate source and continue feeding the target from it.</summary>
     public bool AlternateSourceSearch { get; set; } = true;
 
-    /// <summary>Per-server timeout (seconds) for the mid-race alternate-source search.</summary>
+    /// <summary>
+    /// Per-server traversal budget (seconds) for alternate-source and request-fill
+    /// searches. An issued command may drain until the search service's hard
+    /// deadline; explicit caller cancellation still interrupts it.
+    /// </summary>
     public int AlternateSourceSearchTimeoutSeconds { get; set; } = 20;
 
     /// <summary>

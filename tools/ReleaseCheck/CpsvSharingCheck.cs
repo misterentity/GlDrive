@@ -129,6 +129,8 @@ internal static class CpsvSharingCheck
         string? failure = null;
         try
         {
+            Phase = "relay directory rejection";
+            await RelayDirectoryRejection(evidence, deadline.Token);
             Phase = "clean yield";
             await CleanYieldAndReacquire(evidence, deadline.Token);
             Phase = "stalled setup";
@@ -153,7 +155,7 @@ internal static class CpsvSharingCheck
                 startedUtc = started, finishedUtc = DateTime.UtcNow,
                 appVersion = typeof(FtpConnectionPool).Assembly.GetName().Version?.ToString(),
                 success = failure == null, assertions = Passed, failure,
-                scope = "Real native GnuTLS control, managed CPSV data TLS, separate pools/shared gate, actual lender/lane/scheduler; queued race, held-destination manual StartFxp handoff and opposite-direction pair acquisition. No remote FXP payload or production data."
+                scope = "Real native GnuTLS control, managed CPSV data TLS, separate pools/shared gate, actual relay directory rejection and lender/lane/scheduler; queued race, held-destination manual StartFxp handoff and opposite-direction pair acquisition. No remote FXP payload or production data."
             }, new JsonSerializerOptions { WriteIndented = true }));
         }
     }
@@ -163,6 +165,65 @@ internal static class CpsvSharingCheck
         if (!condition) throw new InvalidOperationException("FAIL: " + Phase + ": " + message);
         Passed.Add(Phase + ": " + message);
         Console.WriteLine("PASS: " + Phase + ": " + message);
+    }
+
+    private static async Task RelayDirectoryRejection(string evidence, CancellationToken ct)
+    {
+        await using var f = await Fixture.Create(evidence, "relay-directory", false, ct);
+        f.Peer.DenyDirectories = true;
+        using var job = new SpreadJob("TEST", "fixture", SpreadMode.Race, new SpreadConfig(),
+            new(), new(), new(), new SpeedTracker(), new SkiplistEvaluator());
+        var ensure = typeof(SpreadJob).GetMethod("EnsureDirectoryExists", Hidden)!;
+        var srcId = "fixture-source-" + Guid.NewGuid().ToString("N");
+        // Pin this synthetic route to relay so the public transfer entry point reaches
+        // its normal CPSV/CPSV path without first attempting a direct FXP probe.
+        typeof(FxpTransfer).GetMethod("RecordDirectFailure", BindingFlags.Static | BindingFlags.NonPublic)!
+            .Invoke(null, [srcId, f.ServerId, DateTime.UtcNow]);
+        AsyncFtpClient? firstSource = null, firstDestination = null;
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            await using var source = await f.Main.Borrow(ct);
+            await using var destination = await f.Spread.Borrow(ct);
+            if (attempt == 0) { firstSource = source.Client; firstDestination = destination.Client; }
+            else Check(ReferenceEquals(firstSource, source.Client) && ReferenceEquals(firstDestination, destination.Client),
+                "repeated clean MKD rejection reborrows the same two native sessions");
+            var callbackCalls = 0;
+            var transfer = new FxpTransfer
+            {
+                BeforeStore = token =>
+                {
+                    callbackCalls++;
+                    Check(PendingSequence(source.Client) && PendingSequence(destination.Client) &&
+                        f.Peer.CpsvCommands == 2 * (attempt + 1),
+                        "directory preparation remains deferred until both native CPSV sockets are open");
+                    // Exercise the real race directory walker and its typed failure.
+                    return (Task)ensure.Invoke(job, [destination.Client, f.ServerId, "/blocked-release", "payload.bin", token])!;
+                }
+            };
+            var ok = await transfer.ExecuteAsync(source, destination, "/payload.bin", "/blocked-release/payload.bin",
+                FxpMode.Relay, 10, ct, srcServerId: srcId, dstServerId: f.ServerId, fileSizeBytes: f.Peer.Payload.Length);
+            Check(!ok && callbackCalls == 1 && transfer.ErrorMessage ==
+                "MKD failed for /blocked-release: 550 Not allowed to make directories here",
+                "real native MKD denial remains a failed transfer with its exact reply");
+            Check(!PendingSequence(source.Client) && !PendingSequence(destination.Client) &&
+                transfer.FaultSide == FxpFaultSide.Neither && !source.Poisoned && !destination.Poisoned,
+                "clean directory rejection clears only unused relay sequences and implicates neither session");
+            Check(f.Peer.TransferCommands == 0 && transfer.TotalBytes == 0 && !transfer.WasDupe,
+                "denied directory sends no RETR or STOR and credits no payload or duplicate success");
+        }
+        Check(f.Main.ActiveCount == 0 && f.Spread.ActiveCount == 0 && f.Main.QuarantineSize == 0 && f.Spread.QuarantineSize == 0,
+            "repeated directory denials return both leases without native quarantine");
+        await using (var source = await f.Main.Borrow(ct))
+        await using (var destination = await f.Spread.Borrow(ct))
+        {
+            Check(ReferenceEquals(firstSource, source.Client) && ReferenceEquals(firstDestination, destination.Client) &&
+                (await Noop(source, ct)).Code == "200" && (await Noop(destination, ct)).Code == "200",
+                "both original native control sessions remain synchronized and reusable after denied MKD");
+        }
+        Check(f.Peer.Authenticated == 2 && f.Gate.Held == 2,
+            "three refused directories require no replacement login or extra account permit");
+        await f.DisposeAsync();
+        Check(f.Gate.Held == 0, "directory fixture disposal releases every login permit");
     }
 
     private static async Task CleanYieldAndReacquire(string evidence, CancellationToken ct, bool stalledSetup = false, bool manualActivity = false)
@@ -522,6 +583,10 @@ internal static class CpsvSharingCheck
         private readonly IReadOnlyList<IPAddress>? _networkAddresses;
         private readonly ConcurrentDictionary<int, byte> _observedSources = new();
         private int _sessionId, _authenticated, _liveAuthenticated, _maximum, _doubleAbort;
+        private int _cpsvCommands, _transferCommands;
+        internal volatile bool DenyDirectories;
+        internal int CpsvCommands => Volatile.Read(ref _cpsvCommands);
+        internal int TransferCommands => Volatile.Read(ref _transferCommands);
         internal string Username { get; } = "fixture-" + Guid.NewGuid().ToString("N");
         internal byte[] Payload { get; }
         internal IEnumerable<int> ObservedSources => _observedSources.Keys;
@@ -612,6 +677,7 @@ internal static class CpsvSharingCheck
                         var split = command.Split(' ', 2);
                         var verb = split[0].ToUpperInvariant();
                         var value = split.Length == 2 ? split[1] : "";
+                        if (verb is "RETR" or "STOR") Interlocked.Increment(ref _transferCommands);
                         Trace(session, "command", verb is "USER" or "PASS" ? verb + " [fixture credential]" : command);
                         if (verb == "AUTH")
                         {
@@ -643,10 +709,13 @@ internal static class CpsvSharingCheck
                             case "FEAT": await Reply("211-Features"); await Reply(" CPSV"); await Reply(" SIZE"); await Reply(" MDTM"); await Reply(" REST STREAM"); await Reply(" UTF8"); await Reply("211 End"); break;
                             case "SYST": await Reply("215 UNIX Type: L8"); break;
                             case "PWD": await Reply("257 \"/\" is current directory"); break;
+                            case "CWD": await Reply(DenyDirectories && value != "/" ? "550 No such directory" : "250 Directory selected"); break;
+                            case "MKD": await Reply(DenyDirectories ? "550 Not allowed to make directories here" : "257 Directory created"); break;
                             case "SIZE": await Reply("213 " + Payload.Length); break;
                             case "MDTM": await Reply("213 20261015000000"); break;
                             case "REST": offset = long.Parse(value); await Reply("350 Restart accepted"); break;
                             case "CPSV":
+                                Interlocked.Increment(ref _cpsvCommands);
                                 data?.Stop();
                                 data = new TcpListener(_dataAddress, 0); data.Start(1);
                                 var p = ((IPEndPoint)data.LocalEndpoint).Port;

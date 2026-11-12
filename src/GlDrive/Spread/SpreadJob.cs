@@ -4157,7 +4157,7 @@ public partial class SpreadJob : IDisposable
             RecordPermanentMkdDenialIfMatch(dstId, basePath, code, msg);
             // Carry the FTP reply text so the failure handler can classify it
             // (permanent path/rights deny vs transient hiccup).
-            throw new IOException($"MKD failed for {basePath}: {code} {msg}".TrimEnd());
+            throw new Ftp.FtpDirectoryRejectedException(basePath, code, msg);
         }
 
         // Self-heal: a REAL create (not a CWD "already exists") means a prior

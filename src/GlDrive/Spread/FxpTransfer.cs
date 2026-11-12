@@ -854,7 +854,7 @@ public class FxpTransfer
 
             SetState(TransferState.NegotiatingActive);
 
-            if (BeforeStore != null) await BeforeStore(ct);
+            await PrepareRelayStoreAsync(src, dst, ct);
 
             var retrReply = await src.Execute($"RETR {Ftp.CpsvDataHelper.SanitizeFtpPath(srcPath)}", ct);
             AcceptRelayRetrReply(src, dst, retrReply);
@@ -1061,6 +1061,26 @@ public class FxpTransfer
             var rejection = CpsvDataHelper.RejectDataCommand(src, "RETR", retrReply);
             throw Fault(rejection.ControlChannelInSync ? FxpFaultSide.Neither : FxpFaultSide.Source,
                 rejection.Message);
+        }
+    }
+
+    internal async Task PrepareRelayStoreAsync(AsyncFtpClient src, AsyncFtpClient dst, CancellationToken ct)
+    {
+        try
+        {
+            if (BeforeStore != null) await BeforeStore(ct);
+        }
+        catch (FtpDirectoryRejectedException ex) when (ex.ControlChannelInSync && !ct.IsCancellationRequested)
+        {
+            // Both CPSV sockets are open, but RETR/STOR have not been issued. The
+            // directory walker consumed a final negative reply, so neither session
+            // owes a transfer completion. ExecuteRelay closes the unused sockets.
+            // Transport errors, cancellation, 421 and unexpected replies keep both
+            // marks; clearing them in the relay's finally would hide real desync.
+            CpsvDataHelper.EndDataSequence(src);
+            CpsvDataHelper.EndDataSequence(dst);
+            FaultSide = FxpFaultSide.Neither;
+            throw;
         }
     }
 

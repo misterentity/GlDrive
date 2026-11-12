@@ -1876,11 +1876,14 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
     public async Task<SearchResult?> SearchRequestSource(
         string release, IReadOnlyCollection<string> excludeIds, CancellationToken ct)
     {
-        using var first = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        // A winning site stops the other crawls before their next command. Hard
+        // cancellation of an issued LIST/SITE would discard a usable login and
+        // repeated request misses/wins can exhaust the account's login budget.
+        using var first = new CancellationTokenSource();
         var pending = GetConnectedServerIds().Where(id => !excludeIds.Contains(id))
             .Select(id => SearchReleaseOnServers(release,
                 GetConnectedServerIds().Where(other => other != id).Concat(excludeIds).ToList(),
-                first.Token, CancellationToken.None, applySkiplist: false))
+                ct, first.Token, applySkiplist: false))
             .ToList();
         try
         {
@@ -1891,6 +1894,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
                 SearchResult? hit;
                 try { hit = await done; }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested) { continue; }
+                ct.ThrowIfCancellationRequested();
                 if (hit != null) return hit;
             }
             return null;
@@ -1924,9 +1928,13 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             try
             {
                 stopToken.ThrowIfCancellationRequested();
-                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                cts.CancelAfter(timeout);
-                var search = await svc.SearchDetailed(release, null, cts.Token, stopToken);
+                // The source-search budget limits traversal, not the lifetime of
+                // an already-issued FTP command. Let that reply drain; the search
+                // service's hard deadline and explicit caller cancellation still
+                // bound a stalled command and retain normal quarantine handling.
+                using var budget = CancellationTokenSource.CreateLinkedTokenSource(stopToken);
+                budget.CancelAfter(timeout);
+                var search = await svc.SearchDetailed(release, null, ct, budget.Token);
                 stopToken.ThrowIfCancellationRequested();
                 if (search.IsPartial)
                     Log.Information("Alternate-source search incomplete on {Server}: {Count} matches, {Failed} failed listings, timed out={TimedOut}, truncated={Truncated}",
@@ -1940,6 +1948,11 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
             catch (OperationCanceledException) when (ct.IsCancellationRequested || stopToken.IsCancellationRequested)
             {
                 throw;
+            }
+            catch (OperationCanceledException)
+            {
+                Log.Debug("Alternate-source search traversal stopped on {Server}", id);
+                return null;
             }
             catch (Exception ex)
             {

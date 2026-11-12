@@ -12,6 +12,16 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.20.23 — fullscreen and FTP session recovery (2026-11-12)
+
+- Prevent fullscreen close callbacks from attaching the video view twice; close
+  the fullscreen window before disposing its dashboard player.
+- Stop automatic source searches between commands instead of cancelling healthy
+  FTP commands when another source wins or the traversal budget expires.
+- Preserve relay sessions after a proven clean directory refusal before transfer
+  commands begin, retaining quarantine for ambiguous failures.
+- See [release notes](releases/v3.20.23.md) for scope and operational limits.
+
 ## v3.20.22 — fixed route chain (2026-11-11)
 
 - Spread routes are ranked by measured speed by default; a new setting ranks

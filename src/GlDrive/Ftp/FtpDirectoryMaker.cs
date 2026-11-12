@@ -16,11 +16,15 @@ public static class FtpDirectoryMaker
     /// </summary>
     public static bool IsMkdSuccess(FtpReply reply)
     {
-        if (reply.Success) return true;
+        if (IsCompletedReply(reply)) return true;
+        if (!FtpDirectoryRejectedException.IsSynchronizedRejection(reply.Code)) return false;
         var msg = reply.Message ?? "";
         return msg.Contains("File exist", StringComparison.OrdinalIgnoreCase)
             || msg.Contains("already exist", StringComparison.OrdinalIgnoreCase);
     }
+
+    private static bool IsCompletedReply(FtpReply reply) =>
+        reply.Code is { Length: 3 } code && code[0] == '2' && code.All(char.IsAsciiDigit);
 
     /// <summary>
     /// Ensures an absolute directory exists using cbftp-style navigation: CWD to the whole
@@ -42,13 +46,18 @@ public static class FtpDirectoryMaker
         var sanitized = CpsvDataHelper.SanitizeFtpPath(fullPath);
 
         var whole = await execute($"CWD {sanitized}", ct);
-        if (whole.Success) return (true, whole.Code ?? "250", "exists (CWD)");
+        if (IsCompletedReply(whole)) return (true, whole.Code, "exists (CWD)");
+        // Only a consumed final negative reply may mean "missing". Continuing
+        // after 421 or a preliminary/unexpected reply could hide an unsafe session
+        // behind a later clean MKD denial and incorrectly authorize its reuse.
+        if (!FtpDirectoryRejectedException.IsSynchronizedRejection(whole.Code))
+            return (false, whole.Code ?? "", whole.Message ?? "CWD failed");
 
         var parts = sanitized.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length == 0) return (false, "ERR", "empty path");
 
         var root = await execute("CWD /", ct);
-        if (!root.Success) return (false, root.Code ?? "", root.Message ?? "CWD / failed");
+        if (!IsCompletedReply(root)) return (false, root.Code ?? "", root.Message ?? "CWD / failed");
 
         var createdAny = false;
         var currentPath = "";
@@ -56,19 +65,21 @@ public static class FtpDirectoryMaker
         {
             currentPath += "/" + part;
             var cwd = await execute($"CWD {part}", ct);
-            if (cwd.Success) continue;
+            if (IsCompletedReply(cwd)) continue;
+            if (!FtpDirectoryRejectedException.IsSynchronizedRejection(cwd.Code))
+                return (false, cwd.Code ?? "", cwd.Message ?? "CWD failed");
 
             var mkd = await execute($"MKD {part}", ct);
             if (!IsMkdSuccess(mkd))
                 return (false, mkd.Code ?? "", mkd.Message ?? "(no reply text)");
-            if (mkd.Success && !(mkd.Message ?? "").Contains("exist", StringComparison.OrdinalIgnoreCase))
+            if (IsCompletedReply(mkd) && !(mkd.Message ?? "").Contains("exist", StringComparison.OrdinalIgnoreCase))
             {
                 createdAny = true;
                 created?.Invoke(currentPath);
             }
 
             var cwd2 = await execute($"CWD {part}", ct);
-            if (!cwd2.Success)
+            if (!IsCompletedReply(cwd2))
                 return (false, cwd2.Code ?? "", cwd2.Message ?? "CWD after MKD failed");
         }
         return (true, createdAny ? "257" : "250", createdAny ? "created" : "exists");
