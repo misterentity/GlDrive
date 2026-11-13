@@ -38,29 +38,47 @@ public static class FtpDirectoryMaker
     /// "exists (CWD)" / "exists" when nothing was created, or "created". <paramref name="created"/>
     /// fires once per component this call actually created; a concurrent creator's
     /// "already exists" is navigable but never counts as ours.
+    /// When <paramref name="existingParent"/> is supplied, that exact ancestor must
+    /// still exist. Navigate into it first and create only descendants, never the
+    /// parent or its ancestors (for example a server-owned REQUEST directory).
     /// </summary>
     public static async Task<(bool Ok, string Code, string Message)> EnsurePath(
         Func<string, CancellationToken, Task<FtpReply>> execute,
-        string fullPath, CancellationToken ct, Action<string>? created = null)
+        string fullPath, CancellationToken ct, Action<string>? created = null, string? existingParent = null)
     {
         var sanitized = CpsvDataHelper.SanitizeFtpPath(fullPath);
+        var currentPath = "";
+        string[] parts;
+        if (existingParent != null)
+        {
+            var parent = existingParent.TrimEnd('/');
+            var prefix = parent + "/";
+            if (!IsSafeAbsolutePath(existingParent) || !IsSafeAbsolutePath(fullPath)
+                || !sanitized.StartsWith(prefix, StringComparison.Ordinal) || sanitized.Length <= prefix.Length)
+                return (false, "ERR", "path is not a safe descendant of the existing parent");
+            var boundary = await execute($"CWD {(parent.Length == 0 ? "/" : parent)}", ct);
+            if (!IsCompletedReply(boundary))
+                return (false, boundary.Code ?? "", boundary.Message ?? "Required parent CWD failed");
+            currentPath = parent;
+            parts = sanitized[prefix.Length..].Split('/');
+        }
+        else
+        {
+            var whole = await execute($"CWD {sanitized}", ct);
+            if (IsCompletedReply(whole)) return (true, whole.Code, "exists (CWD)");
+            // Only a consumed final negative reply may mean "missing". Continuing
+            // after 421 or a preliminary/unexpected reply could hide an unsafe session
+            // behind a later clean MKD denial and incorrectly authorize its reuse.
+            if (!FtpDirectoryRejectedException.IsSynchronizedRejection(whole.Code))
+                return (false, whole.Code ?? "", whole.Message ?? "CWD failed");
 
-        var whole = await execute($"CWD {sanitized}", ct);
-        if (IsCompletedReply(whole)) return (true, whole.Code, "exists (CWD)");
-        // Only a consumed final negative reply may mean "missing". Continuing
-        // after 421 or a preliminary/unexpected reply could hide an unsafe session
-        // behind a later clean MKD denial and incorrectly authorize its reuse.
-        if (!FtpDirectoryRejectedException.IsSynchronizedRejection(whole.Code))
-            return (false, whole.Code ?? "", whole.Message ?? "CWD failed");
-
-        var parts = sanitized.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length == 0) return (false, "ERR", "empty path");
-
-        var root = await execute("CWD /", ct);
-        if (!IsCompletedReply(root)) return (false, root.Code ?? "", root.Message ?? "CWD / failed");
+            parts = sanitized.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0) return (false, "ERR", "empty path");
+            var root = await execute("CWD /", ct);
+            if (!IsCompletedReply(root)) return (false, root.Code ?? "", root.Message ?? "CWD / failed");
+        }
 
         var createdAny = false;
-        var currentPath = "";
         foreach (var part in parts)
         {
             currentPath += "/" + part;
@@ -84,4 +102,8 @@ public static class FtpDirectoryMaker
         }
         return (true, createdAny ? "257" : "250", createdAny ? "created" : "exists");
     }
+
+    private static bool IsSafeAbsolutePath(string path) => path.StartsWith('/')
+        && !path.Any(char.IsControl) && !path.Contains('\\')
+        && (path == "/" || !path[1..].Split('/').Any(part => part is "" or "." or ".."));
 }

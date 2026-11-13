@@ -324,6 +324,22 @@ public sealed class RequestTrackerTests
     }
 
     [Fact]
+    public void Admission_deferral_preserves_rate_limit_and_request_age()
+    {
+        var tracker = new RequestTracker(new RequestTrackerOptions { MaxPerHour = 1 });
+        tracker.Observe(Release, null, null, Now);
+        tracker.Observe(Second, null, null, Now);
+        Assert.True(tracker.TryBeginFill(Release, Now));
+        tracker.FillDeferred(Release, Now);
+        Assert.Equal(0, tracker.Get(Release)!.FillAttempts);
+        Assert.Equal(Now, tracker.Get(Release)!.FirstSeenUtc);
+        Assert.False(tracker.TryBeginFill(Second, Now.AddMinutes(2)));
+        Assert.Equal(Now.AddHours(1), tracker.Get(Second)!.NextAttemptUtc);
+        Assert.Empty(tracker.DueForSearch(Now.AddHours(49)));
+        Assert.Equal(RequestState.Closed, tracker.Get(Release)!.State);
+    }
+
+    [Fact]
     public void Cooldown_keeps_requests_open_until_the_exact_boundary_without_counting_rejections()
     {
         var tracker = new RequestTracker(new RequestTrackerOptions { MaxPerHour = 0, CooldownSeconds = 60 });

@@ -12,6 +12,18 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.20.25 — release polling and request-fill boundaries (2026-11-13)
+
+- Ignore calendar `MMDD` containers during release polling, preventing false
+  release notifications and automatic races while preserving other short names.
+- Keep ordinary queued races separate from request fills; admission deferrals
+  retain pending requests without spending transfer-failure attempts.
+- Restrict request-fill receivers to their explicit destinations, including
+  duplicate announces and older persisted work with extra participants.
+- Require the existing request parent before creating its release/subdirectories;
+  never recreate a vanished server-owned request directory.
+- See [release notes](releases/v3.20.25.md) for scope and operational limits.
+
 ## v3.20.24 — wait for recovering source pools (2026-11-12)
 
 - Keep queued and fresh races waiting for an announced source during startup,

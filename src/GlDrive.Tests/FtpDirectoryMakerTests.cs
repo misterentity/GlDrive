@@ -11,6 +11,7 @@ public sealed class FtpDirectoryMakerTests
     {
         public readonly HashSet<string> Dirs = new(StringComparer.Ordinal) { "/" };
         public readonly Dictionary<string, FtpReply> MkdReplies = new(StringComparer.Ordinal);
+        public readonly Dictionary<string, FtpReply> CwdReplies = new(StringComparer.Ordinal);
         public readonly List<string> Commands = [];
         private string _cwd = "/";
 
@@ -27,6 +28,7 @@ public sealed class FtpDirectoryMakerTests
             switch (verb)
             {
                 case "CWD":
+                    if (CwdReplies.TryGetValue(target, out var cwdReply)) return Task.FromResult(cwdReply);
                     if (!Dirs.Contains(target)) return Reply("550", "No such file or directory.");
                     _cwd = target;
                     return Reply("250", "CWD command successful.");
@@ -143,6 +145,77 @@ public sealed class FtpDirectoryMakerTests
         var site = new FakeSite();
         site.Dirs.Remove("/");
         Assert.Equal((false, "ERR", "empty path"), await Ensure(site, "/"));
+    }
+
+    [Fact]
+    public async Task Request_parent_must_still_exist_before_each_create_attempt()
+    {
+        const string parent = "/requests/REQUEST-Release";
+        var site = new FakeSite("/requests", parent);
+        var created = new List<string>();
+        var first = await FtpDirectoryMaker.EnsurePath(site.Execute, parent + "/Release/CD1",
+            CancellationToken.None, created.Add, existingParent: parent);
+        Assert.True(first.Ok);
+        Assert.Equal([parent + "/Release", parent + "/Release/CD1"], created);
+        Assert.Equal("CWD " + parent, site.Commands[0]);
+        Assert.DoesNotContain("MKD REQUEST-Release", site.Commands);
+
+        // Another filler closes the request after discovery/earlier file delivery.
+        site.Dirs.RemoveWhere(path => path.StartsWith(parent, StringComparison.Ordinal));
+        site.Commands.Clear();
+        created.Clear();
+        var next = await FtpDirectoryMaker.EnsurePath(site.Execute, parent + "/Release/CD2",
+            CancellationToken.None, created.Add, existingParent: parent);
+        Assert.Equal((false, "550", "No such file or directory."), next);
+        Assert.Equal(["CWD " + parent], site.Commands);
+        Assert.Empty(created);
+        Assert.DoesNotContain(parent, site.Dirs);
+    }
+
+    [Theory]
+    [InlineData("421")]
+    [InlineData("150")]
+    [InlineData("350")]
+    [InlineData("550")]
+    [InlineData("553")]
+    [InlineData("5xx")]
+    [InlineData("")]
+    public async Task Required_parent_rejection_preserves_reply_without_fallback_or_MKD(string code)
+    {
+        const string parent = "/requests/REQUEST-Release";
+        var site = new FakeSite("/requests", parent);
+        site.CwdReplies[parent] = new() { Code = code, Message = "fixture parent rejection" };
+        var result = await FtpDirectoryMaker.EnsurePath(site.Execute, parent + "/Release",
+            CancellationToken.None, existingParent: parent);
+        Assert.Equal((false, code, "fixture parent rejection"), result);
+        Assert.Equal(["CWD " + parent], site.Commands);
+    }
+
+    [Fact]
+    public async Task The_existing_root_can_bound_creation_without_being_recreated()
+    {
+        var site = new FakeSite();
+        var result = await FtpDirectoryMaker.EnsurePath(site.Execute, "/Release/CD1", CancellationToken.None,
+            existingParent: "/");
+        Assert.True(result.Ok);
+        Assert.Equal("CWD /", site.Commands[0]);
+        Assert.Equal(["MKD Release", "MKD CD1"], site.Commands.Where(c => c.StartsWith("MKD ", StringComparison.Ordinal)));
+    }
+
+    [Theory]
+    [InlineData("/requests/REQUEST-Release2/Release")]
+    [InlineData("/requests/REQUEST-Release/../Closed/Release")]
+    [InlineData("/requests/REQUEST-Release//Release")]
+    [InlineData("/requests/REQUEST-Release/Release\r\nMKD x")]
+    [InlineData("/requests/REQUEST-Release")]
+    public async Task Protected_parent_rejects_non_descendant_paths_before_any_command(string fullPath)
+    {
+        var site = new FakeSite();
+        var result = await FtpDirectoryMaker.EnsurePath(site.Execute, fullPath, CancellationToken.None,
+            existingParent: "/requests/REQUEST-Release");
+        Assert.False(result.Ok);
+        Assert.Equal("ERR", result.Code);
+        Assert.Empty(site.Commands);
     }
 
     [Theory]

@@ -57,6 +57,16 @@ Ordinary PASV sites never acquire a fallback, and neither LIST 550 nor a refused
 endpoint renews it using an older successful reply. `--pasv-fallback-only` runs this check
 after the certificate and initialization checks. The fixture never contacts a production site.
 
+The request-directory check calls the actual race directory preparer through native FTPS.
+It confirms a synthetic REQUEST parent exists, removes that empty parent on the fixture
+server, and verifies that transfer preparation fails with the exact final FTP reply after
+one CWD, without MKD, recreation or cleanup ownership. Once the fixture operator restores
+the parent, only the release and its CD1 subdirectory may be created; ownership covers only
+the release root. Repeating preparation sends no MKD, and the same native session remains
+usable with no replacement login or quarantine. Append `--request-directory-only` to run
+this with the certificate, admission, initialization, listing-disconnect and standard-data
+fallback preambles. It creates no payload and does not exercise a complete remote FXP copy.
+
 The harness first checks source relocation through real FTPS scans, directory probes and downloads. It establishes ownership, physically moves a payload while retaining the old release directory, and checks both a rejected RETR and an empty LIST. The watch path must win over a populated section decoy; the next scan must restore ownership and a file observed before the move must download intact from its new path. Missing watch and section candidates must preserve the same reusable pooled connection without a new login. To run just these checks, append `--relocation-only` to the harness command.
 
 Before other pools start, initialization checks hold the disposable fixture's first USER response while native TLS login is in flight. For both initial connection and reinitialization, a competing borrow cancels without losing the reserved pool slot or account permit; another waiting borrower receives the successfully published session. A synthetic mount must withhold its pool before and during initialization, expose it after that native login succeeds, and hide it after disposal. A real NOOP and subsequent reuse must succeed with exactly one authentication and no leaked permit, lease, quarantine or cooldown. Append `--initialization-only` to run certificate rejection and these publication checks alone. The fixture pause has a 15-second deadline and only affects this isolated server.

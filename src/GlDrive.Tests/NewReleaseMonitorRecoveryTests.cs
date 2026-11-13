@@ -93,6 +93,30 @@ public sealed class NewReleaseMonitorRecoveryTests
     }
 
     [Fact]
+    public async Task Calendar_buckets_are_not_announced_or_sent_to_release_consumers()
+    {
+        var round = 0;
+        var monitor = Monitor((path, _) => Task.FromResult(path == "/recent"
+            ? Dirs("music")
+            : round == 0 ? Dirs("old")
+            : Dirs("old", "0101", "0229", "1106", "1112", "1113", "1231",
+                "Artist.Album.2026-GRP", "1917", "1232", "0000", "Short", "1113-Album")));
+        var detected = new List<(string Category, string Release, string Path)>();
+        monitor.NewReleaseDetected += (category, release, path) => detected.Add((category, release, path));
+        await monitor.PollCycle(CancellationToken.None);
+        round = 1;
+        await monitor.PollCycle(CancellationToken.None);
+        await monitor.PollCycle(CancellationToken.None);
+        var expected = new[] { "Artist.Album.2026-GRP", "1917", "1232", "0000", "Short", "1113-Album" };
+        Assert.Equal(expected.Order(), detected.Select(row => row.Release).Order());
+        Assert.All(detected, row =>
+        {
+            Assert.Equal("music", row.Category);
+            Assert.Equal("/recent/music/" + row.Release, row.Path);
+        });
+    }
+
+    [Fact]
     public async Task Shutdown_inside_category_does_not_continue_to_other_categories()
     {
         using var stop = new CancellationTokenSource();

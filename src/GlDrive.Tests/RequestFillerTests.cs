@@ -263,6 +263,35 @@ public class RequestFillerTests
         Assert.Equal(RequestState.Open, Assert.Single(filler.Requests).State);
     }
 
+    [Theory]
+    [InlineData(RaceStartOutcome.Unavailable)]
+    [InlineData(RaceStartOutcome.AlreadyActive)]
+    [InlineData(RaceStartOutcome.Suppressed)]
+    public async Task Admission_deferrals_do_not_exhaust_actual_fill_attempts(RaceStartOutcome outcome)
+    {
+        var f = new Fixture { Outcome = outcome };
+        using var filler = f.Create();
+        await Observe(filler, Requested);
+        for (var i = 0; i < 4; i++)
+        {
+            var request = Assert.Single(filler.Requests);
+            Assert.Equal(RequestState.Open, request.State);
+            Assert.Equal(0, request.FillAttempts);
+            Assert.True(request.NextAttemptUtc > f.Now);
+            f.Now = request.NextAttemptUtc;
+            await filler.PumpAsync();
+        }
+        Assert.Equal(5, f.Fills.Count);
+        f.Outcome = RaceStartOutcome.Queued;
+        f.Now = Assert.Single(filler.Requests).NextAttemptUtc;
+        await filler.PumpAsync();
+        Assert.Equal(RequestState.Filling, Assert.Single(filler.Requests).State);
+        Assert.Equal(1, Assert.Single(filler.Requests).FillAttempts);
+        filler.OnFillEnded(Release, complete: false, "fixture transfer failed");
+        Assert.Equal(1, Assert.Single(filler.Requests).FillAttempts);
+        Assert.Equal(RequestState.Open, Assert.Single(filler.Requests).State);
+    }
+
     [Fact]
     public async Task Bot_nick_and_channel_filters_apply()
     {

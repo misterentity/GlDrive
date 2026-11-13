@@ -509,6 +509,7 @@ public partial class SpreadManager : IDisposable, GlDrive.Downloads.Segmented.IR
     {
         if (!RaceLifetimePolicy.IsSafeAbsolutePath(destinationPath))
             return new(RaceStartOutcome.Unavailable, section, releaseName, Reason: "Unsafe request destination path");
+        destinationPath = destinationPath.TrimEnd('/');
         return StartRaceCore(section, releaseName, [sourceServerId, requesterServerId], SpreadMode.Race,
             sourceServerId, sourcePath, throwOnAdmissionFailure: false,
             destinationPaths: new() { [requesterServerId] = destinationPath });

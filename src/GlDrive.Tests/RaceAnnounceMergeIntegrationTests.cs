@@ -46,6 +46,44 @@ public sealed class RaceAnnounceMergeIntegrationTests : IDisposable
     private void ReserveSlot(SpreadManager manager) => Field<List<PersistedRace>>(manager, "_startingRequests").Add(Request("Other.Release-GRP"));
     private List<PersistedRace> Saved() => JsonSerializer.Deserialize<List<PersistedRace>>(File.ReadAllText(Path.Combine(_directory, "race-queue.json")))!;
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Request_fill_cannot_reaim_an_ordinary_queued_race(bool merge)
+    {
+        using var manager = Manager(Config(merge));
+        ReserveSlot(manager);
+        var ordinary = Request();
+        Field<List<PersistedRace>>(manager, "_raceQueue").Add(ordinary);
+
+        var result = manager.StartRequestFill("tv-hd", Release, "src", "/source/" + Release,
+            "dst", "/requests/REQUEST-" + Release + "/" + Release);
+
+        Assert.Equal(RaceStartOutcome.Unavailable, result.Outcome);
+        Assert.Contains("ordinary race", result.Reason);
+        Assert.False(result.HintsMerged);
+        Assert.Same(ordinary, Assert.Single(Field<List<PersistedRace>>(manager, "_raceQueue")));
+        Assert.False(manager.HasPendingRequestFill(Release, "dst"));
+        Assert.Equal(JsonSerializer.Serialize(ordinary), JsonSerializer.Serialize(Saved().Single(r => r.ReleaseName == Release)));
+    }
+
+    [Fact]
+    public void Ordinary_announce_cannot_add_unrequested_receivers_to_a_queued_fill()
+    {
+        using var manager = Manager(Config());
+        ReserveSlot(manager);
+        var result = manager.StartRequestFill("tv-hd", Release, "src", "/source/" + Release,
+            "dst", "/requests/REQUEST-" + Release + "/" + Release);
+        Assert.Equal(RaceStartOutcome.Queued, result.Outcome);
+
+        manager.StartRaceDetailed("tv-hd", Release, ["src", "dst", "peer"], SpreadMode.Race,
+            "src", "/source/" + Release);
+
+        var fill = Assert.Single(manager.QueuedRaces);
+        Assert.Equal(["src", "dst"], fill.ServerIds);
+        Assert.Equal("dst", Assert.Single(fill.DestinationPaths!).Key);
+    }
+
     [Fact]
     public void Destination_first_queue_merges_source_alias_preserves_wait_and_survives_restart()
     {

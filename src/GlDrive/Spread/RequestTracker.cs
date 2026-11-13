@@ -169,6 +169,24 @@ public sealed class RequestTracker
         }
     }
 
+    /// <summary>Admission did not start a fill. Retain the request without spending a transfer retry.</summary>
+    public void FillDeferred(string release, DateTime nowUtc)
+    {
+        lock (_lock)
+        {
+            if (!_requests.TryGetValue(release, out var request) || request.State != RequestState.Filling)
+                return;
+            _requests[release] = request with
+            {
+                State = RequestState.Open,
+                FillAttempts = Math.Max(0, request.FillAttempts - 1),
+                NextAttemptUtc = nowUtc.AddMinutes(2)
+            };
+            // Keep the admission-rate accounting: repeated deferrals must not
+            // bypass the configured hourly limit or global cooldown.
+        }
+    }
+
     public void FillFailed(string release, DateTime nowUtc)
     {
         lock (_lock)

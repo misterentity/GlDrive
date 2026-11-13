@@ -22,7 +22,11 @@ internal static class RaceAnnounceMerge
             .ThenByDescending(h => !string.IsNullOrWhiteSpace(h.Path)).FirstOrDefault();
         var sourceChanged = selected != null && (selected.ServerId != current.KnownSourceServerId
             || selected.Path != current.KnownSourcePath || selected.Section != current.Section);
-        var ids = current.ServerIds.Concat(incoming.ServerIds).Concat(hints.Select(h => h.ServerId))
+        // Ordinary duplicate announcements may supply another source for a request
+        // fill, but may not turn their unrelated receivers into request recipients.
+        var incomingIds = current.DestinationPaths is { Count: > 0 }
+            ? Enumerable.Empty<string>() : incoming.ServerIds;
+        var ids = current.ServerIds.Concat(incomingIds).Concat(hints.Select(h => h.ServerId))
             .Distinct(StringComparer.Ordinal).ToList();
         var section = canChangeSection && sourceChanged && !current.HasOwnedPartial && !current.CleanupOnly
             ? selected!.Section : current.Section;

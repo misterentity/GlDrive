@@ -63,9 +63,15 @@ public partial class SpreadManager
         var duplicate = _raceQueue.FindIndex(r => IsSameRace(r.ReleaseName, incoming.ReleaseName));
         if (duplicate < 0) return null;
         var queued = _raceQueue[duplicate];
+        // A request's section-rule exemptions and exact destination cannot be
+        // applied to an ordinary race's other receivers. Leave that work intact;
+        // the request filler defers admission until it can obtain its own slot.
+        if (incoming.DestinationPaths is { Count: > 0 } && queued.DestinationPaths is not { Count: > 0 })
+            return new(RaceStartOutcome.Unavailable, incoming.Section, incoming.ReleaseName,
+                Reason: "Release has an ordinary race queued; request fill will retry after it finishes");
         var updated = _config.Spread.MergeRaceAnnounces && !queued.CleanupOnly ? MergeRaceNoLock(queued, incoming, true) : queued;
-        // A request fill for an already queued release promotes that entry: it gains
-        // the request directory and the requester, and moves to the front of the queue.
+        // Compatible request fills can share a queue entry, adding only explicit
+        // request destinations and their known sources.
         if (incoming.DestinationPaths is { Count: > 0 } requested
             && !requested.All(d => queued.DestinationPaths?.GetValueOrDefault(d.Key) == d.Value))
         {

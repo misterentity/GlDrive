@@ -239,7 +239,7 @@ public sealed class RequestFiller : IDisposable
                 else
                 {
                     lock (_lock) _fills.Remove(request.Release);
-                    _tracker.FillFailed(request.Release, now);
+                    _tracker.FillDeferred(request.Release, now);
                     Log.Information("RequestFiller: could not start fill of {Release}: {Outcome} {Reason}",
                         request.Release, result.Outcome, result.Reason);
                 }

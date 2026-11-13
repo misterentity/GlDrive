@@ -177,6 +177,7 @@ public class NewReleaseMonitor
                 .Where(i => i.Type is FtpObjectType.Directory or FtpObjectType.Link)
                 .Select(i => i.Name)
                 .Where(name => !GlDrive.Downloads.ReleaseArtifactNames.IsSectionIndicatorName(name))
+                .Where(name => !IsCalendarBucket(name))
                 .ToHashSet();
 
             if (_snapshot.TryGetValue(category, out var previous))
@@ -214,5 +215,18 @@ public class NewReleaseMonitor
         // its error counter. One summary per cycle avoids a warning per category.
         if (firstFailure != null)
             throw new IOException($"{failedCategories} category listing(s) failed; first {firstFailedPath}", firstFailure);
+    }
+
+    // Dated sections contain MMDD containers at the level normally occupied by
+    // releases. Passing one to release consumers races the container itself and
+    // can recursively download its contents. Do not impose IRC's scene-name
+    // heuristic here: ordinary short FTP directory names remain valid releases.
+    private static bool IsCalendarBucket(string name)
+    {
+        if (name.Length != 4 || !name.All(char.IsAsciiDigit)) return false;
+        var month = (name[0] - '0') * 10 + name[1] - '0';
+        var day = (name[2] - '0') * 10 + name[3] - '0';
+        // Leap-day containers may remain in an archive in a non-leap year.
+        return month is >= 1 and <= 12 && day >= 1 && day <= DateTime.DaysInMonth(2000, month);
     }
 }

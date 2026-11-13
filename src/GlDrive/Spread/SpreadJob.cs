@@ -517,7 +517,8 @@ public partial class SpreadJob : IDisposable
     }
 
     private bool IsReceivingSite(string serverId) =>
-        _serverConfigs.TryGetValue(serverId, out var config)
+        (!IsRequestFill || HasDestinationOverride(serverId))
+        && _serverConfigs.TryGetValue(serverId, out var config)
         && !config.SpreadSite.DownloadOnly && !LiveSpreadPolicy.IsAffiliated(config, ReleaseName);
 
     // Caller holds _ownershipLock. A source can also receive missing files, so
@@ -763,6 +764,7 @@ public partial class SpreadJob : IDisposable
             foreach (var (serverId, config) in _serverConfigs)
             {
                 if (sitePaths.ContainsKey(serverId)) continue; // Already has it
+                if (IsRequestFill && !HasDestinationOverride(serverId)) continue;
                 if (config.SpreadSite.DownloadOnly)
                 {
                     downloadOnlyDests.Add(config.Name);
@@ -2539,7 +2541,7 @@ public partial class SpreadJob : IDisposable
                 || _fileInfos.Count < _expectedFileCount
                 || _fileInfos.Keys.Any(name => name.EndsWith(".sfv", StringComparison.OrdinalIgnoreCase)
                     && !_parsedSfvs.Contains(name))
-                || _destHasMissingStub.Any(kv => kv.Value);
+                || _destHasMissingStub.Any(kv => kv.Value && (!IsRequestFill || HasDestinationOverride(kv.Key)));
         }
     }
 
@@ -2690,6 +2692,9 @@ public partial class SpreadJob : IDisposable
                     foreach (var (dstId, dstBasePath) in sitePaths)
                     {
                         if (srcId == dstId) continue;
+                        // Also protect old persisted fills that predate admission
+                        // isolation, and extra sources discovered after admission.
+                        if (IsRequestFill && !HasDestinationOverride(dstId)) continue;
                         destsEvaluated++;
                         if (owners.Contains(dstId)) { skippedOwned++; continue; }
                         if (_inFlightFiles.Contains((fileName, dstId))) { skippedOwned++; continue; }
@@ -4148,9 +4153,22 @@ public partial class SpreadJob : IDisposable
             ? basePath
             : basePath.TrimEnd('/') + "/" + dirPart.Trim('/');
 
+        // Discovery's earlier existence check is not enough: another filler may
+        // rename/remove REQUEST-* while this transfer waits for its connections.
+        // The directory walker may create the release and subdirectories only.
+        string? existingParent = null;
+        if (DestinationPaths?.TryGetValue(dstId, out var requestPath) == true)
+        {
+            var requestRoot = requestPath.TrimEnd('/');
+            if (!RaceLifetimePolicy.IsSafeAbsolutePath(requestRoot))
+                throw new Ftp.FtpDirectoryRejectedException(basePath, "ERR", "Unsafe request destination path");
+            var separator = requestRoot.LastIndexOf('/');
+            existingParent = separator == 0 ? "/" : requestRoot[..separator];
+        }
         var (ok, code, msg) = await Ftp.FtpDirectoryMaker.EnsurePath(client.Execute, fullDir, ct,
             created => RecordCreatedRoot(dstId, basePath, created,
-                RaceLifetimePolicy.AccountIdentity(client.Host, client.Port, client.Credentials.UserName)));
+                RaceLifetimePolicy.AccountIdentity(client.Host, client.Port, client.Credentials.UserName)),
+            existingParent: existingParent);
         if (!ok)
         {
             RecordIfPermanent(dstId, basePath, code, msg);

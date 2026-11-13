@@ -121,6 +121,12 @@ if (args.Contains("--pasv-fallback-only", StringComparer.Ordinal))
     Console.WriteLine("PASS: native standard-data fallback verification complete");
     return;
 }
+await NativeRequestDirectoryCheck.Run(factory, root, remoteRoot, deadline.Token);
+if (args.Contains("--request-directory-only", StringComparer.Ordinal))
+{
+    Console.WriteLine("PASS: native request-directory boundary verification complete");
+    return;
+}
 if (args.Contains("--search-only", StringComparer.Ordinal))
 {
     await CheckSearchRecovery(factory, root, remoteRoot, deadline.Token);

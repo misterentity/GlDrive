@@ -55,6 +55,19 @@ class ReleaseCheckHandler(TLS_FTPHandler):
     proto_cmds["SITE NUKES"] = {"perm": None, "auth": True, "arg": False,
                                "help": "Syntax: SITE NUKES"}
 
+    def record_request_directory_command(self, verb, path):
+        if (root / "capture-request-directory-commands").exists():
+            with (root / "request-directory-commands").open("a") as commands:
+                commands.write(verb + " " + self.fs.fs2ftp(path) + "\n")
+
+    def ftp_CWD(self, path):
+        self.record_request_directory_command("CWD", path)
+        return super().ftp_CWD(path)
+
+    def ftp_MKD(self, path):
+        self.record_request_directory_command("MKD", path)
+        return super().ftp_MKD(path)
+
     def ftp_SITE_NUKES(self, line):
         response = root / "site-nukes-response"
         code = response.read_text().strip() if response.exists() else "500"
