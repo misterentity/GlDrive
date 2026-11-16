@@ -129,6 +129,8 @@ internal static class CpsvSharingCheck
         string? failure = null;
         try
         {
+            Phase = "pre-cancelled listing";
+            await PreCancelledListing(evidence, deadline.Token);
             Phase = "relay directory rejection";
             await RelayDirectoryRejection(evidence, deadline.Token);
             Phase = "clean yield";
@@ -165,6 +167,40 @@ internal static class CpsvSharingCheck
         if (!condition) throw new InvalidOperationException("FAIL: " + Phase + ": " + message);
         Passed.Add(Phase + ": " + message);
         Console.WriteLine("PASS: " + Phase + ": " + message);
+    }
+
+    private static async Task PreCancelledListing(string evidence, CancellationToken ct)
+    {
+        await using var f = await Fixture.Create(evidence, "pre-cancelled-listing", false, ct);
+        AsyncFtpClient original;
+        await using (var connection = await f.Main.Borrow(ct))
+        {
+            original = connection.Client;
+            var commandsBefore = f.Peer.Commands;
+            using var cancelled = new CancellationTokenSource();
+            cancelled.Cancel();
+            try
+            {
+                await CpsvDataHelper.ListDirectory(connection.Client, "/fixture", "127.0.0.1", cancelled.Token);
+                throw new InvalidOperationException("Pre-cancelled native listing unexpectedly succeeded");
+            }
+            catch (OperationCanceledException) when (cancelled.IsCancellationRequested) { }
+            Check(f.Peer.Commands == commandsBefore,
+                "pre-cancelled native listing sends no FTP command");
+            Check(!PendingSequence(connection.Client) && !connection.Poisoned,
+                "pre-cancelled native listing leaves no pending reply or poisoned lease");
+        }
+        Check(f.Main.ActiveCount == 0 && f.Main.QuarantineSize == 0,
+            "cancelled-before-start listing returns its native session without quarantine");
+        await using (var next = await f.Main.Borrow(ct))
+        {
+            Check(ReferenceEquals(original, next.Client) && (await Noop(next, ct)).Code == "200",
+                "the same native session is reborrowed and answers NOOP after pre-cancellation");
+        }
+        Check(f.Peer.Authenticated == 2 && f.Gate.Held == 2 && f.Main.TotalCreated == 1,
+            "pre-cancellation needs no replacement login or extra account permit");
+        await f.DisposeAsync();
+        Check(f.Gate.Held == 0, "pre-cancellation fixture releases all login permits");
     }
 
     private static async Task RelayDirectoryRejection(string evidence, CancellationToken ct)
@@ -261,6 +297,15 @@ internal static class CpsvSharingCheck
         {
             await f.Peer.FirstMainData.Task.WaitAsync(TimeSpan.FromSeconds(15), ct);
             await (stalledSetup ? f.Peer.LoanSetupEntered.Task : f.Peer.FirstLoanData.Task).WaitAsync(TimeSpan.FromSeconds(15), ct);
+            var expectedPhase = stalledSetup ? "RETR data TLS" : "RETR data read";
+            await Until(() => PendingDescription(spreadClient)?.Contains("last phase=" + expectedPhase, StringComparison.Ordinal) == true,
+                TimeSpan.FromSeconds(3), ct);
+            Check(PendingDescription(spreadClient) is { } pending &&
+                pending.Contains("operation=OpenAsync", StringComparison.Ordinal) &&
+                pending.Contains("last phase=" + expectedPhase, StringComparison.Ordinal) &&
+                pending.Contains("caller cancellation requested=False", StringComparison.Ordinal),
+                stalledSetup ? "blocked native data TLS is attributed to its operation and phase" :
+                    "blocked native data read is attributed to its operation and phase");
             Check(f.Main.ActiveCount == 1 && f.Spread.ActiveCount == 1 && f.Gate.Held == 2,
                 "idle download holds one main and one borrowed race login within the account cap");
             Check(await source.TryAcquireAsync(ct) == null, "one lane source cannot lend its already outstanding loan twice");
@@ -299,7 +344,7 @@ internal static class CpsvSharingCheck
                     Check(ReferenceEquals(spreadClient, returned.Client) != stalledSetup,
                         stalledSetup ? "queued race receives a replacement for the loan stalled before TLS setup" : "queued race receives the same yielded native control session");
                     if (stalledSetup) spreadClient = returned.Client;
-                    Check(!PendingSequence(returned.Client), stalledSetup
+                    Check(!PendingSequence(returned.Client) && PendingDescription(returned.Client) == null, stalledSetup
                         ? "replacement has no pending CPSV sequence; original setup session is quarantined"
                         : "yield consumes the CPSV data completion before returning the session");
                     var reply = await Noop(returned, ct);
@@ -332,6 +377,8 @@ internal static class CpsvSharingCheck
             {
                 Check(ReferenceEquals(mainClient, mainAgain.Client) && ReferenceEquals(spreadClient, spreadAgain.Client),
                     "each session returns to its original pool after completion");
+                Check(PendingDescription(mainAgain.Client) == null && PendingDescription(spreadAgain.Client) == null,
+                    "completed native transfers retain no stale operation or phase diagnostic");
                 Check((await Noop(mainAgain, ct)).Code == "200" &&
                       (await Noop(spreadAgain, ct)).Code == "200",
                     "both returned control sessions remain synchronized and reusable");
@@ -468,6 +515,10 @@ internal static class CpsvSharingCheck
 
     private static bool PendingSequence(AsyncFtpClient client) => CpsvDataHelper.HasPendingDataSequence(client);
 
+    private static string? PendingDescription(AsyncFtpClient client) =>
+        (string?)typeof(CpsvDataHelper).GetMethod("DescribePendingDataSequence", BindingFlags.Static | BindingFlags.NonPublic)!
+            .Invoke(null, [client]);
+
     private static async Task<FtpReply> Noop(PooledConnection connection, CancellationToken ct)
     {
         try { return await connection.Client.Execute("NOOP", ct); }
@@ -583,8 +634,9 @@ internal static class CpsvSharingCheck
         private readonly IReadOnlyList<IPAddress>? _networkAddresses;
         private readonly ConcurrentDictionary<int, byte> _observedSources = new();
         private int _sessionId, _authenticated, _liveAuthenticated, _maximum, _doubleAbort;
-        private int _cpsvCommands, _transferCommands;
+        private int _commands, _cpsvCommands, _transferCommands;
         internal volatile bool DenyDirectories;
+        internal int Commands => Volatile.Read(ref _commands);
         internal int CpsvCommands => Volatile.Read(ref _cpsvCommands);
         internal int TransferCommands => Volatile.Read(ref _transferCommands);
         internal string Username { get; } = "fixture-" + Guid.NewGuid().ToString("N");
@@ -674,6 +726,7 @@ internal static class CpsvSharingCheck
                     await Reply("220 Isolated CPSV sharing fixture");
                     while (await reader.ReadLineAsync(_stop.Token) is { } command)
                     {
+                        Interlocked.Increment(ref _commands);
                         var split = command.Split(' ', 2);
                         var verb = split[0].ToUpperInvariant();
                         var value = split.Length == 2 ? split[1] : "";

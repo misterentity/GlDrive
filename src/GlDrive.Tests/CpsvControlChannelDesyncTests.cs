@@ -30,6 +30,68 @@ public class CpsvControlChannelDesyncTests
 {
     private static AsyncFtpClient NewClient() => new("example.invalid", "u", "p");
 
+    [Theory]
+    [InlineData("list")]
+    [InlineData("download")]
+    [InlineData("download-stream")]
+    [InlineData("upload")]
+    [InlineData("upload-stream")]
+    [InlineData("upload-stream-unexposed")]
+    [InlineData("data-socket")]
+    public async Task AlreadyCancelledOperation_DoesNotInvalidateAnUnusedConnection(string operation)
+    {
+        using var client = NewClient();
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        using var stream = operation == "upload-stream-unexposed"
+            ? new System.IO.MemoryStream(new byte[1], writable: false)
+            : new System.IO.MemoryStream();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation switch
+        {
+            "list" => CpsvDataHelper.ListDirectory(client, "/", client.Host, cancelled.Token),
+            "download" => CpsvDataHelper.DownloadFile(client, "/file", client.Host, cancelled.Token),
+            "download-stream" => CpsvDataHelper.DownloadFileToStream(client, "/file", stream, ct: cancelled.Token),
+            "upload" => CpsvDataHelper.UploadFile(client, "/file", [], client.Host, cancelled.Token),
+            "upload-stream" => CpsvDataHelper.UploadFileStream(client, "/file", stream, client.Host, cancelled.Token),
+            "upload-stream-unexposed" => CpsvDataHelper.UploadFileStream(client, "/file", stream, client.Host, cancelled.Token),
+            _ => CpsvDataHelper.OpenDataTcp(client, cancelled.Token)
+        });
+        Assert.False(CpsvDataHelper.HasPendingDataSequence(client));
+    }
+
+    [Fact]
+    public async Task AlreadyCancelledOperation_DoesNotClearAnExistingHazard()
+    {
+        using var client = NewClient();
+        CpsvDataHelper.BeginDataSequence(client, operation: "original RETR");
+        CpsvDataHelper.SetDataSequencePhase(client, "completion reply");
+        var original = CpsvDataHelper.DescribePendingDataSequence(client);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            CpsvDataHelper.ListDirectory(client, "/", client.Host, new CancellationToken(true)));
+        Assert.True(CpsvDataHelper.HasPendingDataSequence(client));
+        Assert.Equal(original, CpsvDataHelper.DescribePendingDataSequence(client));
+    }
+
+    [Fact]
+    public void Nested_setup_preserves_origin_and_completion_removes_all_context()
+    {
+        using var client = NewClient();
+        using var cancelledLater = new CancellationTokenSource();
+        CpsvDataHelper.BeginDataSequence(client, cancelledLater.Token, "ListDirectory");
+        CpsvDataHelper.BeginDataSequence(client, operation: "OpenDataTcp");
+        CpsvDataHelper.SetDataSequencePhase(client, "LIST data TLS");
+        cancelledLater.Cancel();
+        Assert.Equal("operation=ListDirectory; last phase=LIST data TLS; caller cancellation requested=True",
+            CpsvDataHelper.DescribePendingDataSequence(client));
+        CpsvDataHelper.AcceptCompletionReply(client, new FtpReply { Code = "226" }, validate: true);
+        Assert.Null(CpsvDataHelper.DescribePendingDataSequence(client));
+        CpsvDataHelper.SetDataSequencePhase(client, "late update");
+        Assert.False(CpsvDataHelper.HasPendingDataSequence(client));
+        CpsvDataHelper.BeginDataSequence(client, operation: "UploadFile");
+        Assert.Equal("operation=UploadFile; last phase=control setup; caller cancellation requested=False",
+            CpsvDataHelper.DescribePendingDataSequence(client));
+    }
+
     [Fact]
     public void FreshClient_HasNoPendingSequence()
     {

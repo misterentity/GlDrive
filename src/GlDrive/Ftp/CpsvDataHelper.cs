@@ -2,6 +2,7 @@ using System.Globalization;
 using System.IO;
 using System.Net.Security;
 using System.Net.Sockets;
+using System.Runtime.CompilerServices;
 using System.Security.Authentication;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -51,16 +52,43 @@ public static class CpsvDataHelper
     // starts and cleared only when it provably completes. Any other exit path
     // leaves it set and PooledConnection.DisposeAsync discards the connection.
     // ConditionalWeakTable so a client that is never returned is not retained.
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<AsyncFtpClient, object> PendingSequences = new();
-    private static readonly object PendingMarker = new();
+    private sealed class PendingSequence(string operation, CancellationToken cancellation)
+    {
+        public string Operation { get; } = operation;
+        public CancellationToken Cancellation { get; } = cancellation;
+        public string Phase = "control setup";
+    }
+
+    private static readonly ConditionalWeakTable<AsyncFtpClient, PendingSequence> PendingSequences = new();
 
     /// <summary>
     /// Marks this control channel as owing a reply. Called when a CPSV data
     /// sequence begins; until <see cref="CompleteDataSequence"/> clears it, the
     /// connection must not be reused by anyone else.
     /// </summary>
-    internal static void BeginDataSequence(AsyncFtpClient client)
-        => PendingSequences.AddOrUpdate(client, PendingMarker);
+    internal static void BeginDataSequence(AsyncFtpClient client, CancellationToken ct = default,
+        [CallerMemberName] string operation = "unknown")
+    {
+        // An already cancelled caller cannot issue a command. Do not spend a
+        // healthy login by marking it unsafe before Execute observes that token.
+        // An existing pending sequence is deliberately left intact on this path.
+        ct.ThrowIfCancellationRequested();
+        PendingSequences.GetValue(client, _ => new PendingSequence(operation, ct));
+    }
+
+    // Keep bounded diagnostic context on the resource itself. Debug flight-recorder
+    // entries may be evicted before an operator sees the quarantine. No paths,
+    // remote replies, credentials or payload are retained in this context.
+    internal static void SetDataSequencePhase(AsyncFtpClient client, string phase)
+    {
+        if (PendingSequences.TryGetValue(client, out var sequence))
+            Volatile.Write(ref sequence.Phase, phase);
+    }
+
+    internal static string? DescribePendingDataSequence(AsyncFtpClient client)
+        => PendingSequences.TryGetValue(client, out var sequence)
+            ? $"operation={sequence.Operation}; last phase={Volatile.Read(ref sequence.Phase)}; caller cancellation requested={sequence.Cancellation.IsCancellationRequested}"
+            : null;
 
     /// <summary>
     /// Reads the transfer-completion reply and clears the desync flag. Only a
@@ -77,6 +105,7 @@ public static class CpsvDataHelper
     /// </summary>
     internal static async Task<FtpReply> CompleteDataSequence(AsyncFtpClient client, CancellationToken ct, bool validate = true)
     {
+        SetDataSequencePhase(client, "completion reply");
         var reply = await client.GetReply(ct);
         return AcceptCompletionReply(client, reply, validate);
     }
@@ -166,14 +195,16 @@ public static class CpsvDataHelper
     /// link-local, and unroutable ranges to block SSRF-like redirection attempts.
     /// </summary>
     internal static async Task<TcpClient> OpenDataTcp(
-        AsyncFtpClient client, CancellationToken ct, System.Net.IPAddress? localBind = null)
+        AsyncFtpClient client, CancellationToken ct, System.Net.IPAddress? localBind = null,
+        [CallerMemberName] string operation = "unknown")
     {
         // From here until the completion reply is read, this control channel owes
         // us replies. Mark before CPSV is even sent: if CPSV itself reads a stale
         // reply (the desync signature), the connection is already unusable and
         // must not go back to the pool for the next caller to inherit.
-        BeginDataSequence(client);
+        BeginDataSequence(client, ct, operation);
 
+        SetDataSequencePhase(client, "CPSV reply");
         var cpsvReply = await client.Execute("CPSV", ct);
         if (!cpsvReply.Success)
             throw new IOException($"CPSV failed: {cpsvReply.Code} {cpsvReply.Message}");
@@ -195,7 +226,10 @@ public static class CpsvDataHelper
         // localBind pins the DATA socket to one network adapter (multi-network downloads). The
         // control channel stays on the default route; glftpd already accepts data from an IP
         // other than the control one, because behind a BNC the control IP is the BNC's.
-        return await ConnectDataSocket(client.Host, cpsvIp, port, localBind, ct);
+        SetDataSequencePhase(client, "data TCP connect");
+        var tcp = await ConnectDataSocket(client.Host, cpsvIp, port, localBind, ct);
+        SetDataSequencePhase(client, "data TCP connected");
+        return tcp;
     }
 
     /// <summary>
@@ -567,7 +601,8 @@ public static class CpsvDataHelper
     {
         Log.Debug("CPSV LIST {Path}", remotePath);
 
-        BeginDataSequence(client);
+        BeginDataSequence(client, ct);
+        SetDataSequencePhase(client, "TYPE A reply");
         var typeReply = await client.Execute("TYPE A", ct);
         if (typeReply.Code != "200")
             throw new IOException($"TYPE A failed: {typeReply.Code} {typeReply.Message}");
@@ -577,15 +612,18 @@ public static class CpsvDataHelper
         try
         {
             // Send LIST command BEFORE TLS — server initiates SSL_connect after this
+            SetDataSequencePhase(client, "LIST preliminary reply");
             var listReply = await client.Execute($"LIST -a {SanitizeFtpPath(remotePath)}", ct);
             if (listReply.Code != "150" && listReply.Code != "125")
                 throw RejectDataCommand(client, "LIST", listReply);
 
             // Now negotiate TLS (server should be doing SSL_connect)
+            SetDataSequencePhase(client, "LIST data TLS");
             var ssl = await NegotiateDataTls(tcp.GetStream(), ct);
 
             try
             {
+                SetDataSequencePhase(client, "LIST data read");
                 using var reader = new StreamReader(ssl, Encoding.UTF8);
                 var listing = await reader.ReadToEndAsync(ct);
 
@@ -613,21 +651,25 @@ public static class CpsvDataHelper
     {
         Log.Debug("CPSV RETR {Path}", remotePath);
 
-        BeginDataSequence(client);
+        BeginDataSequence(client, ct);
+        SetDataSequencePhase(client, "TYPE I reply");
         await client.Execute("TYPE I", ct);
 
         var tcp = await OpenDataTcp(client, ct);
 
         try
         {
+            SetDataSequencePhase(client, "RETR preliminary reply");
             var retrReply = await client.Execute($"RETR {SanitizeFtpPath(remotePath)}", ct);
             if (retrReply.Code != "150" && retrReply.Code != "125")
                 throw RejectDataCommand(client, "RETR", retrReply);
 
+            SetDataSequencePhase(client, "RETR data TLS");
             var ssl = await NegotiateDataTls(tcp.GetStream(), ct);
 
             try
             {
+                SetDataSequencePhase(client, "RETR data read");
                 var ms = new MemoryStream();
                 await ssl.CopyToAsync(ms, ct);
 
@@ -661,21 +703,25 @@ public static class CpsvDataHelper
     {
         Log.Debug("CPSV RETR (stream) {Path}", remotePath);
 
-        BeginDataSequence(client);
+        BeginDataSequence(client, ct);
+        SetDataSequencePhase(client, "TYPE I reply");
         await client.Execute("TYPE I", ct);
 
         var tcp = await OpenDataTcp(client, ct);
 
         try
         {
+            SetDataSequencePhase(client, "RETR preliminary reply");
             var retrReply = await client.Execute($"RETR {SanitizeFtpPath(remotePath)}", ct);
             if (retrReply.Code != "150" && retrReply.Code != "125")
                 throw RejectDataCommand(client, "RETR", retrReply);
 
+            SetDataSequencePhase(client, "RETR data TLS");
             var ssl = await NegotiateDataTls(tcp.GetStream(), ct);
 
             try
             {
+                SetDataSequencePhase(client, "RETR data read");
                 var buf = new byte[256 * 1024];
                 long totalRead = 0;
                 int rd;
@@ -708,21 +754,25 @@ public static class CpsvDataHelper
     {
         Log.Debug("CPSV STOR {Path} ({Bytes} bytes)", remotePath, data.Length);
 
-        BeginDataSequence(client);
+        BeginDataSequence(client, ct);
+        SetDataSequencePhase(client, "TYPE I reply");
         await client.Execute("TYPE I", ct);
 
         var tcp = await OpenDataTcp(client, ct);
 
         try
         {
+            SetDataSequencePhase(client, "STOR preliminary reply");
             var storReply = await client.Execute($"STOR {SanitizeFtpPath(remotePath)}", ct);
             if (storReply.Code != "150" && storReply.Code != "125")
                 throw RejectDataCommand(client, "STOR", storReply);
 
+            SetDataSequencePhase(client, "STOR data TLS");
             var ssl = await NegotiateDataTls(tcp.GetStream(), ct);
 
             try
             {
+                SetDataSequencePhase(client, "STOR data write");
                 await ssl.WriteAsync(data, ct);
                 await ssl.FlushAsync(ct);
 
@@ -755,18 +805,22 @@ public static class CpsvDataHelper
         }
 
         // Stream directly to SSL — avoids double-buffering for large files
-        BeginDataSequence(client);
+        BeginDataSequence(client, ct);
+        SetDataSequencePhase(client, "TYPE I reply");
         await client.Execute("TYPE I", ct);
         var tcp = await OpenDataTcp(client, ct);
         try
         {
+            SetDataSequencePhase(client, "STOR preliminary reply");
             var storReply = await client.Execute($"STOR {SanitizeFtpPath(remotePath)}", ct);
             if (storReply.Code != "150" && storReply.Code != "125")
                 throw RejectDataCommand(client, "STOR", storReply);
 
+            SetDataSequencePhase(client, "STOR data TLS");
             var ssl = await NegotiateDataTls(tcp.GetStream(), ct);
             try
             {
+                SetDataSequencePhase(client, "STOR data write");
                 stream.Position = 0;
                 await stream.CopyToAsync(ssl, ct);
                 ssl.Close();

@@ -128,15 +128,19 @@ internal sealed class FtpLane : ISegmentLane
         {
             if (offset > 0)
             {
+                CpsvDataHelper.SetDataSequencePhase(client, "REST reply");
                 var rest = await client.Execute($"REST {offset}", ct);
                 if (!rest.Success)
                     throw new RangeNotSupportedException($"REST {offset} refused: {rest.Code} {rest.Message}");
             }
+            CpsvDataHelper.SetDataSequencePhase(client, "RETR preliminary reply");
             var retr = await client.Execute($"RETR {CpsvDataHelper.SanitizeFtpPath(file.Key)}", ct);
             if (retr.Code is not ("150" or "125"))
                 throw CpsvDataHelper.RejectDataCommand(client, "RETR", retr);
 
+            CpsvDataHelper.SetDataSequencePhase(client, "RETR data TLS");
             var ssl = await CpsvDataHelper.NegotiateDataTls(tcp.GetStream(), ct);
+            CpsvDataHelper.SetDataSequencePhase(client, "RETR data read");
             return new CpsvReader(client, tcp, ssl, file);
         }
         catch

@@ -95,6 +95,21 @@ public class PoisonAttributionTests
         string? reason, bool pending, string expected)
         => Assert.Equal(expected, PooledConnection.DescribeDiscard(reason, pending));
 
+    [Fact]
+    public void Pending_context_preserves_the_original_fault_and_survives_until_discard()
+    {
+        using var client = new InertClient();
+        using var cancellation = new CancellationTokenSource();
+        CpsvDataHelper.BeginDataSequence(client, cancellation.Token, "ListDirectory");
+        CpsvDataHelper.SetDataSequencePhase(client, "LIST data read");
+        cancellation.Cancel();
+        var context = CpsvDataHelper.DescribePendingDataSequence(client);
+        Assert.Equal("operation=ListDirectory; last phase=LIST data read; caller cancellation requested=True", context);
+        Assert.Equal($"LIST transport failure ({context})", PooledConnection.DescribeDiscard("LIST transport failure", true, context));
+        Assert.Equal($"{PooledConnection.PendingReplyReason} ({context})", PooledConnection.DescribeDiscard(null, true, context));
+        Assert.True(CpsvDataHelper.HasPendingDataSequence(client));
+    }
+
     // ---- the scan keeps a spent login apart from a borrow that never got one ----
 
     [Fact]
@@ -146,7 +161,7 @@ public class PoisonAttributionTests
 
         // DisposeAsync hands the cause to Discard, and Discard folds it into the reason
         // that Quarantine logs. Asserting the local, not a literal (v3.10.78 trap).
-        Assert.Contains("_pool.Discard(client, DescribeDiscard(_poisonReason, pending))", pool);
+        Assert.Contains("_pool.Discard(client, DescribeDiscard(_poisonReason, pending, pendingDetails))", pool);
         Assert.DoesNotContain("_pool.Discard(client);", pool);
 
         var discard = pool.IndexOf("internal void Discard(AsyncFtpClient client, string? cause", StringComparison.Ordinal);

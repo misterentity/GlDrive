@@ -12,6 +12,20 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.20.26 — CPSV cancellation and quarantine diagnostics (2026-11-16)
+
+- Reject already-cancelled CPSV operations before marking an unused control
+  session unsafe. Existing pending replies and in-flight cancellation still
+  require quarantine.
+- Retain the originating operation, last recorded protocol phase and caller
+  cancellation status with pending sequences, including native download lanes,
+  relay transfers and media streaming. Quarantine logs preserve the original
+  fault and add this context without storing paths or remote reply text.
+- Verify a cancelled native LIST sends no commands and returns the same healthy
+  session without replacement logins; exercise diagnostics during blocked
+  native data reads and TLS setup.
+- See [release notes](releases/v3.20.26.md) for scope and remaining remote failures.
+
 ## v3.20.25 — release polling and request-fill boundaries (2026-11-13)
 
 - Ignore calendar `MMDD` containers during release polling, preventing false

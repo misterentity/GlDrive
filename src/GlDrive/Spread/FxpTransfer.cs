@@ -854,11 +854,15 @@ public class FxpTransfer
 
             SetState(TransferState.NegotiatingActive);
 
+            CpsvDataHelper.SetDataSequencePhase(src, "relay directory preparation");
+            CpsvDataHelper.SetDataSequencePhase(dst, "relay directory preparation");
             await PrepareRelayStoreAsync(src, dst, ct);
 
+            CpsvDataHelper.SetDataSequencePhase(src, "RETR preliminary reply");
             var retrReply = await src.Execute($"RETR {Ftp.CpsvDataHelper.SanitizeFtpPath(srcPath)}", ct);
             AcceptRelayRetrReply(src, dst, retrReply);
 
+            CpsvDataHelper.SetDataSequencePhase(dst, "STOR preliminary reply");
             var storReply = await dst.Execute($"STOR {Ftp.CpsvDataHelper.SanitizeFtpPath(dstPath)}", ct);
             if (IsDupeRejection(storReply))
             {
@@ -875,6 +879,7 @@ public class FxpTransfer
                 srcTcp.Close();
                 try
                 {
+                    CpsvDataHelper.SetDataSequencePhase(src, "ABOR reply");
                     await src.Execute("ABOR", ct);
                     // Clears the mark OpenDataTcp set: the aborted RETR's reply has
                     // now been consumed, so src is back in sync and reusable. If ABOR
@@ -916,7 +921,9 @@ public class FxpTransfer
             }
 
             // Negotiate TLS as server on both (glftpd does SSL_connect)
+            CpsvDataHelper.SetDataSequencePhase(src, "RETR data TLS");
             srcSsl = await CpsvDataHelper.NegotiateDataTls(srcTcp.GetStream(), ct);
+            CpsvDataHelper.SetDataSequencePhase(dst, "STOR data TLS");
             dstSsl = await CpsvDataHelper.NegotiateDataTls(dstTcp.GetStream(), ct);
 
             pasvSw.Stop(); // TCP+TLS setup done — relay loop about to start
@@ -927,6 +934,8 @@ public class FxpTransfer
             var buf2 = new byte[256 * 1024];
             long totalRelayed = 0;
 
+            CpsvDataHelper.SetDataSequencePhase(src, "RETR relay data read");
+            CpsvDataHelper.SetDataSequencePhase(dst, "STOR relay data write");
             await WithRelayDeadline(async relayToken =>
             {
                 var rd = await srcSsl.ReadAsync(buf1, relayToken);

@@ -24,6 +24,13 @@ and poisoned-slot wake/deferred reclamation. A real `StartFxp` call reclaims a d
 pool remains deliberately occupied, then cancellation releases its activity and source lease before any remote
 transfer command. Opposite-direction pair acquisitions use real one-slot pools and must both complete without
 deadlock or extra logins. This tests pair acquisition, not a complete server-to-server file copy.
+The sharing preamble also calls CPSV `ListDirectory` with an already-cancelled token
+on a borrowed native session. It must send no FTP command, leave no pending reply,
+return without quarantine, and reborrow the same physical session for a successful
+NOOP without a replacement login. Fixture disposal must release all login permits.
+The held-read and held-TLS scenarios verify that pending-reply diagnostics identify
+the opening operation and actual blocked phase, and that safe completion removes
+that diagnostic before either session is reused.
 The sharing harness also drives the public relay transfer through the actual race
 directory walker after both CPSV sockets open. Three clean MKD denials must fail
 before RETR/STOR, credit no bytes, and return the same two native sessions without

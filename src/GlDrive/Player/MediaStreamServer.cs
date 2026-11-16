@@ -679,13 +679,16 @@ public class MediaStreamServer : IDisposable
         var tcp = await CpsvDataHelper.OpenDataTcp(client, ct);
         try
         {
+            CpsvDataHelper.SetDataSequencePhase(client, "RETR preliminary reply");
             var retrReply = await client.Execute($"RETR {CpsvDataHelper.SanitizeFtpPath(remotePath)}", ct);
             if (retrReply.Code != "150" && retrReply.Code != "125")
                 throw new IOException($"RETR failed: {retrReply.Code} {retrReply.Message}");
 
+            CpsvDataHelper.SetDataSequencePhase(client, "RETR data TLS");
             var ssl = await CpsvDataHelper.NegotiateDataTls(tcp.GetStream(), ct);
             try
             {
+                CpsvDataHelper.SetDataSequencePhase(client, "RETR data read");
                 await GlDrive.Util.StreamTransfer.CopyAsync(ssl, output, maxBytes, ct, saveStream);
                 ssl.Close();
                 tcp.Close();

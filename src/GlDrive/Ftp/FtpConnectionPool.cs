@@ -1413,8 +1413,11 @@ public class PooledConnection : IAsyncDisposable
         => _poisonReason ??= string.IsNullOrWhiteSpace(reason) ? UnattributedReason : reason;
 
     /// <summary>What the quarantine line says. A poison reason outranks the pending mark.</summary>
-    internal static string DescribeDiscard(string? poisonReason, bool pendingDataSequence)
-        => poisonReason ?? (pendingDataSequence ? PendingReplyReason : UnattributedReason);
+    internal static string DescribeDiscard(string? poisonReason, bool pendingDataSequence, string? pendingDetails = null)
+    {
+        var reason = poisonReason ?? (pendingDataSequence ? PendingReplyReason : UnattributedReason);
+        return pendingDataSequence && pendingDetails != null ? $"{reason} ({pendingDetails})" : reason;
+    }
 
     public ValueTask DisposeAsync()
     {
@@ -1427,9 +1430,10 @@ public class PooledConnection : IAsyncDisposable
             // connection would read that stale reply instead of its own. Discard
             // regardless of who borrowed it — the invariant belongs to the
             // connection, not to any one call site.
-            var pending = CpsvDataHelper.HasPendingDataSequence(client);
+            var pendingDetails = CpsvDataHelper.DescribePendingDataSequence(client);
+            var pending = pendingDetails != null;
             if (_poisonReason != null || pending)
-                _pool.Discard(client, DescribeDiscard(_poisonReason, pending));
+                _pool.Discard(client, DescribeDiscard(_poisonReason, pending, pendingDetails));
             else
                 _pool.Return(client);
         }
