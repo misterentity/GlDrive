@@ -66,6 +66,22 @@ public sealed class StatsRefreshDeadlineTests : IDisposable
         Assert.Equal(0, fixture.Pool.ActiveCount);
     }
 
+    [Fact]
+    public async Task Waiting_for_a_connection_leaves_a_full_deadline_for_the_stats_command()
+    {
+        await using var fixture = await Fixture.Create("slow");
+        Task refresh;
+        await using (var occupied = await fixture.Pool.Borrow())
+        {
+            refresh = fixture.Mount.RefreshStatsAsync();
+            await Task.Delay(TimeSpan.FromSeconds(6));
+        }
+        await refresh.WaitAsync(TimeSpan.FromSeconds(12));
+        Assert.Equal("42GB", fixture.Mount.Stats?.Credits);
+        Assert.Equal(1, fixture.Server.StatsCommands);
+        Assert.Equal(0, fixture.Pool.QuarantineSize);
+    }
+
     [Theory]
     [InlineData("stall")]
     [InlineData("disconnect")]
@@ -177,6 +193,7 @@ public sealed class StatsRefreshDeadlineTests : IDisposable
                             await Task.Delay(Timeout.InfiniteTimeSpan, _cts.Token);
                             return;
                         }
+                        if (behavior == "slow") await Task.Delay(TimeSpan.FromSeconds(6), _cts.Token);
                         await writer.WriteLineAsync("200 Credits: 42 GB Ratio: 1:3");
                         continue;
                     }

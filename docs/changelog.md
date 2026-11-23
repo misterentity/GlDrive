@@ -12,6 +12,10 @@ not follow conventional-commit syntax — versions are split into **Features**, 
 > that range. The section below covers the recent v3.10 reliability arc; the v1.44 section
 > and earlier follow it.
 
+## v3.20.27 — November 23, 2026
+
+Site statistics now receive their full command timeout after borrowing a connection.
+
 ## v3.20.26 — CPSV cancellation and quarantine diagnostics (2026-11-16)
 
 - Reject already-cancelled CPSV operations before marking an unused control

@@ -537,13 +537,14 @@ public class MountService : IDisposable
 
         try
         {
-            using var statsCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var timeout = TimeSpan.FromSeconds(10);
+            using var borrowCts = new CancellationTokenSource(timeout);
             PooledConnection borrowed;
             try
             {
-                borrowed = await _pool.BorrowFor(FtpBorrowPurpose.SiteStats, statsCts.Token);
+                borrowed = await _pool.BorrowFor(FtpBorrowPurpose.SiteStats, borrowCts.Token);
             }
-            catch (OperationCanceledException) when (statsCts.IsCancellationRequested)
+            catch (OperationCanceledException) when (borrowCts.IsCancellationRequested)
             {
                 // Background stats may wait behind downloads on the sole available login.
                 // No command has started, so retain the last snapshot/cache and try next tick.
@@ -554,6 +555,7 @@ public class MountService : IDisposable
                 return;
             }
             await using var conn = borrowed;
+            using var statsCts = new CancellationTokenSource(timeout);
             SiteStats? best = null;
             bool connDied = false;
             // Trailer-only sites (e.g. SITEC): every SITE candidate is ACL-denied but the
