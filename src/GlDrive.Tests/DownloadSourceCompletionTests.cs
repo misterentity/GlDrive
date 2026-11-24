@@ -13,6 +13,28 @@ namespace GlDrive.Tests;
 
 public sealed class DownloadSourceCompletionTests
 {
+    [Fact]
+    public async Task Timed_login_hold_waits_for_admission_and_preserves_exhausted_retry_budget()
+    {
+        await using var h = new Harness(new DownloadConfig { RetryDelaySeconds = 1 });
+        h.Source.Files["release.nfo"] = Bytes("info");
+        DateTime deadline = default;
+        DateTime? secondAttempt = null;
+        h.Source.AfterPlan = () =>
+        {
+            if (h.Source.PlanCalls == 1)
+            {
+                deadline = DateTime.UtcNow.AddSeconds(2);
+                throw new FtpLoginHeldException("account-wide hold", false, deadline, loginRateHold: true);
+            }
+            secondAttempt = DateTime.UtcNow;
+        };
+        await h.RunAsync();
+        Assert.Equal(DownloadStatus.Completed, h.Item.Status);
+        Assert.True(secondAttempt >= deadline);
+        Assert.Equal(0, h.Item.RetryCount);
+    }
+
     [Theory]
     [InlineData("-MISSING-disc.rar", true)]
     [InlineData("disc.r00-missing", true)]

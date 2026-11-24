@@ -491,9 +491,12 @@ public class DownloadManager : IDisposable
         var gen = Volatile.Read(ref _generation);
         var source = _cts;
         if (source == null || source.IsCancellationRequested) return;
-        var scheduledCheck = DateTimeOffset.UtcNow.AddSeconds(delaySeconds);
+        var now = DateTimeOffset.UtcNow;
+        if (admissionDeadline is { } deadline && deadline > now)
+            delaySeconds = Math.Max(delaySeconds, (int)Math.Ceiling((deadline - now).TotalSeconds));
+        var scheduledCheck = now.AddSeconds(delaySeconds);
         item.RuntimeWait = new(reasonCode, item.ErrorMessage ?? item.StatusDetail ?? "Waiting for the existing retry schedule",
-            admissionDeadline > scheduledCheck ? admissionDeadline : scheduledCheck);
+            scheduledCheck);
         var token = source.Token;
         Task task = null!;
         task = Task.Run(async () =>
@@ -980,6 +983,27 @@ public class DownloadManager : IDisposable
             NotifyDownloadStatus(item);
             ScheduleRetry(item, (int)delay.TotalSeconds, "destination-drive");
         }
+        catch (FtpLoginHeldException ex) when (ex.RetryAtUtc.HasValue)
+        {
+            bool cancelled;
+            lock (_activeCts)
+            {
+                cancelled = itemCts.IsCancellationRequested || item.Status is DownloadStatus.Paused or DownloadStatus.Cancelled;
+                if (!cancelled)
+                {
+                    item.Status = DownloadStatus.Queued;
+                    item.ErrorMessage = $"Waiting: {ex.Message}";
+                    _store.Update(item);
+                }
+            }
+            if (cancelled)
+            {
+                RecordCancellation(item, globalCt.IsCancellationRequested);
+                return;
+            }
+            NotifyDownloadStatus(item);
+            ScheduleRetry(item, Math.Max(1, _config.RetryDelaySeconds), DownloadWaiting.RetryReason(ex), ex.RetryAtUtc);
+        }
         catch (GlDrive.Downloads.Segmented.NetworkAllowanceExhaustedException ex)
         {
             // The user's data cap, not a failure: park without spending a retry and look again
@@ -1090,7 +1114,7 @@ public class DownloadManager : IDisposable
                 NotifyDownloadStatus(item);
                 // NOTE: item.RetryCount is post-increment here — means "scheduling retry attempt N".
                 EmitDownloadOutcome(item, "retried");
-                ScheduleRetry(item, delay, DownloadWaiting.RetryReason(ex), ex is FtpLoginHeldException held ? held.RetryAtUtc : null);
+                ScheduleRetry(item, delay, DownloadWaiting.RetryReason(ex));
             }
             else
             {
