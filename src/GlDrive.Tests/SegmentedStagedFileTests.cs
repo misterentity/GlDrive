@@ -24,6 +24,28 @@ public sealed class SegmentedStagedFileTests : IDisposable
     }
 
     [Fact]
+    public async Task ResetDone_replaces_checkpoint_after_a_brief_Windows_reader_lock()
+    {
+        var file = new TransferFile("/release/file", P("file"), 1024);
+        await using var staged = StagedFile.Open(file);
+        staged.MarkDone(new ByteRange(0, 512));
+        staged.FlushState();
+        using var reader = File.Open(staged.SidecarPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var reset = Task.Run(staged.ResetDone);
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            while (!File.Exists(staged.SidecarPath + ".tmp") && !reset.IsCompleted)
+                await Task.Delay(5, timeout.Token);
+            await Task.Delay(50, timeout.Token);
+        }
+        finally { reader.Dispose(); }
+        await reset;
+        using var checkpoint = JsonDocument.Parse(File.ReadAllText(staged.SidecarPath));
+        Assert.Equal(0, checkpoint.RootElement.GetProperty("ranges").GetArrayLength());
+    }
+
+    [Fact]
     public async Task Fresh_CreatesDirectoryStagingAndSidecar_ThenCommitRenames()
     {
         var f = new TransferFile("/r/a.rar", P("a.rar"), 1000, "1000:20261014");

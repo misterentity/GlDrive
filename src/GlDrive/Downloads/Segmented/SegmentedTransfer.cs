@@ -518,7 +518,10 @@ public sealed class SegmentedTransfer
         }
         catch (Exception ex) when (reader != null && !finished)
         {
+            // The supervisor can cancel peers as soon as EOF records the fatal error.
+            // Keep that original fault on its lane even if cancellation won this race.
             lane.Fault(ex is DiskFailure df ? df.InnerException!
+                : ReferenceEquals(run.Fatal?.SourceException, ex) ? ex
                 : token.IsCancellationRequested ? new OperationCanceledException(token) : ex);
             throw;
         }

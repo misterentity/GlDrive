@@ -187,7 +187,20 @@ public sealed class StagedFile : IAsyncDisposable
         var state = new Sidecar(File.Size, File.Validator, Done.Ranges.Select(r => new[] { r.Start, r.End }).ToArray());
         var tmp = SidecarPath + ".tmp";
         System.IO.File.WriteAllText(tmp, JsonSerializer.Serialize(state, JsonOptions));
-        System.IO.File.Move(tmp, SidecarPath, overwrite: true);
+        // A Windows reader can briefly deny delete sharing during atomic replacement.
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                System.IO.File.Move(tmp, SidecarPath, overwrite: true);
+                break;
+            }
+            catch (Exception ex) when (attempt < 6 && (ex is IOException or UnauthorizedAccessException)
+                && (ex.HResult & 0xffff) is 5 or 32 or 33)
+            {
+                Thread.Sleep(50 * attempt);
+            }
+        }
         _bytesSincePersist = 0;
         _sincePersist.Restart();
     }
