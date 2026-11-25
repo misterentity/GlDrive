@@ -67,6 +67,38 @@ public sealed class AgentReviewFixTests : IDisposable
         Assert.Equal(baseline, Serialize(live));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Audit_only_run_preserves_unsaved_edits_and_checks_disk_baseline(bool diskChanged)
+    {
+        var live = new AppConfig();
+        var baseline = Serialize(live);
+        var candidate = Clone(live);
+        live.Logging.Level = "Debug";
+        var path = Path.Combine(_root, "config.json");
+        var disk = diskChanged ? baseline + "\n" : baseline;
+        File.WriteAllText(path, disk);
+        var audit = new AuditTrail(_root);
+        var row = new AuditRow { RunId = "audit-only", Applied = false };
+
+        void Commit() => AgentConfigCommit.CommitAndPublish(path, baseline, candidate, [row], _root,
+            _ => throw new InvalidOperationException("Unexpected settings save"), audit, live);
+
+        if (diskChanged)
+        {
+            Assert.Throws<IOException>(Commit);
+            Assert.Empty(audit.ReadAll());
+        }
+        else
+        {
+            Commit();
+            Assert.NotNull(Assert.Single(audit.ReadAll()).Id);
+        }
+        Assert.Equal(disk, File.ReadAllText(path));
+        Assert.Equal("Debug", live.Logging.Level);
+    }
+
     [Fact]
     public void Unsaved_runtime_edit_rejects_agent_commit_without_overwriting_either_side()
     {
