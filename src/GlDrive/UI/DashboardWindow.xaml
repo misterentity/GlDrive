@@ -101,11 +101,13 @@
             <Setter Property="EnableRowVirtualization" Value="True"/>
             <Setter Property="EnableColumnVirtualization" Value="True"/>
             <Setter Property="ScrollViewer.CanContentScroll" Value="True"/>
+            <Setter Property="VirtualizingPanel.ScrollUnit" Value="Pixel"/>
             <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True"/>
             <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling"/>
         </Style>
         <Style TargetType="ListBox" BasedOn="{StaticResource {x:Type ListBox}}">
             <Setter Property="ScrollViewer.CanContentScroll" Value="True"/>
+            <Setter Property="VirtualizingPanel.ScrollUnit" Value="Pixel"/>
             <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True"/>
             <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling"/>
         </Style>

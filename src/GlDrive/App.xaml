@@ -235,6 +235,7 @@
                                                   IsHitTestVisible="False"
                                                   Content="{TemplateBinding SelectionBoxItem}"
                                                   ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                                  ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"
                                                   ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}"
                                                   Margin="10,5,28,5"
                                                   VerticalAlignment="Center"
@@ -416,6 +417,7 @@
 
             <!-- ListBox -->
             <Style TargetType="ListBox">
+                <Setter Property="VirtualizingPanel.ScrollUnit" Value="Pixel"/>
                 <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
                 <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
                 <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
@@ -449,6 +451,7 @@
 
             <!-- DataGrid -->
             <Style TargetType="DataGrid">
+                <Setter Property="VirtualizingPanel.ScrollUnit" Value="Pixel"/>
                 <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
                 <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
                 <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
