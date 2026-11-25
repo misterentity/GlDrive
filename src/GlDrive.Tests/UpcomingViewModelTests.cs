@@ -98,4 +98,38 @@ public sealed class UpcomingViewModelTests
         upcoming.UpcomingStatus = "late";
         Assert.Equal(0, changed);
     }
+
+    [Fact]
+    public void Row_and_detail_lines_carry_every_field_and_drop_the_empty_ones()
+    {
+        var episode = new UpcomingTvEpisodeVm
+        {
+            ShowName = "Show", EpisodeInfo = "S01E01 — Pilot", DateDisplay = "Wed 11/25", TimeDisplay = "21:00",
+            NetworkDisplay = "Demo TV", ShowType = "Scripted", Genres = "Drama, Crime", Rating = "8.1"
+        };
+        Assert.Equal("Demo TV · Drama, Crime", episode.MetaLine);
+        Assert.Equal("★ 8.1", episode.RatingDisplay);
+        Assert.Equal("", new UpcomingTvEpisodeVm().MetaLine);
+        Assert.Equal("", new UpcomingTvEpisodeVm().RatingDisplay);
+
+        var movie = new UpcomingMovieVm { Title = "Film", Year = "2026", ReleaseDateDisplay = "2026-12-04" };
+        Assert.Equal("Film (2026)", movie.TitleDisplay);
+        Assert.Equal("Film", new UpcomingMovieVm { Title = "Film" }.TitleDisplay);
+        Assert.Equal("Releases 2026-12-04", movie.ReleaseLine);
+        Assert.Equal("", movie.DatesLine);
+
+        var notified = new List<string?>();
+        movie.PropertyChanged += (_, e) => notified.Add(e.PropertyName);
+        movie.ReleaseDates = new MovieReleaseDates(new DateOnly(2026, 12, 4), null, null, "US", "known", null);
+        Assert.Contains(nameof(UpcomingMovieVm.DatesLine), notified);
+        Assert.StartsWith("Theatrical ", movie.DatesLine);
+        Assert.Contains(" · Digital ", movie.DatesLine);
+        Assert.Contains(" · Physical ", movie.DatesLine);
+
+        var upcoming = Upcoming();
+        upcoming.SelectedTvEpisode = episode;
+        Assert.Equal("Wed 11/25 · 21:00 · Demo TV · Scripted", upcoming.UpcomingDetailMeta);
+        upcoming.SelectedUpcomingMovie = movie;
+        Assert.Equal("Releases 2026-12-04", upcoming.UpcomingDetailMeta);
+    }
 }

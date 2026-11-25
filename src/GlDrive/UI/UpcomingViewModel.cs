@@ -88,6 +88,11 @@ public sealed class UpcomingViewModel : INotifyPropertyChanged, IDisposable
         _selectedTvEpisode?.Rating is { Length: > 0 } tr ? $"★ {tr}/10" :
         _selectedUpcomingMovie?.Rating is { Length: > 0 } mr ? $"★ {mr}/10" : "";
     public string UpcomingGenres => _selectedTvEpisode?.Genres ?? _selectedUpcomingMovie?.Genres ?? "";
+    /// <summary>When and where the selection airs or releases. A movie's per-format dates are bound
+    /// separately (<see cref="UpcomingMovieVm.DatesLine"/>) because a date lookup changes them in place.</summary>
+    public string UpcomingDetailMeta =>
+        _selectedTvEpisode is { } ep ? UpcomingText.Join(ep.DateDisplay, ep.TimeDisplay, ep.NetworkDisplay, ep.ShowType) :
+        _selectedUpcomingMovie?.ReleaseLine ?? "";
     public string UpcomingPlot => _selectedTvEpisode?.Plot ?? _selectedUpcomingMovie?.Plot ?? "";
 
     public string UpcomingQualityText
@@ -141,6 +146,7 @@ public sealed class UpcomingViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(UpcomingDetailTitle));
         OnPropertyChanged(nameof(UpcomingRating));
         OnPropertyChanged(nameof(UpcomingGenres));
+        OnPropertyChanged(nameof(UpcomingDetailMeta));
         OnPropertyChanged(nameof(UpcomingPlot));
     }
 
@@ -438,6 +444,8 @@ public class UpcomingTvEpisodeVm
     public string? Rating { get; set; }
     public string? Genres { get; set; }
     public int TvMazeId { get; set; }
+    public string MetaLine => UpcomingText.Join(NetworkDisplay, Genres);
+    public string RatingDisplay => UpcomingText.Stars(Rating);
 }
 
 public class UpcomingMovieVm : INotifyPropertyChanged
@@ -453,7 +461,7 @@ public class UpcomingMovieVm : INotifyPropertyChanged
         set
         {
             _releaseDates = value;
-            foreach (var property in new[] { nameof(ReleaseDates), nameof(ReleaseType), nameof(TheatricalDate), nameof(DigitalDate), nameof(PhysicalDate) })
+            foreach (var property in new[] { nameof(ReleaseDates), nameof(ReleaseType), nameof(TheatricalDate), nameof(DigitalDate), nameof(PhysicalDate), nameof(DatesLine) })
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(property));
         }
     }
@@ -467,4 +475,18 @@ public class UpcomingMovieVm : INotifyPropertyChanged
     public string? Rating { get; set; }
     public string? Genres { get; set; }
     public string? ImdbId { get; set; }
+    public string TitleDisplay => Year.Length > 0 ? $"{Title} ({Year})" : Title;
+    public string ReleaseLine => ReleaseDateDisplay.Length > 0 ? $"Releases {ReleaseDateDisplay}" : "";
+    /// <summary>Empty until a release-date lookup has run, so rows don't repeat "Unknown" three times.</summary>
+    public string DatesLine => ReleaseDates == null ? "" :
+        $"Theatrical {TheatricalDate} · Digital {DigitalDate} · Physical {PhysicalDate}";
+    public string RatingDisplay => UpcomingText.Stars(Rating);
+}
+
+internal static class UpcomingText
+{
+    public static string Join(params string?[] parts) =>
+        string.Join(" · ", parts.Where(p => !string.IsNullOrWhiteSpace(p)));
+
+    public static string Stars(string? rating) => string.IsNullOrEmpty(rating) ? "" : $"★ {rating}";
 }

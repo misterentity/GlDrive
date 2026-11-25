@@ -90,6 +90,13 @@
             <Setter Property="VerticalAlignment" Value="Center"/>
             <Setter Property="ToolTip" Value="{Binding Text, RelativeSource={RelativeSource Self}}"/>
         </Style>
+        <Style x:Key="HideWhenEmptyText" TargetType="TextBlock">
+            <Style.Triggers>
+                <Trigger Property="Text" Value="">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
         <Style TargetType="DataGrid" BasedOn="{StaticResource {x:Type DataGrid}}">
             <Setter Property="EnableRowVirtualization" Value="True"/>
             <Setter Property="EnableColumnVirtualization" Value="True"/>
@@ -1552,67 +1559,77 @@
                             <DockPanel Margin="12">
                     <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}"
                             CornerRadius="0" Padding="8,6" Margin="0,0,0,10">
-                        <StackPanel Orientation="Horizontal">
-                            <Button Content="Refresh" Command="{Binding LoadUpcomingCommand}"
+                        <DockPanel LastChildFill="True">
+                            <Button DockPanel.Dock="Left" Content="Refresh" Command="{Binding LoadUpcomingCommand}"
                                     Padding="12,6" Margin="0,0,6,0" Style="{DynamicResource PrimaryButton}"/>
-                            <Button Content="Add to Wishlist" Command="{Binding AddUpcomingToWishlistCommand}"
+                            <Button DockPanel.Dock="Left" Content="Add to Wishlist" Command="{Binding AddUpcomingToWishlistCommand}"
                                     Padding="12,6" Margin="0,0,12,0" Style="{DynamicResource PrimaryButton}"/>
-                            <Button Content="Release dates" Command="{Binding RefreshUpcomingCalendarCommand}"
+                            <Button DockPanel.Dock="Left" Content="Release dates" Command="{Binding RefreshUpcomingCalendarCommand}"
                                     Padding="12,6" Margin="0,0,12,0" Style="{DynamicResource SecondaryButton}" ToolTip="Look up dates for the selected movie"/>
-                            <TextBlock Text="Quality:" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                            <ComboBox ItemsSource="{Binding QualityOptions}"
+                            <TextBlock DockPanel.Dock="Left" Text="Quality:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <ComboBox DockPanel.Dock="Left" ItemsSource="{Binding QualityOptions}"
                                       SelectedItem="{Binding UpcomingQualityText}" Width="90"/>
                             <TextBlock Text="{Binding UpcomingStatus}" VerticalAlignment="Center"
-                                       Margin="16,0,0,0" Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"/>
-                        </StackPanel>
+                                       Margin="16,0,0,0" Foreground="{DynamicResource ForegroundDimBrush}" FontSize="12"
+                                       TextTrimming="CharacterEllipsis"
+                                       ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                        </DockPanel>
                     </Border>
-                    <Border DockPanel.Dock="Bottom" Height="155"
+                    <Border DockPanel.Dock="Bottom" MaxHeight="250"
                             Background="{DynamicResource SurfaceBrush}"
                             BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
                             CornerRadius="6" Margin="0,10,0,0" Padding="14"
                             Visibility="{Binding HasUpcomingSelection, Converter={StaticResource BoolToVisibility}}">
                         <DockPanel>
-                            <Border DockPanel.Dock="Left" Width="95" Margin="0,0,16,0"
+                            <Border DockPanel.Dock="Left" Width="120" Height="176" Margin="0,0,16,0"
+                                    VerticalAlignment="Top"
                                     CornerRadius="4" ClipToBounds="True"
                                     Background="{DynamicResource SurfaceLightBrush}"
                                     Visibility="{Binding HasUpcomingPoster, Converter={StaticResource BoolToVisibility}}">
                                 <Image Stretch="UniformToFill" VerticalAlignment="Top"
                                        RenderOptions.BitmapScalingMode="HighQuality"
-                                       Source="{Binding UpcomingPosterUrl, Converter={StaticResource ImageUrlConverter}, ConverterParameter=120}"/>
+                                       Source="{Binding UpcomingPosterUrl, Converter={StaticResource ImageUrlConverter}, ConverterParameter=240}"/>
                             </Border>
-                            <StackPanel VerticalAlignment="Top">
-                                <TextBlock Text="{Binding UpcomingDetailTitle}" FontWeight="Bold" FontSize="16"
-                                           Foreground="{DynamicResource ForegroundBrush}"/>
-                                <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
-                                    <TextBlock Text="{Binding UpcomingRating}" FontSize="13"
-                                               FontWeight="SemiBold"
-                                               Foreground="{DynamicResource AccentBrush}"/>
-                                    <TextBlock Text="{Binding UpcomingGenres}" FontSize="12.5"
-                                               Foreground="{DynamicResource ForegroundDimBrush}"
-                                               Margin="14,0,0,0"/>
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                <StackPanel VerticalAlignment="Top">
+                                    <TextBlock Text="{Binding UpcomingDetailTitle}" FontWeight="Bold" FontSize="16"
+                                               TextWrapping="Wrap"
+                                               Foreground="{DynamicResource ForegroundBrush}"/>
+                                    <TextBlock Text="{Binding UpcomingDetailMeta}" FontSize="12.5" Margin="0,4,0,0"
+                                               TextWrapping="Wrap" Style="{StaticResource HideWhenEmptyText}"
+                                               Foreground="{DynamicResource ForegroundBrush}"/>
+                                    <TextBlock Text="{Binding SelectedUpcomingMovie.DatesLine}" FontSize="12.5" Margin="0,3,0,0"
+                                               TextWrapping="Wrap" Style="{StaticResource HideWhenEmptyText}"
+                                               Foreground="{DynamicResource ForegroundBrush}"/>
+                                    <WrapPanel Margin="0,5,0,0">
+                                        <TextBlock Text="{Binding UpcomingRating}" FontSize="13"
+                                                   FontWeight="SemiBold" Margin="0,0,14,0"
+                                                   Style="{StaticResource HideWhenEmptyText}"
+                                                   Foreground="{DynamicResource AccentBrush}"/>
+                                        <TextBlock Text="{Binding UpcomingGenres}" FontSize="12.5"
+                                                   TextWrapping="Wrap"
+                                                   Foreground="{DynamicResource ForegroundDimBrush}"/>
+                                    </WrapPanel>
+                                    <TextBlock Text="{Binding UpcomingPlot}" TextWrapping="Wrap"
+                                               FontSize="12.5" Margin="0,8,0,0"
+                                               LineHeight="18"
+                                               Foreground="{DynamicResource ForegroundDimBrush}"/>
                                 </StackPanel>
-                                <TextBlock Text="{Binding UpcomingPlot}" TextWrapping="Wrap"
-                                           MaxHeight="65" FontSize="12.5" Margin="0,8,0,0"
-                                           LineHeight="18"
-                                           Foreground="{DynamicResource ForegroundDimBrush}"
-                                           TextTrimming="CharacterEllipsis"/>
-                            </StackPanel>
+                            </ScrollViewer>
                         </DockPanel>
                     </Border>
                     <Grid>
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*" MinWidth="320"/>
                             <ColumnDefinition Width="5"/>
-                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*" MinWidth="320"/>
                         </Grid.ColumnDefinitions>
                         <DockPanel Grid.Column="0">
                             <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
-                                <TextBlock Text="{Binding TvScheduleHeader}" FontWeight="SemiBold"
-                                           VerticalAlignment="Center"/>
-                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                                     <ComboBox ItemsSource="{Binding TvTypeOptions}"
                                               SelectedItem="{Binding TvTypeFilter}"
-                                              Width="90" FontSize="12" Margin="0,0,6,0"
+                                              Width="110" FontSize="12" Margin="0,0,6,0"
                                               ToolTip="Filter by show type"/>
                                     <TextBox Text="{Binding ShowSearchQuery, UpdateSourceTrigger=PropertyChanged}"
                                              AutomationProperties.Name="Search TV schedule by show"
@@ -1629,47 +1646,111 @@
                                             Style="{DynamicResource SecondaryButton}"
                                             Visibility="{Binding IsShowSearchActive, Converter={StaticResource BoolToVisibility}}"/>
                                 </StackPanel>
+                                <TextBlock Text="{Binding TvScheduleHeader}" FontWeight="SemiBold"
+                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
                             </DockPanel>
-                            <DataGrid ItemsSource="{Binding UpcomingTvEpisodes}"
-                                      SelectedItem="{Binding SelectedTvEpisode}"
-                                      AutoGenerateColumns="False" IsReadOnly="True"
-                                      SelectionMode="Single" GridLinesVisibility="Horizontal"
-                                      HeadersVisibility="Column" CanUserAddRows="False">
-                                <DataGrid.Columns>
-                                    <DataGridTextColumn Header="Date" Binding="{Binding DateDisplay}" Width="75"/>
-                                    <DataGridTextColumn Header="Show" Binding="{Binding ShowName}" Width="*" ElementStyle="{StaticResource TruncatedCellText}"/>
-                                    <DataGridTextColumn Header="Network" Binding="{Binding NetworkDisplay}" Width="80"/>
-                                    <DataGridTextColumn Header="Episode" Binding="{Binding EpisodeInfo}" Width="140"/>
-                                    <DataGridTextColumn Header="Time" Binding="{Binding TimeDisplay}" Width="55"/>
-                                </DataGrid.Columns>
-                            </DataGrid>
+                            <ListBox ItemsSource="{Binding UpcomingTvEpisodes}"
+                                     SelectedItem="{Binding SelectedTvEpisode}"
+                                     AutomationProperties.Name="Upcoming TV episodes"
+                                     SelectionMode="Single"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid MinHeight="78">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="50"/>
+                                                <ColumnDefinition Width="72"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Border Grid.Column="0" Width="50" Height="72" CornerRadius="3" ClipToBounds="True"
+                                                    Background="{DynamicResource SurfaceLightBrush}">
+                                                <Image Source="{Binding PosterUrl, Converter={StaticResource ImageUrlConverter}, ConverterParameter=100}"
+                                                       Stretch="UniformToFill" VerticalAlignment="Top"
+                                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                            </Border>
+                                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="10,0,0,0">
+                                                <TextBlock Text="{Binding DateDisplay}" FontSize="12.5" FontWeight="SemiBold"/>
+                                                <TextBlock Text="{Binding TimeDisplay}" FontSize="12" Margin="0,2,0,0"
+                                                           Style="{StaticResource HideWhenEmptyText}"
+                                                           Foreground="{DynamicResource ForegroundDimBrush}"/>
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="8,0,4,0">
+                                                <TextBlock Text="{Binding ShowName}" FontSize="13.5" FontWeight="SemiBold"
+                                                           TextWrapping="Wrap"
+                                                           ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                                                <TextBlock Text="{Binding EpisodeInfo}" FontSize="12.5" Margin="0,2,0,0"
+                                                           TextWrapping="Wrap"
+                                                           ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                                                <DockPanel Margin="0,2,0,0">
+                                                    <TextBlock DockPanel.Dock="Right" Text="{Binding RatingDisplay}" FontSize="12"
+                                                               FontWeight="SemiBold" Margin="8,0,0,0"
+                                                               Foreground="{DynamicResource AccentBrush}"/>
+                                                    <TextBlock Text="{Binding MetaLine}" FontSize="12"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
+                                                               Foreground="{DynamicResource ForegroundDimBrush}"/>
+                                                </DockPanel>
+                                            </StackPanel>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
                         </DockPanel>
                         <GridSplitter Grid.Column="1" Width="5" HorizontalAlignment="Stretch"
                                       Background="Transparent"/>
                         <DockPanel Grid.Column="2">
-                            <TextBlock DockPanel.Dock="Top" FontWeight="SemiBold" Margin="0,0,0,6">
-                                <Run Text="Movie Releases"/>
+                            <TextBlock DockPanel.Dock="Top" FontWeight="SemiBold" Margin="0,4,0,10">
+                                <Run Text="Movie Releases (Next 30 Days)"/>
                             </TextBlock>
-                            <TextBlock DockPanel.Dock="Top" Margin="0,0,0,6" FontSize="12"
+                            <TextBlock DockPanel.Dock="Top" Margin="0,0,0,6" FontSize="12" TextWrapping="Wrap"
                                        Foreground="{DynamicResource ForegroundDimBrush}"
                                        Visibility="{Binding HasNoTmdbKey, Converter={StaticResource BoolToVisibility}}">
                                 <Run Text="Configure TMDb API key in Settings &#x2192; Downloads to see movie releases."/>
                             </TextBlock>
-                            <DataGrid ItemsSource="{Binding UpcomingMovies}"
-                                      SelectedItem="{Binding SelectedUpcomingMovie}"
-                                      AutoGenerateColumns="False" IsReadOnly="True"
-                                      SelectionMode="Single" GridLinesVisibility="Horizontal"
-                                      HeadersVisibility="Column" CanUserAddRows="False">
-                                <DataGrid.Columns>
-                                    <DataGridTextColumn Header="Title" Binding="{Binding Title}" Width="*" ElementStyle="{StaticResource TruncatedCellText}"/>
-                                    <DataGridTextColumn Header="Year" Binding="{Binding Year}" Width="50"/>
-                                    <DataGridTextColumn Header="Date" Binding="{Binding ReleaseDateDisplay}" Width="85"/>
-                                    <DataGridTextColumn Header="Theatrical" Binding="{Binding TheatricalDate}" Width="95"/>
-                                    <DataGridTextColumn Header="Digital" Binding="{Binding DigitalDate}" Width="95"/>
-                                    <DataGridTextColumn Header="Physical" Binding="{Binding PhysicalDate}" Width="95"/>
-                                    <DataGridTextColumn Header="Genres" Binding="{Binding Genres}" Width="110"/>
-                                </DataGrid.Columns>
-                            </DataGrid>
+                            <ListBox ItemsSource="{Binding UpcomingMovies}"
+                                     SelectedItem="{Binding SelectedUpcomingMovie}"
+                                     AutomationProperties.Name="Upcoming movies"
+                                     SelectionMode="Single"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid MinHeight="78">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="50"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Border Grid.Column="0" Width="50" Height="72" CornerRadius="3" ClipToBounds="True"
+                                                    Background="{DynamicResource SurfaceLightBrush}">
+                                                <Image Source="{Binding PosterUrl, Converter={StaticResource ImageUrlConverter}, ConverterParameter=100}"
+                                                       Stretch="UniformToFill" VerticalAlignment="Top"
+                                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                            </Border>
+                                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="10,0,4,0">
+                                                <TextBlock Text="{Binding TitleDisplay}" FontSize="13.5" FontWeight="SemiBold"
+                                                           TextWrapping="Wrap"
+                                                           ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                                                <TextBlock Text="{Binding ReleaseLine}" FontSize="12.5" Margin="0,2,0,0"
+                                                           Style="{StaticResource HideWhenEmptyText}"/>
+                                                <TextBlock Text="{Binding DatesLine}" FontSize="12" Margin="0,2,0,0"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           Style="{StaticResource HideWhenEmptyText}"
+                                                           ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                                                <DockPanel Margin="0,2,0,0">
+                                                    <TextBlock DockPanel.Dock="Right" Text="{Binding RatingDisplay}" FontSize="12"
+                                                               FontWeight="SemiBold" Margin="8,0,0,0"
+                                                               Foreground="{DynamicResource AccentBrush}"/>
+                                                    <TextBlock Text="{Binding Genres}" FontSize="12"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
+                                                               Foreground="{DynamicResource ForegroundDimBrush}"/>
+                                                </DockPanel>
+                                            </StackPanel>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
                         </DockPanel>
                     </Grid>
                             </DockPanel>

@@ -230,7 +230,7 @@ public partial class DashboardWindow : Window
             "Downloads" => "Follow progress, retry interrupted transfers, and open your files.",
             "Search" => "Find releases across connected servers. Enter a title below to begin.",
             "Player" => "Browse media, choose a release, and watch it here.",
-            "Upcoming" => "Explore upcoming episodes and movies, then add them to your wishlist.",
+            "Upcoming" => "Episodes and movies coming soon.",
             "Plex" => "Connect your Plex account to manage library access and invitations.",
             "IRC" => "Choose a channel to read or send messages. Enter sends your message.",
             "PreDB" => "Search release announcements, then find them on your servers.",
