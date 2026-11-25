@@ -16,7 +16,7 @@ internal static class AgentConfigCommit
 
     // Called on the dispatcher, before taking the file lock: readers/savers on
     // that dispatcher cannot observe the gap between disk commit and publication.
-    internal static void CommitAndPublish(string configPath, string expected, AppConfig candidate,
+    internal static bool CommitAndPublish(string configPath, string expected, AppConfig candidate,
         List<AuditRow> rows, string root, Action<AppConfig> save, AuditTrail audit, AppConfig live)
         => Commit(configPath, expected, candidate, rows, root, save, audit, live);
 
@@ -36,7 +36,7 @@ internal static class AgentConfigCommit
         });
     }
 
-    internal static void Commit(string configPath, string expected, AppConfig candidate,
+    internal static bool Commit(string configPath, string expected, AppConfig candidate,
         List<AuditRow> rows, string root, Action<AppConfig> save, AuditTrail audit,
         AppConfig? live = null)
     {
@@ -44,6 +44,7 @@ internal static class AgentConfigCommit
         using var attribution = ConfigWriteScope.Current.Actor == "mcp:agent_run"
             ? ConfigWriteScope.Begin("agent:" + runId, runId)
             : ConfigWriteScope.Fallback("agent:" + runId, runId);
+        var saved = false;
         SecureFile.WithPathLock(configPath, () =>
         {
             Recover(configPath, root, audit);
@@ -79,7 +80,9 @@ internal static class AgentConfigCommit
             if (live != null) ConfigReconciler.Apply(live, candidate);
             audit.AppendBatchRequired(rows);
             File.Delete(journal);
+            saved = true;
         });
+        return saved;
     }
 
     private static bool MatchesCommittedSettings(string current, string expectedHash)

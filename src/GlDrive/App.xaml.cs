@@ -111,16 +111,18 @@ public partial class App
     internal async Task CommitAgentChangesAsync(string baseline, AppConfig candidate,
         List<GlDrive.AiAgent.AuditRow> rows)
     {
+        var saved = false;
         await Dispatcher.InvokeAsync(() =>
         {
             (ChangeApplier ?? throw new InvalidOperationException("Agent validator service unavailable"))
-                .GuardCommit(ConfigManager.ConfigPath, rows, candidate, () => GlDrive.AiAgent.AgentConfigCommit.CommitAndPublish(
-            ConfigManager.ConfigPath, baseline, candidate, rows,
-            Path.Combine(ConfigManager.AppDataPath, "ai-data"), ConfigManager.Save,
-            AuditTrail ?? throw new InvalidOperationException("Audit trail is unavailable"),
-            _runtimeConfig ?? throw new InvalidOperationException("Runtime settings are unavailable")));
+                .GuardCommit(ConfigManager.ConfigPath, rows, candidate, () =>
+                    saved = GlDrive.AiAgent.AgentConfigCommit.CommitAndPublish(
+                        ConfigManager.ConfigPath, baseline, candidate, rows,
+                        Path.Combine(ConfigManager.AppDataPath, "ai-data"), ConfigManager.Save,
+                        AuditTrail ?? throw new InvalidOperationException("Audit trail is unavailable"),
+                        _runtimeConfig ?? throw new InvalidOperationException("Runtime settings are unavailable")));
         });
-        if (_serverManager != null)
+        if (saved && _serverManager != null)
         {
             // Refresh listeners/pools that cache compiled rules or sizing. The
             // configuration itself is already published even if reconnection fails.

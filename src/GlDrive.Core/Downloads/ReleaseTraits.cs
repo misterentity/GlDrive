@@ -26,8 +26,7 @@ public sealed record ReleaseTraits(
         var television = Regex.IsMatch(name, @"(?:^|[. _-])S[0-9]{1,2}(?:E[0-9]{1,3})*(?:$|[. _-])",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.NonBacktracking,
             TimeSpan.FromMilliseconds(50)) || SceneNameParser.TryEpisodeDate(name, out _);
-        name = Regex.Replace(name, @"\(((?:19|20)[0-9]{2})\)", " $1 ",
-            RegexOptions.CultureInvariant | RegexOptions.NonBacktracking, TimeSpan.FromMilliseconds(50));
+        name = NormalizeParenthesizedYears(name);
         // A reliable year/episode boundary separates title words from format tokens.
         // Use the last year so titles beginning with a year do not hide their actual release year.
         var boundaries = Regex.Matches(name, @"(?:^|[. _-])(?:(?:19|20)[0-9]{2}|S[0-9]{1,2}(?:E[0-9]{1,3})*)(?:$|[. _-])",
@@ -69,4 +68,19 @@ public sealed record ReleaseTraits(
             (Has("COMPLETE") && Has("BLU[. _-]?RAY|DVD")), edition, Has("PROPER"), revision,
             groupMatch.Success ? groupMatch.Groups[1].Value : null);
     }
+    private static string NormalizeParenthesizedYears(string name)
+    {
+        char[]? normalized = null;
+        for (var start = name.IndexOf('('); start >= 0 && start + 5 < name.Length;
+             start = name.IndexOf('(', start + 1))
+        {
+            var year = name.AsSpan(start + 1, 4);
+            if (name[start + 5] != ')' || !(year.StartsWith("19") || year.StartsWith("20"))
+                || !char.IsAsciiDigit(year[2]) || !char.IsAsciiDigit(year[3])) continue;
+            normalized ??= name.ToCharArray();
+            normalized[start] = normalized[start + 5] = ' ';
+        }
+        return normalized == null ? name : new string(normalized);
+    }
+
 }
