@@ -781,12 +781,11 @@
                     <Expander x:Name="StreamsExpander" DockPanel.Dock="Top" Header="Connection streams and throughput" IsExpanded="False" Margin="0,0,0,8"
                               Expanded="StreamsExpander_Toggled" Collapsed="StreamsExpander_Toggled"
                               Visibility="{Binding HasStreamMatrix, Converter={StaticResource BoolToVisibility}}">
-                        <ScrollViewer MaxHeight="240" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                            <sm:StreamMatrixView DataContext="{Binding StreamMatrix}" ConfigRequested="StreamMatrix_ConfigRequested"/>
-                        </ScrollViewer>
+                        <!-- No scroller here: the panel shows whole and only the queue below scrolls. -->
+                        <sm:StreamMatrixView DataContext="{Binding StreamMatrix}" ConfigRequested="StreamMatrix_ConfigRequested"/>
                     </Expander>
                     <!-- Transfer Queue HUD panel wrapping the toolbar + DataGrid -->
-                    <Border Style="{DynamicResource HudPanelStyle}">
+                    <Border Style="{DynamicResource HudPanelStyle}" MinHeight="170">
                         <DockPanel>
                             <Border DockPanel.Dock="Top" Style="{DynamicResource HudPanelHeaderStyle}">
                                 <TextBlock Text="TRANSFER QUEUE" Style="{DynamicResource SectionHeaderTextStyle}"/>
