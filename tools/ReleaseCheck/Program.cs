@@ -1158,7 +1158,8 @@ static async Task CheckSourceRelocation(FtpClientFactory factory, string fixture
             if (trigger == "empty-list")
                 await JobTask(job, "ScanSites", paths, ct); // Empty LIST initiates migration itself.
             else
-                await JobTask(job, "HandleSourceMigration", source.Id, pressurePool != null ? migrationDeadline.Token : ct);
+                await JobTask(job, "HandleSourceMigration", source.Id, pressurePool != null ? migrationDeadline.Token : ct,
+                    observedFile, oldPath + "/" + fileName);
             if (pressurePool != null)
             {
                 Check(!migrationDeadline.IsCancellationRequested && migrationClock.Elapsed < TimeSpan.FromSeconds(5),
