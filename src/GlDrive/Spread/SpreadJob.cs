@@ -3134,7 +3134,7 @@ public partial class SpreadJob : IDisposable
                 {
                     // Source 550'd "no such file" — it may have moved the release off
                     // mid-race. Don't punish the (blameless) dest; confirm + fail over.
-                    _ = HandleSourceMigration(srcId, _cts.Token);
+                    _ = HandleSourceMigration(srcId, _cts.Token, file, srcPath);
                     _forceScan = true;
                 }
                 else
@@ -3367,18 +3367,19 @@ public partial class SpreadJob : IDisposable
     /// search connected sites for an alternate source and splice it (its spread pool +
     /// scan path) into the running race. Nuke-guarded; single-flighted.
     /// </summary>
-    private Task HandleSourceMigration(string srcId, CancellationToken ct)
+    private Task HandleSourceMigration(string srcId, CancellationToken ct, SpreadFileInfo? failedFile = null, string? failedPath = null)
     {
         lock (_migrationLock)
         {
             if (_migrationClosed || _migrationReads.IsStopped || ct.IsCancellationRequested)
                 return Task.CompletedTask;
             if (_sourceMigrationTask is { IsCompleted: false }) return _sourceMigrationTask;
-            return _sourceMigrationTask = HandleSourceMigrationCore(srcId, ct, _migrationReads.StopToken);
+            return _sourceMigrationTask = HandleSourceMigrationCore(srcId, ct, _migrationReads.StopToken, failedFile, failedPath);
         }
     }
 
-    private async Task HandleSourceMigrationCore(string srcId, CancellationToken ct, CancellationToken readStop)
+    private async Task HandleSourceMigrationCore(string srcId, CancellationToken ct, CancellationToken readStop,
+        SpreadFileInfo? failedFile, string? failedPath)
     {
         if (_isNuked) return;
         if (Interlocked.CompareExchange(ref _failoverInFlight, 1, 0) != 0) return; // already running
@@ -3393,6 +3394,8 @@ public partial class SpreadJob : IDisposable
 
             var srcPath = SourceBasePath(srcId);
             if (srcPath == null) return;
+            // A concurrent transfer can finish after another probe already switched paths.
+            if (failedFile != null && ResolveSourcePath(srcPath, failedFile) != failedPath) return;
             var srcName = _serverConfigs.TryGetValue(srcId, out var sc0) ? sc0.Name : srcId;
 
             // 1. Confirming re-probe: does the source still have its release dir?
@@ -3409,7 +3412,7 @@ public partial class SpreadJob : IDisposable
             //     Calling that "transient" kept RETRing vanished files until the next scan
             //     saw an empty listing (Take.Charge.of.My.Heart.S01E08, 2026-10-09: 5 dead
             //     transfers, 25s stall).
-            var relocated = await FindRelocatedSourcePath(srcId, srcPath, ct, readStop);
+            var relocated = await FindRelocatedSourcePath(srcId, srcPath, ct, readStop, oldDirPresent ? failedFile : null);
             lock (_migrationLock)
             {
                 if (_migrationClosed || readStop.IsCancellationRequested) return;
@@ -3593,14 +3596,14 @@ public partial class SpreadJob : IDisposable
     /// notification watch path) for a release that 550'd at <paramref name="currentPath"/>.
     /// Returns the first dir that exists, or null. Probe failures are not evidence.</summary>
     private async Task<string?> FindRelocatedSourcePath(string serverId, string currentPath, CancellationToken ct,
-        CancellationToken readStop = default)
+        CancellationToken readStop, SpreadFileInfo? requiredFile)
     {
         if (!_serverConfigs.TryGetValue(serverId, out var config)) return null;
-        return await FindExistingSourcePath(serverId, RelocationCandidatePaths(config, Section, ReleaseName, currentPath), ct, readStop);
+        return await FindExistingSourcePath(serverId, RelocationCandidatePaths(config, Section, ReleaseName, currentPath), ct, readStop, requiredFile);
     }
 
     private async Task<string?> FindExistingSourcePath(string serverId, IEnumerable<string> candidates,
-        CancellationToken ct, CancellationToken readStop = default)
+        CancellationToken ct, CancellationToken readStop = default, SpreadFileInfo? requiredFile = null)
     {
         if (!_serverConfigs.TryGetValue(serverId, out var config) &&
             (config = ServerConfigResolver?.Invoke(serverId)) == null) return null;
@@ -3622,7 +3625,12 @@ public partial class SpreadJob : IDisposable
                 {
                     readStop.ThrowIfCancellationRequested();
                     commandStarted = true;
-                    if (await conn.Client.DirectoryExists(candidate, ct)) return candidate;
+                    if (!await conn.Client.DirectoryExists(candidate, ct)) continue;
+                    // Both directories can survive a move. Only follow a second visible
+                    // directory when it contains the payload that actually failed.
+                    if (requiredFile != null && await conn.Client.GetFileSize(
+                            ResolveSourcePath(candidate, requiredFile), -1, ct) < 0) continue;
+                    return candidate;
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested || readStop.IsCancellationRequested)
                 {

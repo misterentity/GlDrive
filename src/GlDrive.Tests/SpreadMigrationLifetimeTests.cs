@@ -15,6 +15,35 @@ namespace GlDrive.Tests;
 public sealed class SpreadMigrationLifetimeTests
 {
     [Fact]
+    public async Task Late_failure_from_previous_directory_cannot_redirect_the_current_source()
+    {
+        await using var fixture = await Fixture.Create(relocatedPathExists: true);
+        var file = new SpreadFileInfo { Name = "sample.rar", FullPath = "/previous/Release/sample.rar", Size = 4 };
+
+        await fixture.Migrate(file, file.FullPath).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Empty(fixture.Server.ProbedPaths);
+        Assert.Empty(Get<ConcurrentDictionary<string, string>>(fixture.Job, "_extraSourcePaths"));
+        Assert.Empty(Get<HashSet<string>>(fixture.Job, "_sourceMigrationPending"));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public async Task Overlapping_directories_require_the_missing_payload_before_switching(bool filePresent, bool switched)
+    {
+        await using var fixture = await Fixture.Create(oldPathExists: true, relocatedPathExists: true);
+        fixture.Server.SizePath = filePresent ? "/recent/tv/Release/CD1/file.rar" : null;
+        var file = new SpreadFileInfo { Name = "CD1/file.rar", FullPath = "/old/Release/CD1/file.rar", Size = 4 };
+
+        await fixture.Migrate(file, file.FullPath).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Contains("/recent/tv/Release/CD1/file.rar", fixture.Server.ProbedPaths);
+        Assert.Equal(switched, Get<ConcurrentDictionary<string, string>>(fixture.Job, "_extraSourcePaths").ContainsKey("source"));
+        Assert.Empty(Get<HashSet<string>>(fixture.Job, "_sourceMigratedAway"));
+    }
+
+    [Fact]
     public async Task Migration_uses_the_idle_spread_session_while_the_main_pool_is_occupied()
     {
         await using var fixture = await Fixture.Create(relocatedPathExists: true);
@@ -219,8 +248,8 @@ public sealed class SpreadMigrationLifetimeTests
             return new Fixture { Server = server, Pool = pool, Job = job };
         }
 
-        internal Task Migrate() => (Task)typeof(SpreadJob).GetMethod("HandleSourceMigration",
-            BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(Job, ["source", CancellationToken.None])!;
+        internal Task Migrate(SpreadFileInfo? file = null, string? failedPath = null) => (Task)typeof(SpreadJob).GetMethod("HandleSourceMigration",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(Job, ["source", CancellationToken.None, file, failedPath])!;
 
         public async ValueTask DisposeAsync()
         {
@@ -239,6 +268,7 @@ public sealed class SpreadMigrationLifetimeTests
         internal TaskCompletionSource OldPathEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource ReleaseOldPath { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal ConcurrentQueue<string> ProbedPaths { get; } = new();
+        internal string? SizePath { get; set; }
         internal string? DisconnectPath { get; set; }
         internal int Port => ((IPEndPoint)_listener.LocalEndpoint).Port;
 
@@ -259,6 +289,12 @@ public sealed class SpreadMigrationLifetimeTests
                 await writer.WriteLineAsync("220 Synthetic FTP");
                 while (await reader.ReadLineAsync(_stop.Token) is { } command)
                 {
+                    if (command.StartsWith("SIZE ", StringComparison.Ordinal))
+                    {
+                        ProbedPaths.Enqueue(command[5..]);
+                        await writer.WriteLineAsync(command[5..] == SizePath ? "213 4" : "550 No such file");
+                        continue;
+                    }
                     if (command.StartsWith("CWD ", StringComparison.Ordinal))
                     {
                         var path = command[4..];
@@ -285,7 +321,7 @@ public sealed class SpreadMigrationLifetimeTests
                     {
                         "USER" => "331 Password required", "PASS" => "230 Logged in",
                         "SYST" => "215 UNIX Type: L8", "PWD" => "257 \"/\" is current directory",
-                        "FEAT" => "211 No extensions", "QUIT" => "221 Goodbye", _ => "200 OK"
+                        "FEAT" => "211-Features\r\n SIZE\r\n211 End", "QUIT" => "221 Goodbye", _ => "200 OK"
                     });
                 }
             }
