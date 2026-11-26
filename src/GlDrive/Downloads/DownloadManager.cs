@@ -813,7 +813,13 @@ public class DownloadManager : IDisposable
 
                     var payload = SfvRepair.SelectPayload(item, plan.Files.Where(f => !IsManifest(f)).ToArray());
                     if (payload.Count > 0)
+                    {
+                        if (!hasRepair && !item.BackgroundWantedPull && _config.MultiStream.UseReleaseMirrors &&
+                            RacePullPolicy.SafeReleasePath(item.ReleaseName, item.RemotePath.TrimEnd('/')))
+                            execution = execution with { ReleaseRoot = item.RemotePath.TrimEnd('/'),
+                                Manifests = plan.Files.Where(IsManifest).ToArray() };
                         await Transfer(payload, progress);
+                    }
                     lock (_activeCts)
                     {
                         itemCts.Token.ThrowIfCancellationRequested();

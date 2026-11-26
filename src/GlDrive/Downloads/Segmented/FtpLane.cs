@@ -96,6 +96,22 @@ internal sealed class FtpLane : ISegmentLane
         return reply.Success && long.TryParse(reply.Message.Trim(), out var size) ? size : -1;
     }
 
+    internal async Task<MirrorChecksum?> ChecksumAsync(string path, FtpHashAlgorithm algorithm, CancellationToken ct)
+    {
+        var client = await ClientAsync(ct);
+        if (!client.Capabilities.Any(cap => cap is FtpCapability.HASH or FtpCapability.MD5 or
+            FtpCapability.XMD5 or FtpCapability.XCRC or FtpCapability.XSHA1 or FtpCapability.XSHA256 or FtpCapability.XSHA512))
+            return null;
+        try
+        {
+            var hash = await client.GetChecksum(path, algorithm, ct);
+            return hash.IsValid ? new MirrorChecksum(hash.Algorithm, hash.Value.ToUpperInvariant()) : null;
+        }
+        catch (FtpCommandException) { return null; }
+        catch (FtpHashUnsupportedException) { return null; }
+        catch (NotImplementedException) { return null; }
+    }
+
     public async Task<ISegmentReader> OpenAsync(TransferFile file, long offset, long end, CancellationToken ct)
     {
         if (_overAllowance?.Invoke(_network) == true)

@@ -23,7 +23,7 @@ internal sealed class DownloadSource(FtpOperations ftp, StreamingDownloader down
         downloader.DownloadFiles(files, progress, ct);
     public Task DownloadAsync(IReadOnlyList<FtpDownloadFile> files, IProgress<DownloadProgress>? progress,
         CancellationToken ct, DownloadExecutionPolicy policy) =>
-        downloader.DownloadFiles(files, progress, ct, policy.YieldWhen, policy.OnBytes);
+        downloader.DownloadFiles(files, progress, ct, policy.YieldWhen, policy.OnBytes, policy.ReleaseRoot, policy.Manifests);
 
     public async Task RefreshManifestAsync(FtpDownloadFile file, CancellationToken ct)
     {

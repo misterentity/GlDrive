@@ -114,6 +114,11 @@ public class SettingsViewModel : INotifyPropertyChanged
         var ms = config.Downloads.MultiStream;
         _multiStreamEnabled = ms.Enabled;
         _borrowIdleRaceLogin = ms.BorrowIdleRaceLogin;
+        DownloadSources = new[] { new DownloadSourceOption("", "Automatic") }
+            .Concat(config.Servers.Select(s => new DownloadSourceOption(s.Id, s.Name))).ToArray();
+        PreferredDownloadServerId = DownloadSources.Any(s => s.Id == ms.PreferredDownloadServerId)
+            ? ms.PreferredDownloadServerId : "";
+        UseReleaseMirrors = ms.UseReleaseMirrors;
         _httpLanesPerNetwork = ms.HttpLanesPerNetwork.ToString();
         _ftpMinSplitMb = ms.FtpMinSplitMb.ToString();
         _slowMode = ms.SlowMode;
@@ -166,6 +171,11 @@ public class SettingsViewModel : INotifyPropertyChanged
     public bool SpreadValidateOnBorrow { get => _spreadValidateOnBorrow; set { _spreadValidateOnBorrow = value; OnPropertyChanged(); } }
     public string SpreadKeepaliveSeconds { get => _spreadKeepaliveSeconds; set { _spreadKeepaliveSeconds = value; OnPropertyChanged(); } }
     public ObservableCollection<SkiplistRule> GlobalSkiplist { get; set; } = new();
+    public sealed record DownloadSourceOption(string Id, string Name);
+    public IReadOnlyList<DownloadSourceOption> DownloadSources { get; }
+    public string PreferredDownloadServerId { get; set; }
+    private bool _useReleaseMirrors;
+    public bool UseReleaseMirrors { get => _useReleaseMirrors; set { _useReleaseMirrors = value; OnPropertyChanged(); } }
     public bool MultiStreamEnabled { get => _multiStreamEnabled; set { _multiStreamEnabled = value; OnPropertyChanged(); } }
     public bool BorrowIdleRaceLogin { get => _borrowIdleRaceLogin; set { _borrowIdleRaceLogin = value; OnPropertyChanged(); } }
     public string HttpLanesPerNetwork { get => _httpLanesPerNetwork; set { _httpLanesPerNetwork = value; OnPropertyChanged(); } }
@@ -430,6 +440,8 @@ public class SettingsViewModel : INotifyPropertyChanged
 
         var ms = config.Downloads.MultiStream;
         ms.Enabled = MultiStreamEnabled;
+        ms.UseReleaseMirrors = UseReleaseMirrors;
+        ms.PreferredDownloadServerId = PreferredDownloadServerId;
         ms.BorrowIdleRaceLogin = BorrowIdleRaceLogin;
         ms.FtpMinSplitMb = int.TryParse(FtpMinSplitMb, out var fms) ? Math.Clamp(fms, 4, 1024) : 32;
         ms.SlowMode = SlowMode;

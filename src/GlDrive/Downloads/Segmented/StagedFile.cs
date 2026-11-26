@@ -72,7 +72,8 @@ public sealed class StagedFile : IAsyncDisposable
                 saved = TryReadSidecar(sidecar, out why);
                 if (saved != null && saved.Size != f.Size)
                     why = $"remote file changed (size {saved.Size} -> {f.Size})";
-                else if (saved != null && f.Validator != null && saved.Validator != f.Validator)
+                else if (saved != null && (f.Validator != null ||
+                    saved.Validator?.StartsWith("mirror:", StringComparison.Ordinal) == true) && saved.Validator != f.Validator)
                     why = $"remote file changed (validator {saved.Validator} -> {f.Validator})";
             }
 

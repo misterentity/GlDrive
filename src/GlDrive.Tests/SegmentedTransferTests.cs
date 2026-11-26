@@ -49,6 +49,45 @@ public sealed class SegmentedTransferTests : IDisposable
     }
 
     [Fact]
+    public async Task MirrorChecksumMismatchClearsStagedRangesAndDoesNotPublish()
+    {
+        var file = AddFile("part.r01", 32768) with
+        {
+            Validator = "mirror:CRC:12345678",
+            MirrorChecksum = new(FluentFTP.FtpHashAlgorithm.CRC, "12345678")
+        };
+        await Assert.ThrowsAsync<MirrorContentMismatchException>(() => new SegmentedTransfer([file], Opts())
+            .RunAsync([new FakeLane(_source, "mirror")], null, null, default));
+        Assert.False(File.Exists(file.LocalPath));
+        await using var staged = StagedFile.Open(file);
+        Assert.Equal(0, staged.Done.TotalLength);
+    }
+
+    [Fact]
+    public void MirrorManifestRejectsTraversalAndConflictingChecksums()
+    {
+        var inventory = new MirrorInventory();
+        inventory.AddManifest("disc1/release.sfv",
+            "first part.r01 A1230000\n../other.rar 00000001\npart.r02 00000001\npart.r02 00000002\n");
+        var entry = Assert.Single(inventory.Files);
+        Assert.Equal("disc1/first part.r01", entry.Key);
+        Assert.Equal("A1230000", entry.Value.Value);
+    }
+
+    [Fact]
+    public void PreferredMirrorCanOnlyClaimOrSplitFilesItHas()
+    {
+        var scheduler = new RangeScheduler([400000, 400000], [new(), new()], 65536, 0);
+        var preferred = scheduler.Take(true, eligible: index => index == 1);
+        Assert.Equal(1, preferred!.FileIndex);
+        Assert.Equal(0, scheduler.Take(true)!.FileIndex);
+        var tail = scheduler.Take(true, eligible: index => index == 1);
+        Assert.Equal(1, tail!.FileIndex);
+        Assert.Equal(preferred.End, tail.Start);
+        Assert.Null(scheduler.Take(true, eligible: _ => false));
+    }
+
+    [Fact]
     public async Task MultiFileMultiLane_WritesExactBytes()
     {
         var files = new[] { AddFile("a.r00", 300_000), AddFile("a.nfo", 1), AddFile("empty.txt", 0), AddFile("a.r01", 700_000), AddFile("a.sfv", 77) };

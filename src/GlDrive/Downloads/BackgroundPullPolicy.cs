@@ -1,4 +1,5 @@
 using System.IO;
+using GlDrive.Ftp;
 
 namespace GlDrive.Downloads;
 
@@ -15,4 +16,5 @@ internal static class BackgroundPullPolicy
 
 internal sealed class BackgroundPullYieldedException() : IOException("Waiting for this site's racing work");
 
-internal sealed record DownloadExecutionPolicy(Func<bool>? YieldWhen = null, Action<long>? OnBytes = null);
+internal sealed record DownloadExecutionPolicy(Func<bool>? YieldWhen = null, Action<long>? OnBytes = null,
+    string? ReleaseRoot = null, IReadOnlyList<FtpDownloadFile>? Manifests = null);

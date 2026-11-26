@@ -313,6 +313,9 @@ public class MultiStreamConfig
     /// </summary>
     public bool BorrowIdleRaceLogin { get; set; } = true;
 
+    public bool UseReleaseMirrors { get; set; }
+    public string PreferredDownloadServerId { get; set; } = "";
+
     /// <summary>HTTP connections per enabled network (plexo starts at 8; updates are one zip, 4 is plenty).</summary>
     public int HttpLanesPerNetwork { get; set; } = ConfigurationLimits.DefaultHttpLanesPerNetwork;
 

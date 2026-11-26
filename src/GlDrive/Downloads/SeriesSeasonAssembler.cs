@@ -32,7 +32,9 @@ public static class SeriesSeasonAssembler
                 QualityAccepted: score.Accepted, Speed: double.IsFinite(speed) && speed > 0 ? speed : 0);
         }).Where(c => c.Decision.Accepted && c.QualityAccepted && c.Decision.EpisodeKeys.Count != 0 &&
             c.Decision.EpisodeKeys.All(wanted.Contains))
-            .OrderByDescending(c => c.Score).ThenByDescending(c => c.Speed)
+            .OrderByDescending(c => c.Score)
+            .ThenByDescending(c => c.Candidate.ServerId == config.MultiStream.PreferredDownloadServerId)
+            .ThenByDescending(c => c.Speed)
             .ThenBy(c => c.Candidate.ReleaseName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(c => c.Candidate.ServerId, StringComparer.Ordinal).ToArray();
         var pack = candidates.FirstOrDefault(c => c.Decision.SeasonPack && wanted.SetEquals(c.Decision.EpisodeKeys));

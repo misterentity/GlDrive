@@ -231,6 +231,7 @@ public sealed class WantedAcquisitionCoordinator
             .Select(c => (Candidate: c, Decision: Evaluate(item, c.Release, c.SizeBytes)))
             .Where(c => c.Decision.Accepted)
             .OrderByDescending(c => c.Decision.Score)
+            .ThenByDescending(c => c.Candidate.Matcher.ServerId == _config.MultiStream.PreferredDownloadServerId)
             .ThenByDescending(c => _config.PreferFastestWantedSource ? SafeSpeed(c.Candidate.Matcher.ServerId) : 0)
             .ThenBy(c => c.Candidate.FirstSeen)
             .ThenBy(c => c.Candidate.Release, StringComparer.OrdinalIgnoreCase)

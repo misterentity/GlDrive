@@ -123,13 +123,13 @@ public sealed class RangeScheduler
     /// already done. The engine sets it only when no lane that can stop early is alive —
     /// otherwise such a hole would strand forever.
     /// </summary>
-    public Assignment? Take(bool canStopEarly, bool allowRedownload = false, LaneTag? tag = null)
+    public Assignment? Take(bool canStopEarly, bool allowRedownload = false, LaneTag? tag = null, Func<int, bool>? eligible = null)
     {
         lock (_lock)
         {
-            var a = TakeGap(canStopEarly)
-                ?? Steal(canStopEarly)
-                ?? (allowRedownload && !canStopEarly ? TakeRedownload() : null);
+            var a = TakeGap(canStopEarly, eligible)
+                ?? Steal(canStopEarly, eligible)
+                ?? (allowRedownload && !canStopEarly ? TakeRedownload(eligible) : null);
             if (a != null) a.Tag = tag;
             return a;
         }
@@ -156,11 +156,11 @@ public sealed class RangeScheduler
         }
     }
 
-    private Assignment? TakeGap(bool canStopEarly)
+    private Assignment? TakeGap(bool canStopEarly, Func<int, bool>? eligible)
     {
         for (int i = 0; i < _sizes.Length; i++)
         {
-            if (IsFileCompleteLocked(i)) continue;
+            if (eligible?.Invoke(i) == false || IsFileCompleteLocked(i)) continue;
 
             if (_sequential[i] && !_sizeUnknown[i])
             {
@@ -195,13 +195,13 @@ public sealed class RangeScheduler
         return null;
     }
 
-    private Assignment? Steal(bool canStopEarly)
+    private Assignment? Steal(bool canStopEarly, Func<int, bool>? eligible)
     {
         Assignment? victim = null;
         long victimRemaining = 0, victimMid = 0;
         foreach (var a in _inFlight)
         {
-            if (!a.Splittable) continue;
+            if (!a.Splittable || eligible?.Invoke(a.FileIndex) == false) continue;
             if (!canStopEarly && a.End != _sizes[a.FileIndex]) continue;
             long from = Math.Max(a.Position, a.Reserved);
             long remaining = a.End - from;
@@ -219,11 +219,11 @@ public sealed class RangeScheduler
         return Add(new Assignment(victim.FileIndex, victimMid, oldEnd, canStopEarly, splittable: canStopEarly));
     }
 
-    private Assignment? TakeRedownload()
+    private Assignment? TakeRedownload(Func<int, bool>? eligible)
     {
         for (int i = 0; i < _sizes.Length; i++)
         {
-            if (_sizeUnknown[i] || IsFileCompleteLocked(i)) continue;
+            if (eligible?.Invoke(i) == false || _sizeUnknown[i] || IsFileCompleteLocked(i)) continue;
             var gaps = _done[i].Gaps(_sizes[i]);
             if (gaps.Count == 0) continue;
             var range = new ByteRange(gaps[0].Start, _sizes[i]);

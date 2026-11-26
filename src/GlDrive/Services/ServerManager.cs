@@ -126,7 +126,7 @@ public partial class ServerManager : IDisposable
         var mountAttemptStarted = DateTime.UtcNow;
 
         var service = new MountService(serverConfig, _config.Downloads, _certManager, _spreadManager, _wantedCoordinator, Hooks,
-            CompletedDownloadObserved);
+            CompletedDownloadObserved) { DownloadSites = GetMountedServers };
 
         service.StateChanged += state =>
         {

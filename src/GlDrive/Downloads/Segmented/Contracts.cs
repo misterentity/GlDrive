@@ -23,7 +23,10 @@ public readonly record struct ByteRange(long Start, long End)
 /// rather than resumed, so a file is never spliced from two versions. Null = unknown; resume
 /// then trusts size alone.
 /// </summary>
-public sealed record TransferFile(string Key, string LocalPath, long Size, string? Validator = null);
+public sealed record TransferFile(string Key, string LocalPath, long Size, string? Validator = null)
+{
+    internal MirrorChecksum? MirrorChecksum { get; init; }
+}
 
 /// <summary>
 /// FTP delivered bytes beyond the immutable download plan. Repeating that plan cannot
@@ -104,6 +107,13 @@ public interface ISegmentLane : IAsyncDisposable
     /// lane supports it, otherwise it throws and the engine retires the lane.
     /// </summary>
     void Fault(Exception ex);
+}
+
+internal interface IMirrorLane
+{
+    bool CanServe(TransferFile file);
+    ITransferPacer Pacer { get; }
+    void RecordBytes(long bytes);
 }
 
 public interface ISegmentReader : IAsyncDisposable

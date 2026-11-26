@@ -72,6 +72,8 @@
                             <RowDefinition Height="Auto" MinHeight="40"/>
                             <RowDefinition Height="Auto" MinHeight="40"/>
                             <RowDefinition Height="Auto" MinHeight="40"/>
+                            <RowDefinition Height="Auto" MinHeight="40"/>
+                            <RowDefinition Height="Auto" MinHeight="40"/>
                         </Grid.RowDefinitions>
 
                         <CheckBox Grid.Row="0" Grid.ColumnSpan="2" IsChecked="{Binding MultiStreamEnabled}"
@@ -87,6 +89,17 @@
                         </CheckBox>
                         <TextBlock Grid.Row="1" Grid.Column="2" Style="{StaticResource Comment}"
                                    Text="Adds a second FTP stream while racing is idle. Returned when a race needs it."/>
+
+                        <CheckBox Grid.Row="4" Grid.ColumnSpan="2" Style="{StaticResource Check}"
+                                  IsChecked="{Binding UseReleaseMirrors}" IsEnabled="{Binding MultiStreamEnabled}"
+                                  Content="Download from multiple sites"/>
+                        <TextBlock Grid.Row="4" Grid.Column="2" Style="{StaticResource Comment}"
+                                   Text="Use matching copies in mounted FTP site indexes."/>
+                        <TextBlock Grid.Row="5" Style="{StaticResource Label}" Text="Preferred download source"/>
+                        <ComboBox Grid.Row="5" Grid.Column="1" Grid.ColumnSpan="2"
+                                  AutomationProperties.Name="Preferred download source"
+                                  ItemsSource="{Binding DownloadSources}" DisplayMemberPath="Name" SelectedValuePath="Id"
+                                  SelectedValue="{Binding PreferredDownloadServerId}"/>
 
                         <TextBlock x:Name="HttpStreamsLabel" Grid.Row="2" Grid.Column="0" Style="{StaticResource Label}" Text="HTTP streams / network"/>
                         <TextBox x:Name="HttpStreamsBox" Grid.Row="2" Grid.Column="1" Width="70" HorizontalAlignment="Left" Style="{StaticResource Box}"

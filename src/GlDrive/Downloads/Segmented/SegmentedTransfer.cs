@@ -270,10 +270,12 @@ public sealed class SegmentedTransfer
     {
         var lr = new LaneRun(lane);
         lock (run.Gate) run.Lanes.Add(lr);
-        return Task.Run(() => LaneLoopAsync(run, lr));
+        var eligible = lane is IMirrorLane mirror ? new Func<int, bool>(i => mirror.CanServe(_files[i])) : null;
+        var first = run.Scheduler.Take(lane.CanStopEarly, tag: lr.Tag, eligible: eligible);
+        return Task.Run(() => LaneLoopAsync(run, lr, first, eligible));
     }
 
-    private async Task LaneLoopAsync(Run run, LaneRun lr)
+    private async Task LaneLoopAsync(Run run, LaneRun lr, RangeScheduler.Assignment? first, Func<int, bool>? eligible)
     {
         var lane = lr.Lane;
         var token = run.Cts.Token;
@@ -288,11 +290,13 @@ public sealed class SegmentedTransfer
                 if (lane.ShouldYield) { lr.State = LaneState.Yielded; return; }
 
                 var signal = run.WorkSignal;
-                var a = run.Scheduler.Take(lane.CanStopEarly, tag: lr.Tag);
+                var a = first ?? run.Scheduler.Take(lane.CanStopEarly, tag: lr.Tag, eligible: eligible);
+                first = null;
                 if (a == null && !lane.CanStopEarly && run.Scheduler.InFlightCount == 0 && !run.AnyLiveStopEarlyLane())
-                    a = run.Scheduler.Take(false, allowRedownload: true, tag: lr.Tag);
+                    a = run.Scheduler.Take(false, allowRedownload: true, tag: lr.Tag, eligible: eligible);
                 if (a == null)
                 {
+                    if (eligible != null) { lr.State = LaneState.Done; return; }
                     lr.State = LaneState.Idle;
                     await Task.WhenAny(signal, Task.Delay(IdleWait, token));
                     continue;
@@ -360,6 +364,7 @@ public sealed class SegmentedTransfer
         }
         finally
         {
+            if (first != null) run.Scheduler.Release(first);
             if (lr.State is not (LaneState.Failed or LaneState.Yielded or LaneState.Done))
                 lr.State = run.Scheduler.AllComplete ? LaneState.Done : LaneState.Failed;
             run.PulseWork();
@@ -491,13 +496,15 @@ public sealed class SegmentedTransfer
                 }
 
                 Interlocked.Add(ref lr.Bytes, n);
-                _options.OnBytes?.Invoke(lane.NetworkId, n);
-                if (_options.Pacer != null)
+                if (lane is IMirrorLane mirror) mirror.RecordBytes(n);
+                else _options.OnBytes?.Invoke(lane.NetworkId, n);
+                var pacer = (lane as IMirrorLane)?.Pacer ?? _options.Pacer;
+                if (pacer != null)
                 {
                     Volatile.Write(ref localWait, 1);
                     try
                     {
-                        await _options.Pacer.WaitAsync(lane.NetworkId, n, readToken);
+                        await pacer.WaitAsync(lane.NetworkId, n, readToken);
                     }
                     catch (OperationCanceledException) when (!token.IsCancellationRequested && Volatile.Read(ref interrupt) != 0)
                     {
@@ -563,6 +570,11 @@ public sealed class SegmentedTransfer
                 // The EOF probe is a managed data read on stoppable lanes, so yield/stall can
                 // interrupt it like any other read.
                 await reader!.FinishAsync(true, readToken);
+            }
+            catch (RemoteFileSizeExceededException) when (lane is IMirrorLane)
+            {
+                InvalidateFile(run, a.FileIndex, sequential: false);
+                throw new IOException($"Mirror file changed while downloading {file.Key}");
             }
             catch (RemoteFileSizeExceededException ex)
             {
@@ -639,6 +651,15 @@ public sealed class SegmentedTransfer
             if (Interlocked.Exchange(ref run.Committed[i], 1) != 0) continue;
             try
             {
+                if (_files[i].MirrorChecksum is { } checksum)
+                {
+                    try { await checksum.VerifyAsync(run.Staged[i].StagingPath, run.Cts.Token); }
+                    catch (MirrorContentMismatchException)
+                    {
+                        lock (run.Gate) run.ReplanFiles[i] = true;
+                        throw;
+                    }
+                }
                 // An unknown-size file may have been refetched shorter than an earlier attempt.
                 await run.Staged[i].CommitAsync(run.Scheduler.IsSizeUnknown(i) ? run.Scheduler.SizeOf(i) : null);
             }

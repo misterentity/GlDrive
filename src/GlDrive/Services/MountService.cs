@@ -2,6 +2,7 @@ using System.IO;
 using Fsp;
 using GlDrive.Config;
 using GlDrive.Downloads;
+using GlDrive.Downloads.Segmented;
 using GlDrive.Filesystem;
 using GlDrive.Ftp;
 using GlDrive.Tls;
@@ -69,6 +70,7 @@ public class MountService : IDisposable
         }
     }
     public FtpClientFactory? Factory => _factory;
+    internal Func<IReadOnlyList<MountService>>? DownloadSites { get; init; }
     public FtpOperations? Ftp => _ftp;
     public DirectoryCache? Cache => _cache;
     public DownloadManager? Downloads => _downloadManager;
@@ -91,6 +93,21 @@ public class MountService : IDisposable
         _wantedCoordinator = wantedCoordinator;
         _hooks = hooks;
         _completedDownload = completedDownload;
+    }
+
+    private IReadOnlyList<DownloadMirror> FindDownloadMirrors(string release)
+    {
+        var mirrors = new List<DownloadMirror>();
+        foreach (var site in DownloadSites?.Invoke() ?? [])
+        {
+            if (site.ServerId == ServerId || site._stopping || site.CurrentState != MountState.Connected ||
+                site.Pool is not { IsThrottled: false } || site._streamingDownloader is not { } downloader) continue;
+            var match = site.Search?.GetCachedIndexSnapshot().Entries.FirstOrDefault(e =>
+                string.Equals(e.ReleaseName, release, StringComparison.OrdinalIgnoreCase) &&
+                RacePullPolicy.SafeReleasePath(e.ReleaseName, e.RemotePath));
+            if (match != null) mirrors.Add(new(site.ServerId, site.ServerName, match.RemotePath, downloader));
+        }
+        return mirrors;
     }
 
     public async Task Mount(CancellationToken ct = default)
@@ -229,7 +246,10 @@ public class MountService : IDisposable
             // RaceLoginLaneSource. The global speed limit is app-wide (shared pacer);
             // the per-server limit applies on top.
             _streamingDownloader = new StreamingDownloader(
-                _pool, _serverConfig.Id, _downloadConfig, _serverConfig.SpeedLimitKbps, _raceLoginLender);
+                _pool, _serverConfig.Id, _downloadConfig, _serverConfig.SpeedLimitKbps, _raceLoginLender)
+            {
+                FindMirrors = FindDownloadMirrors
+            };
             _downloadManager = new DownloadManager(downloadStore, _ftp, _streamingDownloader,
                 _downloadConfig, _diskReservation);
             if (_hooks != null) _downloadManager.DownloadSettled += _hooks.Publish;
