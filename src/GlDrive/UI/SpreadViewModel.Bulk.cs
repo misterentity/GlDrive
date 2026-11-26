@@ -58,7 +58,7 @@ public partial class SpreadViewModel
             {
                 var result = _serverManager.Spread?.RemoveQueuedRequests(ids);
                 return result == null ? "Spread engine unavailable; nothing removed." :
-                    $"Removed {result.Removed}; skipped {result.Skipped} started, replaced, busy or owned-partial requests. No content deleted.";
+                    $"Removed {result.Removed}; skipped {result.Skipped} started, replaced, busy or still-cleaning-up requests." + LeftOnSite(result);
             }));
         });
         ClearQueueCommand = new RelayCommand(() => ClearQueue(stopRunning: false));
@@ -90,10 +90,13 @@ public partial class SpreadViewModel
             var result = spread.ClearQueuedRequests();
             return (stopRunning ? $"Stopped {stopped} running; " : "") +
                 $"removed {result.Removed} queued" +
-                (result.Skipped > 0 ? $"; kept {result.Skipped} that are starting or have uploaded files to clean up" : "") +
-                ". No content deleted.";
+                (result.Skipped > 0 ? $"; kept {result.Skipped} that are starting or still cleaning up their uploads" : "") +
+                "." + LeftOnSite(result);
         }));
     }
+
+    private static string LeftOnSite(GlDrive.Spread.BulkRaceRemovalResult result) => result.Abandoned == 0 ? " No content deleted." :
+        $" No content deleted: {result.Abandoned} had incomplete uploads the site would not let GlDrive remove, and those folders stay on the site (paths are in the log).";
 
     private bool TakeUserStopped(string jobId)
     {

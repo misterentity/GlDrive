@@ -43,6 +43,9 @@ public sealed record PersistedRace(
     public bool Urgent { get; init; }
     public int CleanupAttempts { get; init; }
     internal bool HasOwnedPartial => Partial?.Directories.Count > 0;
+    // Cleanup spent its whole retry budget: nothing will ever act on this request again, so
+    // holding it only strands a row the user cannot remove.
+    internal bool CleanupAbandoned => CleanupOnly && CleanupAttempts >= RaceLifetimePolicy.MaxCleanupAttempts;
 
     internal bool IsExpired(DateTime nowUtc) => !HasOwnedPartial && !KeepUntilAvailable && nowUtc - QueuedAtUtc > RaceQueueStore.MaxAge;
     internal bool IsDue(DateTime nowUtc) => (!CleanupOnly || CleanupAttempts < RaceLifetimePolicy.MaxCleanupAttempts)

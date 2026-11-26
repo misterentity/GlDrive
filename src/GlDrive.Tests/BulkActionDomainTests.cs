@@ -171,6 +171,24 @@ public sealed class BulkActionDomainTests : IDisposable
         Assert.Equal(0, manager.StopAllJobs());
     }
 
+    // A cleanup that spent its retries is never retried, so the row could not be cleared by any button.
+    [Fact]
+    public void Cleanup_that_exhausted_its_retries_can_be_removed_and_cleared()
+    {
+        using var manager = new SpreadManager(new AppConfig(), _root);
+        PersistedRace Spent(string id) => RaceControlPolicyTests.Request(true) with
+            { RequestId = id, ReleaseName = id, CleanupOnly = true, CleanupAttempts = RaceLifetimePolicy.MaxCleanupAttempts };
+        var retrying = Spent("retrying") with { CleanupAttempts = RaceLifetimePolicy.MaxCleanupAttempts - 1 };
+        var queue = Field<List<PersistedRace>>(manager, "_raceQueue");
+        queue.Add(Spent("one")); queue.Add(Spent("two")); queue.Add(retrying);
+
+        Assert.Equal(new BulkRaceRemovalResult(1, 0, 1), manager.RemoveQueuedRequests(["one"]));
+        Assert.Equal(new BulkRaceRemovalResult(1, 1, 1), manager.ClearQueuedRequests());
+
+        Assert.Equal("retrying", Assert.Single(manager.QueuedRaces).RequestId);
+        Assert.Equal("retrying", Assert.Single(new RaceQueueStore(Path.Combine(_root, "race-queue.json")).Load()).RequestId);
+    }
+
     [Theory]
     [InlineData("owned-partial")]
     [InlineData("cleanup")]

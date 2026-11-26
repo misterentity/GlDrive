@@ -1,6 +1,8 @@
 namespace GlDrive.Spread;
 
-public sealed record BulkRaceRemovalResult(int Removed, int Skipped);
+/// <param name="Abandoned">Of <paramref name="Removed"/>, requests whose owned-partial cleanup had
+/// exhausted its retries; their incomplete directories stay on the site.</param>
+public sealed record BulkRaceRemovalResult(int Removed, int Skipped, int Abandoned = 0);
 public sealed record BulkRaceSiteEditResult(int Changed, int Skipped, bool Saved);
 public sealed record RaceBatchRequest(string Section, string ReleaseName, IReadOnlyList<string> ServerIds,
     SpreadMode Mode, string? KnownSourceServerId = null, string? KnownSourcePath = null);
@@ -102,7 +104,8 @@ public partial class SpreadManager
 
     /// <summary>
     /// Remove every request that is still waiting. Requests that are starting, running,
-    /// under a control action, or that own uploaded files (which need their cleanup) stay.
+    /// under a control action, or that own uploaded files still awaiting cleanup stay.
+    /// A cleanup that exhausted its retries is terminal and is removed.
     /// </summary>
     public BulkRaceRemovalResult ClearQueuedRequests()
     {
@@ -124,16 +127,28 @@ public partial class SpreadManager
     {
         var selected = requestIds.ToHashSet(StringComparer.Ordinal);
         int removed;
+        var abandoned = new List<PersistedRace>();
         lock (_lock)
         {
             if (_disposed) return new(0, selected.Count);
-            removed = _raceQueue.RemoveAll(request => selected.Contains(request.RequestId) &&
-                !request.HasOwnedPartial && !request.CleanupOnly && !_controlRequestsInFlight.Contains(request.RequestId) &&
-                !_startingRequests.Any(starting => starting.RequestId == request.RequestId) &&
-                !_activeRequests.Values.Any(active => active.RequestId == request.RequestId));
+            removed = _raceQueue.RemoveAll(request =>
+            {
+                var removable = selected.Contains(request.RequestId) &&
+                    (request.CleanupAbandoned || (!request.HasOwnedPartial && !request.CleanupOnly)) &&
+                    !_controlRequestsInFlight.Contains(request.RequestId) &&
+                    !_startingRequests.Any(starting => starting.RequestId == request.RequestId) &&
+                    !_activeRequests.Values.Any(active => active.RequestId == request.RequestId);
+                if (removable && request.CleanupAbandoned) abandoned.Add(request);
+                return removable;
+            });
             if (removed > 0) ScheduleQueueWakeupNoLock();
         }
         if (removed > 0) PersistQueue();
-        return new(removed, selected.Count - removed);
+        // The only record of what stays on the site once the request is gone.
+        foreach (var request in abandoned)
+            foreach (var directory in request.Partial?.Directories ?? [])
+                Serilog.Log.Warning("Spread queue: removed {Release} after cleanup gave up; incomplete directory {Path} on {Server} was left in place",
+                    request.ReleaseName, directory.RemotePath, directory.ServerId);
+        return new(removed, selected.Count - removed, abandoned.Count);
     }
 }
