@@ -1,6 +1,7 @@
 using System.IO;
 using FluentFTP;
 using GlDrive.Config;
+using GlDrive.Ftp;
 using GlDrive.Services;
 using Xunit;
 
@@ -8,6 +9,40 @@ namespace GlDrive.Tests;
 
 public sealed class NewReleaseMonitorRecoveryTests
 {
+    [Theory]
+    [InlineData("/recent")]
+    [InlineData("/recent/TV")]
+    public async Task ClosedSessionRetriesOnlyTheAffectedListing(string affectedPath)
+    {
+        var calls = new List<string>();
+        var monitor = Monitor((path, _) =>
+        {
+            calls.Add(path);
+            if (path == affectedPath && calls.Count(p => p == path) == 1)
+                throw new DataCommandRejectedException("TYPE A", new FtpReply { Code = "421" }, false);
+            return Task.FromResult(path == "/recent" ? Dirs("TV") : Dirs("Example"));
+        });
+
+        await monitor.PollCycle(CancellationToken.None);
+        Assert.Equal(2, calls.Count(p => p == affectedPath));
+        Assert.Equal(3, calls.Count);
+    }
+
+    [Theory]
+    [InlineData("421", 2)]
+    [InlineData("550", 1)]
+    public async Task PersistentRejectionEndsThePoll(string code, int expectedCalls)
+    {
+        int calls = 0;
+        var monitor = Monitor((_, _) =>
+        {
+            calls++;
+            throw new DataCommandRejectedException("LIST", new FtpReply { Code = code }, code == "550");
+        });
+        await Assert.ThrowsAsync<DataCommandRejectedException>(() => monitor.PollCycle(CancellationToken.None));
+        Assert.Equal(expectedCalls, calls);
+    }
+
     private static FtpListItem[] Dirs(params string[] names) => names.Select(name =>
         new FtpListItem { Name = name, Type = FtpObjectType.Directory }).ToArray();
 

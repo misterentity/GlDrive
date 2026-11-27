@@ -127,7 +127,7 @@ public class NewReleaseMonitor
     {
         // FtpOperations owns borrow/disposal and quarantines unclean LIST failures,
         // while preserving connections after clean final rejections (425 / 550).
-        var categories = await _listDirectory(_config.WatchPath, ct);
+        var categories = await ListForPoll(_config.WatchPath, ct);
         if (Health.Observe(_config.WatchPath,
             categories.Count(i => i.Type is FtpObjectType.Directory or FtpObjectType.Link), DateTime.UtcNow))
             Log.Warning("NewReleaseMonitor[{Server}] found no categories under {WatchPath}; wishlist polling has no categories to watch",
@@ -157,7 +157,7 @@ public class NewReleaseMonitor
             FtpListItem[] releases;
             try
             {
-                releases = await _listDirectory(categoryPath, ct);
+                releases = await ListForPoll(categoryPath, ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -215,6 +215,21 @@ public class NewReleaseMonitor
         // its error counter. One summary per cycle avoids a warning per category.
         if (firstFailure != null)
             throw new IOException($"{failedCategories} category listing(s) failed; first {firstFailedPath}", firstFailure);
+    }
+
+    private async Task<FtpListItem[]> ListForPoll(string path, CancellationToken ct)
+    {
+        try
+        {
+            return await _listDirectory(path, ct);
+        }
+        catch (DataCommandRejectedException ex) when (ex.Code == "421")
+        {
+            // FtpOperations has discarded the closed session. Repeat this read once
+            // through the normal pool so account limits and login holds still apply.
+            ct.ThrowIfCancellationRequested();
+            return await _listDirectory(path, ct);
+        }
     }
 
     // Dated sections contain MMDD containers at the level normally occupied by

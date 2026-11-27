@@ -604,6 +604,8 @@ public static class CpsvDataHelper
         BeginDataSequence(client, ct);
         SetDataSequencePhase(client, "TYPE A reply");
         var typeReply = await client.Execute("TYPE A", ct);
+        if (typeReply.Code == "421")
+            throw new DataCommandRejectedException("TYPE A", typeReply, controlChannelInSync: false);
         if (typeReply.Code != "200")
             throw new IOException($"TYPE A failed: {typeReply.Code} {typeReply.Message}");
 
