@@ -46,6 +46,25 @@ public class IrcChannelVm : INotifyPropertyChanged
     }
     public string HighlightDisplay => _highlightCount > 0 ? $" !{_highlightCount}" : "";
 
+    private int Kind => Name == "*" ? 0 : IsChannel ? 1 : 2;
+
+    // Servers A-Z; within a server: its header row, channels A-Z, then PMs A-Z.
+    public static int Compare(IrcChannelVm a, IrcChannelVm b)
+    {
+        var c = string.Compare(a.ServerName, b.ServerName, StringComparison.OrdinalIgnoreCase);
+        if (c == 0) c = string.CompareOrdinal(a.ServerId, b.ServerId);
+        if (c == 0) c = a.Kind.CompareTo(b.Kind);
+        if (c == 0) c = string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
+        return c;
+    }
+
+    public static int SortedInsertIndex(IReadOnlyList<IrcChannelVm> sorted, IrcChannelVm vm)
+    {
+        var i = 0;
+        while (i < sorted.Count && Compare(sorted[i], vm) <= 0) i++;
+        return i;
+    }
+
     public event PropertyChangedEventHandler? PropertyChanged;
     protected void OnPropertyChanged([CallerMemberName] string? name = null) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
@@ -578,23 +597,7 @@ public class IrcViewModel : INotifyPropertyChanged, IDisposable
             HasFishKey = hasFishKey
         };
 
-        // Insert grouped under the correct server: find the last item for this server
-        // and insert after it, keeping channels sorted (server header, channels, PMs)
-        var insertIdx = -1;
-        for (var i = Channels.Count - 1; i >= 0; i--)
-        {
-            if (Channels[i].ServerId == serverId)
-            {
-                insertIdx = i + 1;
-                break;
-            }
-        }
-
-        if (insertIdx >= 0 && insertIdx <= Channels.Count)
-            Channels.Insert(insertIdx, vm);
-        else
-            Channels.Add(vm);
-
+        Channels.Insert(IrcChannelVm.SortedInsertIndex(Channels, vm), vm);
         return vm;
     }
 
